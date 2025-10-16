@@ -3,9 +3,8 @@ import json
 import random
 import string
 import asyncio
-import requests
-import websockets
 import aiohttp
+import websockets
 from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
@@ -13,16 +12,6 @@ from sqlalchemy import create_engine, text
 
 import discord
 from discord.ext import commands, tasks
-
-from kick_client import KickChatClient
-import asyncio
-
-kick_client = KickChatClient("madcats")
-
-async def start_kick_listener():
-    await kick_client.connect()
-
-bot.loop.create_task(start_kick_listener())
 
 # -------------------------
 # Load config
@@ -38,7 +27,7 @@ WATCH_INTERVAL_SECONDS = int(os.getenv("WATCH_INTERVAL_SECONDS", "60"))
 ROLE_UPDATE_INTERVAL_SECONDS = int(os.getenv("ROLE_UPDATE_INTERVAL_SECONDS", "600"))
 CODE_EXPIRY_MINUTES = int(os.getenv("CODE_EXPIRY_MINUTES", "10"))
 
-# Role thresholds in minutes (change or make configurable via env as needed)
+# Role thresholds in minutes
 WATCHTIME_ROLES = [
     {"name": "🎯 Fan", "minutes": 60},
     {"name": "🔥 Superfan", "minutes": 300},
@@ -47,10 +36,10 @@ WATCHTIME_ROLES = [
 
 # Kick API / websocket
 KICK_API_CHANNEL = "https://kick.com/api/v2/channels"
-KICK_CHAT_WS = "wss://chat.service.kick.com/socket.io/?EIO=4&transport=websocket"
+KICK_CHAT_WS = "wss://ws-us3.pusher.com/app/dd11c46dae0376080879?protocol=7&client=js&version=8.4.0&flash=false"
 
 # -------------------------
-# Database (SQLAlchemy engine)
+# Database setup
 # -------------------------
 engine = create_engine(DATABASE_URL, future=True)
 
@@ -65,12 +54,12 @@ with engine.begin() as conn:
     conn.execute(text("""
     CREATE TABLE IF NOT EXISTS links (
         discord_id BIGINT PRIMARY KEY,
-        kick_name TEXT
+        kick_name TEXT UNIQUE
     );
     """))
     conn.execute(text("""
     CREATE TABLE IF NOT EXISTS pending_links (
-        discord_id BIGINT,
+        discord_id BIGINT PRIMARY KEY,
         kick_name TEXT,
         code TEXT,
         timestamp TEXT
@@ -86,126 +75,138 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# In-memory active viewer last-seen map (username -> datetime aware UTC)
+# In-memory active viewer tracking
 active_viewers = {}
 
 # -------------------------
-# Kick listener
+# Kick listener functions
 # -------------------------
 async def fetch_chatroom_id(channel_name: str):
     """Fetch chatroom id via Kick channel API."""
     try:
-        r = requests.get(f"{KICK_API_CHANNEL}/{channel_name}", timeout=8)
-        if r.status_code != 200:
-            print(f"[Kick] Channel API returned {r.status_code} for {channel_name}")
-            return None
-        data = r.json()
-        # chatroom id location may vary; these fields are common in Kick responses
-        # try several keys used historically
-        chatroom = data.get("chatroom") or data.get("livestream", {}).get("chatroom")
-        if chatroom and isinstance(chatroom, dict):
-            return chatroom.get("id")
-        return data.get("chatroom", {}).get("id")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{KICK_API_CHANNEL}/{channel_name}", timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    print(f"[Kick] Channel API returned {resp.status} for {channel_name}")
+                    return None
+                data = await resp.json()
+                
+                # Extract chatroom id from response
+                if "chatroom" in data and isinstance(data["chatroom"], dict):
+                    return data["chatroom"].get("id")
+                return None
     except Exception as e:
         print(f"[Kick] fetch_chatroom_id error: {e}")
         return None
 
 async def kick_chat_loop(channel_name: str):
-    """Run loop that connects to Kick WS, joins room, and updates active_viewers."""
+    """Connect to Kick's Pusher WebSocket and listen for chat messages."""
     while True:
         try:
-            chatroom_id = await asyncio.get_event_loop().run_in_executor(None, fetch_chatroom_id, channel_name)
+            chatroom_id = await fetch_chatroom_id(channel_name)
             if not chatroom_id:
                 print(f"[Kick] Could not obtain chatroom id for {channel_name}. Retrying in 30s.")
                 await asyncio.sleep(30)
                 continue
 
-            print(f"[Kick] Connecting to chatroom {chatroom_id} for channel {channel_name} ...")
+            print(f"[Kick] Connecting to chatroom {chatroom_id} for channel {channel_name}...")
+            
+            # Connect to Pusher WebSocket
             async with websockets.connect(KICK_CHAT_WS, max_size=None) as ws:
-                # Socket.IO connect handshake
-                # send '40' to establish Engine.IO connection (Socket.IO protocol)
-                await ws.send("40")
-                await asyncio.sleep(0.5)
-                # join the chatroom
-                join_payload = f'42["joinRoom",{{"chatroom_id":{chatroom_id}}}]'
-                await ws.send(join_payload)
-                print(f"[Kick] Joined chatroom {chatroom_id}")
+                print("[Kick] WebSocket connected, subscribing to channel...")
+                
+                # Subscribe to the chatroom channel
+                subscribe_msg = json.dumps({
+                    "event": "pusher:subscribe",
+                    "data": {
+                        "auth": "",
+                        "channel": f"chatrooms.{chatroom_id}.v2"
+                    }
+                })
+                await ws.send(subscribe_msg)
+                print(f"[Kick] Subscribed to chatrooms.{chatroom_id}.v2")
 
-                # listen loop
+                # Listen for messages
                 while True:
-                    msg = await ws.recv()
-                    if not msg:
-                        continue
-
-                    # heartbeat ping from socket.io (starts with '2'), respond with '3'
-                    if isinstance(msg, str) and msg.startswith("2"):
-                        try:
-                            await ws.send("3")
-                        except Exception:
-                            pass
-                        continue
-
-                    # The protocol often wraps events with leading digits; find first '['
                     try:
-                        idx = msg.find('[')
-                        if idx == -1:
+                        msg = await asyncio.wait_for(ws.recv(), timeout=30)
+                        
+                        if not msg:
                             continue
-                        payload = json.loads(msg[idx:])
-                        # payload is usually like ["message", { ... }]
-                        if isinstance(payload, list) and len(payload) >= 2:
-                            event = payload[0]
-                            content = payload[1]
-                            if event == "message":
-                                sender = content.get("sender", {}).get("username")
-                                if sender:
-                                    active_viewers[sender.lower()] = datetime.now(timezone.utc)
-                                    # optional: print message content for debugging
-                                    text = content.get("content") or content.get("text") or ""
-                                    print(f"[Kick] {sender}: {text}")
-                    except Exception:
-                        # ignore parse errors
-                        pass
 
-        except websockets.InvalidURI as e:
-            print(f"[Kick] Invalid WS URI: {e}. Aborting.")
-            await asyncio.sleep(30)
+                        # Parse Pusher message
+                        try:
+                            data = json.loads(msg)
+                            event_type = data.get("event")
+                            
+                            # Respond to ping
+                            if event_type == "pusher:ping":
+                                await ws.send(json.dumps({"event": "pusher:pong"}))
+                                continue
+                            
+                            # Handle chat message
+                            if event_type == "App\\Events\\ChatMessageEvent":
+                                event_data = json.loads(data.get("data", "{}"))
+                                sender = event_data.get("sender", {})
+                                username = sender.get("username")
+                                
+                                if username:
+                                    active_viewers[username.lower()] = datetime.now(timezone.utc)
+                                    content_text = event_data.get("content", "")
+                                    print(f"[Kick] {username}: {content_text}")
+                                    
+                        except json.JSONDecodeError:
+                            pass
+                        except Exception as e:
+                            print(f"[Kick] Error parsing message: {e}")
+                            
+                    except asyncio.TimeoutError:
+                        # Send ping to keep connection alive
+                        try:
+                            await ws.send(json.dumps({"event": "pusher:ping"}))
+                        except:
+                            break
+
+        except websockets.exceptions.WebSocketException as e:
+            print(f"[Kick] WebSocket error: {e}. Reconnecting in 10s.")
+            await asyncio.sleep(10)
         except Exception as e:
             print(f"[Kick] Connection error: {e}. Reconnecting in 10s.")
             await asyncio.sleep(10)
-            continue
 
 # -------------------------
-# Watchtime updater
+# Watchtime updater task
 # -------------------------
 @tasks.loop(seconds=WATCH_INTERVAL_SECONDS)
 async def update_watchtime_task():
+    """Update watchtime for active viewers."""
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(minutes=5)
+    
     with engine.begin() as conn:
         for user, last_seen in list(active_viewers.items()):
-            # keep only users seen in the last 5 minutes as active
             if last_seen and last_seen >= cutoff:
-                # upsert: works on sqlite (ON CONFLICT) and Postgres
+                # Add 1 minute of watchtime per interval
+                minutes_to_add = WATCH_INTERVAL_SECONDS / 60
                 conn.execute(text("""
                     INSERT INTO watchtime (username, minutes, last_active)
-                    VALUES (:u, 1, :t)
+                    VALUES (:u, :m, :t)
                     ON CONFLICT(username) DO UPDATE SET
-                        minutes = watchtime.minutes + 1,
+                        minutes = watchtime.minutes + :m,
                         last_active = :t
-                """), {"u": user, "t": last_seen.isoformat()})
+                """), {"u": user, "m": minutes_to_add, "t": last_seen.isoformat()})
 
 # -------------------------
-# Role updater
+# Role updater task
 # -------------------------
 @tasks.loop(seconds=ROLE_UPDATE_INTERVAL_SECONDS)
 async def update_roles_task():
+    """Assign Discord roles based on watchtime thresholds."""
     if DISCORD_GUILD_ID is None:
-        print("[Discord] DISCORD_GUILD_ID not set; skipping role updates.")
         return
 
     guild = bot.get_guild(DISCORD_GUILD_ID)
     if not guild:
-        print("[Discord] Guild not found; ensure the bot is in the server and DISCORD_GUILD_ID is correct.")
         return
 
     with engine.connect() as conn:
@@ -220,150 +221,318 @@ async def update_roles_task():
         if not member:
             continue
 
+        # Assign all eligible roles
         for role_info in WATCHTIME_ROLES:
             role = discord.utils.get(guild.roles, name=role_info["name"])
             if role and minutes >= role_info["minutes"] and role not in member.roles:
                 try:
-                    await member.add_roles(role, reason="Reached watchtime threshold")
-                    print(f"[Discord] Assigned role {role.name} to {member.display_name} ({kick_name} - {minutes}m)")
+                    await member.add_roles(role, reason=f"Reached {role_info['minutes']} min watchtime")
+                    print(f"[Discord] Assigned {role.name} to {member.display_name} ({kick_name})")
                 except discord.Forbidden:
-                    print(f"[Discord] Missing permission to assign {role.name}. Ensure bot role is above target roles.")
+                    print(f"[Discord] Missing permission to assign {role.name}")
                 except Exception as e:
                     print(f"[Discord] Error assigning role: {e}")
 
 # -------------------------
-# Pending links cleanup (and DM expired users)
+# Cleanup expired verification codes
 # -------------------------
 @tasks.loop(minutes=5)
 async def cleanup_pending_links_task():
+    """Remove expired verification codes and notify users."""
     expiry_cutoff = datetime.now(timezone.utc) - timedelta(minutes=CODE_EXPIRY_MINUTES)
-    expired = []
+    
     with engine.begin() as conn:
-        rows = conn.execute(text("SELECT discord_id FROM pending_links WHERE timestamp < :t"), {"t": expiry_cutoff.isoformat()}).fetchall()
-        expired = [r[0] for r in rows]
-        conn.execute(text("DELETE FROM pending_links WHERE timestamp < :t"), {"t": expiry_cutoff.isoformat()})
+        rows = conn.execute(text(
+            "SELECT discord_id FROM pending_links WHERE timestamp < :t"
+        ), {"t": expiry_cutoff.isoformat()}).fetchall()
+        
+        expired_ids = [r[0] for r in rows]
+        
+        conn.execute(text(
+            "DELETE FROM pending_links WHERE timestamp < :t"
+        ), {"t": expiry_cutoff.isoformat()})
 
-    for discord_id in expired:
+    # Notify users their codes expired
+    for discord_id in expired_ids:
         try:
             user = await bot.fetch_user(int(discord_id))
             if user:
                 try:
-                    await user.send("⏰ Your Kick verification code expired. Use `!link <kick_username>` to start again.")
+                    await user.send(
+                        "⏰ Your Kick verification code expired. "
+                        "Use `!link <kick_username>` to generate a new one."
+                    )
                 except discord.Forbidden:
                     pass
         except Exception:
             pass
 
 # -------------------------
-# Commands: link, verify, unlink, leaderboard
+# Commands
 # -------------------------
 @bot.command(name="link")
 async def cmd_link(ctx, kick_username: str):
+    """Generate a verification code to link Kick account to Discord."""
     discord_id = ctx.author.id
+    kick_username = kick_username.lower()
+    
+    # Check if this Kick account is already linked to another Discord user
+    with engine.connect() as conn:
+        existing = conn.execute(text(
+            "SELECT discord_id FROM links WHERE kick_name = :k"
+        ), {"k": kick_username}).fetchone()
+        
+        if existing and existing[0] != discord_id:
+            await ctx.send(
+                f"❌ The Kick account **{kick_username}** is already linked to another Discord user. "
+                "If this is your account, ask them to `!unlink` first."
+            )
+            return
+    
+    # Generate 6-digit verification code
     code = ''.join(random.choices(string.digits, k=6))
     now_iso = datetime.now(timezone.utc).isoformat()
 
     with engine.begin() as conn:
+        # Remove any existing pending verification for this Discord user
         conn.execute(text("DELETE FROM pending_links WHERE discord_id = :d"), {"d": discord_id})
+        
+        # Insert new pending verification
         conn.execute(text("""
             INSERT INTO pending_links (discord_id, kick_name, code, timestamp)
             VALUES (:d, :k, :c, :t)
-        """), {"d": discord_id, "k": kick_username.lower(), "c": code, "t": now_iso})
+        """), {"d": discord_id, "k": kick_username, "c": code, "t": now_iso})
 
     await ctx.send(
-        f"🔗 To verify ownership of **{kick_username}**, please add this code to your Kick bio:\n\n"
-        f"**{code}**\n\n"
-        f"Then run `!verify {kick_username}` once it's added. The code expires in {CODE_EXPIRY_MINUTES} minutes."
+        f"🔗 **Link your Kick account**\n\n"
+        f"1. Go to https://kick.com/dashboard/settings/profile\n"
+        f"2. Add this code to your bio: **{code}**\n"
+        f"3. Run `!verify {kick_username}` here\n\n"
+        f"⏰ Code expires in {CODE_EXPIRY_MINUTES} minutes."
     )
 
 @bot.command(name="verify")
 async def cmd_verify(ctx, kick_username: str):
+    """Verify Kick account ownership by checking bio for code."""
     discord_id = ctx.author.id
+    kick_username = kick_username.lower()
+    
+    # Check for pending verification
     with engine.connect() as conn:
         row = conn.execute(text("""
             SELECT code, timestamp FROM pending_links
             WHERE discord_id = :d AND kick_name = :k
-        """), {"d": discord_id, "k": kick_username.lower()}).fetchone()
+        """), {"d": discord_id, "k": kick_username}).fetchone()
 
     if not row:
-        await ctx.send("❌ No pending verification found. Use `!link <kick_username>` first.")
+        await ctx.send(
+            "❌ No pending verification found. Use `!link <kick_username>` first."
+        )
         return
 
     code, ts = row
     ts_dt = datetime.fromisoformat(ts)
+    
+    # Check if code expired
     if datetime.now(timezone.utc) - ts_dt > timedelta(minutes=CODE_EXPIRY_MINUTES):
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM pending_links WHERE discord_id = :d"), {"d": discord_id})
-        await ctx.send("⏰ Your verification code expired. Run `!link <kick_username>` again.")
+        await ctx.send(
+            "⏰ Your verification code expired. Run `!link <kick_username>` again."
+        )
         return
 
-    # check Kick bio via Kick's channel API
+    # Fetch Kick user profile to check bio
     try:
         async with aiohttp.ClientSession() as sess:
-            async with sess.get(f"{KICK_API_CHANNEL}/{kick_username}") as resp:
+            async with sess.get(
+                f"{KICK_API_CHANNEL}/{kick_username}",
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
                 if resp.status != 200:
-                    await ctx.send("❌ Couldn't find Kick user. Check spelling.")
+                    await ctx.send(
+                        "❌ Couldn't find that Kick user. Check the spelling and try again."
+                    )
                     return
                 data = await resp.json()
     except Exception as e:
+        print(f"[Verify] API error: {e}")
         await ctx.send("❌ Error contacting Kick API. Try again later.")
         return
 
+    # Check if code is in bio
     bio = data.get("bio") or ""
-    if bio and code in bio:
+    if code in bio:
         with engine.begin() as conn:
+            # Link accounts
             conn.execute(text("""
                 INSERT INTO links (discord_id, kick_name)
                 VALUES (:d, :k)
                 ON CONFLICT(discord_id) DO UPDATE SET kick_name = excluded.kick_name
-            """), {"d": discord_id, "k": kick_username.lower()})
+            """), {"d": discord_id, "k": kick_username})
+            
+            # Remove pending verification
             conn.execute(text("DELETE FROM pending_links WHERE discord_id = :d"), {"d": discord_id})
 
-        await ctx.send(f"✅ Verified and linked Discord -> Kick ` {kick_username} `")
+        await ctx.send(
+            f"✅ **Verified!** Your Discord account is now linked to Kick user **{kick_username}**\n"
+            f"You can now remove the code from your bio."
+        )
     else:
-        await ctx.send("❌ Could not find the verification code in your Kick bio. Make sure it's visible and try again.")
+        await ctx.send(
+            f"❌ Could not find code `{code}` in your Kick bio.\n"
+            "Make sure you added it exactly as shown and try again."
+        )
 
 @bot.command(name="unlink")
 async def cmd_unlink(ctx):
+    """Unlink Kick account from Discord."""
     discord_id = ctx.author.id
+    
     with engine.begin() as conn:
-        conn.execute(text("DELETE FROM links WHERE discord_id = :d"), {"d": discord_id})
-    await ctx.send("🔓 Unlinked your Kick account from this Discord account.")
+        result = conn.execute(text(
+            "DELETE FROM links WHERE discord_id = :d RETURNING kick_name"
+        ) if "postgres" in DATABASE_URL else text(
+            "DELETE FROM links WHERE discord_id = :d"
+        ), {"d": discord_id})
+        
+        # For SQLite, check if row was deleted
+        if "sqlite" in DATABASE_URL:
+            was_linked = result.rowcount > 0
+        else:
+            was_linked = result.fetchone() is not None
+    
+    if was_linked:
+        await ctx.send("🔓 Your Kick account has been unlinked from Discord.")
+    else:
+        await ctx.send("❌ You don't have a linked Kick account.")
 
 @bot.command(name="leaderboard")
 async def cmd_leaderboard(ctx, top: int = 10):
+    """Show top viewers by watchtime."""
+    if top > 25:
+        top = 25
+    
     with engine.connect() as conn:
-        rows = conn.execute(text("SELECT username, minutes FROM watchtime ORDER BY minutes DESC LIMIT :n"), {"n": top}).fetchall()
+        rows = conn.execute(text(
+            "SELECT username, minutes FROM watchtime ORDER BY minutes DESC LIMIT :n"
+        ), {"n": top}).fetchall()
+    
     if not rows:
-        await ctx.send("No watchtime data yet.")
+        await ctx.send("📊 No watchtime data yet. Start watching to appear on the leaderboard!")
         return
 
-    embed = discord.Embed(title="🏆 Kick Watchtime Leaderboard", color=0x00FF00)
+    embed = discord.Embed(
+        title="🏆 Kick Watchtime Leaderboard",
+        description=f"Top {len(rows)} viewers",
+        color=0x53FC18
+    )
+    
+    medals = ["🥇", "🥈", "🥉"]
     for i, (username, minutes) in enumerate(rows, start=1):
-        embed.add_field(name=f"#{i} {username}", value=f"{minutes} minutes ({minutes/60:.2f} hrs)", inline=False)
+        medal = medals[i-1] if i <= 3 else f"#{i}"
+        hours = minutes / 60
+        embed.add_field(
+            name=f"{medal} {username}",
+            value=f"⏱️ {minutes:.0f} min ({hours:.1f} hrs)",
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name="watchtime")
+async def cmd_watchtime(ctx):
+    """Check your current watchtime."""
+    discord_id = ctx.author.id
+    
+    with engine.connect() as conn:
+        # Get linked Kick username
+        link = conn.execute(text(
+            "SELECT kick_name FROM links WHERE discord_id = :d"
+        ), {"d": discord_id}).fetchone()
+        
+        if not link:
+            await ctx.send(
+                "❌ You haven't linked your Kick account yet. Use `!link <kick_username>` to get started."
+            )
+            return
+        
+        kick_name = link[0]
+        
+        # Get watchtime
+        watchtime = conn.execute(text(
+            "SELECT minutes FROM watchtime WHERE username = :u"
+        ), {"u": kick_name}).fetchone()
+    
+    if not watchtime or watchtime[0] == 0:
+        await ctx.send(
+            f"⏱️ No watchtime recorded yet for **{kick_name}**. Start watching to earn time!"
+        )
+        return
+    
+    minutes = watchtime[0]
+    hours = minutes / 60
+    
+    # Check which roles they've earned
+    earned_roles = []
+    for role_info in WATCHTIME_ROLES:
+        if minutes >= role_info["minutes"]:
+            earned_roles.append(role_info["name"])
+    
+    embed = discord.Embed(
+        title=f"⏱️ Watchtime for {kick_name}",
+        color=0x53FC18
+    )
+    embed.add_field(name="Total Time", value=f"{minutes:.0f} minutes ({hours:.1f} hours)", inline=False)
+    
+    if earned_roles:
+        embed.add_field(name="Earned Roles", value="\n".join(earned_roles), inline=False)
+    
     await ctx.send(embed=embed)
 
 # -------------------------
-# Startup and tasks
+# Bot events
 # -------------------------
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user} (id: {bot.user.id})")
-    # start background tasks if not already running
+    print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+    print(f"📺 Monitoring Kick channel: {KICK_CHANNEL}")
+    
+    # Start background tasks
     if not update_watchtime_task.is_running():
         update_watchtime_task.start()
+        print("✅ Watchtime updater started")
+    
     if not update_roles_task.is_running():
         update_roles_task.start()
+        print("✅ Role updater started")
+    
     if not cleanup_pending_links_task.is_running():
         cleanup_pending_links_task.start()
+        print("✅ Cleanup task started")
 
-    # start Kick listener in background
+    # Start Kick chat listener
     bot.loop.create_task(kick_chat_loop(KICK_CHANNEL))
+    print("✅ Kick chat listener started")
+
+@bot.event
+async def on_command_error(ctx, error):
+    """Handle command errors gracefully."""
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(f"❌ Missing argument: `{error.param.name}`")
+    elif isinstance(error, commands.CommandNotFound):
+        pass  # Ignore unknown commands
+    else:
+        print(f"[Error] {error}")
+        await ctx.send("❌ An error occurred. Please try again.")
 
 # -------------------------
-# Run
+# Run bot
 # -------------------------
 if not DISCORD_TOKEN:
-    raise SystemExit("DISCORD_TOKEN environment variable is required")
+    raise SystemExit("❌ DISCORD_TOKEN environment variable is required")
+
+if not KICK_CHANNEL:
+    raise SystemExit("❌ KICK_CHANNEL environment variable is required")
 
 bot.run(DISCORD_TOKEN)
