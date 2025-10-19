@@ -115,9 +115,9 @@ KICK_CHAT_WS = f"wss://ws-{PUSHER_CONFIG['cluster']}.pusher.com/app/{PUSHER_CONF
 
 # Role thresholds in minutes
 WATCHTIME_ROLES = [
-    {"name": "🎯 Fan", "minutes": 60},
-    {"name": "🔥 Superfan", "minutes": 300},
-    {"name": "💎 Elite Viewer", "minutes": 1000},
+    {"name": "Tier 1", "minutes": 60},
+    {"name": "Tier 2", "minutes": 300},
+    {"name": "Tier 3", "minutes": 1000},
 ]
 
 BROWSER_HEADERS = {
