@@ -816,13 +816,25 @@ async def cmd_link(ctx, kick_username: str):
         discord_id = ctx.author.id
         kick_username = kick_username.lower()
         
-        # Check if this Kick account is already linked to another Discord user
         with engine.connect() as conn:
-            existing = conn.execute(text(
+            # Check if this Discord user is already linked to any Kick account
+            existing_link = conn.execute(text(
+                "SELECT kick_name FROM links WHERE discord_id = :d"
+            ), {"d": discord_id}).fetchone()
+            
+            if existing_link:
+                await ctx.send(
+                    f"✅ You are already linked to **{existing_link[0]}**.\n"
+                    f"Use `!unlink` first if you want to link a different account."
+                )
+                return
+            
+            # Check if this Kick account is already linked to another Discord user
+            existing_kick = conn.execute(text(
                 "SELECT discord_id FROM links WHERE kick_name = :k"
             ), {"k": kick_username}).fetchone()
             
-            if existing and existing[0] != discord_id:
+            if existing_kick and existing_kick[0] != discord_id:
                 await ctx.send(
                     f"❌ The Kick account **{kick_username}** is already linked to another Discord user."
                 )
