@@ -487,8 +487,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 active_viewers = {}
 
 # Stream status tracking
-is_stream_live = False
-last_stream_check = None
+stream_tracking_enabled = True  # Admin can toggle this
+last_chat_activity = None  # Track last time we saw any chat activity
 
 # -------------------------
 # Kick listener functions
@@ -601,6 +601,9 @@ async def kick_chat_loop(channel_name: str):
                             
                             # Handle chat message
                             if event_type == "App\\Events\\ChatMessageEvent":
+                                global last_chat_activity
+                                last_chat_activity = datetime.now(timezone.utc)  # Update stream activity
+                                
                                 event_data = json.loads(data.get("data", "{}"))
                                 sender = event_data.get("sender", {})
                                 username = sender.get("username")
@@ -634,25 +637,15 @@ async def kick_chat_loop(channel_name: str):
 # -------------------------
 @tasks.loop(seconds=WATCH_INTERVAL_SECONDS)
 async def update_watchtime_task():
-    """Update watchtime for active viewers (only when stream is live)."""
-    global is_stream_live, last_stream_check
+    """Update watchtime for active viewers (only when tracking is enabled)."""
+    global stream_tracking_enabled
     
     try:
-        now = datetime.now(timezone.utc)
-        
-        # Check stream status every minute to avoid excessive API calls
-        if not last_stream_check or (now - last_stream_check).total_seconds() >= 60:
-            is_stream_live = await check_stream_live(KICK_CHANNEL)
-            last_stream_check = now
-            if is_stream_live:
-                print(f"[Watchtime] ✅ {KICK_CHANNEL} is live - tracking watchtime")
-            else:
-                print(f"[Watchtime] ⏸️ {KICK_CHANNEL} is offline - pausing watchtime tracking")
-        
-        # Only track watchtime if stream is live
-        if not is_stream_live:
+        # Check if tracking is enabled by admin
+        if not stream_tracking_enabled:
             return
         
+        now = datetime.now(timezone.utc)
         cutoff = now - timedelta(minutes=5)
         
         # Get active viewers who were seen recently
@@ -1100,6 +1093,38 @@ async def cmd_watchtime(ctx, user: str = None):
         embed.add_field(name="Earned Roles", value="\n".join(earned_roles), inline=False)
     
     await ctx.send(embed=embed)
+
+# -------------------------
+# Admin Commands
+# -------------------------
+@bot.command(name="tracking")
+@commands.has_permissions(administrator=True)
+@in_guild()
+async def toggle_tracking(ctx, action: str = None):
+    """
+    Admin command to control watchtime tracking.
+    Usage: !tracking on|off|status
+    """
+    global stream_tracking_enabled
+    
+    if action is None or action.lower() == "status":
+        status = "🟢 ENABLED" if stream_tracking_enabled else "🔴 DISABLED"
+        await ctx.send(f"**Watchtime Tracking Status:** {status}")
+        return
+    
+    if action.lower() == "on":
+        stream_tracking_enabled = True
+        await ctx.send("✅ **Watchtime tracking ENABLED**\nUsers will now earn watchtime from chat activity.")
+    elif action.lower() == "off":
+        stream_tracking_enabled = False
+        await ctx.send("⏸️ **Watchtime tracking DISABLED**\nUsers will NOT earn watchtime until re-enabled.")
+    else:
+        await ctx.send("❌ Invalid option. Use: `!tracking on`, `!tracking off`, or `!tracking status`")
+
+@toggle_tracking.error
+async def tracking_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You need Administrator permission to use this command.")
 
 # -------------------------
 # Bot events
