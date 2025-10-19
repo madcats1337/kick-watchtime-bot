@@ -53,6 +53,9 @@ KICK_CHANNEL = os.getenv("KICK_CHANNEL")
 if not KICK_CHANNEL:
     raise ValueError("KICK_CHANNEL not found in environment variables")
 
+# Optional: Hardcoded chatroom ID to bypass Cloudflare issues
+KICK_CHATROOM_ID = os.getenv("KICK_CHATROOM_ID")  # Set this on Railway to skip fetching
+
 DISCORD_GUILD_ID = int(os.getenv("DISCORD_GUILD_ID")) if os.getenv("DISCORD_GUILD_ID") else None
 if not DISCORD_GUILD_ID:
     print("⚠️ Warning: DISCORD_GUILD_ID not set. Some features may be limited.")
@@ -496,11 +499,16 @@ async def kick_chat_loop(channel_name: str):
     """Connect to Kick's Pusher WebSocket and listen for chat messages."""
     while True:
         try:
-            chatroom_id = await fetch_chatroom_id(channel_name)
-            if not chatroom_id:
-                print(f"[Kick] Could not obtain chatroom id for {channel_name}. Retrying in 30s.")
-                await asyncio.sleep(30)
-                continue
+            # Check if chatroom ID is hardcoded in environment (bypass for Cloudflare issues)
+            if KICK_CHATROOM_ID:
+                chatroom_id = KICK_CHATROOM_ID
+                print(f"[Kick] Using hardcoded chatroom ID: {chatroom_id}")
+            else:
+                chatroom_id = await fetch_chatroom_id(channel_name)
+                if not chatroom_id:
+                    print(f"[Kick] Could not obtain chatroom id for {channel_name}. Retrying in 30s.")
+                    await asyncio.sleep(30)
+                    continue
 
             print(f"[Kick] Connecting to chatroom {chatroom_id} for channel {channel_name}...")
             
