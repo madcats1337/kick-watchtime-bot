@@ -173,7 +173,7 @@ class KickAPI:
                 pass
             self._browser = None
 
-    async def fetch_chatroom_id(self, channel_name: str, max_retries: int = 3) -> Optional[str]:
+    async def fetch_chatroom_id(self, channel_name: str, max_retries: int = 5) -> Optional[str]:
         """
         Fetch the chatroom ID for a given Kick channel.
         Uses Playwright with stealth mode to bypass Cloudflare protection.
@@ -210,7 +210,7 @@ class KickAPI:
                     response = await page.goto(
                         f"https://kick.com/{channel_name}",
                         wait_until="domcontentloaded",
-                        timeout=20000
+                        timeout=30000
                     )
                     
                     if not response:
@@ -222,11 +222,21 @@ class KickAPI:
                         return None
                     
                     if response.status == 403:
-                        print(f"[Kick] Cloudflare protection detected (403). Waiting longer...")
-                        # Wait for Cloudflare challenge to potentially complete
-                        await asyncio.sleep(random.uniform(5, 10))
+                        print(f"[Kick] Cloudflare detected. Simulating human behavior...")
+                        # Simulate human-like behavior
+                        await asyncio.sleep(random.uniform(8, 12))
+                        
+                        # Move mouse randomly to appear human
                         try:
-                            await page.wait_for_load_state("networkidle", timeout=10000)
+                            await page.mouse.move(random.randint(100, 500), random.randint(100, 500))
+                            await asyncio.sleep(random.uniform(0.5, 1.5))
+                            await page.mouse.move(random.randint(100, 500), random.randint(100, 500))
+                        except:
+                            pass
+                        
+                        # Wait for network to settle
+                        try:
+                            await page.wait_for_load_state("networkidle", timeout=15000)
                         except:
                             pass
                         # Try to continue anyway
@@ -349,7 +359,7 @@ class KickAPI:
 _api = None
 
 
-async def fetch_chatroom_id(channel_name: str, max_retries: int = 3) -> Optional[str]:
+async def fetch_chatroom_id(channel_name: str, max_retries: int = 5) -> Optional[str]:
     """
     Convenience function to fetch chatroom ID.
     Maintains a global KickAPI instance for reuse.
