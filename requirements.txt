@@ -4,4 +4,5 @@ websockets==15.0.1
 python-dotenv==1.0.1
 SQLAlchemy==2.0.35
 psycopg2-binary==2.9.9
-requests==2.31.0playwright==1.40.0
+requests==2.31.0
+playwright==1.40.0
