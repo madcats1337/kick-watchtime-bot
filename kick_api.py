@@ -209,7 +209,7 @@ class KickAPI:
                     response = await page.goto(
                         f"https://kick.com/{channel_name}",
                         wait_until="domcontentloaded",
-                        timeout=15000
+                        timeout=20000
                     )
                     
                     if not response:
@@ -219,8 +219,18 @@ class KickAPI:
                     if response.status == 404:
                         print(f"[Kick] Channel not found: {channel_name}")
                         return None
+                    
+                    if response.status == 403:
+                        print(f"[Kick] Cloudflare protection detected (403). Waiting longer...")
+                        # Wait for Cloudflare challenge to potentially complete
+                        await asyncio.sleep(random.uniform(5, 10))
+                        try:
+                            await page.wait_for_load_state("networkidle", timeout=10000)
+                        except:
+                            pass
+                        # Try to continue anyway
                         
-                    if response.status != 200:
+                    if response.status not in [200, 403]:
                         print(f"[Kick] Unexpected status: {response.status}")
                         continue
                         
@@ -278,8 +288,9 @@ class KickAPI:
                         pass
             
             if attempt < max_retries - 1:
-                delay = 2 * (attempt + 1) + random.uniform(1, 3)
-                print(f"[Kick] Waiting {delay:.1f} seconds before next attempt")
+                # Longer delays to avoid Cloudflare rate limiting
+                delay = 5 * (attempt + 1) + random.uniform(3, 7)
+                print(f"[Kick] Waiting {delay:.1f} seconds before next attempt...")
                 await asyncio.sleep(delay)
         
         print(f"[Kick] ❌ Failed to fetch chatroom ID after {max_retries} attempts")
