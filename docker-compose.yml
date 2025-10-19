@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: kick-discord-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://kick_bot:kick_password@db:5432/kick_discord
+    depends_on:
+      - db
+    volumes:
+      - ./data:/app/data
+
+  db:
+    image: postgres:15-alpine
+    container_name: kick-discord-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=kick_discord
+      - POSTGRES_USER=kick_bot
+      - POSTGRES_PASSWORD=kick_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:
