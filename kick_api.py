@@ -404,5 +404,43 @@ async def fetch_chatroom_id(channel_name: str, max_retries: int = 5) -> Optional
         return None
 
 
+async def check_stream_live(channel_name: str) -> bool:
+    """
+    Check if a Kick channel is currently live streaming.
+    
+    Args:
+        channel_name: The Kick channel name
+        
+    Returns:
+        True if stream is live, False otherwise
+    """
+    try:
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                'User-Agent': random.choice(USER_AGENTS),
+                'Accept': 'application/json',
+                'Referer': 'https://kick.com/',
+            }
+            async with session.get(
+                f'https://kick.com/api/v2/channels/{channel_name}',
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    # Check if livestream exists and is active
+                    livestream = data.get('livestream')
+                    if livestream and isinstance(livestream, dict):
+                        # If livestream object exists and has data, stream is live
+                        return True
+                    return False
+                else:
+                    print(f"[Kick] Stream status check returned status: {response.status}")
+                    return False
+    except Exception as e:
+        print(f"[Kick] Error checking stream status: {type(e).__name__}: {str(e)}")
+        return False
+
+
 # Export all public interfaces
-__all__ = ['KickAPI', 'fetch_chatroom_id', 'USER_AGENTS', 'REFERRERS', 'COUNTRY_CODES']
+__all__ = ['KickAPI', 'fetch_chatroom_id', 'check_stream_live', 'USER_AGENTS', 'REFERRERS', 'COUNTRY_CODES']

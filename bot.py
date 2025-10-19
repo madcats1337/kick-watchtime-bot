@@ -16,7 +16,7 @@ from functools import partial
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text # type: ignore
-from kick_api import fetch_chatroom_id, KickAPI, USER_AGENTS  # Consolidated Kick API module
+from kick_api import fetch_chatroom_id, check_stream_live, KickAPI, USER_AGENTS  # Consolidated Kick API module
 
 import discord
 from discord.ext import commands, tasks
@@ -411,13 +411,20 @@ engine = create_engine(
     DATABASE_URL,
     future=True,
     pool_pre_ping=True,     # Detect disconnections
-    pool_recycle=3600,      # Recycle connections after 1 hour
-    pool_size=5,            # Maximum number of connections
-    max_overflow=10,        # Allow up to 10 connections beyond pool_size
+    pool_recycle=1800,      # Recycle connections after 30 minutes (Railway timeout)
+    pool_size=3,            # Smaller pool for Railway's connection limits
+    max_overflow=5,         # Allow up to 5 connections beyond pool_size
     pool_timeout=30,        # Wait up to 30 seconds for a connection
     echo=False,             # Don't log all SQL
-    echo_pool=True,         # Log pool checkouts for debugging
-    pool_use_lifo=True      # Last In First Out for better performance
+    echo_pool=False,        # Disable pool logging to reduce noise
+    pool_use_lifo=True,     # Last In First Out for better performance
+    connect_args={
+        "connect_timeout": 10,           # Connection timeout
+        "keepalives": 1,                 # Enable TCP keepalives
+        "keepalives_idle": 30,           # Start keepalives after 30s idle
+        "keepalives_interval": 10,       # Send keepalive every 10s
+        "keepalives_count": 5            # Drop connection after 5 failed keepalives
+    } if DATABASE_URL.startswith('postgresql') else {}
 )
 
 try:
@@ -478,6 +485,10 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # In-memory active viewer tracking
 active_viewers = {}
+
+# Stream status tracking
+is_stream_live = False
+last_stream_check = None
 
 # -------------------------
 # Kick listener functions
@@ -623,9 +634,25 @@ async def kick_chat_loop(channel_name: str):
 # -------------------------
 @tasks.loop(seconds=WATCH_INTERVAL_SECONDS)
 async def update_watchtime_task():
-    """Update watchtime for active viewers."""
+    """Update watchtime for active viewers (only when stream is live)."""
+    global is_stream_live, last_stream_check
+    
     try:
         now = datetime.now(timezone.utc)
+        
+        # Check stream status every minute to avoid excessive API calls
+        if not last_stream_check or (now - last_stream_check).total_seconds() >= 60:
+            is_stream_live = await check_stream_live(KICK_CHANNEL)
+            last_stream_check = now
+            if is_stream_live:
+                print(f"[Watchtime] ✅ {KICK_CHANNEL} is live - tracking watchtime")
+            else:
+                print(f"[Watchtime] ⏸️ {KICK_CHANNEL} is offline - pausing watchtime tracking")
+        
+        # Only track watchtime if stream is live
+        if not is_stream_live:
+            return
+        
         cutoff = now - timedelta(minutes=5)
         
         # Get active viewers who were seen recently
