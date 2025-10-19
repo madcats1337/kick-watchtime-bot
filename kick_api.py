@@ -9,6 +9,7 @@ import json
 import random
 from typing import Optional, Dict, Any
 from playwright.async_api import async_playwright
+import aiohttp
 
 # User agents for rotation
 USER_AGENTS = [
@@ -315,6 +316,30 @@ class KickAPI:
                 delay = 5 * (attempt + 1) + random.uniform(3, 7)
                 print(f"[Kick] Waiting {delay:.1f} seconds before next attempt...")
                 await asyncio.sleep(delay)
+        
+        # Final fallback: Try direct HTTP request without browser
+        print(f"[Kick] All browser attempts failed. Trying direct HTTP request as last resort...")
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {
+                    'User-Agent': random.choice(USER_AGENTS),
+                    'Accept': 'application/json',
+                    'Referer': 'https://kick.com/',
+                }
+                async with session.get(
+                    f'https://kick.com/api/v2/channels/{channel_name}',
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        chatroom_id = data.get('chatroom', {}).get('id')
+                        if chatroom_id:
+                            print(f"[Kick] ✅ Found chatroom ID via HTTP: {chatroom_id}")
+                            return str(chatroom_id)
+                    print(f"[Kick] HTTP request returned status: {response.status}")
+        except Exception as http_err:
+            print(f"[Kick] HTTP fallback error: {type(http_err).__name__}: {str(http_err)}")
         
         print(f"[Kick] ❌ Failed to fetch chatroom ID after {max_retries} attempts")
         return None
