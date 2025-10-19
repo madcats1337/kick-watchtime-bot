@@ -58,11 +58,20 @@ if not DISCORD_GUILD_ID:
     print("⚠️ Warning: DISCORD_GUILD_ID not set. Some features may be limited.")
 
 # Database configuration with cloud PostgreSQL support
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///watchtime.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+if not DATABASE_URL:
+    print("⚠️ WARNING: DATABASE_URL not set! Using in-memory SQLite database.")
+    print("⚠️ This is fine for testing but data will be lost on restart.")
+    print("⚠️ For production, set DATABASE_URL environment variable.")
+    DATABASE_URL = "sqlite:///watchtime.db"
+
 # Convert postgres:// to postgresql:// for SQLAlchemy compatibility (Heroku uses postgres://)
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
     print("📊 Converted database URL to use postgresql:// scheme")
+    
+print(f"📊 Using database: {DATABASE_URL.split('@')[1] if '@' in DATABASE_URL else 'SQLite (local)'}")
 
 WATCH_INTERVAL_SECONDS = int(os.getenv("WATCH_INTERVAL_SECONDS", "60"))
 ROLE_UPDATE_INTERVAL_SECONDS = int(os.getenv("ROLE_UPDATE_INTERVAL_SECONDS", "600"))
