@@ -1,7 +1,6 @@
 FROM python:3.11-slim
 
-# Install only essential system dependencies
-# Playwright will handle most browser-specific dependencies
+# Install system dependencies for Playwright browsers
 RUN apt-get update && apt-get install -y \
     wget \
     ca-certificates \
@@ -13,6 +12,7 @@ RUN apt-get update && apt-get install -y \
     libcups2 \
     libdrm2 \
     libdbus-1-3 \
+    libdbus-glib-1-2 \
     libxkbcommon0 \
     libxcomposite1 \
     libxdamage1 \
