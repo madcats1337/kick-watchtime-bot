@@ -258,18 +258,21 @@ class KickAPI:
                 
                 # Try multiple methods to extract chatroom ID
                 chatroom_id = await page.evaluate("""() => {
-                    // Method 1: Look for chatroom ID in script tags
+                    // Method 1: Look for chatroom ID in script tags with more patterns
                     const scripts = document.querySelectorAll('script');
                     for (const script of scripts) {
                         const text = script.textContent || '';
                         
-                        // Look for chatroom_id in various formats
+                        // Look for chatroom_id in various formats including nested objects
                         const patterns = [
                             /"chatroom_id":\s*(\d+)/,
                             /'chatroom_id':\s*(\d+)/,
                             /chatroom_id:\s*(\d+)/,
                             /"chatroomId":\s*(\d+)/,
-                            /chatroomId:\s*(\d+)/
+                            /chatroomId:\s*(\d+)/,
+                            /"chatroom":\s*\{[^}]*"id":\s*(\d+)/,
+                            /'chatroom':\s*\{[^}]*'id':\s*(\d+)/,
+                            /chatroom:\s*\{[^}]*id:\s*(\d+)/,
                         ];
                         
                         for (const pattern of patterns) {
@@ -278,7 +281,21 @@ class KickAPI:
                         }
                     }
                     
-                    // Method 2: Check window/global objects
+                    // Method 2: Look for __NUXT__ or __INITIAL_STATE__ data
+                    if (window.__NUXT__) {
+                        const nuxt = window.__NUXT__;
+                        // Try to find chatroom in various nested paths
+                        try {
+                            if (nuxt.data && nuxt.data[0] && nuxt.data[0].chatroom) {
+                                return String(nuxt.data[0].chatroom.id);
+                            }
+                            if (nuxt.state && nuxt.state.chatroom) {
+                                return String(nuxt.state.chatroom.id);
+                            }
+                        } catch(e) {}
+                    }
+                    
+                    // Method 3: Check window/global objects
                     if (window.chatroomId) return String(window.chatroomId);
                     if (window.chatroom_id) return String(window.chatroom_id);
                     
