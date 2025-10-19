@@ -737,6 +737,35 @@ async def update_roles_task():
                 try:
                     await member.add_roles(role, reason=f"Reached {role_info['minutes']} min watchtime")
                     print(f"[Discord] Assigned {role.name} to {member.display_name} ({kick_name})")
+                    
+                    # Send DM notification to user
+                    try:
+                        hours = minutes / 60
+                        embed = discord.Embed(
+                            title="🎉 New Role Unlocked!",
+                            description=f"Congratulations! You've earned the **{role.name}** role!",
+                            color=0x53FC18
+                        )
+                        embed.add_field(
+                            name="Your Watchtime",
+                            value=f"{minutes:.0f} minutes ({hours:.1f} hours)",
+                            inline=False
+                        )
+                        embed.add_field(
+                            name="Keep Watching",
+                            value="Continue watching to unlock more exclusive roles!",
+                            inline=False
+                        )
+                        embed.set_footer(text=f"Kick: {kick_name}")
+                        
+                        await member.send(embed=embed)
+                        print(f"[Discord] Sent role notification DM to {member.display_name}")
+                    except discord.Forbidden:
+                        # User has DMs disabled
+                        print(f"[Discord] Could not DM {member.display_name} (DMs disabled)")
+                    except Exception as dm_error:
+                        print(f"[Discord] Error sending DM: {dm_error}")
+                        
                 except discord.Forbidden:
                     print(f"[Discord] Missing permission to assign {role.name}")
                 except Exception as e:
