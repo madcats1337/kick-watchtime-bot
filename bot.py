@@ -1,17 +1,44 @@
 import os
 import json
+import time
 import random
 import string
 import asyncio
 import aiohttp
+import ssl
+import requests
 import websockets
+from typing import Optional
+from playwright.async_api import async_playwright
+from kick_api import USER_AGENTS
 from datetime import datetime, timedelta, timezone
+from functools import partial
 
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text # type: ignore
+from kick_api import fetch_chatroom_id, KickAPI, USER_AGENTS  # Consolidated Kick API module
 
 import discord
 from discord.ext import commands, tasks
+
+# -------------------------
+# Command checks and utils
+# -------------------------
+def in_guild():
+    """Check if command is used in the configured guild."""
+    async def predicate(ctx):
+        if not DISCORD_GUILD_ID:
+            return True
+        return ctx.guild and ctx.guild.id == DISCORD_GUILD_ID
+    return commands.check(predicate)
+
+def has_manage_roles():
+    """Check if user has manage roles permission."""
+    async def predicate(ctx):
+        if not ctx.guild:
+            return False
+        return ctx.author.guild_permissions.manage_roles
+    return commands.check(predicate)
 
 # -------------------------
 # Load config
@@ -19,13 +46,60 @@ from discord.ext import commands, tasks
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-DISCORD_GUILD_ID = int(os.getenv("DISCORD_GUILD_ID")) if os.getenv("DISCORD_GUILD_ID") else None
-KICK_CHANNEL = os.getenv("KICK_CHANNEL")
+if not DISCORD_TOKEN:
+    raise ValueError("DISCORD_TOKEN not found in environment variables")
 
+KICK_CHANNEL = os.getenv("KICK_CHANNEL")
+if not KICK_CHANNEL:
+    raise ValueError("KICK_CHANNEL not found in environment variables")
+
+DISCORD_GUILD_ID = int(os.getenv("DISCORD_GUILD_ID")) if os.getenv("DISCORD_GUILD_ID") else None
+if not DISCORD_GUILD_ID:
+    print("⚠️ Warning: DISCORD_GUILD_ID not set. Some features may be limited.")
+
+# Database configuration with cloud PostgreSQL support
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///watchtime.db")
+# Convert postgres:// to postgresql:// for SQLAlchemy compatibility (Heroku uses postgres://)
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    print("📊 Converted database URL to use postgresql:// scheme")
+
 WATCH_INTERVAL_SECONDS = int(os.getenv("WATCH_INTERVAL_SECONDS", "60"))
 ROLE_UPDATE_INTERVAL_SECONDS = int(os.getenv("ROLE_UPDATE_INTERVAL_SECONDS", "600"))
 CODE_EXPIRY_MINUTES = int(os.getenv("CODE_EXPIRY_MINUTES", "10"))
+
+# URLs and Pusher config
+KICK_API_BASE = "https://kick.com"
+KICK_API_CHANNEL = f"{KICK_API_BASE}/api/v2/channels"
+KICK_API_USER = f"{KICK_API_BASE}/api/v2/users"  # Updated to v2 API
+
+# Browser configuration for API requests
+CHROME_VERSION = "118.0.0.0"
+BROWSER_CONFIG = {
+    "headers": {
+        "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{CHROME_VERSION} Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Sec-Ch-Ua": f'"Google Chrome";v="{CHROME_VERSION}", "Chromium";v="{CHROME_VERSION}", "Not=A?Brand";v="24"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        "Connection": "keep-alive"
+    }
+}
+
+PUSHER_CONFIG = {
+    "key": "32cbd69e4b950bf97679",  # Updated Pusher key
+    "cluster": "us2",
+    "version": "8.4.0",             # Updated version
+    "protocol": 7,
+}
+KICK_CHAT_WS = f"wss://ws-{PUSHER_CONFIG['cluster']}.pusher.com/app/{PUSHER_CONFIG['key']}"  # Standard Pusher WebSocket endpoint
 
 # Role thresholds in minutes
 WATCHTIME_ROLES = [
@@ -34,23 +108,338 @@ WATCHTIME_ROLES = [
     {"name": "💎 Elite Viewer", "minutes": 1000},
 ]
 
-# Kick API / websocket
-KICK_API_CHANNEL = "https://kick.com/api/v2/channels"
-KICK_CHAT_WS = "wss://ws-us3.pusher.com/app/dd11c46dae0376080879?protocol=7&client=js&version=8.4.0&flash=false"
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "Host": "kick.com",
+    "Pragma": "no-cache",
+    "Referer": "https://kick.com/",
+    "Origin": "https://kick.com",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+}
+
+# -------------------------
+# Utility functions
+# -------------------------
+_kick_api = None
+
+async def get_kick_api():
+    """Get or create a KickAPI instance."""
+    global _kick_api
+    if _kick_api is None:
+        from kick_api import KickAPI
+        _kick_api = KickAPI()
+        await _kick_api.setup()
+    return _kick_api
+
+async def get_kick_bio(username: str) -> Optional[dict]:
+    """Get a Kick user's bio using Playwright."""
+    print(f"[Verify] Fetching bio for {username} using Playwright...")
+    browser = None
+    context = None
+    page = None
+    
+    try:
+        async with async_playwright() as p:
+            try:
+                # Try Firefox first (often bypasses Cloudflare better than Chromium)
+                try:
+                    browser = await p.firefox.launch(
+                        headless=True,
+                        firefox_user_prefs={
+                            "dom.webdriver.enabled": False,
+                            "useAutomationExtension": False,
+                            "general.platform.override": "Win32",
+                            "general.useragent.override": random.choice(USER_AGENTS)
+                        }
+                    )
+                    print("[Verify] Using Firefox browser")
+                except Exception as ff_error:
+                    print(f"[Verify] Firefox not available ({ff_error}), falling back to Chromium")
+                    # Fallback to Chromium with enhanced stealth
+                    browser = await p.chromium.launch(
+                        headless=True,
+                        args=[
+                            '--disable-blink-features=AutomationControlled',
+                            '--disable-web-security',
+                            '--disable-features=IsolateOrigins,site-per-process',
+                            '--no-sandbox',
+                            '--window-size=1920,1080',
+                            '--disable-setuid-sandbox',
+                            '--disable-dev-shm-usage',
+                            '--disable-accelerated-2d-canvas',
+                            '--no-first-run',
+                            '--no-zygote',
+                            '--disable-gpu',
+                            '--hide-scrollbars',
+                            '--mute-audio'
+                        ]
+                    )
+                    print("[Verify] Using Chromium browser")
+                
+                # Enhanced browser context with more realistic settings
+                context = await browser.new_context(
+                    user_agent=random.choice(USER_AGENTS),
+                    viewport={'width': 1920, 'height': 1080},
+                    bypass_csp=True,
+                    ignore_https_errors=True,
+                    extra_http_headers={
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'Connection': 'keep-alive',
+                        'Upgrade-Insecure-Requests': '1',
+                        'Sec-Fetch-Dest': 'document',
+                        'Sec-Fetch-Mode': 'navigate',
+                        'Sec-Fetch-Site': 'none',
+                        'Sec-Fetch-User': '?1',
+                        'Cache-Control': 'no-cache',
+                        'Pragma': 'no-cache'
+                    },
+                    java_script_enabled=True,
+                    locale='en-US',
+                    timezone_id='America/New_York',
+                    color_scheme='light',
+                    permissions=['geolocation']
+                )
+                
+                # Configure page to evade detection
+                page = await context.new_page()
+                await page.set_viewport_size({"width": 1920, "height": 1080})
+                
+                # Add evasion scripts
+                await page.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+                    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+                """)
+                
+                print(f"[Verify] Navigating to profile about page...")
+                
+                # First try with shorter timeout
+                try:
+                    # Add random delay before navigation
+                    await asyncio.sleep(random.uniform(1, 3))
+                    
+                    response = await page.goto(
+                        f"https://kick.com/{username}/about",
+                        wait_until="domcontentloaded",
+                        timeout=15000
+                    )
+                except Exception as e:
+                    print(f"[Verify] Initial load timeout, retrying with different strategy: {str(e)}")
+                    
+                    # Clear cookies and cache before retry
+                    await context.clear_cookies()
+                    await page.evaluate("() => { localStorage.clear(); sessionStorage.clear(); }")
+                    
+                    # Add random delay before retry
+                    await asyncio.sleep(random.uniform(2, 4))
+                    
+                    # Try again with networkidle strategy
+                    response = await page.goto(
+                        f"https://kick.com/{username}/about",
+                        wait_until="networkidle",
+                        timeout=20000
+                    )
+                    
+                    # Handle Cloudflare if needed
+                    if response.status == 403:
+                        print("[Verify] Detected Cloudflare protection, waiting for challenge...")
+                        try:
+                            # Wait for Cloudflare to resolve
+                            await page.wait_for_load_state("networkidle", timeout=30000)
+                            # Get new response after challenge
+                            response = await page.goto(
+                                f"https://kick.com/{username}/about",
+                                wait_until="networkidle",
+                                timeout=15000
+                            )
+                        except Exception as cf_e:
+                            print(f"[Verify] Failed to bypass protection: {str(cf_e)}")
+                            return None
+                
+                if not response:
+                    print("[Verify] No response from page navigation")
+                    return None
+                
+                if response.status == 404:
+                    print("[Verify] Profile page not found")
+                    return None
+                
+                if response.status != 200:
+                    print(f"[Verify] Unexpected status code: {response.status}")
+                    return None
+                
+                # Wait for specific elements
+                try:
+                    await page.wait_for_selector(
+                        'script[type="application/json"], meta[property="og:title"], .profile-header',
+                        timeout=5000
+                    )
+                except Exception as e:
+                    print(f"[Verify] Warning - page elements not fully loaded: {str(e)}")
+                
+                # Extract user data with multiple fallback methods
+                user_data = await page.evaluate("""() => {
+                    // Method 1: Find data in JSON script tags
+                    const scripts = document.querySelectorAll('script[type="application/json"]');
+                    for (const script of scripts) {
+                        try {
+                            const data = JSON.parse(script.textContent);
+                            if (data && data.user) return data.user;
+                        } catch (e) {}
+                    }
+                    
+                    // Method 2: Search inline scripts
+                    const allScripts = document.querySelectorAll('script');
+                    for (const script of allScripts) {
+                        const text = script.textContent || '';
+                        if (text.includes('"user":')) {
+                            try {
+                                const match = text.match(/user":\s*({[^}]+})/);
+                                if (match) return JSON.parse(match[1]);
+                            } catch (e) {}
+                        }
+                    }
+                    
+                    // Method 3: Check meta description
+                    const bioMeta = document.querySelector('meta[name="description"]');
+                    if (bioMeta) {
+                        return { bio: bioMeta.content };
+                    }
+                    
+                    // Method 4: Try various profile selectors
+                    const bioSelectors = [
+                        '.profile-card-description',
+                        '.profile-bio',
+                        '.channel-profile-bio',
+                        '[data-bio]',
+                        '.bio',
+                        '.user-bio'
+                    ];
+                    
+                    for (const selector of bioSelectors) {
+                        const element = document.querySelector(selector);
+                        if (element) {
+                            return { bio: element.textContent.trim() };
+                        }
+                    }
+                    
+                    return null;
+                }""")
+                
+                if user_data:
+                    print("[Verify] Successfully found user data")
+                return user_data
+                
+            except Exception as e:
+                print(f"[Verify] Error during profile access: {str(e)}")
+                # Attempt to capture error state
+                try:
+                    if page:
+                        await page.screenshot(path=f"debug_{username}_error.png")
+                        print(f"[Verify] Saved error screenshot to debug_{username}_error.png")
+                except:
+                    pass
+                return None
+                
+            finally:
+                if page:
+                    await page.close()
+                if context:
+                    await context.close()
+                if browser:
+                    await browser.close()
+                    
+    except Exception as e:
+        print(f"[Verify] Playwright initialization error: {str(e)}")
+        return None
+
+# -------------------------
+# Database setup and utilities
+# -------------------------
+
+class DBConnection:
+    """Context manager for safe database connections."""
+    def __init__(self):
+        self.conn = None
+
+    async def __aenter__(self):
+        retries = 3
+        while retries > 0:
+            try:
+                self.conn = engine.connect()
+                return self.conn
+            except Exception as e:
+                retries -= 1
+                if retries == 0:
+                    raise
+                await asyncio.sleep(1)
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self.conn:
+            self.conn.close()
 
 # -------------------------
 # Database setup
 # -------------------------
-engine = create_engine(DATABASE_URL, future=True)
+engine = create_engine(
+    DATABASE_URL,
+    future=True,
+    pool_pre_ping=True,     # Detect disconnections
+    pool_recycle=3600,      # Recycle connections after 1 hour
+    pool_size=5,            # Maximum number of connections
+    max_overflow=10,        # Allow up to 10 connections beyond pool_size
+    pool_timeout=30,        # Wait up to 30 seconds for a connection
+    echo=False,             # Don't log all SQL
+    echo_pool=True,         # Log pool checkouts for debugging
+    pool_use_lifo=True      # Last In First Out for better performance
+)
 
-with engine.begin() as conn:
-    conn.execute(text("""
-    CREATE TABLE IF NOT EXISTS watchtime (
-        username TEXT PRIMARY KEY,
-        minutes INTEGER DEFAULT 0,
-        last_active TIMESTAMP
-    );
-    """))
+try:
+    with engine.begin() as conn:
+        # Create watchtime table
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS watchtime (
+            username TEXT PRIMARY KEY,
+            minutes INTEGER DEFAULT 0,
+            last_active TIMESTAMP
+        );
+        """))
+        
+        # Create links table
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS links (
+            discord_id BIGINT PRIMARY KEY,
+            kick_name TEXT UNIQUE
+        );
+        """))
+        
+        # Create pending_links table
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS pending_links (
+            discord_id BIGINT PRIMARY KEY,
+            kick_name TEXT,
+            code TEXT,
+            timestamp TEXT
+        );
+        """))
+    print("✅ Database tables initialized successfully")
+except Exception as e:
+    print(f"⚠️ Database initialization error: {e}")
+    raise
     conn.execute(text("""
     CREATE TABLE IF NOT EXISTS links (
         discord_id BIGINT PRIMARY KEY,
@@ -81,23 +470,18 @@ active_viewers = {}
 # -------------------------
 # Kick listener functions
 # -------------------------
-async def fetch_chatroom_id(channel_name: str):
-    """Fetch chatroom id via Kick channel API."""
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{KICK_API_CHANNEL}/{channel_name}", timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status != 200:
-                    print(f"[Kick] Channel API returned {resp.status} for {channel_name}")
-                    return None
-                data = await resp.json()
-                
-                # Extract chatroom id from response
-                if "chatroom" in data and isinstance(data["chatroom"], dict):
-                    return data["chatroom"].get("id")
-                return None
-    except Exception as e:
-        print(f"[Kick] fetch_chatroom_id error: {e}")
-        return None
+# Browser-like headers for requests
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Connection": "keep-alive",
+    "Host": "kick.com",
+    "Origin": "https://kick.com"
+}
 
 async def kick_chat_loop(channel_name: str):
     """Connect to Kick's Pusher WebSocket and listen for chat messages."""
@@ -111,12 +495,55 @@ async def kick_chat_loop(channel_name: str):
 
             print(f"[Kick] Connecting to chatroom {chatroom_id} for channel {channel_name}...")
             
-            # Connect to Pusher WebSocket
-            async with websockets.connect(KICK_CHAT_WS, max_size=None) as ws:
-                print("[Kick] WebSocket connected, subscribing to channel...")
+            # Build WebSocket URL matching successful connection pattern
+            ws_url = (
+                f"{KICK_CHAT_WS}"
+                f"?protocol={PUSHER_CONFIG['protocol']}"
+                f"&client=js"
+                f"&version={PUSHER_CONFIG['version']}"
+                f"&flash=false"
+                f"&cluster={PUSHER_CONFIG['cluster']}"
+            )
+            print(f"[Kick] Connecting to WebSocket: {ws_url}")
+            
+            # Prepare SSL context
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            
+            # Connect to Pusher WebSocket with headers
+            async with websockets.connect(
+                ws_url,
+                max_size=None,
+                ssl=ssl_context,
+                additional_headers={
+                    "User-Agent": BROWSER_HEADERS["User-Agent"],
+                    "Origin": "https://kick.com",
+                    "Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits",
+                }
+            ) as ws:
+                print("[Kick] WebSocket connected, waiting for server response...")
                 
-                # Subscribe to the chatroom channel
-                subscribe_msg = json.dumps({
+                # Wait for connection established
+                response = await ws.recv()
+                print(f"[Kick] Initial response: {response}")
+                response_data = json.loads(response)
+                
+                # Handle connection errors
+                if response_data.get("event") == "pusher:error":
+                    error_data = response_data.get("data", {})
+                    error_code = error_data.get("code")
+                    error_message = error_data.get("message")
+                    raise Exception(f"WebSocket error code {error_code}: {error_message}")
+                
+                # Handle successful connection
+                if response_data.get("event") == "pusher:connection_established":
+                    socket_details = json.loads(response_data["data"])
+                    socket_id = socket_details["socket_id"]
+                    print(f"[Kick] Got socket_id: {socket_id}")
+                    
+                    # Subscribe to the chatroom channel
+                    subscribe_msg = json.dumps({
                     "event": "pusher:subscribe",
                     "data": {
                         "auth": "",
@@ -180,34 +607,79 @@ async def kick_chat_loop(channel_name: str):
 @tasks.loop(seconds=WATCH_INTERVAL_SECONDS)
 async def update_watchtime_task():
     """Update watchtime for active viewers."""
-    now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(minutes=5)
-    
-    with engine.begin() as conn:
-        for user, last_seen in list(active_viewers.items()):
-            if last_seen and last_seen >= cutoff:
-                # Add 1 minute of watchtime per interval
-                minutes_to_add = WATCH_INTERVAL_SECONDS / 60
-                conn.execute(text("""
-                    INSERT INTO watchtime (username, minutes, last_active)
-                    VALUES (:u, :m, :t)
-                    ON CONFLICT(username) DO UPDATE SET
-                        minutes = watchtime.minutes + :m,
-                        last_active = :t
-                """), {"u": user, "m": minutes_to_add, "t": last_seen.isoformat()})
+    try:
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(minutes=5)
+        
+        # Get active viewers who were seen recently
+        active_users = {
+            user: last_seen 
+            for user, last_seen in list(active_viewers.items())
+            if last_seen and last_seen >= cutoff
+        }
+        
+        if not active_users:
+            return  # No active users to update
+            
+        # Calculate minutes to add
+        minutes_to_add = WATCH_INTERVAL_SECONDS / 60
+        
+        # Update all active users in a single transaction
+        with engine.begin() as conn:
+            for user, last_seen in active_users.items():
+                try:
+                    conn.execute(text("""
+                        INSERT INTO watchtime (username, minutes, last_active)
+                        VALUES (:u, :m, :t)
+                        ON CONFLICT(username) DO UPDATE SET
+                            minutes = watchtime.minutes + :m,
+                            last_active = :t
+                    """), {
+                        "u": user,
+                        "m": minutes_to_add,
+                        "t": last_seen.isoformat()
+                    })
+                except Exception as e:
+                    print(f"⚠️ Error updating watchtime for {user}: {e}")
+                    continue  # Skip this user but continue with others
+                    
+    except Exception as e:
+        print(f"⚠️ Error in watchtime update task: {e}")
+        await asyncio.sleep(5)  # Wait before retrying
 
 # -------------------------
 # Role updater task
 # -------------------------
 @tasks.loop(seconds=ROLE_UPDATE_INTERVAL_SECONDS)
 async def update_roles_task():
-    """Assign Discord roles based on watchtime thresholds."""
-    if DISCORD_GUILD_ID is None:
-        return
+    """Update Discord roles based on watchtime."""
+    try:
+        if not DISCORD_GUILD_ID:
+            print("⚠️ Role updates disabled: DISCORD_GUILD_ID not set")
+            return
 
-    guild = bot.get_guild(DISCORD_GUILD_ID)
-    if not guild:
-        return
+        guild = bot.get_guild(DISCORD_GUILD_ID)
+        if not guild:
+            print(f"⚠️ Could not find guild with ID {DISCORD_GUILD_ID}")
+            return
+            
+        # Validate bot permissions
+        if not guild.me.guild_permissions.manage_roles:
+            print("⚠️ Bot lacks manage_roles permission!")
+            return
+            
+        # Cache role objects and validate they exist
+        role_cache = {}
+        for role_info in WATCHTIME_ROLES:
+            role = discord.utils.get(guild.roles, name=role_info["name"])
+            if not role:
+                print(f"⚠️ Role {role_info['name']} not found in server!")
+                continue
+            role_cache[role_info["name"]] = role
+            
+    except Exception as e:
+        print(f"⚠️ Error in role update task: {e}")
+        await asyncio.sleep(5)  # Wait before retrying
 
     with engine.connect() as conn:
         rows = conn.execute(text("""
@@ -268,16 +740,59 @@ async def cleanup_pending_links_task():
             pass
 
 # -------------------------
+# Command cooldowns and checks
+# -------------------------
+class CommandCooldowns:
+    # Cooldown settings
+    LINK_COOLDOWN = commands.CooldownMapping.from_cooldown(1, 60, commands.BucketType.user)
+    VERIFY_COOLDOWN = commands.CooldownMapping.from_cooldown(1, 30, commands.BucketType.user)
+    LEADERBOARD_COOLDOWN = commands.CooldownMapping.from_cooldown(1, 30, commands.BucketType.channel)
+    WATCHTIME_COOLDOWN = commands.CooldownMapping.from_cooldown(1, 15, commands.BucketType.user)
+    UNLINK_COOLDOWN = commands.CooldownMapping.from_cooldown(1, 300, commands.BucketType.user)
+
+def dynamic_cooldown(cooldown_mapping):
+    async def predicate(ctx):
+        bucket = cooldown_mapping.get_bucket(ctx.message)
+        retry_after = bucket.update_rate_limit()
+        if retry_after:
+            raise commands.CommandOnCooldown(bucket, retry_after, cooldown_mapping._type)
+        return True
+    return commands.check(predicate)
+
+# -------------------------
 # Commands
 # -------------------------
+def in_guild():
+    """Check if command is used in the configured guild."""
+    async def predicate(ctx):
+        if not DISCORD_GUILD_ID:
+            return True
+        return ctx.guild and ctx.guild.id == DISCORD_GUILD_ID
+    return commands.check(predicate)
+
 @bot.command(name="link")
+@commands.cooldown(1, 60, commands.BucketType.user)  # One use per minute per user
+@in_guild()
 async def cmd_link(ctx, kick_username: str):
     """Generate a verification code to link Kick account to Discord."""
-    discord_id = ctx.author.id
-    kick_username = kick_username.lower()
-    
-    # Check if this Kick account is already linked to another Discord user
-    with engine.connect() as conn:
+    try:
+        discord_id = ctx.author.id
+        kick_username = kick_username.lower()
+        
+        # Check if this Kick account is already linked to another Discord user
+        with engine.connect() as conn:
+            existing = conn.execute(text(
+                "SELECT discord_id FROM links WHERE kick_name = :k"
+            ), {"k": kick_username}).fetchone()
+            
+            if existing and existing[0] != discord_id:
+                await ctx.send(
+                    f"❌ The Kick account **{kick_username}** is already linked to another Discord user."
+                )
+                return
+    except Exception as e:
+        print(f"⚠️ Error in link command: {e}")
+        await ctx.send("❌ An error occurred while checking account linkage. Please try again.")
         existing = conn.execute(text(
             "SELECT discord_id FROM links WHERE kick_name = :k"
         ), {"k": kick_username}).fetchone()
@@ -312,10 +827,14 @@ async def cmd_link(ctx, kick_username: str):
     )
 
 @bot.command(name="verify")
+@dynamic_cooldown(CommandCooldowns.VERIFY_COOLDOWN)
+@in_guild()
 async def cmd_verify(ctx, kick_username: str):
     """Verify Kick account ownership by checking bio for code."""
     discord_id = ctx.author.id
     kick_username = kick_username.lower()
+    
+    print(f"[Verify] Starting verification for {kick_username}")
     
     # Check for pending verification
     with engine.connect() as conn:
@@ -333,6 +852,23 @@ async def cmd_verify(ctx, kick_username: str):
     code, ts = row
     ts_dt = datetime.fromisoformat(ts)
     
+    # Get user profile using Playwright
+    try:
+        user_data = await get_kick_bio(kick_username)
+        if not user_data:
+            await ctx.send("❌ Couldn't find that Kick user. Check the spelling and try again.")
+            return
+            
+        # Get bio from user data
+        bio = user_data.get("bio", "")
+        if not bio:
+            await ctx.send("❌ Couldn't read user's bio. Make sure you've added the verification code.")
+            return
+    except Exception as e:
+        print(f"[Verify] Error fetching bio: {e}")
+        await ctx.send("❌ Error accessing Kick profile. Try again later.")
+        return
+    
     # Check if code expired
     if datetime.now(timezone.utc) - ts_dt > timedelta(minutes=CODE_EXPIRY_MINUTES):
         with engine.begin() as conn:
@@ -344,24 +880,53 @@ async def cmd_verify(ctx, kick_username: str):
 
     # Fetch Kick user profile to check bio
     try:
-        async with aiohttp.ClientSession() as sess:
-            async with sess.get(
-                f"{KICK_API_CHANNEL}/{kick_username}",
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
-                if resp.status != 200:
-                    await ctx.send(
-                        "❌ Couldn't find that Kick user. Check the spelling and try again."
-                    )
-                    return
-                data = await resp.json()
+        # Enhanced browser-like headers
+        verify_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Referer": "https://kick.com/",
+            "DNT": "1",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-User": "?1",
+            "Sec-Fetch-Dest": "document",
+            "sec-ch-ua": '"Chromium";v="118", "Google Chrome";v="118", "Not=A?Brand";v="99"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"'
+        }
+
+        # Use Playwright to fetch bio from the about page
+        print(f"[Verify] Fetching profile data for {kick_username}")
+        user_data = await get_kick_bio(kick_username)
+        
+        if user_data is None:
+            await ctx.send(
+                "❌ Couldn't access Kick profile. The user might not exist or Kick is temporarily unavailable. Try again later."
+            )
+            return
+        
+        # Extract bio from user data
+        bio = user_data.get('bio', '') if isinstance(user_data, dict) else ''
+        
+        if not bio:
+            await ctx.send(
+                "❌ No bio found on this Kick profile. Please add your verification code to your Kick bio and try again."
+            )
+            return
+                
+    except asyncio.TimeoutError:
+        await ctx.send("❌ Request timed out. Please try again.")
+        return
     except Exception as e:
-        print(f"[Verify] API error: {e}")
-        await ctx.send("❌ Error contacting Kick API. Try again later.")
+        print(f"[Verify] Error during verification: {type(e).__name__}: {e}")
+        await ctx.send("❌ Error contacting Kick. Try again later.")
         return
 
     # Check if code is in bio
-    bio = data.get("bio") or ""
     if code in bio:
         with engine.begin() as conn:
             # Link accounts
@@ -441,8 +1006,10 @@ async def cmd_leaderboard(ctx, top: int = 10):
     await ctx.send(embed=embed)
 
 @bot.command(name="watchtime")
-async def cmd_watchtime(ctx):
-    """Check your current watchtime."""
+@dynamic_cooldown(CommandCooldowns.WATCHTIME_COOLDOWN)
+@in_guild()
+async def cmd_watchtime(ctx, user: str = None):
+    """Check watchtime for yourself or another user."""
     discord_id = ctx.author.id
     
     with engine.connect() as conn:
@@ -498,18 +1065,41 @@ async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
     print(f"📺 Monitoring Kick channel: {KICK_CHANNEL}")
     
-    # Start background tasks
-    if not update_watchtime_task.is_running():
-        update_watchtime_task.start()
-        print("✅ Watchtime updater started")
-    
-    if not update_roles_task.is_running():
-        update_roles_task.start()
-        print("✅ Role updater started")
-    
-    if not cleanup_pending_links_task.is_running():
-        cleanup_pending_links_task.start()
-        print("✅ Cleanup task started")
+    try:
+        # Ensure we're connected to the right guild
+        if DISCORD_GUILD_ID:
+            guild = bot.get_guild(DISCORD_GUILD_ID)
+            if not guild:
+                print(f"⚠️ Could not find guild with ID {DISCORD_GUILD_ID}")
+                return
+            
+            # Validate bot permissions
+            me = guild.me
+            if not me.guild_permissions.manage_roles:
+                print("⚠️ Bot lacks manage_roles permission!")
+                return
+            
+            # Validate roles exist
+            existing_roles = {role.name for role in guild.roles}
+            for role_config in WATCHTIME_ROLES:
+                if role_config["name"] not in existing_roles:
+                    print(f"⚠️ Role {role_config['name']} does not exist in the server!")
+        
+        # Start background tasks
+        if not update_watchtime_task.is_running():
+            update_watchtime_task.start()
+            print("✅ Watchtime updater started")
+        
+        if not update_roles_task.is_running():
+            update_roles_task.start()
+            print("✅ Role updater started")
+        
+        if not cleanup_pending_links_task.is_running():
+            cleanup_pending_links_task.start()
+            print("✅ Cleanup task started")
+            
+    except Exception as e:
+        print(f"⚠️ Error during startup: {e}")
 
     # Start Kick chat listener
     bot.loop.create_task(kick_chat_loop(KICK_CHANNEL))
@@ -522,6 +1112,29 @@ async def on_command_error(ctx, error):
         await ctx.send(f"❌ Missing argument: `{error.param.name}`")
     elif isinstance(error, commands.CommandNotFound):
         pass  # Ignore unknown commands
+    elif isinstance(error, commands.CommandOnCooldown):
+        # Format cooldown message
+        seconds = int(error.retry_after)
+        if seconds < 60:
+            await ctx.send(f"⏳ Please wait {seconds} seconds before using this command again.")
+        else:
+            minutes = seconds // 60
+            await ctx.send(f"⏳ Please wait {minutes} minutes before using this command again.")
+    elif isinstance(error, commands.CheckFailure):
+        if "in_guild" in str(error):
+            await ctx.send("❌ This command can only be used in the configured server.")
+        else:
+            await ctx.send("❌ You don't have permission to use this command.")
+    elif isinstance(error, discord.HTTPException):
+        if error.code == 429:  # Rate limit error
+            retry_after = error.retry_after
+            if retry_after > 1:  # If retry_after is significant
+                await ctx.send(f"⚠️ Rate limited. Please try again in {int(retry_after)} seconds.")
+            else:
+                await ctx.send("⚠️ Too many requests. Please try again in a moment.")
+        else:
+            print(f"[HTTP Error] {error}")
+            await ctx.send("❌ A network error occurred. Please try again.")
     else:
         print(f"[Error] {error}")
         await ctx.send("❌ An error occurred. Please try again.")
