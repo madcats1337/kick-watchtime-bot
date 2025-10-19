@@ -241,6 +241,10 @@ class KickAPI:
                 # Wait for page to settle
                 await asyncio.sleep(random.uniform(1, 3))
                 
+                # Debug: Check page title and content
+                page_title = await page.title()
+                print(f"[Kick] Page title: {page_title}")
+                
                 # Try multiple methods to extract chatroom ID
                 chatroom_id = await page.evaluate("""() => {
                     // Method 1: Look for chatroom ID in script tags
@@ -275,7 +279,26 @@ class KickAPI:
                     await page.close()
                     return chatroom_id
                 else:
-                    print(f"[Kick] Could not find chatroom ID in page content")
+                    # Try alternative method: Fetch from Kick API directly
+                    print(f"[Kick] Could not find chatroom ID in page content, trying API endpoint...")
+                    try:
+                        api_response = await page.evaluate(f"""async () => {{
+                            const response = await fetch('https://kick.com/api/v2/channels/{channel_name}');
+                            if (response.ok) {{
+                                const data = await response.json();
+                                return data.chatroom?.id || null;
+                            }}
+                            return null;
+                        }}""")
+                        
+                        if api_response:
+                            print(f"[Kick] ✅ Found chatroom ID from API: {api_response}")
+                            await page.close()
+                            return api_response
+                        else:
+                            print(f"[Kick] API endpoint also failed to return chatroom ID")
+                    except Exception as api_err:
+                        print(f"[Kick] API fetch error: {type(api_err).__name__}: {str(api_err)}")
                     
             except Exception as e:
                 print(f"[Kick] Browser error: {type(e).__name__}: {str(e)}")
