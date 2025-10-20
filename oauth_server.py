@@ -381,5 +381,8 @@ def render_error(message):
 
 
 if __name__ == '__main__':
-    port = int(os.getenv('PORT', 8000))
+    # Use OAUTH_PORT if set, otherwise use PORT, otherwise default to 8000
+    # This allows Flask to run on a different port than Railway's main PORT
+    port = int(os.getenv('OAUTH_PORT', os.getenv('PORT', 8000)))
+    print(f"🚀 Starting OAuth server on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False)

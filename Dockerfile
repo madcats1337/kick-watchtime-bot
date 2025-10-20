@@ -39,5 +39,5 @@ COPY . .
 
 ENV PYTHONUNBUFFERED=1
 
-# Run both OAuth server and Discord bot using Python startup script
-CMD ["python", "start.py"]
+# Run combined server (Flask as main process, bot as background thread)
+CMD ["python", "-u", "combined_server.py"]
