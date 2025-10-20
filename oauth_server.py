@@ -255,8 +255,27 @@ def auth_kick_callback():
             
             # Clean up used OAuth state
             conn.execute(text("DELETE FROM oauth_states WHERE state = :state"), {"state": state})
+            
+            # Create notification for bot to send success message
+            # Create table if not exists
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS oauth_notifications (
+                    id SERIAL PRIMARY KEY,
+                    discord_id BIGINT NOT NULL,
+                    kick_username TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    processed BOOLEAN DEFAULT FALSE
+                )
+            """))
+            
+            # Insert notification
+            conn.execute(text("""
+                INSERT INTO oauth_notifications (discord_id, kick_username)
+                VALUES (:d, :k)
+            """), {"d": discord_id, "k": kick_username})
         
-        return render_success(kick_username)
+        print(f"✅ OAuth link successful: Discord {discord_id} -> Kick {kick_username}", flush=True)
+        return render_success(kick_username, discord_id)
         
     except Exception as e:
         print(f"❌ [OAuth] Error during callback: {e}", flush=True)
@@ -336,8 +355,8 @@ def get_kick_user_info(access_token):
         raise Exception(f"Could not get user info from Kick API: {str(e)}")
 
 
-def render_success(kick_username):
-    """Render success page."""
+def render_success(kick_username, discord_id):
+    """Render success page with auto-close."""
     return f"""
     <html>
         <head>
@@ -381,6 +400,12 @@ def render_success(kick_username):
                     cursor: pointer;
                 }}
             </style>
+            <script>
+                // Auto-close window after 3 seconds
+                setTimeout(function() {{
+                    window.close();
+                }}, 3000);
+            </script>
         </head>
         <body>
             <div class="container">
@@ -388,8 +413,8 @@ def render_success(kick_username):
                 <h2>Account Linked Successfully!</h2>
                 <div class="username">{kick_username}</div>
                 <p>Your Discord account is now linked to your Kick account.</p>
-                <p>You can close this window and return to Discord.</p>
-                <button class="close-btn" onclick="window.close()">Close Window</button>
+                <p>This window will close automatically...</p>
+                <button class="close-btn" onclick="window.close()">Close Now</button>
             </div>
         </body>
     </html>
