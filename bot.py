@@ -468,6 +468,8 @@ try:
             id SERIAL PRIMARY KEY,
             discord_id BIGINT NOT NULL,
             kick_username TEXT NOT NULL,
+            channel_id BIGINT,
+            message_id BIGINT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             processed BOOLEAN DEFAULT FALSE
         );
@@ -848,15 +850,29 @@ async def check_oauth_notifications_task():
         with engine.begin() as conn:
             # Get unprocessed notifications
             notifications = conn.execute(text("""
-                SELECT id, discord_id, kick_username 
+                SELECT id, discord_id, kick_username, channel_id, message_id
                 FROM oauth_notifications 
-                WHERE processed = FALSE
+                WHERE processed = FALSE AND kick_username != ''
                 ORDER BY created_at ASC
                 LIMIT 10
             """)).fetchall()
             
-            for notification_id, discord_id, kick_username in notifications:
+            for notification_id, discord_id, kick_username, channel_id, message_id in notifications:
                 try:
+                    # Delete the original "Link with Kick OAuth" message if we have the IDs
+                    if channel_id and message_id:
+                        try:
+                            channel = bot.get_channel(int(channel_id))
+                            if channel:
+                                try:
+                                    original_message = await channel.fetch_message(int(message_id))
+                                    await original_message.delete()
+                                    print(f"🗑️ Deleted original OAuth message", flush=True)
+                                except (discord.NotFound, discord.Forbidden):
+                                    pass
+                        except Exception as e:
+                            print(f"⚠️ Could not delete original message: {e}", flush=True)
+                    
                     # Get the user
                     user = await bot.fetch_user(int(discord_id))
                     if user:
@@ -870,10 +886,13 @@ async def check_oauth_notifications_task():
                                 if guild:
                                     member = guild.get_member(int(discord_id))
                                     if member:
-                                        # Try to send in a system channel or first available text channel
-                                        channel = guild.system_channel or next((ch for ch in guild.text_channels if ch.permissions_for(guild.me).send_messages), None)
-                                        if channel:
-                                            await channel.send(f"{member.mention} ✅ **Verification Successful!** Your account has been linked to Kick **{kick_username}**.")
+                                        # Try to send in the same channel as original message, or system channel
+                                        target_channel = bot.get_channel(int(channel_id)) if channel_id else None
+                                        if not target_channel or not target_channel.permissions_for(guild.me).send_messages:
+                                            target_channel = guild.system_channel or next((ch for ch in guild.text_channels if ch.permissions_for(guild.me).send_messages), None)
+                                        
+                                        if target_channel:
+                                            await target_channel.send(f"{member.mention} ✅ **Verification Successful!** Your account has been linked to Kick **{kick_username}**.")
                     
                     # Mark as processed
                     conn.execute(text("""
@@ -895,8 +914,6 @@ async def check_oauth_notifications_task():
                     
     except Exception as e:
         print(f"⚠️ Error in OAuth notifications task: {e}", flush=True)
-
-
 @tasks.loop(minutes=5)
 async def cleanup_pending_links_task():
     """Remove expired verification codes and old chat activity data."""
@@ -1164,7 +1181,18 @@ async def cmd_link(ctx):
     )
     view.add_item(button)
     
-    await ctx.send(embed=embed, view=view)
+    message = await ctx.send(embed=embed, view=view)
+    
+    # Store message info for later deletion
+    with engine.begin() as conn:
+        # Delete any existing pending OAuth for this user
+        conn.execute(text("DELETE FROM oauth_notifications WHERE discord_id = :d AND processed = FALSE"), {"d": discord_id})
+        
+        # Store message info (will be updated with kick_username when OAuth completes)
+        conn.execute(text("""
+            INSERT INTO oauth_notifications (discord_id, kick_username, channel_id, message_id, processed)
+            VALUES (:d, '', :c, :m, FALSE)
+        """), {"d": discord_id, "c": ctx.channel.id, "m": message.id})
 
 @bot.command(name="verify")
 @dynamic_cooldown(CommandCooldowns.VERIFY_COOLDOWN)
