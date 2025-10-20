@@ -434,17 +434,23 @@ def get_kick_user_info(access_token):
     
     # Try multiple endpoints to find one that works with the OAuth token
     endpoints_to_try = [
-        ('OAuth userinfo', KICK_OAUTH_USER_INFO_URL),
-        ('API v2 user', 'https://kick.com/api/v2/user'),
-        ('API v1 user', 'https://kick.com/api/v1/user'),
-        ('API user/me', 'https://kick.com/api/user/me'),
-        ('API v2 me', 'https://kick.com/api/v2/me'),
+        ('OAuth userinfo', KICK_OAUTH_USER_INFO_URL, 'GET'),
+        ('Broadcasting auth', 'https://kick.com/broadcasting/auth', 'POST'),
+        ('API v2 user', 'https://kick.com/api/v2/user', 'GET'),
+        ('API v1 user', 'https://kick.com/api/v1/user', 'GET'),
+        ('API user/me', 'https://kick.com/api/user/me', 'GET'),
+        ('API v2 me', 'https://kick.com/api/v2/me', 'GET'),
     ]
     
-    for name, url in endpoints_to_try:
+    for name, url, method in endpoints_to_try:
         try:
-            print(f"🔍 Trying {name}: {url}", flush=True)
-            response = requests.get(url, headers=headers, timeout=10)
+            print(f"🔍 Trying {name}: {method} {url}", flush=True)
+            
+            if method == 'POST':
+                response = requests.post(url, headers=headers, timeout=10)
+            else:
+                response = requests.get(url, headers=headers, timeout=10)
+                
             print(f"📊 {name} response status: {response.status_code}", flush=True)
             
             if response.status_code == 200:
