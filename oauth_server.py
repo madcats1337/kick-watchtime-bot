@@ -30,6 +30,7 @@ if not KICK_CLIENT_ID or not KICK_CLIENT_SECRET:
 KICK_AUTHORIZE_URL = "https://id.kick.com/oauth/authorize"
 KICK_TOKEN_URL = "https://id.kick.com/oauth/token"
 KICK_USER_API_URL = "https://kick.com/api/v2/user"
+KICK_OAUTH_USER_INFO_URL = "https://id.kick.com/oauth/userinfo"  # OAuth standard endpoint
 
 # Database configuration (reuse from bot.py)
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///watchtime.db")
@@ -245,7 +246,7 @@ def exchange_code_for_token(code, code_verifier):
 
 
 def get_kick_user_info(access_token):
-    """Get user information from Kick API."""
+    """Get user information from Kick OAuth API."""
     import requests
     
     headers = {
@@ -253,10 +254,27 @@ def get_kick_user_info(access_token):
         'Accept': 'application/json'
     }
     
-    response = requests.get(KICK_USER_API_URL, headers=headers)
-    response.raise_for_status()
+    # Try OAuth userinfo endpoint first (standard OAuth 2.0)
+    try:
+        response = requests.get(KICK_OAUTH_USER_INFO_URL, headers=headers, timeout=10)
+        if response.status_code == 200:
+            user_data = response.json()
+            # OAuth userinfo might return different format, normalize it
+            if 'username' in user_data:
+                return user_data
+            elif 'name' in user_data:
+                return {'username': user_data['name'], 'id': user_data.get('sub') or user_data.get('id')}
+    except Exception as e:
+        print(f"OAuth userinfo endpoint failed: {e}")
     
-    return response.json()
+    # Fallback: try regular API endpoint with token
+    try:
+        response = requests.get(KICK_USER_API_URL, headers=headers, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"Regular API endpoint failed: {e}")
+        raise Exception(f"Failed to get user info from Kick API: {e}")
 
 
 def render_success(kick_username):
