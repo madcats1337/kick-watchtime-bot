@@ -476,6 +476,13 @@ def get_kick_user_info(access_token):
                 
                 # Try to extract username from various possible fields
                 if isinstance(user_data, dict):
+                    # Handle Kick's public API format: {"data": [{"name": "...", "user_id": ...}]}
+                    if 'data' in user_data and isinstance(user_data['data'], list) and len(user_data['data']) > 0:
+                        first_user = user_data['data'][0]
+                        if 'name' in first_user:
+                            return {'username': first_user['name'], 'id': first_user.get('user_id'), 'email': first_user.get('email')}
+                    
+                    # Standard OAuth formats
                     if 'username' in user_data:
                         return user_data
                     elif 'name' in user_data:
