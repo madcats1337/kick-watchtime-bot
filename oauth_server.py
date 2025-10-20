@@ -262,9 +262,14 @@ def auth_kick_callback():
         
         # Fallback: Get user info from API
         if not kick_user:
-            print(f"⚠️ No user info available from token/ID token", flush=True)
-            kick_user = get_kick_user_info(access_token)
-            print(f"📊 API response: {kick_user}", flush=True)
+            print(f"⚠️ No user info available from token/ID token, trying API...", flush=True)
+            try:
+                kick_user = get_kick_user_info(access_token)
+                print(f"📊 API response: {kick_user}", flush=True)
+            except Exception as e:
+                print(f"⚠️ API call failed: {e}", flush=True)
+                # API failed, ask user for username manually
+                kick_user = None
         
         # If we still don't have user info, redirect to username input page
         if not kick_user:
