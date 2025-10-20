@@ -145,15 +145,15 @@ def auth_kick():
     # Build authorization URL
     redirect_uri = f"{OAUTH_BASE_URL}/auth/kick/callback"
     
+    # Basic OAuth without scopes or PKCE - let Kick use defaults
     auth_params = {
         'client_id': KICK_CLIENT_ID,
         'response_type': 'code',
         'redirect_uri': redirect_uri,
-        'state': state,
-        'scope': 'openid profile',  # Use OpenID Connect standard scopes
-        'code_challenge': code_challenge,
-        'code_challenge_method': 'S256'
+        'state': state
     }
+    
+    print(f"🔗 Authorization URL: {KICK_AUTHORIZE_URL}?{urlencode(auth_params)}", flush=True)
     
     auth_url = f"{KICK_AUTHORIZE_URL}?{urlencode(auth_params)}"
     
@@ -193,7 +193,7 @@ def auth_kick_callback():
     
     # Exchange code for access token
     try:
-        token_data = exchange_code_for_token(code, code_verifier)
+        token_data = exchange_code_for_token(code, code_verifier=None)  # No PKCE for now
         access_token = token_data.get('access_token')
         id_token = token_data.get('id_token')  # OpenID Connect ID token
         
@@ -279,7 +279,7 @@ def auth_kick_callback():
         return render_error(f"An error occurred: {str(e)}")
 
 
-def exchange_code_for_token(code, code_verifier):
+def exchange_code_for_token(code, code_verifier=None):
     """Exchange authorization code for access token."""
     import requests
     
@@ -290,14 +290,21 @@ def exchange_code_for_token(code, code_verifier):
         'code': code,
         'redirect_uri': redirect_uri,
         'client_id': KICK_CLIENT_ID,
-        'client_secret': KICK_CLIENT_SECRET,
-        'code_verifier': code_verifier
+        'client_secret': KICK_CLIENT_SECRET
     }
     
-    response = requests.post(KICK_TOKEN_URL, data=token_data)
+    # Only include code_verifier if PKCE was used
+    if code_verifier:
+        token_data['code_verifier'] = code_verifier
+    
+    print(f"🔄 Exchanging code for token...", flush=True)
+    response = requests.post(KICK_TOKEN_URL, data=token_data, timeout=10)
+    print(f"📊 Token response status: {response.status_code}", flush=True)
     response.raise_for_status()
     
-    return response.json()
+    token_json = response.json()
+    print(f"✅ Got token response with keys: {list(token_json.keys())}", flush=True)
+    return token_json
 
 
 def get_kick_user_info(access_token):
