@@ -1268,34 +1268,56 @@ async def cmd_leaderboard(ctx, top: int = 10):
 @bot.command(name="watchtime")
 @dynamic_cooldown(CommandCooldowns.WATCHTIME_COOLDOWN)
 @in_guild()
-async def cmd_watchtime(ctx, user: str = None):
-    """Check watchtime for yourself or another user."""
+async def cmd_watchtime(ctx, kick_username: str = None):
+    """
+    Check watchtime for yourself or another user.
+    Usage: !watchtime (check your own) or !watchtime <kick_username> (admins only)
+    """
     discord_id = ctx.author.id
+    is_admin = ctx.guild and ctx.author.guild_permissions.administrator
     
     with engine.connect() as conn:
-        # Get linked Kick username
-        link = conn.execute(text(
-            "SELECT kick_name FROM links WHERE discord_id = :d"
-        ), {"d": discord_id}).fetchone()
-        
-        if not link:
-            await ctx.send(
-                "❌ You haven't linked your Kick account yet. Use `!link <kick_username>` to get started."
-            )
-            return
-        
-        kick_name = link[0]
-        
-        # Get watchtime
-        watchtime = conn.execute(text(
-            "SELECT minutes FROM watchtime WHERE username = :u"
-        ), {"u": kick_name}).fetchone()
-    
-    if not watchtime or watchtime[0] == 0:
-        await ctx.send(
-            f"⏱️ No watchtime recorded yet for **{kick_name}**. Start watching to earn time!"
-        )
-        return
+        # If kick_username provided, check if admin
+        if kick_username:
+            if not is_admin:
+                await ctx.send("❌ Only administrators can check other users' watchtime.")
+                return
+            
+            # Admin lookup by Kick username
+            kick_name = kick_username.lower()
+            watchtime = conn.execute(text(
+                "SELECT minutes FROM watchtime WHERE username = :u"
+            ), {"u": kick_name}).fetchone()
+            
+            if not watchtime or watchtime[0] == 0:
+                await ctx.send(
+                    f"⏱️ No watchtime recorded for **{kick_name}**."
+                )
+                return
+        else:
+            # Regular user checking their own watchtime
+            link = conn.execute(text(
+                "SELECT kick_name FROM links WHERE discord_id = :d"
+            ), {"d": discord_id}).fetchone()
+            
+            if not link:
+                await ctx.send(
+                    "❌ You haven't linked your Kick account yet. Use `!link <kick_username>` to get started."
+                )
+                return
+            
+            kick_name = link[0]
+            
+            # Get watchtime
+            watchtime = conn.execute(text(
+                "SELECT minutes FROM watchtime WHERE username = :u"
+            ), {"u": kick_name}).fetchone()
+            
+            if not watchtime or watchtime[0] == 0:
+                await ctx.send(
+                    f"⏱️ No watchtime recorded yet for **{kick_name}**. Start watching to earn time!"
+                )
+                return
     
     minutes = watchtime[0]
     hours = minutes / 60
@@ -1314,6 +1336,17 @@ async def cmd_watchtime(ctx, user: str = None):
     
     if earned_roles:
         embed.add_field(name="Earned Roles", value="\n".join(earned_roles), inline=False)
+    else:
+        # Show next role milestone
+        for role_info in WATCHTIME_ROLES:
+            if minutes < role_info["minutes"]:
+                remaining = role_info["minutes"] - minutes
+                embed.add_field(
+                    name="Next Role", 
+                    value=f"**{role_info['name']}** in {remaining:.0f} more minutes",
+                    inline=False
+                )
+                break
     
     await ctx.send(embed=embed)
 
