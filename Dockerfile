@@ -39,5 +39,5 @@ COPY . .
 
 ENV PYTHONUNBUFFERED=1
 
-# For debugging: run Flask only first, then we'll add the bot back
-CMD ["python", "-u", "oauth_server.py"]
+# Run both OAuth server and Discord bot using Python startup script
+CMD ["python", "start.py"]
