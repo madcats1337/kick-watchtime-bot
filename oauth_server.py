@@ -142,7 +142,7 @@ def auth_kick():
         'response_type': 'code',
         'redirect_uri': redirect_uri,
         'state': state,
-        'scope': 'user:read',
+        'scope': 'openid profile',  # Use OpenID Connect standard scopes
         'code_challenge': code_challenge,
         'code_challenge_method': 'S256'
     }
@@ -177,17 +177,43 @@ def auth_kick_callback():
     try:
         token_data = exchange_code_for_token(code, code_verifier)
         access_token = token_data.get('access_token')
+        id_token = token_data.get('id_token')  # OpenID Connect ID token
         
         if not access_token:
             return render_error("Failed to obtain access token")
         
-        # Get user info from Kick
-        kick_user = get_kick_user_info(access_token)
+        # Try to get user info from ID token first (OpenID Connect)
+        kick_user = None
+        if id_token:
+            try:
+                import json
+                import base64
+                # Decode ID token (JWT) - middle part contains claims
+                parts = id_token.split('.')
+                if len(parts) >= 2:
+                    # Add padding if needed
+                    payload = parts[1]
+                    payload += '=' * (4 - len(payload) % 4)
+                    decoded = base64.urlsafe_b64decode(payload)
+                    kick_user = json.loads(decoded)
+                    print(f"✅ Got user from ID token: {kick_user}")
+            except Exception as e:
+                print(f"Failed to decode ID token: {e}")
+        
+        # Fallback: Get user info from API
+        if not kick_user:
+            kick_user = get_kick_user_info(access_token)
         
         if not kick_user:
             return render_error("Failed to retrieve Kick user information")
         
-        kick_username = kick_user.get('username')
+        # Extract username from various possible fields
+        kick_username = (
+            kick_user.get('username') or 
+            kick_user.get('preferred_username') or 
+            kick_user.get('name') or
+            kick_user.get('sub')  # OpenID subject identifier
+        )
         
         if not kick_username:
             return render_error("Could not find username in Kick response")
