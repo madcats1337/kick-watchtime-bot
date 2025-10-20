@@ -17,6 +17,14 @@ from urllib.parse import urlencode
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", secrets.token_hex(32))
 
+# Global error handler
+@app.errorhandler(Exception)
+def handle_error(e):
+    print(f"🚨 Unhandled error: {e}", flush=True)
+    import traceback
+    traceback.print_exc()
+    return jsonify({"error": str(e), "type": type(e).__name__}), 500
+
 # Kick OAuth Configuration
 KICK_CLIENT_ID = os.getenv("KICK_CLIENT_ID")
 KICK_CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET")
