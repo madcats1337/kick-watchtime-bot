@@ -492,6 +492,11 @@ active_viewers = {}
 stream_tracking_enabled = True  # Admin can toggle this
 last_chat_activity = None  # Track last time we saw any chat activity
 
+# 🔒 SECURITY: Track unique chatters in recent window for stream-live detection
+recent_chatters = {}  # {username: timestamp} - rolling window of recent chat activity
+MIN_UNIQUE_CHATTERS = 3  # Require at least 3 different people chatting to consider stream "live"
+CHAT_ACTIVITY_WINDOW_MINUTES = 10  # Look back 10 minutes for unique chatters
+
 # 🔒 SECURITY: Semaphore to limit concurrent Playwright operations (prevent resource exhaustion)
 playwright_semaphore = asyncio.Semaphore(2)  # Max 2 concurrent browser instances
 
@@ -606,15 +611,19 @@ async def kick_chat_loop(channel_name: str):
                             
                             # Handle chat message
                             if event_type == "App\\Events\\ChatMessageEvent":
-                                global last_chat_activity
-                                last_chat_activity = datetime.now(timezone.utc)  # Update stream activity
+                                global last_chat_activity, recent_chatters
+                                now = datetime.now(timezone.utc)
+                                last_chat_activity = now  # Update stream activity
                                 
                                 event_data = json.loads(data.get("data", "{}"))
                                 sender = event_data.get("sender", {})
                                 username = sender.get("username")
                                 
                                 if username:
-                                    active_viewers[username.lower()] = datetime.now(timezone.utc)
+                                    username_lower = username.lower()
+                                    active_viewers[username_lower] = now
+                                    # 🔒 SECURITY: Track unique chatters for stream-live detection
+                                    recent_chatters[username_lower] = now
                                     content_text = event_data.get("content", "")
                                     print(f"[Kick] {username}: {content_text}")
                                     
@@ -642,21 +651,47 @@ async def kick_chat_loop(channel_name: str):
 # -------------------------
 @tasks.loop(seconds=WATCH_INTERVAL_SECONDS)
 async def update_watchtime_task():
-    """Update watchtime for active viewers (only when tracking is enabled and stream is live)."""
-    global stream_tracking_enabled
+    """Update watchtime for active viewers (only when tracking is enabled and stream has real activity)."""
+    global stream_tracking_enabled, last_chat_activity, recent_chatters
     
     try:
         # Check if tracking is enabled by admin
         if not stream_tracking_enabled:
             return
         
-        # 🔒 SECURITY: Verify stream is actually live before awarding watchtime
-        is_live = await check_stream_live(KICK_CHANNEL)
-        if not is_live:
-            print("[Security] Stream is offline - skipping watchtime update")
+        now = datetime.now(timezone.utc)
+        
+        # 🔒 SECURITY: Multi-factor stream-live detection
+        # Require multiple unique chatters to prevent single-user farming
+        
+        if last_chat_activity is None:
+            print("[Security] No chat activity detected yet - skipping watchtime update")
             return
         
-        now = datetime.now(timezone.utc)
+        # Check 1: Recent chat activity (within last 10 minutes)
+        time_since_last_chat = (now - last_chat_activity).total_seconds() / 60
+        if time_since_last_chat > CHAT_ACTIVITY_WINDOW_MINUTES:
+            print(f"[Security] No chat activity for {time_since_last_chat:.1f} minutes - stream likely offline")
+            return
+        
+        # Check 2: Count unique chatters in the recent window
+        chat_cutoff = now - timedelta(minutes=CHAT_ACTIVITY_WINDOW_MINUTES)
+        active_chatters = {
+            username: timestamp 
+            for username, timestamp in recent_chatters.items() 
+            if timestamp >= chat_cutoff
+        }
+        
+        unique_chatter_count = len(active_chatters)
+        
+        if unique_chatter_count < MIN_UNIQUE_CHATTERS:
+            print(f"[Security] Only {unique_chatter_count} unique chatter(s) in last {CHAT_ACTIVITY_WINDOW_MINUTES} min (need {MIN_UNIQUE_CHATTERS})")
+            print("[Security] Stream might be offline or being farmed - skipping watchtime update")
+            print("[Security] Tip: Use '!tracking on' to override if stream has low chat activity")
+            return
+        
+        print(f"[Security] ✅ Stream appears live: {unique_chatter_count} unique chatters in last {CHAT_ACTIVITY_WINDOW_MINUTES} min")
+        
         cutoff = now - timedelta(minutes=5)
         
         # Get active viewers who were seen recently
@@ -803,12 +838,24 @@ async def update_roles_task():
                     print(f"[Discord] Error assigning role: {e}")
 
 # -------------------------
-# Cleanup expired verification codes
+# Cleanup expired verification codes and old chat data
 # -------------------------
 @tasks.loop(minutes=5)
 async def cleanup_pending_links_task():
-    """Remove expired verification codes and notify users."""
-    expiry_cutoff = datetime.now(timezone.utc) - timedelta(minutes=CODE_EXPIRY_MINUTES)
+    """Remove expired verification codes and old chat activity data."""
+    global recent_chatters
+    
+    now = datetime.now(timezone.utc)
+    
+    # 🔒 SECURITY: Clean up old chatter data to prevent memory leak
+    chat_cutoff = now - timedelta(minutes=CHAT_ACTIVITY_WINDOW_MINUTES * 2)  # Keep 2x window for safety
+    recent_chatters = {
+        username: timestamp 
+        for username, timestamp in recent_chatters.items() 
+        if timestamp >= chat_cutoff
+    }
+    
+    expiry_cutoff = now - timedelta(minutes=CODE_EXPIRY_MINUTES)
     
     with engine.begin() as conn:
         rows = conn.execute(text(

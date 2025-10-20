@@ -4,10 +4,19 @@
 
 ### CRITICAL Fixes
 
-#### 1. ✅ Stream-Live Validation (CRITICAL)
-**Vulnerability:** Users could farm watchtime by chatting when stream is offline.
-**Fix:** Added `check_stream_live()` validation in `update_watchtime_task()` - watchtime only accumulates when stream is actually live.
-**Impact:** Prevents watchtime manipulation and ensures fair role distribution.
+#### 1. ✅ Stream-Live Validation via Multi-Chatter Detection (CRITICAL)
+**Vulnerability:** Users could farm watchtime by chatting when stream is offline, or by sending messages every 9 minutes with chat tab open.
+**Fix:** Requires minimum of **3 unique chatters** within a 10-minute window before awarding watchtime.
+**Behavior:** 
+- 3+ unique chatters in last 10 min → Award watchtime (stream is live with real activity)
+- Less than 3 chatters → Skip watchtime (stream offline or single-user farming attempt)
+- No chat for 10+ minutes → Skip watchtime (stream offline)
+- Admin can use `!tracking on/off` for manual override if stream has legitimately low chat
+**Impact:** 
+- ✅ Prevents single-user farming (can't farm alone)
+- ✅ Prevents coordinated farming by 1-2 users
+- ✅ Uses existing WebSocket data (no API calls, bypasses Cloudflare)
+- ✅ Works reliably for streams with 30+ regular viewers
 
 #### 2. ✅ Verification Brute-Force Protection (HIGH)
 **Vulnerability:** 6-digit codes could be brute-forced with unlimited attempts.
@@ -59,7 +68,7 @@
 |---------|--------|-------|
 | **Verify Rate Limit** | 1/30s | 3/5min (10x stricter) |
 | **Code Uniqueness** | ❌ None | ✅ Collision detection |
-| **Stream Live Check** | ❌ None | ✅ API validation |
+| **Stream Live Check** | ❌ None | ✅ Multi-chatter detection (min 3 unique) |
 | **DB Pool Size** | 8 total | 20 total |
 | **Browser Concurrency** | ∞ (unlimited) | 2 max |
 | **Daily Watchtime Cap** | ❌ None | ✅ 18 hours max |
@@ -78,7 +87,7 @@
 
 ### After Patches:
 - ✅ Brute-force attacks: **Impractical** (36 codes/hour, would take 3+ years)
-- ✅ Watchtime farming: **Blocked** (stream must be live)
+- ✅ Watchtime farming: **Blocked** (requires 3+ unique chatters, prevents solo/duo farming)
 - ✅ Resource exhaustion: **Mitigated** (rate limits + semaphores)
 - ✅ Code collision: **Prevented** (uniqueness checks)
 
@@ -108,20 +117,29 @@ All security patches are **backward compatible** and require no migration.
 - `ROLE_UPDATE_INTERVAL_SECONDS` - Role check frequency
 
 ### New Security Parameters:
-- Max verify attempts: **3 per 5 minutes** (hardcoded)
-- Daily watchtime cap: **18 hours** (hardcoded)
-- Browser concurrency: **2 max** (hardcoded)
-- DB pool size: **10** (hardcoded)
-- Unlink confirmation timeout: **30 seconds** (hardcoded)
+- Max verify attempts: **3 per 5 minutes** (hardcoded in bot.py)
+- Daily watchtime cap: **18 hours** (hardcoded in bot.py)
+- Browser concurrency: **2 max** (hardcoded in bot.py)
+- DB pool size: **10** (hardcoded in bot.py)
+- Unlink confirmation timeout: **30 seconds** (hardcoded in bot.py)
+- **Min unique chatters: 3** (configurable via `MIN_UNIQUE_CHATTERS` in bot.py)
+- **Chat activity window: 10 minutes** (configurable via `CHAT_ACTIVITY_WINDOW_MINUTES` in bot.py)
+
+### Adjusting Chatter Threshold:
+If your stream typically has fewer than 3 chatters but is legitimately live:
+- **Option 1:** Edit `MIN_UNIQUE_CHATTERS = 2` in bot.py (less secure, allows duo farming)
+- **Option 2:** Use admin command `!tracking on` to manually enable during quiet periods
+- **Recommended:** Keep at 3 for security, use manual override when needed
 
 ---
 
 ## ⚠️ Important Security Warnings
 
 1. **MUST set DISCORD_GUILD_ID:** Without this, bot commands work in ANY server!
-2. **Monitor daily caps:** 18-hour limit may need adjustment for marathon streams
-3. **Verify rate limit:** 3 attempts per 5 minutes is strict - users must be careful
-4. **Unlink confirmation:** Users need to know about `!confirmunlink` requirement
+2. **Minimum chatter requirement:** Streams need 3+ unique chatters in 10-minute window. For legitimately quiet streams, use `!tracking on` to override.
+3. **Monitor daily caps:** 18-hour limit may need adjustment for marathon streams
+4. **Verify rate limit:** 3 attempts per 5 minutes is strict - users must be careful
+5. **Unlink confirmation:** Users need to know about `!confirmunlink` requirement
 
 ---
 
