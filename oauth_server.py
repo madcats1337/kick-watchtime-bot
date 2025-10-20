@@ -214,6 +214,8 @@ def auth_kick_callback():
         id_token = token_data.get('id_token')  # OpenID Connect ID token
         
         print(f"📝 Token data keys: {token_data.keys()}", flush=True)
+        print(f"📝 Has id_token: {bool(id_token)}", flush=True)
+        print(f"📝 Access token first 50 chars: {access_token[:50] if access_token else 'None'}...", flush=True)
         
         if not access_token:
             return render_error("Failed to obtain access token")
