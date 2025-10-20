@@ -1095,7 +1095,7 @@ async def cmd_linkbio(ctx, kick_username: str):
             if existing_link:
                 await ctx.send(
                     f"✅ You are already linked to **{existing_link[0]}**.\n"
-                    f"Use `!unlink` first if you want to link a different account."
+                    f"Contact an admin if you need to unlink your account."
                 )
                 return
             
@@ -1179,7 +1179,7 @@ async def cmd_link(ctx):
         if existing:
             await ctx.send(
                 f"✅ You are already linked to **{existing[0]}**.\n"
-                f"Use `!unlink` first if you want to link a different account."
+                f"Contact an admin if you need to unlink your account."
             )
             return
     
@@ -1345,60 +1345,55 @@ async def cmd_verify(ctx, kick_username: str):
         )
 
 @bot.command(name="unlink")
-@dynamic_cooldown(CommandCooldowns.UNLINK_COOLDOWN)  # 🔒 SECURITY: 5-minute cooldown to prevent spam
+@commands.has_permissions(administrator=True)
 @in_guild()
-async def cmd_unlink(ctx):
-    """Unlink Kick account from Discord."""
-    discord_id = ctx.author.id
+async def cmd_unlink(ctx, member: discord.Member = None):
+    """Admin command to unlink a user's Kick account from Discord.
     
-    # 🔒 SECURITY: Check if user has a linked account first
+    Usage: 
+    !unlink @user - Unlink another user's account (admin only)
+    """
+    
+    # Admin must specify a user
+    if member is None:
+        await ctx.send("❌ Usage: `!unlink @user`\n\nAdmins must specify which user to unlink.")
+        return
+    
+    discord_id = member.id
+    
+    # Check if user has a linked account
     with engine.connect() as conn:
         existing = conn.execute(text(
             "SELECT kick_name FROM links WHERE discord_id = :d"
         ), {"d": discord_id}).fetchone()
     
     if not existing:
-        await ctx.send("❌ You don't have a linked Kick account.")
+        await ctx.send(f"❌ {member.mention} doesn't have a linked Kick account.")
         return
     
     kick_name = existing[0]
     
-    # 🔒 SECURITY: Send confirmation message
-    await ctx.send(
-        f"⚠️ **Are you sure you want to unlink your account?**\n\n"
-        f"Kick account: **{kick_name}**\n"
-        f"Your watchtime will be preserved, but you won't be able to earn more until you re-link.\n\n"
-        f"Type `!confirmunlink` within 30 seconds to proceed."
-    )
-    
-    # Wait for confirmation
-    def check(m):
-        return m.author.id == discord_id and m.channel == ctx.channel and m.content.lower() == "!confirmunlink"
-    
-    try:
-        await bot.wait_for('message', check=check, timeout=30.0)
-    except asyncio.TimeoutError:
-        await ctx.send("❌ Unlink cancelled (timed out).")
-        return
-    
-    # Proceed with unlinking
+    # Unlink without confirmation (admin action)
     with engine.begin() as conn:
-        result = conn.execute(text(
-            "DELETE FROM links WHERE discord_id = :d RETURNING kick_name"
-        ) if "postgres" in DATABASE_URL else text(
-            "DELETE FROM links WHERE discord_id = :d"
-        ), {"d": discord_id})
+        conn.execute(text("DELETE FROM links WHERE discord_id = :d"), {"d": discord_id})
         
-        # For SQLite, check if row was deleted
-        if "sqlite" in DATABASE_URL:
-            was_linked = result.rowcount > 0
-        else:
-            was_linked = result.fetchone() is not None
+        # Also clean up any pending OAuth notifications
+        conn.execute(text("DELETE FROM oauth_notifications WHERE discord_id = :d"), {"d": discord_id})
+        
+        # Clean up pending verifications
+        conn.execute(text("DELETE FROM pending_links WHERE discord_id = :d"), {"d": discord_id})
     
-    if was_linked:
-        await ctx.send(f"🔓 Your Kick account **{kick_name}** has been unlinked from Discord.")
-    else:
-        await ctx.send("❌ You don't have a linked Kick account.")
+    await ctx.send(
+        f"🔓 Admin action: {member.mention}'s Kick account **{kick_name}** has been unlinked.\n"
+        f"Their watchtime has been preserved."
+    )
+
+@cmd_unlink.error
+async def unlink_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ This command is admin-only. Regular users cannot unlink accounts to prevent abuse.")
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send("❌ Invalid user. Usage: `!unlink @user`")
 
 @bot.command(name="leaderboard")
 async def cmd_leaderboard(ctx, top: int = 10):
@@ -1707,17 +1702,16 @@ async def on_raw_reaction_add(payload):
         ), {"d": discord_id}).fetchone()
         
         if existing:
-            try:
-                await member.send(
-                    f"✅ You are already linked to **{existing[0]}**.\n"
-                    f"Use `!unlink` first if you want to link a different account."
+            # Send message in channel instead of DM
+            channel = bot.get_channel(payload.channel_id)
+            if channel:
+                await channel.send(
+                    f"✅ {member.mention} You are already linked to **{existing[0]}**!",
+                    delete_after=8  # Auto-delete after 8 seconds
                 )
-            except discord.Forbidden:
-                pass  # User has DMs disabled
             
             # Remove the reaction
             try:
-                channel = bot.get_channel(payload.channel_id)
                 if channel:
                     message = await channel.fetch_message(payload.message_id)
                     await message.remove_reaction(payload.emoji, member)
