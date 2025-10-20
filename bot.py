@@ -80,6 +80,10 @@ WATCH_INTERVAL_SECONDS = int(os.getenv("WATCH_INTERVAL_SECONDS", "60"))
 ROLE_UPDATE_INTERVAL_SECONDS = int(os.getenv("ROLE_UPDATE_INTERVAL_SECONDS", "600"))
 CODE_EXPIRY_MINUTES = int(os.getenv("CODE_EXPIRY_MINUTES", "10"))
 
+# OAuth configuration
+OAUTH_BASE_URL = os.getenv("OAUTH_BASE_URL", "")  # e.g., https://your-app.up.railway.app
+KICK_CLIENT_ID = os.getenv("KICK_CLIENT_ID", "")
+
 # URLs and Pusher config
 KICK_API_BASE = "https://kick.com"
 KICK_API_CHANNEL = f"{KICK_API_BASE}/api/v2/channels"
@@ -1050,8 +1054,69 @@ async def cmd_link(ctx, kick_username: str):
         f"1. Go to https://kick.com/dashboard/settings/profile\n"
         f"2. Add this code to your bio: **{code}**\n"
         f"3. Run `!verify {kick_username}` here\n\n"
-        f"⏰ Code expires in {CODE_EXPIRY_MINUTES} minutes."
+        f"⏰ Code expires in {CODE_EXPIRY_MINUTES} minutes.\n\n"
+        f"💡 **Tip:** Use `!linkoauth` for instant linking without editing your bio!"
     )
+
+@bot.command(name="linkoauth")
+@progressive_cooldown(base_seconds=10, increment_seconds=10, max_seconds=60)
+@in_guild()
+async def cmd_linkoauth(ctx):
+    """Link your Kick account using OAuth (instant, no bio editing required)."""
+    
+    if not OAUTH_BASE_URL or not KICK_CLIENT_ID:
+        await ctx.send(
+            "❌ OAuth linking is not configured on this bot.\n"
+            "Use `!link <kick_username>` for bio verification instead."
+        )
+        return
+    
+    discord_id = ctx.author.id
+    
+    # Check if already linked
+    with engine.connect() as conn:
+        existing = conn.execute(text(
+            "SELECT kick_name FROM links WHERE discord_id = :d"
+        ), {"d": discord_id}).fetchone()
+        
+        if existing:
+            await ctx.send(
+                f"✅ You are already linked to **{existing[0]}**.\n"
+                f"Use `!unlink` first if you want to link a different account."
+            )
+            return
+    
+    # Generate OAuth URL
+    oauth_url = f"{OAUTH_BASE_URL}/auth/kick?discord_id={discord_id}"
+    
+    embed = discord.Embed(
+        title="🔗 Link with Kick OAuth",
+        description="Click the button below to securely link your Kick account.",
+        color=0x53FC18
+    )
+    embed.add_field(
+        name="✨ Benefits",
+        value="• Instant verification\n• No bio editing needed\n• Secure OAuth 2.0",
+        inline=False
+    )
+    embed.add_field(
+        name="📝 Instructions",
+        value="1. Click the link below\n2. Log in to Kick (if needed)\n3. Authorize the connection\n4. You're done!",
+        inline=False
+    )
+    embed.set_footer(text="Link expires in 10 minutes")
+    
+    # Create a view with a button
+    view = discord.ui.View()
+    button = discord.ui.Button(
+        label="Link with Kick",
+        style=discord.ButtonStyle.link,
+        url=oauth_url,
+        emoji="🎮"
+    )
+    view.add_item(button)
+    
+    await ctx.send(embed=embed, view=view)
 
 @bot.command(name="verify")
 @dynamic_cooldown(CommandCooldowns.VERIFY_COOLDOWN)

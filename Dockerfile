@@ -37,6 +37,10 @@ RUN playwright install firefox chromium --with-deps || \
 # Copy application files
 COPY . .
 
+# Make start script executable
+RUN chmod +x start.sh
+
 ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "bot.py"]
+# Run both OAuth server and Discord bot
+CMD ["./start.sh"]

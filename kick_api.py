@@ -408,11 +408,17 @@ async def check_stream_live(channel_name: str) -> bool:
     """
     Check if a Kick channel is currently live streaming.
     
+    NOTE: This may be blocked by Cloudflare. If it fails, the bot will
+    continue operating and rely on admin manual control via !tracking command.
+    
     Args:
         channel_name: The Kick channel name
         
     Returns:
-        True if stream is live, False otherwise
+        True if stream is live, False if offline
+        
+    Raises:
+        Exception: If API request fails (Cloudflare block, timeout, etc.)
     """
     try:
         async with aiohttp.ClientSession() as session:
@@ -434,12 +440,17 @@ async def check_stream_live(channel_name: str) -> bool:
                         # If livestream object exists and has data, stream is live
                         return True
                     return False
+                elif response.status == 403:
+                    # Cloudflare block - raise exception so caller can handle gracefully
+                    raise Exception(f"Cloudflare blocked stream status check (403)")
                 else:
-                    print(f"[Kick] Stream status check returned status: {response.status}")
-                    return False
+                    # Other error status - raise exception
+                    raise Exception(f"HTTP {response.status}")
+    except asyncio.TimeoutError:
+        raise Exception("API request timed out")
     except Exception as e:
-        print(f"[Kick] Error checking stream status: {type(e).__name__}: {str(e)}")
-        return False
+        # Re-raise with context
+        raise Exception(f"Stream status check failed: {type(e).__name__}: {str(e)}")
 
 
 # Export all public interfaces
