@@ -435,6 +435,8 @@ def get_kick_user_info(access_token):
     # Try multiple endpoints to find one that works with the OAuth token
     endpoints_to_try = [
         ('OAuth userinfo', KICK_OAUTH_USER_INFO_URL, 'GET'),
+        ('OAuth introspect', 'https://id.kick.com/oauth/introspect', 'POST'),
+        ('OAuth tokeninfo', 'https://id.kick.com/oauth/tokeninfo', 'GET'),
         ('Broadcasting auth', 'https://kick.com/broadcasting/auth', 'POST'),
         ('API v2 user', 'https://kick.com/api/v2/user', 'GET'),
         ('API v1 user', 'https://kick.com/api/v1/user', 'GET'),
@@ -447,9 +449,17 @@ def get_kick_user_info(access_token):
             print(f"🔍 Trying {name}: {method} {url}", flush=True)
             
             if method == 'POST':
-                response = requests.post(url, headers=headers, timeout=10)
+                # For introspect endpoint, send token as form data
+                if 'introspect' in url:
+                    response = requests.post(url, data={'token': access_token}, headers={'Accept': 'application/json'}, timeout=10)
+                else:
+                    response = requests.post(url, headers=headers, timeout=10)
             else:
-                response = requests.get(url, headers=headers, timeout=10)
+                # For tokeninfo, send token as query param
+                if 'tokeninfo' in url:
+                    response = requests.get(f"{url}?access_token={access_token}", headers={'Accept': 'application/json'}, timeout=10)
+                else:
+                    response = requests.get(url, headers=headers, timeout=10)
                 
             print(f"📊 {name} response status: {response.status_code}", flush=True)
             
