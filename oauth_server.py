@@ -320,25 +320,29 @@ def get_kick_user_info(access_token):
     
     # Try OAuth userinfo endpoint first (standard OAuth 2.0)
     try:
+        print(f"🔍 Trying OAuth userinfo endpoint...", flush=True)
         response = requests.get(KICK_OAUTH_USER_INFO_URL, headers=headers, timeout=10)
+        print(f"📊 Userinfo response status: {response.status_code}", flush=True)
         if response.status_code == 200:
             user_data = response.json()
+            print(f"✅ Got user data: {user_data}", flush=True)
             # OAuth userinfo might return different format, normalize it
             if 'username' in user_data:
                 return user_data
             elif 'name' in user_data:
                 return {'username': user_data['name'], 'id': user_data.get('sub') or user_data.get('id')}
+            elif 'preferred_username' in user_data:
+                return {'username': user_data['preferred_username'], 'id': user_data.get('sub') or user_data.get('id')}
+            else:
+                # Return whatever we got
+                return user_data
+        print(f"⚠️ Userinfo endpoint returned {response.status_code}: {response.text[:200]}", flush=True)
     except Exception as e:
-        print(f"OAuth userinfo endpoint failed: {e}")
+        print(f"❌ OAuth userinfo endpoint failed: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
     
-    # Fallback: try regular API endpoint with token
-    try:
-        response = requests.get(KICK_USER_API_URL, headers=headers, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        print(f"Regular API endpoint failed: {e}")
-        raise Exception(f"Failed to get user info from Kick API: {e}")
+    raise Exception(f"Could not get user info from Kick OAuth. The access token was received but user data endpoints are not accessible.")
 
 
 def render_success(kick_username):
