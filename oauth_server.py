@@ -256,11 +256,21 @@ def auth_kick_callback():
             # Clean up used OAuth state
             conn.execute(text("DELETE FROM oauth_states WHERE state = :state"), {"state": state})
             
-            # Insert notification for bot to send success message
-            conn.execute(text("""
-                INSERT INTO oauth_notifications (discord_id, kick_username)
-                VALUES (:d, :k)
-            """), {"d": discord_id, "k": kick_username})
+            # Update existing notification with kick_username (was created when !link command was used)
+            # If no existing notification exists, create a new one
+            result = conn.execute(text("""
+                UPDATE oauth_notifications 
+                SET kick_username = :k, processed = FALSE
+                WHERE discord_id = :d AND kick_username = ''
+                RETURNING id
+            """), {"d": discord_id, "k": kick_username}).fetchone()
+            
+            # If no pending notification found, create new one
+            if not result:
+                conn.execute(text("""
+                    INSERT INTO oauth_notifications (discord_id, kick_username)
+                    VALUES (:d, :k)
+                """), {"d": discord_id, "k": kick_username})
         
         print(f"✅ OAuth link successful: Discord {discord_id} -> Kick {kick_username}", flush=True)
         return render_success(kick_username, discord_id)
@@ -389,10 +399,18 @@ def render_success(kick_username, discord_id):
                 }}
             </style>
             <script>
-                // Auto-close window after 3 seconds
-                setTimeout(function() {{
+                // Try to close window immediately
+                function tryClose() {{
                     window.close();
-                }}, 3000);
+                    // If we're still here after 500ms, the close was blocked
+                    setTimeout(function() {{
+                        document.getElementById('closeMsg').style.display = 'block';
+                    }}, 500);
+                }}
+                // Try to close after page loads
+                window.onload = function() {{
+                    setTimeout(tryClose, 2000);
+                }};
             </script>
         </head>
         <body>
@@ -401,8 +419,8 @@ def render_success(kick_username, discord_id):
                 <h2>Account Linked Successfully!</h2>
                 <div class="username">{kick_username}</div>
                 <p>Your Discord account is now linked to your Kick account.</p>
-                <p>This window will close automatically...</p>
-                <button class="close-btn" onclick="window.close()">Close Now</button>
+                <p id="closeMsg" style="display:none;">If the window doesn't close automatically, you can close it manually.</p>
+                <button class="close-btn" onclick="window.close()">Close Window</button>
             </div>
         </body>
     </html>
