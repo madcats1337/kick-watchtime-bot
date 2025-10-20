@@ -155,23 +155,33 @@ def auth_kick():
 @app.route('/auth/kick/callback')
 def auth_kick_callback():
     """Handle OAuth callback from Kick."""
+    print(f"🔔 Callback received! Query params: {dict(request.args)}", flush=True)
+    
     code = request.args.get('code')
     state = request.args.get('state')
     error = request.args.get('error')
     
+    print(f"📥 Code: {code[:20] if code else None}..., State: {state}, Error: {error}", flush=True)
+    
     if error:
+        print(f"❌ Kick returned error: {error}", flush=True)
         return render_error(f"Kick authorization failed: {error}")
     
     if not code or not state:
+        print(f"❌ Missing code or state", flush=True)
         return render_error("Missing authorization code or state")
     
     # Verify state
+    print(f"🔍 Checking state... States in memory: {list(oauth_states.keys())}", flush=True)
     if state not in oauth_states:
+        print(f"❌ State not found or expired", flush=True)
         return render_error("Invalid or expired state. Please try linking again.")
     
     state_data = oauth_states[state]
     discord_id = state_data['discord_id']
     code_verifier = state_data['code_verifier']
+    
+    print(f"✅ State valid, Discord ID: {discord_id}", flush=True)
     
     # Exchange code for access token
     try:
