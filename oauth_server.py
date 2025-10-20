@@ -262,12 +262,14 @@ def auth_kick_callback():
         
         # Fallback: Get user info from API
         if not kick_user:
-            print(f"⚠️ No ID token, trying API...", flush=True)
+            print(f"⚠️ No user info available from token/ID token", flush=True)
             kick_user = get_kick_user_info(access_token)
             print(f"📊 API response: {kick_user}", flush=True)
         
+        # If we still don't have user info, redirect to username input page
         if not kick_user:
-            return render_error("Failed to retrieve Kick user information")
+            print(f"⚠️ Could not get user info automatically, asking user to input username", flush=True)
+            return render_username_form(state, discord_id)
         
         # Extract username from various possible fields
         kick_username = (
@@ -496,6 +498,163 @@ def render_error(message):
                 <div class="error-message">{message}</div>
                 <p>Please return to Discord and try the <code>!linkoauth</code> command again.</p>
                 <button class="retry-btn" onclick="window.close()">Close Window</button>
+            </div>
+        </body>
+    </html>
+    """, 400
+
+
+def render_username_form(state, discord_id):
+    """Render form for user to input their Kick username."""
+    return f"""
+    <html>
+        <head>
+            <title>Enter Your Kick Username</title>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    min-height: 100vh;
+                    margin: 0;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                }}
+                .container {{
+                    text-align: center;
+                    padding: 40px;
+                    background: rgba(255, 255, 255, 0.1);
+                    border-radius: 20px;
+                    backdrop-filter: blur(10px);
+                    max-width: 500px;
+                }}
+                h1 {{ margin: 0 0 10px 0; font-size: 48px; }}
+                h2 {{ margin: 0 0 20px 0; }}
+                p {{ font-size: 16px; line-height: 1.6; margin-bottom: 30px; }}
+                form {{
+                    display: flex;
+                    flex-direction: column;
+                    gap: 15px;
+                }}
+                input[type="text"] {{
+                    padding: 15px;
+                    font-size: 16px;
+                    border: 2px solid #53FC18;
+                    border-radius: 8px;
+                    background: rgba(255, 255, 255, 0.9);
+                    color: #000;
+                }}
+                button {{
+                    padding: 15px 30px;
+                    background: #53FC18;
+                    color: #000;
+                    border: none;
+                    border-radius: 8px;
+                    font-size: 18px;
+                    font-weight: bold;
+                    cursor: pointer;
+                }}
+                button:hover {{
+                    background: #45d914;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🎮</h1>
+                <h2>Enter Your Kick Username</h2>
+                <p>We couldn't automatically retrieve your username. Please enter your Kick username below to complete the linking:</p>
+                <form method="POST" action="/auth/kick/complete">
+                    <input type="hidden" name="state" value="{state}">
+                    <input type="hidden" name="discord_id" value="{discord_id}">
+                    <input type="text" name="kick_username" placeholder="Your Kick username" required pattern="[a-zA-Z0-9_]+" title="Username can only contain letters, numbers, and underscores">
+                    <button type="submit">Link Account</button>
+                </form>
+            </div>
+        </body>
+    </html>
+    """
+
+
+@app.route('/auth/kick/complete', methods=['POST'])
+def auth_kick_complete():
+    """Complete OAuth linking with manual username input."""
+    state = request.form.get('state')
+    discord_id = request.form.get('discord_id')
+    kick_username = request.form.get('kick_username')
+    
+    print(f"📝 Manual username submission: {kick_username} for Discord {discord_id}", flush=True)
+    
+    if not state or not discord_id or not kick_username:
+        return render_error("Missing required information")
+    
+    # Verify state still exists in database
+    with engine.connect() as conn:
+        result = conn.execute(text("""
+            SELECT discord_id FROM oauth_states WHERE state = :state
+        """), {"state": state}).fetchone()
+    
+    if not result or str(result[0]) != str(discord_id):
+        return render_error("Invalid or expired session. Please try linking again.")
+    
+    # Link accounts in database
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO links (discord_id, kick_name)
+                VALUES (:d, :k)
+                ON CONFLICT(discord_id) DO UPDATE SET kick_name = excluded.kick_name
+            """), {"d": int(discord_id), "k": kick_username.lower()})
+            
+            # Clean up pending bio verifications if any
+            conn.execute(text("DELETE FROM pending_links WHERE discord_id = :d"), {"d": int(discord_id)})
+            
+            # Clean up used OAuth state
+            conn.execute(text("DELETE FROM oauth_states WHERE state = :state"), {"state": state})
+        
+        print(f"✅ Manually linked Discord {discord_id} to Kick {kick_username}", flush=True)
+        return render_success(kick_username)
+    except Exception as e:
+        print(f"❌ Error linking accounts: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        return render_error(f"Failed to link accounts: {str(e)}")
+
+
+def render_error(message):
+    """Render error page."""
+    return f"""
+    <html>
+        <head>
+            <title>❌ Error</title>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    min-height: 100vh;
+                    margin: 0;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                }}
+                .container {{
+                    text-align: center;
+                    padding: 40px;
+                    background: rgba(255, 255, 255, 0.1);
+                    border-radius: 20px;
+                    backdrop-filter: blur(10px);
+                }}
+                h1 {{ margin: 0 0 20px 0; font-size: 48px; }}
+                p {{ font-size: 18px; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>❌</h1>
+                <h2>Oops!</h2>
+                <p>{message}</p>
             </div>
         </body>
     </html>
