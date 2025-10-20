@@ -39,19 +39,25 @@ if __name__ == '__main__':
     print("⏳ Waiting for bot to initialize...", flush=True)
     time.sleep(3)
     
-    # Now run Flask OAuth server in main process
-    print("📡 Starting OAuth web server...", flush=True)
+    # Now run Flask OAuth server in main process using Gunicorn
+    print("📡 Starting OAuth web server with Gunicorn...", flush=True)
     port = int(os.getenv('PORT', 8000))
     print(f"🌐 Port: {port}", flush=True)
     print(f"🌐 OAuth Base URL: {os.getenv('OAUTH_BASE_URL', 'Not set')}", flush=True)
     
-    # Import and run Flask app
+    # Use Gunicorn for production
     try:
-        from oauth_server import app
-        print("✅ Flask app imported successfully", flush=True)
-        app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+        os.execvp('gunicorn', [
+            'gunicorn',
+            '--bind', f'0.0.0.0:{port}',
+            '--workers', '2',
+            '--timeout', '120',
+            '--access-logfile', '-',
+            '--error-logfile', '-',
+            'oauth_server:app'
+        ])
     except Exception as e:
-        print(f"❌ Failed to start Flask: {e}", flush=True)
+        print(f"❌ Failed to start Gunicorn: {e}", flush=True)
         import traceback
         traceback.print_exc()
         sys.exit(1)
