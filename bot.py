@@ -474,6 +474,19 @@ try:
             processed BOOLEAN DEFAULT FALSE
         );
         """))
+        
+        # Migrate existing oauth_notifications table to add new columns if they don't exist
+        try:
+            conn.execute(text("""
+                ALTER TABLE oauth_notifications 
+                ADD COLUMN IF NOT EXISTS channel_id BIGINT
+            """))
+            conn.execute(text("""
+                ALTER TABLE oauth_notifications 
+                ADD COLUMN IF NOT EXISTS message_id BIGINT
+            """))
+        except Exception as e:
+            print(f"ℹ️ Migration note: {e}")
     print("✅ Database tables initialized successfully")
 except Exception as e:
     print(f"⚠️ Database initialization error: {e}")
