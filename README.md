@@ -1,35 +1,74 @@
 # 🎮 Kick.com Watchtime Discord Bot
 
-A Discord bot that tracks viewer watchtime on Kick.com and rewards loyal fans with Discord roles. Features secure account linking with Playwright-based bio verification to prevent unauthorized account linking.
+A Discord bot that tracks viewer watchtime on Kick.com and rewards loyal fans with Discord roles. Features **OAuth 2.0 linking** and **reaction-based link panels** for seamless account verification.
 
 ## ✨ Features
 
-- **🔒 Secure Account Linking**: Users verify Kick account ownership by adding a code to their bio
+- **� OAuth Account Linking**: Instant linking with Kick OAuth (no manual bio editing!)
+- **📌 Reaction Link Panels**: Users react to a pinned message to start linking (no command spam!)
 - **⏱️ Watchtime Tracking**: Automatically tracks viewer activity in your Kick chat
 - **🏆 Role Rewards**: Assigns Discord roles based on watchtime milestones
 - **📊 Leaderboards**: Shows top viewers with interactive embeds
 - **🔄 Real-time Sync**: Updates watchtime every minute
-- **🌐 Playwright Integration**: Uses Firefox/Chromium to bypass Cloudflare protection
 - **🐳 Dockerized**: Easy deployment to Railway, Heroku, Render, or any container platform
 - **☁️ Cloud-Ready**: PostgreSQL support for production deployments
 
-## 🔐 Authentication System
+## 🔐 Authentication Methods
 
-The bot uses a **bio verification system** with Playwright automation to ensure users can only link their own Kick accounts:
+### 🌟 Method 1: OAuth Link Panel (Recommended)
+The easiest way for users to link accounts - **no typing required!**
 
-1. User runs `/link <kick_username>` in Discord
+**Admin Setup:**
+```
+!setup_link_panel 🔗
+```
+
+This creates a pinned message with a reaction. Users simply:
+1. React with 🔗 on the pinned message
+2. Get a DM with their personal OAuth link
+3. Click link → Authorize with Kick → Done!
+
+**Benefits:**
+- ✅ No channel spam (no commands)
+- ✅ Always visible (pinned message)
+- ✅ One-click experience
+- ✅ Professional appearance
+
+👉 **See [LINK_PANEL_QUICKSTART.md](LINK_PANEL_QUICKSTART.md) for setup guide**
+
+### Method 2: OAuth Command (Fallback)
+Users can type `!link` to get their personal OAuth link via DM.
+
+**How it works:**
+1. User runs `!link` in Discord
+2. Bot sends DM with OAuth authorization link
+3. User clicks link and authorizes with Kick
+4. Bot automatically retrieves Kick username
+5. Accounts are instantly linked
+
+**Benefits:**
+- ✅ Instant linking (no bio editing)
+- ✅ Automatic username retrieval
+- ✅ Secure OAuth 2.0 with PKCE
+- ✅ Works as fallback if reactions fail
+
+👉 **See [OAUTH_SETUP.md](OAUTH_SETUP.md) for OAuth configuration**
+
+### Method 3: Bio Verification (Legacy)
+Manual verification by adding a code to Kick bio.
+
+**How it works:**
+1. User runs `!linkbio <kick_username>` in Discord
 2. Bot generates a unique 6-digit code
-3. User adds the code to their Kick profile bio (on the About page)
-4. User runs `/verify` to complete linking
-5. Bot uses Playwright (Firefox preferred) to check the Kick bio for the code
-6. If verified, the accounts are permanently linked
+3. User adds the code to their Kick profile bio
+4. User runs `!verify` to complete linking
+5. Bot uses Playwright to check the Kick bio for the code
 
 **Security features:**
 - Codes expire after 10 minutes (configurable)
 - One Kick account can only be linked to one Discord user
 - Must have access to the Kick account to add code to bio
-- Prevents unauthorized account linking
-- Cloudflare bypass with Firefox/Chromium stealth mode
+- Cloudflare bypass with Playwright stealth mode
 
 ## 🚀 Quick Start (Local Testing)
 
@@ -69,11 +108,18 @@ KICK_CHANNEL=your_kick_username
 # Database (use SQLite for local testing)
 DATABASE_URL=sqlite:///watchtime.db
 
+# OAuth Configuration (for instant linking)
+OAUTH_BASE_URL=https://your-app.up.railway.app  # Your deployed OAuth server URL
+KICK_CLIENT_ID=your_kick_oauth_client_id        # Get from Kick developer portal
+
 # Optional: Customize intervals
 WATCH_INTERVAL_SECONDS=60
 ROLE_UPDATE_INTERVAL_SECONDS=600
 CODE_EXPIRY_MINUTES=10
 ```
+
+**Note:** OAuth linking requires deploying the OAuth server (see [OAUTH_SETUP.md](OAUTH_SETUP.md)).  
+For local testing without OAuth, users can still use the bio verification method (`!linkbio`).
 
 4. **Create the watchtime roles in your Discord server**
 
@@ -101,24 +147,79 @@ You should see:
 
 ## 🎮 Commands
 
+### Account Linking
 | Command | Description | Example |
 |---------|-------------|---------|
-| `!link <kick_username>` | Generate verification code to link accounts | `!link madcats` |
-| `!verify <kick_username>` | Verify account ownership and complete linking | `!verify madcats` |
+| `!setup_link_panel [emoji]` | **[Admin]** Create reaction-based link panel | `!setup_link_panel 🔗` |
+| `!link` | Get personal OAuth link (instant linking) | `!link` |
+| `!linkbio <kick_username>` | Generate bio verification code (legacy method) | `!linkbio madcats` |
+| `!verify` | Verify bio code and complete linking | `!verify` |
 | `!unlink` | Unlink your Kick account from Discord | `!unlink` |
+
+### Watchtime & Stats
+| Command | Description | Example |
+|---------|-------------|---------|
 | `!watchtime` | Check your current watchtime | `!watchtime` |
 | `!leaderboard [top]` | Show top viewers (default: 10, max: 25) | `!leaderboard 15` |
 
-## 📋 Linking Workflow Example
+### Admin Commands
+| Command | Description | Example |
+|---------|-------------|---------|
+| `!tracking on/off/status` | Enable/disable watchtime tracking | `!tracking on` |
 
+## 📋 Linking Workflow Examples
+
+### 🌟 Recommended: Reaction Panel Method
 ```
-User: !link madcats
+Admin: !setup_link_panel 🔗
+
+Bot: Creates pinned message:
+┌────────────────────────────────┐
+│  🎮 Link Your Kick Account     │
+│  React with 🔗 below...        │
+│                                │
+│  📝 How it works:              │
+│  1. Click 🔗                   │
+│  2. Get DM with OAuth link     │
+│  3. Authorize with Kick        │
+│  4. Done!                      │
+└────────────────────────────────┘
+
+[User reacts with 🔗]
+
+Bot (via DM): 
+🔗 Link with Kick OAuth
+[Button: 🎮 Link with Kick]
+
+[User clicks button → authorizes → done!]
+
+Bot: ✅ Successfully linked to your Kick account!
+```
+
+### Method 2: OAuth Command
+```
+User: !link
+
+Bot (via DM):
+🔗 Link with Kick OAuth
+[Button: 🎮 Link with Kick]
+
+[User clicks button → authorizes → done!]
+
+Bot: ✅ Successfully linked to your Kick account!
+```
+
+### Method 3: Bio Verification (Legacy)
+
+### Method 3: Bio Verification (Legacy)
+```
+User: !linkbio madcats
 
 Bot: 🔗 Link your Kick account
 
 1. Go to https://kick.com/dashboard/settings/profile
 2. Add this code to your bio: 847261
-3. Run !verify madcats here
+3. Run !verify here
 
 ⏰ Code expires in 10 minutes.
 
@@ -126,7 +227,7 @@ Bot: 🔗 Link your Kick account
 
 [User adds code to Kick bio]
 
-User: !verify madcats
+User: !verify
 
 Bot: ✅ Verified! Your Discord account is now linked to Kick user madcats
 You can now remove the code from your bio.
@@ -248,22 +349,64 @@ links (
     kick_name TEXT UNIQUE
 )
 
--- Pending verifications
+-- Pending bio verifications
 pending_links (
     discord_id BIGINT PRIMARY KEY,
     kick_name TEXT,
     code TEXT,
     timestamp TEXT
 )
+
+-- OAuth state tracking (PKCE flow)
+oauth_states (
+    state TEXT PRIMARY KEY,
+    discord_id BIGINT NOT NULL,
+    code_verifier TEXT NOT NULL,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+
+-- OAuth success notifications
+oauth_notifications (
+    id SERIAL PRIMARY KEY,
+    discord_id BIGINT NOT NULL,
+    kick_username TEXT NOT NULL,
+    channel_id BIGINT,
+    message_id BIGINT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    processed BOOLEAN DEFAULT FALSE
+)
+
+-- Reaction-based link panels
+link_panels (
+    id SERIAL PRIMARY KEY,
+    guild_id BIGINT NOT NULL,
+    channel_id BIGINT NOT NULL,
+    message_id BIGINT NOT NULL,
+    emoji TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(guild_id, channel_id, message_id)
+)
 ```
 
-## 🛡️ Security Notes
+## � Documentation
+
+This bot includes comprehensive documentation:
+
+- **[LINK_PANEL_QUICKSTART.md](LINK_PANEL_QUICKSTART.md)** - Quick start guide for reaction-based link panels
+- **[LINK_PANEL_SETUP.md](LINK_PANEL_SETUP.md)** - Complete setup guide for link panels
+- **[LINK_PANEL_ARCHITECTURE.md](LINK_PANEL_ARCHITECTURE.md)** - Technical architecture and flow diagrams
+- **[LINK_PANEL_IMPLEMENTATION.md](LINK_PANEL_IMPLEMENTATION.md)** - Implementation details and code changes
+- **[OAUTH_SETUP.md](OAUTH_SETUP.md)** - OAuth server setup and configuration guide
+
+## �🛡️ Security Notes
 
 - **Never commit `.env`** - it's already in `.gitignore`
 - **Rotate tokens** if accidentally exposed
 - **Use PostgreSQL** in production (SQLite is for testing only)
-- **Bio verification** prevents unauthorized linking
+- **OAuth PKCE** protects against authorization code interception
+- **Bio verification** prevents unauthorized linking (legacy method)
 - **Code expiry** limits time window for attacks
+- **Unique links** - each user gets a unique OAuth URL
 
 ## 📝 License
 
