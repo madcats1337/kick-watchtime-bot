@@ -886,16 +886,78 @@ async def cleanup_pending_links_task():
 # -------------------------
 # Command cooldowns and checks
 # -------------------------
+# Progressive cooldown tracking: {user_id: {command: attempt_count}}
+progressive_cooldown_attempts = {}
+
 class CommandCooldowns:
-    # Cooldown settings
-    LINK_COOLDOWN = commands.CooldownMapping.from_cooldown(1, 60, commands.BucketType.user)
+    # Cooldown settings (base values, will increase progressively)
+    LINK_COOLDOWN = commands.CooldownMapping.from_cooldown(1, 10, commands.BucketType.user)  # Start at 10s, +10s per attempt
     VERIFY_COOLDOWN = commands.CooldownMapping.from_cooldown(3, 300, commands.BucketType.user)  # 🔒 SECURITY: Max 3 attempts per 5 minutes
     LEADERBOARD_COOLDOWN = commands.CooldownMapping.from_cooldown(1, 30, commands.BucketType.channel)
     WATCHTIME_COOLDOWN = commands.CooldownMapping.from_cooldown(1, 15, commands.BucketType.user)
     UNLINK_COOLDOWN = commands.CooldownMapping.from_cooldown(1, 300, commands.BucketType.user)
 
+def progressive_cooldown(base_seconds: int, increment_seconds: int, max_seconds: int):
+    """
+    Progressive cooldown that increases with each use.
+    
+    Args:
+        base_seconds: Starting cooldown (e.g., 10)
+        increment_seconds: How much to add per attempt (e.g., 10)
+        max_seconds: Maximum cooldown cap (e.g., 60)
+    
+    Example: 10s -> 20s -> 30s -> 40s -> 50s -> 60s (capped)
+    """
+    async def predicate(ctx):
+        # 🔒 ADMIN BYPASS: Admins skip cooldowns for testing
+        if ctx.guild and ctx.author.guild_permissions.administrator:
+            return True
+        
+        user_id = ctx.author.id
+        command_name = ctx.command.name
+        
+        # Initialize tracking
+        if user_id not in progressive_cooldown_attempts:
+            progressive_cooldown_attempts[user_id] = {}
+        
+        if command_name not in progressive_cooldown_attempts[user_id]:
+            progressive_cooldown_attempts[user_id][command_name] = {
+                'count': 0,
+                'last_use': None
+            }
+        
+        tracking = progressive_cooldown_attempts[user_id][command_name]
+        now = datetime.now(timezone.utc)
+        
+        # Reset count if enough time has passed (2x max cooldown = full reset)
+        if tracking['last_use']:
+            time_since_last = (now - tracking['last_use']).total_seconds()
+            if time_since_last > (max_seconds * 2):
+                tracking['count'] = 0
+        
+        # Calculate progressive cooldown
+        current_cooldown = min(base_seconds + (tracking['count'] * increment_seconds), max_seconds)
+        
+        # Check if user is still on cooldown
+        if tracking['last_use']:
+            time_since_last = (now - tracking['last_use']).total_seconds()
+            if time_since_last < current_cooldown:
+                retry_after = current_cooldown - time_since_last
+                raise commands.CommandOnCooldown(None, retry_after, commands.BucketType.user)
+        
+        # Update tracking
+        tracking['count'] += 1
+        tracking['last_use'] = now
+        
+        return True
+    return commands.check(predicate)
+
 def dynamic_cooldown(cooldown_mapping):
     async def predicate(ctx):
+        # 🔒 SECURITY: Admins bypass cooldowns for testing
+        if ctx.guild and ctx.author.guild_permissions.administrator:
+            return True
+        
         bucket = cooldown_mapping.get_bucket(ctx.message)
         retry_after = bucket.update_rate_limit()
         if retry_after:
@@ -915,7 +977,7 @@ def in_guild():
     return commands.check(predicate)
 
 @bot.command(name="link")
-@commands.cooldown(1, 60, commands.BucketType.user)  # One use per minute per user
+@progressive_cooldown(base_seconds=10, increment_seconds=10, max_seconds=60)  # 10s -> 20s -> 30s -> ... -> 60s (capped)
 @in_guild()
 async def cmd_link(ctx, kick_username: str):
     """Generate a verification code to link Kick account to Discord."""
@@ -1343,13 +1405,22 @@ async def on_command_error(ctx, error):
     elif isinstance(error, commands.CommandNotFound):
         pass  # Ignore unknown commands
     elif isinstance(error, commands.CommandOnCooldown):
+        # 🔒 ADMIN BYPASS: Skip cooldown for administrators
+        if ctx.guild and ctx.author.guild_permissions.administrator:
+            await ctx.reinvoke()
+            return
+        
         # Format cooldown message
         seconds = int(error.retry_after)
         if seconds < 60:
-            await ctx.send(f"⏳ Please wait {seconds} seconds before using this command again.")
+            await ctx.send(f"⏳ Please wait **{seconds}** seconds before using this command again.")
         else:
             minutes = seconds // 60
-            await ctx.send(f"⏳ Please wait {minutes} minutes before using this command again.")
+            remaining_seconds = seconds % 60
+            if remaining_seconds > 0:
+                await ctx.send(f"⏳ Please wait **{minutes}m {remaining_seconds}s** before using this command again.")
+            else:
+                await ctx.send(f"⏳ Please wait **{minutes} minutes** before using this command again.")
     elif isinstance(error, commands.CheckFailure):
         if "in_guild" in str(error):
             await ctx.send("❌ This command can only be used in the configured server.")
