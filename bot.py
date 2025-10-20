@@ -1345,7 +1345,7 @@ async def cmd_verify(ctx, kick_username: str):
         )
 
 @bot.command(name="unlink")
-@commands.has_permissions(administrator=True)
+@commands.has_permissions(manage_guild=True)
 @in_guild()
 async def cmd_unlink(ctx, member: discord.Member = None):
     """Admin command to unlink a user's Kick account from Discord.
@@ -1546,7 +1546,7 @@ async def tracking_error(ctx, error):
         await ctx.send("❌ You need administrator permissions to use this command.")
 
 @bot.command(name="setup_link_panel")
-@commands.has_permissions(administrator=True)
+@commands.has_permissions(manage_guild=True)
 @in_guild()
 async def setup_link_panel(ctx, emoji: str = "🔗"):
     """
@@ -1605,7 +1605,7 @@ async def setup_link_panel(ctx, emoji: str = "🔗"):
 @setup_link_panel.error
 async def setup_link_panel_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You need Administrator permission to use this command.")
+        await ctx.send("❌ You need 'Manage Server' permission to use this command.")
 
 # -------------------------
 # Bot events
@@ -1828,45 +1828,53 @@ async def on_raw_reaction_add(payload):
 @bot.event
 async def on_command_error(ctx, error):
     """Handle command errors gracefully."""
-    if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(f"❌ Missing argument: `{error.param.name}`")
-    elif isinstance(error, commands.CommandNotFound):
-        pass  # Ignore unknown commands
-    elif isinstance(error, commands.CommandOnCooldown):
-        # 🔒 ADMIN BYPASS: Skip cooldown for administrators
-        if ctx.guild and ctx.author.guild_permissions.administrator:
-            await ctx.reinvoke()
-            return
-        
-        # Format cooldown message
-        seconds = int(error.retry_after)
-        if seconds < 60:
-            await ctx.send(f"⏳ Please wait **{seconds}** seconds before using this command again.")
-        else:
-            minutes = seconds // 60
-            remaining_seconds = seconds % 60
-            if remaining_seconds > 0:
-                await ctx.send(f"⏳ Please wait **{minutes}m {remaining_seconds}s** before using this command again.")
+    try:
+        if isinstance(error, commands.MissingRequiredArgument):
+            await ctx.send(f"❌ Missing argument: `{error.param.name}`")
+        elif isinstance(error, commands.CommandNotFound):
+            pass  # Ignore unknown commands
+        elif isinstance(error, commands.CommandOnCooldown):
+            # 🔒 ADMIN BYPASS: Skip cooldown for administrators
+            if ctx.guild and ctx.author.guild_permissions.administrator:
+                await ctx.reinvoke()
+                return
+            
+            # Format cooldown message
+            seconds = int(error.retry_after)
+            if seconds < 60:
+                await ctx.send(f"⏳ Please wait **{seconds}** seconds before using this command again.")
             else:
-                await ctx.send(f"⏳ Please wait **{minutes} minutes** before using this command again.")
-    elif isinstance(error, commands.CheckFailure):
-        if "in_guild" in str(error):
-            await ctx.send("❌ This command can only be used in the configured server.")
-        else:
-            await ctx.send("❌ You don't have permission to use this command.")
-    elif isinstance(error, discord.HTTPException):
-        if error.code == 429:  # Rate limit error
-            retry_after = error.retry_after
-            if retry_after > 1:  # If retry_after is significant
-                await ctx.send(f"⚠️ Rate limited. Please try again in {int(retry_after)} seconds.")
+                minutes = seconds // 60
+                remaining_seconds = seconds % 60
+                if remaining_seconds > 0:
+                    await ctx.send(f"⏳ Please wait **{minutes}m {remaining_seconds}s** before using this command again.")
+                else:
+                    await ctx.send(f"⏳ Please wait **{minutes} minutes** before using this command again.")
+        elif isinstance(error, commands.CheckFailure):
+            if "in_guild" in str(error):
+                await ctx.send("❌ This command can only be used in the configured server.")
             else:
-                await ctx.send("⚠️ Too many requests. Please try again in a moment.")
+                await ctx.send("❌ You don't have permission to use this command.")
+        elif isinstance(error, discord.HTTPException):
+            if error.code == 429:  # Rate limit error
+                retry_after = error.retry_after
+                if retry_after > 1:  # If retry_after is significant
+                    await ctx.send(f"⚠️ Rate limited. Please try again in {int(retry_after)} seconds.")
+                else:
+                    await ctx.send("⚠️ Too many requests. Please try again in a moment.")
+            else:
+                print(f"[HTTP Error] {error}")
+                await ctx.send("❌ A network error occurred. Please try again.")
         else:
-            print(f"[HTTP Error] {error}")
-            await ctx.send("❌ A network error occurred. Please try again.")
-    else:
-        print(f"[Error] {error}")
-        await ctx.send("❌ An error occurred. Please try again.")
+            print(f"[Error] {error}")
+            await ctx.send("❌ An error occurred. Please try again.")
+    except discord.Forbidden:
+        # Bot doesn't have permission to send messages in this channel
+        print(f"[Permission Error] Cannot send error message in channel {ctx.channel.id}: {error}")
+    except Exception as e:
+        # Catch any other errors to prevent crash
+        print(f"[Critical Error in error handler] {e}")
+
 
 # -------------------------
 # Run bot
