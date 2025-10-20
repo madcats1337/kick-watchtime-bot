@@ -1718,10 +1718,16 @@ async def on_raw_reaction_add(payload):
             # Remove the reaction
             try:
                 channel = bot.get_channel(payload.channel_id)
-                message = await channel.fetch_message(payload.message_id)
-                await message.remove_reaction(payload.emoji, member)
-            except:
-                pass
+                if channel:
+                    message = await channel.fetch_message(payload.message_id)
+                    await message.remove_reaction(payload.emoji, member)
+                    print(f"✅ Removed reaction from {member.name} (already linked)")
+            except discord.Forbidden:
+                print(f"⚠️ Missing permissions to remove reaction for {member.name}")
+            except discord.NotFound:
+                print(f"⚠️ Message or reaction not found for {member.name}")
+            except Exception as e:
+                print(f"⚠️ Failed to remove reaction for {member.name}: {e}")
             
             return
     
@@ -1754,13 +1760,28 @@ async def on_raw_reaction_add(payload):
     try:
         dm_message = await member.send(embed=embed, view=view)
         
+        # Send confirmation message in channel (only visible to user, auto-deletes)
+        channel = bot.get_channel(payload.channel_id)
+        if channel:
+            confirmation = await channel.send(
+                f"✅ {member.mention} Check your DMs for the OAuth link!",
+                delete_after=5  # Auto-delete after 5 seconds
+            )
+        
         # Remove the reaction immediately after sending DM
         try:
-            channel = bot.get_channel(payload.channel_id)
-            message = await channel.fetch_message(payload.message_id)
-            await message.remove_reaction(payload.emoji, member)
-        except:
-            pass
+            if channel:
+                message = await channel.fetch_message(payload.message_id)
+                await message.remove_reaction(payload.emoji, member)
+                print(f"✅ Removed reaction from {member.name} on link panel")
+            else:
+                print(f"⚠️ Could not find channel {payload.channel_id}")
+        except discord.Forbidden:
+            print(f"⚠️ Missing permissions to remove reaction for {member.name}")
+        except discord.NotFound:
+            print(f"⚠️ Message or reaction not found for {member.name}")
+        except Exception as e:
+            print(f"⚠️ Failed to remove reaction for {member.name}: {e}")
         
         # Store the DM message info for later deletion
         with engine.begin() as conn:
@@ -1788,8 +1809,13 @@ async def on_raw_reaction_add(payload):
             try:
                 message = await channel.fetch_message(payload.message_id)
                 await message.remove_reaction(payload.emoji, member)
-            except:
-                pass
+                print(f"✅ Removed reaction from {member.name} (DMs disabled)")
+            except discord.Forbidden:
+                print(f"⚠️ Missing permissions to remove reaction for {member.name}")
+            except discord.NotFound:
+                print(f"⚠️ Message or reaction not found for {member.name}")
+            except Exception as e:
+                print(f"⚠️ Failed to remove reaction for {member.name}: {e}")
             
             # Store the channel message info
             with engine.begin() as conn:
