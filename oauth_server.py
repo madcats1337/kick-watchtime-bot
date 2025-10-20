@@ -432,6 +432,12 @@ def get_kick_user_info(access_token):
         'Accept': 'application/json'
     }
     
+    # Also try with access token as a cookie (some APIs work this way)
+    cookies = {
+        'access_token': access_token,
+        'token': access_token,
+    }
+    
     # Try multiple endpoints to find one that works with the OAuth token
     endpoints_to_try = [
         ('OAuth userinfo', KICK_OAUTH_USER_INFO_URL, 'GET'),
@@ -451,15 +457,15 @@ def get_kick_user_info(access_token):
             if method == 'POST':
                 # For introspect endpoint, send token as form data
                 if 'introspect' in url:
-                    response = requests.post(url, data={'token': access_token}, headers={'Accept': 'application/json'}, timeout=10)
+                    response = requests.post(url, data={'token': access_token}, headers={'Accept': 'application/json'}, cookies=cookies, timeout=10)
                 else:
-                    response = requests.post(url, headers=headers, timeout=10)
+                    response = requests.post(url, headers=headers, cookies=cookies, timeout=10)
             else:
                 # For tokeninfo, send token as query param
                 if 'tokeninfo' in url:
-                    response = requests.get(f"{url}?access_token={access_token}", headers={'Accept': 'application/json'}, timeout=10)
+                    response = requests.get(f"{url}?access_token={access_token}", headers={'Accept': 'application/json'}, cookies=cookies, timeout=10)
                 else:
-                    response = requests.get(url, headers=headers, timeout=10)
+                    response = requests.get(url, headers=headers, cookies=cookies, timeout=10)
                 
             print(f"📊 {name} response status: {response.status_code}", flush=True)
             
