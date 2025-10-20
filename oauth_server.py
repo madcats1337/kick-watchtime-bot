@@ -402,10 +402,12 @@ def render_success(kick_username, discord_id):
                 // Try to close window immediately
                 function tryClose() {{
                     window.close();
-                    // If we're still here after 500ms, the close was blocked
+                    // If we're still here after 100ms, the close was blocked
                     setTimeout(function() {{
-                        document.getElementById('closeMsg').style.display = 'block';
-                    }}, 500);
+                        // Check if window is still open (it will be if close was blocked)
+                        document.getElementById('manualClose').style.display = 'block';
+                        document.getElementById('autoClose').style.display = 'none';
+                    }}, 100);
                 }}
                 // Try to close after page loads
                 window.onload = function() {{
@@ -419,8 +421,8 @@ def render_success(kick_username, discord_id):
                 <h2>Account Linked Successfully!</h2>
                 <div class="username">{kick_username}</div>
                 <p>Your Discord account is now linked to your Kick account.</p>
-                <p id="closeMsg" style="display:none;">If the window doesn't close automatically, you can close it manually.</p>
-                <button class="close-btn" onclick="window.close()">Close Window</button>
+                <p id="autoClose">Window will close automatically...</p>
+                <p id="manualClose" style="display:none;">You can now close this tab and return to Discord.</p>
             </div>
         </body>
     </html>
