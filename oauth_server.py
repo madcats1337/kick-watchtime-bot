@@ -218,9 +218,31 @@ def auth_kick_callback():
         if not access_token:
             return render_error("Failed to obtain access token")
         
-        # Try to get user info from ID token first (OpenID Connect)
+        # Try to decode access token if it's a JWT (might contain user info)
         kick_user = None
-        if id_token:
+        try:
+            import json
+            import base64
+            # Check if access_token is a JWT (has 3 parts separated by dots)
+            parts = access_token.split('.')
+            if len(parts) == 3:
+                print(f"🔍 Access token appears to be JWT, attempting to decode...", flush=True)
+                # Decode the payload (middle part)
+                payload = parts[1]
+                # Add padding if needed
+                payload += '=' * (4 - len(payload) % 4)
+                decoded = base64.urlsafe_b64decode(payload)
+                jwt_data = json.loads(decoded)
+                print(f"✅ Decoded JWT payload: {jwt_data}", flush=True)
+                
+                # Extract username from JWT
+                if 'username' in jwt_data or 'sub' in jwt_data or 'name' in jwt_data:
+                    kick_user = jwt_data
+        except Exception as e:
+            print(f"⚠️ Failed to decode access token as JWT: {e}", flush=True)
+        
+        # Try to get user info from ID token first (OpenID Connect)
+        if not kick_user and id_token:
             try:
                 import json
                 import base64
