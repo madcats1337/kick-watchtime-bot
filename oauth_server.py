@@ -352,40 +352,122 @@ def exchange_code_for_token(code, code_verifier=None):
     return token_json
 
 
+def decode_jwt_token(token):
+    """Decode JWT token to extract user information without verification.
+    
+    This is safe because:
+    1. We got the token directly from Kick's OAuth server over HTTPS
+    2. We're only reading data, not verifying authenticity for auth purposes
+    3. The token was obtained through proper OAuth flow with our client secret
+    """
+    import base64
+    import json
+    
+    try:
+        # JWT format: header.payload.signature
+        parts = token.split('.')
+        if len(parts) != 3:
+            print(f"⚠️ Token doesn't look like a JWT (expected 3 parts, got {len(parts)})", flush=True)
+            return None
+        
+        # Decode the payload (second part)
+        payload = parts[1]
+        # Add padding if needed (JWT base64 doesn't use padding)
+        padding = 4 - len(payload) % 4
+        if padding != 4:
+            payload += '=' * padding
+        
+        decoded = base64.urlsafe_b64decode(payload)
+        user_data = json.loads(decoded)
+        print(f"🔓 Decoded JWT payload: {user_data}", flush=True)
+        return user_data
+    except Exception as e:
+        print(f"❌ Failed to decode JWT: {e}", flush=True)
+        return None
+
+
 def get_kick_user_info(access_token):
-    """Get user information from Kick OAuth API."""
+    """Get user information from Kick OAuth access token."""
     import requests
     
+    # First, try to decode the access token as a JWT
+    # Many OAuth providers include user info directly in the JWT
+    print(f"🔍 Attempting to decode access token as JWT...", flush=True)
+    jwt_data = decode_jwt_token(access_token)
+    
+    if jwt_data:
+        # Check if we got username from JWT
+        username = None
+        user_id = None
+        
+        # Try different possible fields
+        if 'username' in jwt_data:
+            username = jwt_data['username']
+        elif 'preferred_username' in jwt_data:
+            username = jwt_data['preferred_username']
+        elif 'name' in jwt_data:
+            username = jwt_data['name']
+        elif 'slug' in jwt_data:
+            username = jwt_data['slug']
+        
+        # Try to get user ID
+        if 'sub' in jwt_data:
+            user_id = jwt_data['sub']
+        elif 'id' in jwt_data:
+            user_id = jwt_data['id']
+        elif 'user_id' in jwt_data:
+            user_id = jwt_data['user_id']
+        
+        if username:
+            print(f"✅ Extracted username from JWT: {username}", flush=True)
+            return {'username': username, 'id': user_id, 'jwt_data': jwt_data}
+        else:
+            print(f"⚠️ JWT decoded but no username field found. Available fields: {list(jwt_data.keys())}", flush=True)
+    
+    # If JWT decode didn't work or didn't contain username, try API endpoints
     headers = {
         'Authorization': f'Bearer {access_token}',
         'Accept': 'application/json'
     }
     
-    # Try OAuth userinfo endpoint first (standard OAuth 2.0)
-    try:
-        print(f"🔍 Trying OAuth userinfo endpoint...", flush=True)
-        response = requests.get(KICK_OAUTH_USER_INFO_URL, headers=headers, timeout=10)
-        print(f"📊 Userinfo response status: {response.status_code}", flush=True)
-        if response.status_code == 200:
-            user_data = response.json()
-            print(f"✅ Got user data: {user_data}", flush=True)
-            # OAuth userinfo might return different format, normalize it
-            if 'username' in user_data:
-                return user_data
-            elif 'name' in user_data:
-                return {'username': user_data['name'], 'id': user_data.get('sub') or user_data.get('id')}
-            elif 'preferred_username' in user_data:
-                return {'username': user_data['preferred_username'], 'id': user_data.get('sub') or user_data.get('id')}
-            else:
-                # Return whatever we got
-                return user_data
-        print(f"⚠️ Userinfo endpoint returned {response.status_code}: {response.text[:200]}", flush=True)
-    except Exception as e:
-        print(f"❌ OAuth userinfo endpoint failed: {e}", flush=True)
-        import traceback
-        traceback.print_exc()
+    # Try multiple endpoints to find one that works with the OAuth token
+    endpoints_to_try = [
+        ('OAuth userinfo', KICK_OAUTH_USER_INFO_URL),
+        ('API v2 user', 'https://kick.com/api/v2/user'),
+        ('API v1 user', 'https://kick.com/api/v1/user'),
+        ('API user/me', 'https://kick.com/api/user/me'),
+        ('API v2 me', 'https://kick.com/api/v2/me'),
+    ]
     
-    raise Exception(f"Could not get user info from Kick OAuth. The access token was received but user data endpoints are not accessible.")
+    for name, url in endpoints_to_try:
+        try:
+            print(f"🔍 Trying {name}: {url}", flush=True)
+            response = requests.get(url, headers=headers, timeout=10)
+            print(f"📊 {name} response status: {response.status_code}", flush=True)
+            
+            if response.status_code == 200:
+                user_data = response.json()
+                print(f"✅ Got user data from {name}: {user_data}", flush=True)
+                
+                # Try to extract username from various possible fields
+                if isinstance(user_data, dict):
+                    if 'username' in user_data:
+                        return user_data
+                    elif 'name' in user_data:
+                        return {'username': user_data['name'], 'id': user_data.get('sub') or user_data.get('id')}
+                    elif 'preferred_username' in user_data:
+                        return {'username': user_data['preferred_username'], 'id': user_data.get('sub') or user_data.get('id')}
+                    elif 'slug' in user_data:
+                        return {'username': user_data['slug'], 'id': user_data.get('id')}
+                    else:
+                        # Return whatever we got
+                        return user_data
+            else:
+                print(f"⚠️ {name} returned {response.status_code}: {response.text[:200]}", flush=True)
+        except Exception as e:
+            print(f"❌ {name} failed: {e}", flush=True)
+    
+    raise Exception(f"Could not get user info from Kick OAuth. JWT decode didn't contain username and tried {len(endpoints_to_try)} API endpoints.")
 
 
 def render_success(kick_username):
