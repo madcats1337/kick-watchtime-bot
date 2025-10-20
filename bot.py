@@ -1754,6 +1754,14 @@ async def on_raw_reaction_add(payload):
     try:
         dm_message = await member.send(embed=embed, view=view)
         
+        # Remove the reaction immediately after sending DM
+        try:
+            channel = bot.get_channel(payload.channel_id)
+            message = await channel.fetch_message(payload.message_id)
+            await message.remove_reaction(payload.emoji, member)
+        except:
+            pass
+        
         # Store the DM message info for later deletion
         with engine.begin() as conn:
             # Delete any existing pending OAuth for this user
@@ -1764,14 +1772,6 @@ async def on_raw_reaction_add(payload):
                 INSERT INTO oauth_notifications (discord_id, kick_username, channel_id, message_id, processed)
                 VALUES (:d, '', :c, :m, FALSE)
             """), {"d": discord_id, "c": dm_message.channel.id, "m": dm_message.id})
-        
-        # Remove the reaction after sending DM
-        try:
-            channel = bot.get_channel(payload.channel_id)
-            message = await channel.fetch_message(payload.message_id)
-            await message.remove_reaction(payload.emoji, member)
-        except:
-            pass
             
     except discord.Forbidden:
         # User has DMs disabled, send in channel instead
@@ -1784,6 +1784,13 @@ async def on_raw_reaction_add(payload):
                 delete_after=60  # Auto-delete after 1 minute
             )
             
+            # Remove the reaction immediately after sending message
+            try:
+                message = await channel.fetch_message(payload.message_id)
+                await message.remove_reaction(payload.emoji, member)
+            except:
+                pass
+            
             # Store the channel message info
             with engine.begin() as conn:
                 # Delete any existing pending OAuth for this user
@@ -1794,13 +1801,6 @@ async def on_raw_reaction_add(payload):
                     INSERT INTO oauth_notifications (discord_id, kick_username, channel_id, message_id, processed)
                     VALUES (:d, '', :c, :m, FALSE)
                 """), {"d": discord_id, "c": channel_message.channel.id, "m": channel_message.id})
-            
-            # Remove the reaction
-            try:
-                message = await channel.fetch_message(payload.message_id)
-                await message.remove_reaction(payload.emoji, member)
-            except:
-                pass
                 
         except Exception as e:
             print(f"Failed to send OAuth link to {member}: {e}")
