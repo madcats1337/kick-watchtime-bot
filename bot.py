@@ -1570,7 +1570,7 @@ async def setup_link_panel(ctx, emoji: str = "🔗"):
         description=f"React with {emoji} below to link your Discord account with your Kick account!",
         color=0x53FC18
     )
-    embed.set_footer(text="You can also use !link command as a fallback")
+    embed.set_footer(text="Contact an admin if you need to unlink your account")
     
     # Send the message
     message = await ctx.send(embed=embed)
