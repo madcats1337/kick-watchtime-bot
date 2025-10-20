@@ -487,6 +487,19 @@ try:
             """))
         except Exception as e:
             print(f"ℹ️ Migration note: {e}")
+        
+        # Create link_panels table for reaction-based OAuth linking
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS link_panels (
+            id SERIAL PRIMARY KEY,
+            guild_id BIGINT NOT NULL,
+            channel_id BIGINT NOT NULL,
+            message_id BIGINT NOT NULL,
+            emoji TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(guild_id, channel_id, message_id)
+        );
+        """))
     print("✅ Database tables initialized successfully")
 except Exception as e:
     print(f"⚠️ Database initialization error: {e}")
@@ -498,6 +511,7 @@ except Exception as e:
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
+intents.reactions = True  # Enable reaction events
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -1534,6 +1548,87 @@ async def toggle_tracking(ctx, action: str = None):
 @toggle_tracking.error
 async def tracking_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You need administrator permissions to use this command.")
+
+@bot.command(name="setup_link_panel")
+@commands.has_permissions(administrator=True)
+@in_guild()
+async def setup_link_panel(ctx, emoji: str = "🔗"):
+    """
+    Admin command to create a pinned message for reaction-based OAuth linking.
+    Usage: !setup_link_panel [emoji]
+    Default emoji: 🔗
+    
+    Users can react to the pinned message to link their Kick account via OAuth.
+    """
+    
+    if not OAUTH_BASE_URL or not KICK_CLIENT_ID:
+        await ctx.send(
+            "❌ OAuth linking is not configured on this bot.\n"
+            "Please set OAUTH_BASE_URL and KICK_CLIENT_ID environment variables."
+        )
+        return
+    
+    # Create the embed for the pinned message
+    embed = discord.Embed(
+        title="🎮 Link Your Kick Account",
+        description=f"React with {emoji} below to link your Discord account with your Kick account!",
+        color=0x53FC18
+    )
+    embed.add_field(
+        name="📝 How it works",
+        value=(
+            f"1. Click the {emoji} reaction below\n"
+            "2. You'll receive a DM with your personal OAuth link\n"
+            "3. Click the link and authorize with Kick\n"
+            "4. Done! Your accounts are now linked"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="💡 Benefits",
+        value=(
+            "• Earn watchtime automatically\n"
+            "• Unlock exclusive roles\n"
+            "• Show your support for the stream"
+        ),
+        inline=False
+    )
+    embed.set_footer(text="You can also use !link command as a fallback")
+    
+    # Send the message
+    message = await ctx.send(embed=embed)
+    
+    # Add the reaction
+    await message.add_reaction(emoji)
+    
+    # Pin the message
+    try:
+        await message.pin()
+    except discord.Forbidden:
+        await ctx.send("⚠️ I don't have permission to pin messages. Please pin the message manually.")
+    except discord.HTTPException as e:
+        await ctx.send(f"⚠️ Failed to pin message: {e}")
+    
+    # Store in database
+    with engine.begin() as conn:
+        # Remove any existing link panel for this channel (only one per channel)
+        conn.execute(text("""
+            DELETE FROM link_panels 
+            WHERE guild_id = :g AND channel_id = :c
+        """), {"g": ctx.guild.id, "c": ctx.channel.id})
+        
+        # Insert new link panel
+        conn.execute(text("""
+            INSERT INTO link_panels (guild_id, channel_id, message_id, emoji)
+            VALUES (:g, :c, :m, :e)
+        """), {"g": ctx.guild.id, "c": ctx.channel.id, "m": message.id, "e": emoji})
+    
+    await ctx.send(f"✅ Link panel created! Users can now react with {emoji} to start the OAuth linking process.")
+
+@setup_link_panel.error
+async def setup_link_panel_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need Administrator permission to use this command.")
 
 # -------------------------
@@ -1587,6 +1682,147 @@ async def on_ready():
     # Start Kick chat listener
     bot.loop.create_task(kick_chat_loop(KICK_CHANNEL))
     print("✅ Kick chat listener started")
+
+@bot.event
+async def on_raw_reaction_add(payload):
+    """Handle reactions to link panel messages."""
+    
+    # Ignore bot's own reactions
+    if payload.user_id == bot.user.id:
+        return
+    
+    # Check if this reaction is on a link panel message
+    with engine.connect() as conn:
+        result = conn.execute(text("""
+            SELECT emoji FROM link_panels 
+            WHERE guild_id = :g AND channel_id = :c AND message_id = :m
+        """), {"g": payload.guild_id, "c": payload.channel_id, "m": payload.message_id}).fetchone()
+        
+        if not result:
+            return  # Not a link panel message
+        
+        panel_emoji = result[0]
+        
+        # Check if the reaction emoji matches
+        reaction_emoji = str(payload.emoji)
+        if reaction_emoji != panel_emoji:
+            return  # Wrong emoji
+    
+    # Get the user
+    guild = bot.get_guild(payload.guild_id)
+    if not guild:
+        return
+    
+    member = guild.get_member(payload.user_id)
+    if not member:
+        return
+    
+    discord_id = member.id
+    
+    # Check if already linked
+    with engine.connect() as conn:
+        existing = conn.execute(text(
+            "SELECT kick_name FROM links WHERE discord_id = :d"
+        ), {"d": discord_id}).fetchone()
+        
+        if existing:
+            try:
+                await member.send(
+                    f"✅ You are already linked to **{existing[0]}**.\n"
+                    f"Use `!unlink` first if you want to link a different account."
+                )
+            except discord.Forbidden:
+                pass  # User has DMs disabled
+            
+            # Remove the reaction
+            try:
+                channel = bot.get_channel(payload.channel_id)
+                message = await channel.fetch_message(payload.message_id)
+                await message.remove_reaction(payload.emoji, member)
+            except:
+                pass
+            
+            return
+    
+    # Generate OAuth URL
+    oauth_url = f"{OAUTH_BASE_URL}/auth/kick?discord_id={discord_id}"
+    
+    embed = discord.Embed(
+        title="🔗 Link with Kick OAuth",
+        description="Click the button below to securely link your Kick account.",
+        color=0x53FC18
+    )
+    embed.add_field(
+        name="📝 Instructions",
+        value="1. Click the link below\n2. Log in to Kick (if needed)\n3. Authorize the connection\n4. You're done!",
+        inline=False
+    )
+    embed.set_footer(text="Link expires in 10 minutes")
+    
+    # Create a view with a button
+    view = discord.ui.View()
+    button = discord.ui.Button(
+        label="Link with Kick",
+        style=discord.ButtonStyle.link,
+        url=oauth_url,
+        emoji="🎮"
+    )
+    view.add_item(button)
+    
+    # Try to DM the user
+    try:
+        dm_message = await member.send(embed=embed, view=view)
+        
+        # Store the DM message info for later deletion
+        with engine.begin() as conn:
+            # Delete any existing pending OAuth for this user
+            conn.execute(text("DELETE FROM oauth_notifications WHERE discord_id = :d AND processed = FALSE"), {"d": discord_id})
+            
+            # Store DM message info (will be updated with kick_username when OAuth completes)
+            conn.execute(text("""
+                INSERT INTO oauth_notifications (discord_id, kick_username, channel_id, message_id, processed)
+                VALUES (:d, '', :c, :m, FALSE)
+            """), {"d": discord_id, "c": dm_message.channel.id, "m": dm_message.id})
+        
+        # Remove the reaction after sending DM
+        try:
+            channel = bot.get_channel(payload.channel_id)
+            message = await channel.fetch_message(payload.message_id)
+            await message.remove_reaction(payload.emoji, member)
+        except:
+            pass
+            
+    except discord.Forbidden:
+        # User has DMs disabled, send in channel instead
+        try:
+            channel = bot.get_channel(payload.channel_id)
+            channel_message = await channel.send(
+                f"{member.mention} Check your DMs for the OAuth link! (If you don't see it, make sure DMs are enabled)",
+                embed=embed,
+                view=view,
+                delete_after=60  # Auto-delete after 1 minute
+            )
+            
+            # Store the channel message info
+            with engine.begin() as conn:
+                # Delete any existing pending OAuth for this user
+                conn.execute(text("DELETE FROM oauth_notifications WHERE discord_id = :d AND processed = FALSE"), {"d": discord_id})
+                
+                # Store channel message info
+                conn.execute(text("""
+                    INSERT INTO oauth_notifications (discord_id, kick_username, channel_id, message_id, processed)
+                    VALUES (:d, '', :c, :m, FALSE)
+                """), {"d": discord_id, "c": channel_message.channel.id, "m": channel_message.id})
+            
+            # Remove the reaction
+            try:
+                message = await channel.fetch_message(payload.message_id)
+                await message.remove_reaction(payload.emoji, member)
+            except:
+                pass
+                
+        except Exception as e:
+            print(f"Failed to send OAuth link to {member}: {e}")
 
 @bot.event
 async def on_command_error(ctx, error):
