@@ -461,24 +461,21 @@ try:
             timestamp TEXT
         );
         """))
+        
+        # Create oauth_notifications table
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS oauth_notifications (
+            id SERIAL PRIMARY KEY,
+            discord_id BIGINT NOT NULL,
+            kick_username TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            processed BOOLEAN DEFAULT FALSE
+        );
+        """))
     print("✅ Database tables initialized successfully")
 except Exception as e:
     print(f"⚠️ Database initialization error: {e}")
     raise
-    conn.execute(text("""
-    CREATE TABLE IF NOT EXISTS links (
-        discord_id BIGINT PRIMARY KEY,
-        kick_name TEXT UNIQUE
-    );
-    """))
-    conn.execute(text("""
-    CREATE TABLE IF NOT EXISTS pending_links (
-        discord_id BIGINT PRIMARY KEY,
-        kick_name TEXT,
-        code TEXT,
-        timestamp TEXT
-    );
-    """))
 
 # -------------------------
 # Discord bot setup
