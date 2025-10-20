@@ -34,11 +34,11 @@ if not KICK_CLIENT_ID or not KICK_CLIENT_SECRET:
     print("⚠️ WARNING: KICK_CLIENT_ID and KICK_CLIENT_SECRET not set!")
     print("⚠️ OAuth linking will not work until these are configured.")
 
-# Kick OAuth endpoints
-KICK_AUTHORIZE_URL = "https://kick.com/oauth2/authorize"
-KICK_TOKEN_URL = "https://kick.com/oauth2/token"
+# Kick OAuth endpoints - correct URLs confirmed from lele.gg
+KICK_AUTHORIZE_URL = "https://id.kick.com/oauth/authorize"
+KICK_TOKEN_URL = "https://id.kick.com/oauth/token"
 KICK_USER_API_URL = "https://kick.com/api/v2/user"
-KICK_OAUTH_USER_INFO_URL = "https://kick.com/api/v2/user"  # Same as regular API
+KICK_OAUTH_USER_INFO_URL = "https://id.kick.com/oauth/userinfo"
 
 # Database configuration (reuse from bot.py)
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///watchtime.db")
@@ -142,15 +142,17 @@ def auth_kick():
     for s in oauth_states_to_remove:
         del oauth_states[s]
     
-    # Build authorization URL
+    # Build authorization URL with user:read scope and PKCE
     redirect_uri = f"{OAUTH_BASE_URL}/auth/kick/callback"
     
-    # Basic OAuth without scopes or PKCE - let Kick use defaults
     auth_params = {
         'client_id': KICK_CLIENT_ID,
         'response_type': 'code',
         'redirect_uri': redirect_uri,
-        'state': state
+        'state': state,
+        'scope': 'user:read',  # Kick scope format (confirmed from lele.gg)
+        'code_challenge': code_challenge,
+        'code_challenge_method': 'S256'
     }
     
     print(f"🔗 Authorization URL: {KICK_AUTHORIZE_URL}?{urlencode(auth_params)}", flush=True)
@@ -193,7 +195,7 @@ def auth_kick_callback():
     
     # Exchange code for access token
     try:
-        token_data = exchange_code_for_token(code, code_verifier=None)  # No PKCE for now
+        token_data = exchange_code_for_token(code, code_verifier=code_verifier)  # Use PKCE
         access_token = token_data.get('access_token')
         id_token = token_data.get('id_token')  # OpenID Connect ID token
         
