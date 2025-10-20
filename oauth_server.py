@@ -17,6 +17,13 @@ from urllib.parse import urlencode
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", secrets.token_hex(32))
 
+# 404 handler - ignore not found errors (bots/scanners)
+@app.errorhandler(404)
+def handle_404(e):
+    # Silently log but don't spam with full traceback
+    print(f"ℹ️ 404: {request.method} {request.path}", flush=True)
+    return jsonify({"error": "Not Found"}), 404
+
 # Global error handler
 @app.errorhandler(Exception)
 def handle_error(e):
