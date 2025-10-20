@@ -157,10 +157,12 @@ async def get_kick_api():
 
 async def get_kick_bio(username: str) -> Optional[dict]:
     """Get a Kick user's bio using Playwright."""
-    print(f"[Verify] Fetching bio for {username} using Playwright...")
-    browser = None
-    context = None
-    page = None
+    # 🔒 SECURITY: Use semaphore to limit concurrent browser instances
+    async with playwright_semaphore:
+        print(f"[Verify] Fetching bio for {username} using Playwright...")
+        browser = None
+        context = None
+        page = None
     
     try:
         async with async_playwright() as p:
@@ -412,8 +414,8 @@ engine = create_engine(
     future=True,
     pool_pre_ping=True,     # Detect disconnections
     pool_recycle=1800,      # Recycle connections after 30 minutes (Railway timeout)
-    pool_size=3,            # Smaller pool for Railway's connection limits
-    max_overflow=5,         # Allow up to 5 connections beyond pool_size
+    pool_size=10,           # 🔒 SECURITY: Increased from 3 to 10 to prevent connection exhaustion
+    max_overflow=10,        # 🔒 SECURITY: Increased from 5 to 10 for better availability
     pool_timeout=30,        # Wait up to 30 seconds for a connection
     echo=False,             # Don't log all SQL
     echo_pool=False,        # Disable pool logging to reduce noise
@@ -489,6 +491,9 @@ active_viewers = {}
 # Stream status tracking
 stream_tracking_enabled = True  # Admin can toggle this
 last_chat_activity = None  # Track last time we saw any chat activity
+
+# 🔒 SECURITY: Semaphore to limit concurrent Playwright operations (prevent resource exhaustion)
+playwright_semaphore = asyncio.Semaphore(2)  # Max 2 concurrent browser instances
 
 # -------------------------
 # Kick listener functions
@@ -637,12 +642,18 @@ async def kick_chat_loop(channel_name: str):
 # -------------------------
 @tasks.loop(seconds=WATCH_INTERVAL_SECONDS)
 async def update_watchtime_task():
-    """Update watchtime for active viewers (only when tracking is enabled)."""
+    """Update watchtime for active viewers (only when tracking is enabled and stream is live)."""
     global stream_tracking_enabled
     
     try:
         # Check if tracking is enabled by admin
         if not stream_tracking_enabled:
+            return
+        
+        # 🔒 SECURITY: Verify stream is actually live before awarding watchtime
+        is_live = await check_stream_live(KICK_CHANNEL)
+        if not is_live:
+            print("[Security] Stream is offline - skipping watchtime update")
             return
         
         now = datetime.now(timezone.utc)
@@ -661,10 +672,30 @@ async def update_watchtime_task():
         # Calculate minutes to add
         minutes_to_add = WATCH_INTERVAL_SECONDS / 60
         
+        # 🔒 SECURITY: Daily watchtime cap (max 18 hours per day to prevent abuse)
+        MAX_DAILY_HOURS = 18
+        MAX_DAILY_MINUTES = MAX_DAILY_HOURS * 60
+        now = datetime.now(timezone.utc)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        
         # Update all active users in a single transaction
         with engine.begin() as conn:
             for user, last_seen in active_users.items():
                 try:
+                    # Check today's watchtime for this user
+                    daily_check = conn.execute(text("""
+                        SELECT minutes, last_active FROM watchtime WHERE username = :u
+                    """), {"u": user}).fetchone()
+                    
+                    if daily_check:
+                        existing_minutes, last_active_str = daily_check
+                        last_active = datetime.fromisoformat(last_active_str) if last_active_str else today_start
+                        
+                        # If last active was today and they've hit the cap, skip
+                        if last_active >= today_start and existing_minutes >= MAX_DAILY_MINUTES:
+                            print(f"[Security] User {user} has reached daily watchtime cap ({MAX_DAILY_HOURS}h)")
+                            continue
+                    
                     conn.execute(text("""
                         INSERT INTO watchtime (username, minutes, last_active)
                         VALUES (:u, :m, :t)
@@ -811,7 +842,7 @@ async def cleanup_pending_links_task():
 class CommandCooldowns:
     # Cooldown settings
     LINK_COOLDOWN = commands.CooldownMapping.from_cooldown(1, 60, commands.BucketType.user)
-    VERIFY_COOLDOWN = commands.CooldownMapping.from_cooldown(1, 30, commands.BucketType.user)
+    VERIFY_COOLDOWN = commands.CooldownMapping.from_cooldown(3, 300, commands.BucketType.user)  # 🔒 SECURITY: Max 3 attempts per 5 minutes
     LEADERBOARD_COOLDOWN = commands.CooldownMapping.from_cooldown(1, 30, commands.BucketType.channel)
     WATCHTIME_COOLDOWN = commands.CooldownMapping.from_cooldown(1, 15, commands.BucketType.user)
     UNLINK_COOLDOWN = commands.CooldownMapping.from_cooldown(1, 300, commands.BucketType.user)
@@ -871,31 +902,40 @@ async def cmd_link(ctx, kick_username: str):
     except Exception as e:
         print(f"⚠️ Error in link command: {e}")
         await ctx.send("❌ An error occurred while checking account linkage. Please try again.")
-        existing = conn.execute(text(
-            "SELECT discord_id FROM links WHERE kick_name = :k"
-        ), {"k": kick_username}).fetchone()
-        
-        if existing and existing[0] != discord_id:
-            await ctx.send(
-                f"❌ The Kick account **{kick_username}** is already linked to another Discord user. "
-                "If this is your account, ask them to `!unlink` first."
-            )
-            return
+        return
     
-    # Generate 6-digit verification code
-    code = ''.join(random.choices(string.digits, k=6))
-    now_iso = datetime.now(timezone.utc).isoformat()
-
+    # 🔒 SECURITY: Generate unique verification code with collision detection
+    max_attempts = 10
+    code = None
+    
     with engine.begin() as conn:
+        for attempt in range(max_attempts):
+            # Generate 6-digit verification code
+            candidate_code = ''.join(random.choices(string.digits, k=6))
+            
+            # Check if code already exists in pending_links
+            existing_code = conn.execute(text(
+                "SELECT discord_id FROM pending_links WHERE code = :c"
+            ), {"c": candidate_code}).fetchone()
+            
+            if not existing_code:
+                code = candidate_code
+                break
+        
+        if not code:
+            await ctx.send("❌ Unable to generate verification code. Please try again.")
+            return
+        
         # Remove any existing pending verification for this Discord user
         conn.execute(text("DELETE FROM pending_links WHERE discord_id = :d"), {"d": discord_id})
         
         # Insert new pending verification
+        now_iso = datetime.now(timezone.utc).isoformat()
         conn.execute(text("""
             INSERT INTO pending_links (discord_id, kick_name, code, timestamp)
             VALUES (:d, :k, :c, :t)
         """), {"d": discord_id, "k": kick_username, "c": code, "t": now_iso})
-
+    
     await ctx.send(
         f"🔗 **Link your Kick account**\n\n"
         f"1. Go to https://kick.com/dashboard/settings/profile\n"
@@ -1028,10 +1068,43 @@ async def cmd_verify(ctx, kick_username: str):
         )
 
 @bot.command(name="unlink")
+@dynamic_cooldown(CommandCooldowns.UNLINK_COOLDOWN)  # 🔒 SECURITY: 5-minute cooldown to prevent spam
+@in_guild()
 async def cmd_unlink(ctx):
     """Unlink Kick account from Discord."""
     discord_id = ctx.author.id
     
+    # 🔒 SECURITY: Check if user has a linked account first
+    with engine.connect() as conn:
+        existing = conn.execute(text(
+            "SELECT kick_name FROM links WHERE discord_id = :d"
+        ), {"d": discord_id}).fetchone()
+    
+    if not existing:
+        await ctx.send("❌ You don't have a linked Kick account.")
+        return
+    
+    kick_name = existing[0]
+    
+    # 🔒 SECURITY: Send confirmation message
+    await ctx.send(
+        f"⚠️ **Are you sure you want to unlink your account?**\n\n"
+        f"Kick account: **{kick_name}**\n"
+        f"Your watchtime will be preserved, but you won't be able to earn more until you re-link.\n\n"
+        f"Type `!confirmunlink` within 30 seconds to proceed."
+    )
+    
+    # Wait for confirmation
+    def check(m):
+        return m.author.id == discord_id and m.channel == ctx.channel and m.content.lower() == "!confirmunlink"
+    
+    try:
+        await bot.wait_for('message', check=check, timeout=30.0)
+    except asyncio.TimeoutError:
+        await ctx.send("❌ Unlink cancelled (timed out).")
+        return
+    
+    # Proceed with unlinking
     with engine.begin() as conn:
         result = conn.execute(text(
             "DELETE FROM links WHERE discord_id = :d RETURNING kick_name"
@@ -1046,7 +1119,7 @@ async def cmd_unlink(ctx):
             was_linked = result.fetchone() is not None
     
     if was_linked:
-        await ctx.send("🔓 Your Kick account has been unlinked from Discord.")
+        await ctx.send(f"🔓 Your Kick account **{kick_name}** has been unlinked from Discord.")
     else:
         await ctx.send("❌ You don't have a linked Kick account.")
 
@@ -1140,7 +1213,7 @@ async def cmd_watchtime(ctx, user: str = None):
 # -------------------------
 @bot.command(name="tracking")
 @commands.has_permissions(administrator=True)
-@in_guild()
+@in_guild()  # 🔒 SECURITY: Ensure command only works in the configured guild
 async def toggle_tracking(ctx, action: str = None):
     """
     Admin command to control watchtime tracking.
