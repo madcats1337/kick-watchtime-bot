@@ -47,8 +47,20 @@ if DATABASE_URL.startswith("postgres://"):
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
-# In-memory storage for OAuth state (in production, use Redis or database)
-oauth_states = {}  # {state: {discord_id, code_verifier, timestamp}}
+# Initialize database tables
+with engine.begin() as conn:
+    # Create oauth_states table for storing OAuth state across workers
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS oauth_states (
+            state TEXT PRIMARY KEY,
+            discord_id BIGINT NOT NULL,
+            code_verifier TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+
+# Note: OAuth states are stored in database, not in-memory
+# This is necessary because Gunicorn workers don't share memory
 
 
 def generate_pkce_pair():
@@ -126,21 +138,19 @@ def auth_kick():
     # Generate state for CSRF protection
     state = secrets.token_urlsafe(32)
     
-    # Store state with discord_id and code_verifier
-    oauth_states[state] = {
-        'discord_id': int(discord_id),
-        'code_verifier': code_verifier,
-        'timestamp': datetime.now(timezone.utc)
-    }
-    
-    # Clean up old states (older than 10 minutes)
-    cutoff = datetime.now(timezone.utc).timestamp() - 600
-    oauth_states_to_remove = [
-        s for s, data in oauth_states.items() 
-        if data['timestamp'].timestamp() < cutoff
-    ]
-    for s in oauth_states_to_remove:
-        del oauth_states[s]
+    # Store state in database (survives across Gunicorn workers)
+    with engine.begin() as conn:
+        # Clean up old states (older than 10 minutes)
+        conn.execute(text("""
+            DELETE FROM oauth_states 
+            WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '10 minutes'
+        """))
+        
+        # Store new state
+        conn.execute(text("""
+            INSERT INTO oauth_states (state, discord_id, code_verifier, created_at)
+            VALUES (:state, :discord_id, :code_verifier, CURRENT_TIMESTAMP)
+        """), {"state": state, "discord_id": int(discord_id), "code_verifier": code_verifier})
     
     # Build authorization URL with user:read scope and PKCE
     redirect_uri = f"{OAUTH_BASE_URL}/auth/kick/callback"
@@ -181,15 +191,19 @@ def auth_kick_callback():
         print(f"❌ Missing code or state", flush=True)
         return render_error("Missing authorization code or state")
     
-    # Verify state
-    print(f"🔍 Checking state... States in memory: {list(oauth_states.keys())}", flush=True)
-    if state not in oauth_states:
+    # Verify state from database
+    with engine.connect() as conn:
+        result = conn.execute(text("""
+            SELECT discord_id, code_verifier FROM oauth_states WHERE state = :state
+        """), {"state": state}).fetchone()
+    
+    print(f"🔍 Checking state in database...", flush=True)
+    if not result:
         print(f"❌ State not found or expired", flush=True)
         return render_error("Invalid or expired state. Please try linking again.")
     
-    state_data = oauth_states[state]
-    discord_id = state_data['discord_id']
-    code_verifier = state_data['code_verifier']
+    discord_id = result[0]
+    code_verifier = result[1]
     
     print(f"✅ State valid, Discord ID: {discord_id}", flush=True)
     
@@ -268,9 +282,9 @@ def auth_kick_callback():
             
             # Clean up pending bio verifications if any
             conn.execute(text("DELETE FROM pending_links WHERE discord_id = :d"), {"d": discord_id})
-        
-        # Clean up state
-        del oauth_states[state]
+            
+            # Clean up used OAuth state
+            conn.execute(text("DELETE FROM oauth_states WHERE state = :state"), {"state": state})
         
         return render_success(kick_username)
         
