@@ -35,10 +35,10 @@ if not KICK_CLIENT_ID or not KICK_CLIENT_SECRET:
     print("⚠️ OAuth linking will not work until these are configured.")
 
 # Kick OAuth endpoints
-KICK_AUTHORIZE_URL = "https://id.kick.com/oauth/authorize"
-KICK_TOKEN_URL = "https://id.kick.com/oauth/token"
+KICK_AUTHORIZE_URL = "https://kick.com/oauth2/authorize"
+KICK_TOKEN_URL = "https://kick.com/oauth2/token"
 KICK_USER_API_URL = "https://kick.com/api/v2/user"
-KICK_OAUTH_USER_INFO_URL = "https://id.kick.com/oauth/userinfo"  # OAuth standard endpoint
+KICK_OAUTH_USER_INFO_URL = "https://kick.com/api/v2/user"  # Same as regular API
 
 # Database configuration (reuse from bot.py)
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///watchtime.db")
