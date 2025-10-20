@@ -179,6 +179,8 @@ def auth_kick_callback():
         access_token = token_data.get('access_token')
         id_token = token_data.get('id_token')  # OpenID Connect ID token
         
+        print(f"📝 Token data keys: {token_data.keys()}", flush=True)
+        
         if not access_token:
             return render_error("Failed to obtain access token")
         
@@ -196,13 +198,17 @@ def auth_kick_callback():
                     payload += '=' * (4 - len(payload) % 4)
                     decoded = base64.urlsafe_b64decode(payload)
                     kick_user = json.loads(decoded)
-                    print(f"✅ Got user from ID token: {kick_user}")
+                    print(f"✅ Got user from ID token: {kick_user}", flush=True)
             except Exception as e:
-                print(f"Failed to decode ID token: {e}")
+                print(f"❌ Failed to decode ID token: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
         
         # Fallback: Get user info from API
         if not kick_user:
+            print(f"⚠️ No ID token, trying API...", flush=True)
             kick_user = get_kick_user_info(access_token)
+            print(f"📊 API response: {kick_user}", flush=True)
         
         if not kick_user:
             return render_error("Failed to retrieve Kick user information")
@@ -215,8 +221,11 @@ def auth_kick_callback():
             kick_user.get('sub')  # OpenID subject identifier
         )
         
+        print(f"👤 Extracted username: {kick_username}", flush=True)
+        
         if not kick_username:
-            return render_error("Could not find username in Kick response")
+            print(f"❌ Could not find username. User data: {kick_user}", flush=True)
+            return render_error(f"Could not find username in Kick response. Data: {list(kick_user.keys())}")
         
         # Check if Kick account is already linked to another Discord user
         with engine.connect() as conn:
@@ -246,7 +255,9 @@ def auth_kick_callback():
         return render_success(kick_username)
         
     except Exception as e:
-        print(f"[OAuth] Error during callback: {e}")
+        print(f"❌ [OAuth] Error during callback: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
         return render_error(f"An error occurred: {str(e)}")
 
 
