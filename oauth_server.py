@@ -209,88 +209,27 @@ def auth_kick_callback():
     
     # Exchange code for access token
     try:
-        token_data = exchange_code_for_token(code, code_verifier=code_verifier)  # Use PKCE
+        token_data = exchange_code_for_token(code, code_verifier=code_verifier)
         access_token = token_data.get('access_token')
-        id_token = token_data.get('id_token')  # OpenID Connect ID token
-        
-        print(f"📝 Token data keys: {token_data.keys()}", flush=True)
-        print(f"📝 Has id_token: {bool(id_token)}", flush=True)
-        print(f"📝 Access token first 50 chars: {access_token[:50] if access_token else 'None'}...", flush=True)
         
         if not access_token:
-            return render_error("Failed to obtain access token")
+            return render_error("Failed to obtain access token from Kick")
         
-        # Try to decode access token if it's a JWT (might contain user info)
-        kick_user = None
+        print(f"✅ Got access token", flush=True)
+        
+        # Get user info from Kick's public API
         try:
-            import json
-            import base64
-            # Check if access_token is a JWT (has 3 parts separated by dots)
-            parts = access_token.split('.')
-            if len(parts) == 3:
-                print(f"🔍 Access token appears to be JWT, attempting to decode...", flush=True)
-                # Decode the payload (middle part)
-                payload = parts[1]
-                # Add padding if needed
-                payload += '=' * (4 - len(payload) % 4)
-                decoded = base64.urlsafe_b64decode(payload)
-                jwt_data = json.loads(decoded)
-                print(f"✅ Decoded JWT payload: {jwt_data}", flush=True)
-                
-                # Extract username from JWT
-                if 'username' in jwt_data or 'sub' in jwt_data or 'name' in jwt_data:
-                    kick_user = jwt_data
+            kick_user = get_kick_user_info(access_token)
+            print(f"📊 Got user info: {kick_user}", flush=True)
         except Exception as e:
-            print(f"⚠️ Failed to decode access token as JWT: {e}", flush=True)
+            print(f"❌ Failed to get user info: {e}", flush=True)
+            return render_error(f"Failed to get your Kick username: {str(e)}")
         
-        # Try to get user info from ID token first (OpenID Connect)
-        if not kick_user and id_token:
-            try:
-                import json
-                import base64
-                # Decode ID token (JWT) - middle part contains claims
-                parts = id_token.split('.')
-                if len(parts) >= 2:
-                    # Add padding if needed
-                    payload = parts[1]
-                    payload += '=' * (4 - len(payload) % 4)
-                    decoded = base64.urlsafe_b64decode(payload)
-                    kick_user = json.loads(decoded)
-                    print(f"✅ Got user from ID token: {kick_user}", flush=True)
-            except Exception as e:
-                print(f"❌ Failed to decode ID token: {e}", flush=True)
-                import traceback
-                traceback.print_exc()
+        if not kick_user or not kick_user.get('username'):
+            return render_error("Could not retrieve your Kick username. Please try again.")
         
-        # Fallback: Get user info from API
-        if not kick_user:
-            print(f"⚠️ No user info available from token/ID token, trying API...", flush=True)
-            try:
-                kick_user = get_kick_user_info(access_token)
-                print(f"📊 API response: {kick_user}", flush=True)
-            except Exception as e:
-                print(f"⚠️ API call failed: {e}", flush=True)
-                # API failed, ask user for username manually
-                kick_user = None
-        
-        # If we still don't have user info, redirect to username input page
-        if not kick_user:
-            print(f"⚠️ Could not get user info automatically, asking user to input username", flush=True)
-            return render_username_form(state, discord_id)
-        
-        # Extract username from various possible fields
-        kick_username = (
-            kick_user.get('username') or 
-            kick_user.get('preferred_username') or 
-            kick_user.get('name') or
-            kick_user.get('sub')  # OpenID subject identifier
-        )
-        
-        print(f"👤 Extracted username: {kick_username}", flush=True)
-        
-        if not kick_username:
-            print(f"❌ Could not find username. User data: {kick_user}", flush=True)
-            return render_error(f"Could not find username in Kick response. Data: {list(kick_user.keys())}")
+        kick_username = kick_user['username']
+        print(f"👤 Kick username: {kick_username}", flush=True)
         
         # Check if Kick account is already linked to another Discord user
         with engine.connect() as conn:
@@ -354,152 +293,47 @@ def exchange_code_for_token(code, code_verifier=None):
     return token_json
 
 
-def decode_jwt_token(token):
-    """Decode JWT token to extract user information without verification.
-    
-    This is safe because:
-    1. We got the token directly from Kick's OAuth server over HTTPS
-    2. We're only reading data, not verifying authenticity for auth purposes
-    3. The token was obtained through proper OAuth flow with our client secret
-    """
-    import base64
-    import json
-    
-    try:
-        # JWT format: header.payload.signature
-        parts = token.split('.')
-        if len(parts) != 3:
-            print(f"⚠️ Token doesn't look like a JWT (expected 3 parts, got {len(parts)})", flush=True)
-            return None
-        
-        # Decode the payload (second part)
-        payload = parts[1]
-        # Add padding if needed (JWT base64 doesn't use padding)
-        padding = 4 - len(payload) % 4
-        if padding != 4:
-            payload += '=' * padding
-        
-        decoded = base64.urlsafe_b64decode(payload)
-        user_data = json.loads(decoded)
-        print(f"🔓 Decoded JWT payload: {user_data}", flush=True)
-        return user_data
-    except Exception as e:
-        print(f"❌ Failed to decode JWT: {e}", flush=True)
-        return None
-
-
 def get_kick_user_info(access_token):
-    """Get user information from Kick OAuth access token."""
+    """Get user information from Kick OAuth access token.
+    
+    Uses Kick's public API endpoint that works with OAuth Bearer tokens.
+    Reference: https://arcticjs.dev/providers/kick
+    """
     import requests
     
-    # First, try to decode the access token as a JWT
-    # Many OAuth providers include user info directly in the JWT
-    print(f"🔍 Attempting to decode access token as JWT...", flush=True)
-    jwt_data = decode_jwt_token(access_token)
-    
-    if jwt_data:
-        # Check if we got username from JWT
-        username = None
-        user_id = None
-        
-        # Try different possible fields
-        if 'username' in jwt_data:
-            username = jwt_data['username']
-        elif 'preferred_username' in jwt_data:
-            username = jwt_data['preferred_username']
-        elif 'name' in jwt_data:
-            username = jwt_data['name']
-        elif 'slug' in jwt_data:
-            username = jwt_data['slug']
-        
-        # Try to get user ID
-        if 'sub' in jwt_data:
-            user_id = jwt_data['sub']
-        elif 'id' in jwt_data:
-            user_id = jwt_data['id']
-        elif 'user_id' in jwt_data:
-            user_id = jwt_data['user_id']
-        
-        if username:
-            print(f"✅ Extracted username from JWT: {username}", flush=True)
-            return {'username': username, 'id': user_id, 'jwt_data': jwt_data}
-        else:
-            print(f"⚠️ JWT decoded but no username field found. Available fields: {list(jwt_data.keys())}", flush=True)
-    
-    # If JWT decode didn't work or didn't contain username, try API endpoints
     headers = {
         'Authorization': f'Bearer {access_token}',
         'Accept': 'application/json'
     }
     
-    # Also try with access token as a cookie (some APIs work this way)
-    cookies = {
-        'access_token': access_token,
-        'token': access_token,
-    }
-    
-    # Try multiple endpoints to find one that works with the OAuth token
-    endpoints_to_try = [
-        ('Public API v1 users', 'https://api.kick.com/public/v1/users', 'GET'),  # From Arctic.js library!
-        ('OAuth userinfo', KICK_OAUTH_USER_INFO_URL, 'GET'),
-        ('OAuth introspect', 'https://id.kick.com/oauth/introspect', 'POST'),
-        ('OAuth tokeninfo', 'https://id.kick.com/oauth/tokeninfo', 'GET'),
-        ('Broadcasting auth', 'https://kick.com/broadcasting/auth', 'POST'),
-        ('API v2 user', 'https://kick.com/api/v2/user', 'GET'),
-        ('API v1 user', 'https://kick.com/api/v1/user', 'GET'),
-        ('API user/me', 'https://kick.com/api/user/me', 'GET'),
-        ('API v2 me', 'https://kick.com/api/v2/me', 'GET'),
-    ]
-    
-    for name, url, method in endpoints_to_try:
-        try:
-            print(f"🔍 Trying {name}: {method} {url}", flush=True)
+    try:
+        # Use Kick's public API endpoint (documented in Arctic.js OAuth library)
+        print(f"🔍 Getting user info from Kick public API...", flush=True)
+        response = requests.get('https://api.kick.com/public/v1/users', headers=headers, timeout=10)
+        
+        print(f"📊 Response status: {response.status_code}", flush=True)
+        
+        if response.status_code == 200:
+            data = response.json()
+            print(f"✅ Got user data: {data}", flush=True)
             
-            if method == 'POST':
-                # For introspect endpoint, send token as form data
-                if 'introspect' in url:
-                    response = requests.post(url, data={'token': access_token}, headers={'Accept': 'application/json'}, cookies=cookies, timeout=10)
-                else:
-                    response = requests.post(url, headers=headers, cookies=cookies, timeout=10)
-            else:
-                # For tokeninfo, send token as query param
-                if 'tokeninfo' in url:
-                    response = requests.get(f"{url}?access_token={access_token}", headers={'Accept': 'application/json'}, cookies=cookies, timeout=10)
-                else:
-                    response = requests.get(url, headers=headers, cookies=cookies, timeout=10)
-                
-            print(f"📊 {name} response status: {response.status_code}", flush=True)
-            
-            if response.status_code == 200:
-                user_data = response.json()
-                print(f"✅ Got user data from {name}: {user_data}", flush=True)
-                
-                # Try to extract username from various possible fields
-                if isinstance(user_data, dict):
-                    # Handle Kick's public API format: {"data": [{"name": "...", "user_id": ...}]}
-                    if 'data' in user_data and isinstance(user_data['data'], list) and len(user_data['data']) > 0:
-                        first_user = user_data['data'][0]
-                        if 'name' in first_user:
-                            return {'username': first_user['name'], 'id': first_user.get('user_id'), 'email': first_user.get('email')}
-                    
-                    # Standard OAuth formats
-                    if 'username' in user_data:
-                        return user_data
-                    elif 'name' in user_data:
-                        return {'username': user_data['name'], 'id': user_data.get('sub') or user_data.get('id')}
-                    elif 'preferred_username' in user_data:
-                        return {'username': user_data['preferred_username'], 'id': user_data.get('sub') or user_data.get('id')}
-                    elif 'slug' in user_data:
-                        return {'username': user_data['slug'], 'id': user_data.get('id')}
-                    else:
-                        # Return whatever we got
-                        return user_data
-            else:
-                print(f"⚠️ {name} returned {response.status_code}: {response.text[:200]}", flush=True)
-        except Exception as e:
-            print(f"❌ {name} failed: {e}", flush=True)
-    
-    raise Exception(f"Could not get user info from Kick OAuth. JWT decode didn't contain username and tried {len(endpoints_to_try)} API endpoints.")
+            # Kick's API returns: {"data": [{"user_id": ..., "name": "...", "email": "..."}], "message": "OK"}
+            if 'data' in data and isinstance(data['data'], list) and len(data['data']) > 0:
+                user = data['data'][0]
+                return {
+                    'username': user.get('name'),
+                    'id': user.get('user_id'),
+                    'email': user.get('email'),
+                    'profile_picture': user.get('profile_picture')
+                }
+        
+        # If we get here, the API didn't return expected data
+        print(f"⚠️ Unexpected response format: {response.text[:200]}", flush=True)
+        raise Exception(f"Kick API returned status {response.status_code}")
+        
+    except Exception as e:
+        print(f"❌ Failed to get user info: {e}", flush=True)
+        raise Exception(f"Could not get user info from Kick API: {str(e)}")
 
 
 def render_success(kick_username):
@@ -621,124 +455,6 @@ def render_error(message):
         </body>
     </html>
     """, 400
-
-
-def render_username_form(state, discord_id):
-    """Render form for user to input their Kick username."""
-    return f"""
-    <html>
-        <head>
-            <title>Enter Your Kick Username</title>
-            <style>
-                body {{
-                    font-family: Arial, sans-serif;
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    min-height: 100vh;
-                    margin: 0;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    color: white;
-                }}
-                .container {{
-                    text-align: center;
-                    padding: 40px;
-                    background: rgba(255, 255, 255, 0.1);
-                    border-radius: 20px;
-                    backdrop-filter: blur(10px);
-                    max-width: 500px;
-                }}
-                h1 {{ margin: 0 0 10px 0; font-size: 48px; }}
-                h2 {{ margin: 0 0 20px 0; }}
-                p {{ font-size: 16px; line-height: 1.6; margin-bottom: 30px; }}
-                form {{
-                    display: flex;
-                    flex-direction: column;
-                    gap: 15px;
-                }}
-                input[type="text"] {{
-                    padding: 15px;
-                    font-size: 16px;
-                    border: 2px solid #53FC18;
-                    border-radius: 8px;
-                    background: rgba(255, 255, 255, 0.9);
-                    color: #000;
-                }}
-                button {{
-                    padding: 15px 30px;
-                    background: #53FC18;
-                    color: #000;
-                    border: none;
-                    border-radius: 8px;
-                    font-size: 18px;
-                    font-weight: bold;
-                    cursor: pointer;
-                }}
-                button:hover {{
-                    background: #45d914;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>🎮</h1>
-                <h2>Enter Your Kick Username</h2>
-                <p>We couldn't automatically retrieve your username. Please enter your Kick username below to complete the linking:</p>
-                <form method="POST" action="/auth/kick/complete">
-                    <input type="hidden" name="state" value="{state}">
-                    <input type="hidden" name="discord_id" value="{discord_id}">
-                    <input type="text" name="kick_username" placeholder="Your Kick username" required pattern="[a-zA-Z0-9_]+" title="Username can only contain letters, numbers, and underscores">
-                    <button type="submit">Link Account</button>
-                </form>
-            </div>
-        </body>
-    </html>
-    """
-
-
-@app.route('/auth/kick/complete', methods=['POST'])
-def auth_kick_complete():
-    """Complete OAuth linking with manual username input."""
-    state = request.form.get('state')
-    discord_id = request.form.get('discord_id')
-    kick_username = request.form.get('kick_username')
-    
-    print(f"📝 Manual username submission: {kick_username} for Discord {discord_id}", flush=True)
-    
-    if not state or not discord_id or not kick_username:
-        return render_error("Missing required information")
-    
-    # Verify state still exists in database
-    with engine.connect() as conn:
-        result = conn.execute(text("""
-            SELECT discord_id FROM oauth_states WHERE state = :state
-        """), {"state": state}).fetchone()
-    
-    if not result or str(result[0]) != str(discord_id):
-        return render_error("Invalid or expired session. Please try linking again.")
-    
-    # Link accounts in database
-    try:
-        with engine.begin() as conn:
-            conn.execute(text("""
-                INSERT INTO links (discord_id, kick_name)
-                VALUES (:d, :k)
-                ON CONFLICT(discord_id) DO UPDATE SET kick_name = excluded.kick_name
-            """), {"d": int(discord_id), "k": kick_username.lower()})
-            
-            # Clean up pending bio verifications if any
-            conn.execute(text("DELETE FROM pending_links WHERE discord_id = :d"), {"d": int(discord_id)})
-            
-            # Clean up used OAuth state
-            conn.execute(text("DELETE FROM oauth_states WHERE state = :state"), {"state": state})
-        
-        print(f"✅ Manually linked Discord {discord_id} to Kick {kick_username}", flush=True)
-        return render_success(kick_username)
-    except Exception as e:
-        print(f"❌ Error linking accounts: {e}", flush=True)
-        import traceback
-        traceback.print_exc()
-        return render_error(f"Failed to link accounts: {str(e)}")
 
 
 def render_error(message):
