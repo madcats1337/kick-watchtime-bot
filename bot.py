@@ -844,6 +844,62 @@ async def update_roles_task():
 # -------------------------
 # Cleanup expired verification codes and old chat data
 # -------------------------
+@tasks.loop(seconds=5)  # Check every 5 seconds for fast response
+async def check_oauth_notifications_task():
+    """Check for OAuth link success notifications and send Discord messages."""
+    try:
+        with engine.begin() as conn:
+            # Get unprocessed notifications
+            notifications = conn.execute(text("""
+                SELECT id, discord_id, kick_username 
+                FROM oauth_notifications 
+                WHERE processed = FALSE
+                ORDER BY created_at ASC
+                LIMIT 10
+            """)).fetchall()
+            
+            for notification_id, discord_id, kick_username in notifications:
+                try:
+                    # Get the user
+                    user = await bot.fetch_user(int(discord_id))
+                    if user:
+                        # Send success message via DM
+                        try:
+                            await user.send(f"✅ **Verification Successful!**\n\nYour Discord account has been linked to Kick account **{kick_username}**.")
+                        except discord.Forbidden:
+                            # If DM fails, try to find a guild channel
+                            if DISCORD_GUILD_ID:
+                                guild = bot.get_guild(DISCORD_GUILD_ID)
+                                if guild:
+                                    member = guild.get_member(int(discord_id))
+                                    if member:
+                                        # Try to send in a system channel or first available text channel
+                                        channel = guild.system_channel or next((ch for ch in guild.text_channels if ch.permissions_for(guild.me).send_messages), None)
+                                        if channel:
+                                            await channel.send(f"{member.mention} ✅ **Verification Successful!** Your account has been linked to Kick **{kick_username}**.")
+                    
+                    # Mark as processed
+                    conn.execute(text("""
+                        UPDATE oauth_notifications 
+                        SET processed = TRUE 
+                        WHERE id = :id
+                    """), {"id": notification_id})
+                    
+                    print(f"✅ Sent OAuth success notification to Discord {discord_id}", flush=True)
+                    
+                except Exception as e:
+                    print(f"⚠️ Error sending OAuth notification to {discord_id}: {e}", flush=True)
+                    # Mark as processed anyway to avoid retry loops
+                    conn.execute(text("""
+                        UPDATE oauth_notifications 
+                        SET processed = TRUE 
+                        WHERE id = :id
+                    """), {"id": notification_id})
+                    
+    except Exception as e:
+        print(f"⚠️ Error in OAuth notifications task: {e}", flush=True)
+
+
 @tasks.loop(minutes=5)
 async def cleanup_pending_links_task():
     """Remove expired verification codes and old chat activity data."""
@@ -980,11 +1036,11 @@ def in_guild():
         return ctx.guild and ctx.guild.id == DISCORD_GUILD_ID
     return commands.check(predicate)
 
-@bot.command(name="link")
+@bot.command(name="linkbio")
 @progressive_cooldown(base_seconds=10, increment_seconds=10, max_seconds=60)  # 10s -> 20s -> 30s -> ... -> 60s (capped)
 @in_guild()
-async def cmd_link(ctx, kick_username: str):
-    """Generate a verification code to link Kick account to Discord."""
+async def cmd_linkbio(ctx, kick_username: str):
+    """Generate a verification code to link Kick account to Discord (bio method)."""
     try:
         discord_id = ctx.author.id
         kick_username = kick_username.lower()
@@ -1055,19 +1111,19 @@ async def cmd_link(ctx, kick_username: str):
         f"2. Add this code to your bio: **{code}**\n"
         f"3. Run `!verify {kick_username}` here\n\n"
         f"⏰ Code expires in {CODE_EXPIRY_MINUTES} minutes.\n\n"
-        f"💡 **Tip:** Use `!linkoauth` for instant linking without editing your bio!"
+        f"💡 **Tip:** Use `!link` for instant OAuth linking without editing your bio!"
     )
 
-@bot.command(name="linkoauth")
+@bot.command(name="link")
 @progressive_cooldown(base_seconds=10, increment_seconds=10, max_seconds=60)
 @in_guild()
-async def cmd_linkoauth(ctx):
+async def cmd_link(ctx):
     """Link your Kick account using OAuth (instant, no bio editing required)."""
     
     if not OAUTH_BASE_URL or not KICK_CLIENT_ID:
         await ctx.send(
             "❌ OAuth linking is not configured on this bot.\n"
-            "Use `!link <kick_username>` for bio verification instead."
+            "Use `!linkbio <kick_username>` for bio verification instead."
         )
         return
     
@@ -1093,11 +1149,6 @@ async def cmd_linkoauth(ctx):
         title="🔗 Link with Kick OAuth",
         description="Click the button below to securely link your Kick account.",
         color=0x53FC18
-    )
-    embed.add_field(
-        name="✨ Benefits",
-        value="• Instant verification\n• No bio editing needed\n• Secure OAuth 2.0",
-        inline=False
     )
     embed.add_field(
         name="📝 Instructions",
@@ -1487,6 +1538,10 @@ async def on_ready():
         if not cleanup_pending_links_task.is_running():
             cleanup_pending_links_task.start()
             print("✅ Cleanup task started")
+        
+        if not check_oauth_notifications_task.is_running():
+            check_oauth_notifications_task.start()
+            print("✅ OAuth notifications task started")
             
     except Exception as e:
         print(f"⚠️ Error during startup: {e}")
