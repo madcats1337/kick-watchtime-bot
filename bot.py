@@ -1575,25 +1575,6 @@ async def setup_link_panel(ctx, emoji: str = "🔗"):
         description=f"React with {emoji} below to link your Discord account with your Kick account!",
         color=0x53FC18
     )
-    embed.add_field(
-        name="📝 How it works",
-        value=(
-            f"1. Click the {emoji} reaction below\n"
-            "2. You'll receive a DM with your personal OAuth link\n"
-            "3. Click the link and authorize with Kick\n"
-            "4. Done! Your accounts are now linked"
-        ),
-        inline=False
-    )
-    embed.add_field(
-        name="💡 Benefits",
-        value=(
-            "• Earn watchtime automatically\n"
-            "• Unlock exclusive roles\n"
-            "• Show your support for the stream"
-        ),
-        inline=False
-    )
     embed.set_footer(text="You can also use !link command as a fallback")
     
     # Send the message
