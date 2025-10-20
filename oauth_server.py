@@ -440,6 +440,7 @@ def get_kick_user_info(access_token):
     
     # Try multiple endpoints to find one that works with the OAuth token
     endpoints_to_try = [
+        ('Public API v1 users', 'https://api.kick.com/public/v1/users', 'GET'),  # From Arctic.js library!
         ('OAuth userinfo', KICK_OAUTH_USER_INFO_URL, 'GET'),
         ('OAuth introspect', 'https://id.kick.com/oauth/introspect', 'POST'),
         ('OAuth tokeninfo', 'https://id.kick.com/oauth/tokeninfo', 'GET'),
