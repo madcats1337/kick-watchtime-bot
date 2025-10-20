@@ -256,19 +256,7 @@ def auth_kick_callback():
             # Clean up used OAuth state
             conn.execute(text("DELETE FROM oauth_states WHERE state = :state"), {"state": state})
             
-            # Create notification for bot to send success message
-            # Create table if not exists
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS oauth_notifications (
-                    id SERIAL PRIMARY KEY,
-                    discord_id BIGINT NOT NULL,
-                    kick_username TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    processed BOOLEAN DEFAULT FALSE
-                )
-            """))
-            
-            # Insert notification
+            # Insert notification for bot to send success message
             conn.execute(text("""
                 INSERT INTO oauth_notifications (discord_id, kick_username)
                 VALUES (:d, :k)
