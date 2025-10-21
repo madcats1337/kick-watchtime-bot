@@ -13,6 +13,42 @@ from sqlalchemy import create_engine, text
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
+# -------------------------
+# 🔒 OPSEC: Data Sanitization
+# -------------------------
+def sanitize_for_logs(value, field_name=None):
+    """
+    Sanitize sensitive data for logging.
+    Redacts emails, tokens, codes while keeping debug info.
+    """
+    if value is None:
+        return None
+    
+    # Sensitive field names to redact
+    sensitive_fields = ['email', 'token', 'access_token', 'refresh_token', 'code', 'code_verifier']
+    
+    # If field name indicates sensitive data, redact
+    if field_name and any(s in field_name.lower() for s in sensitive_fields):
+        if isinstance(value, str) and len(value) > 8:
+            return f"{value[:4]}...{value[-4:]}"
+        return "***REDACTED***"
+    
+    # If value looks like an email, redact
+    if isinstance(value, str) and '@' in value:
+        parts = value.split('@')
+        if len(parts) == 2:
+            return f"{parts[0][:2]}***@{parts[1]}"
+    
+    # If dict, sanitize each field
+    if isinstance(value, dict):
+        return {k: sanitize_for_logs(v, k) for k, v in value.items()}
+    
+    # If list, sanitize each item
+    if isinstance(value, list):
+        return [sanitize_for_logs(item) for item in value]
+    
+    return value
+
 # Initialize Flask app
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", secrets.token_hex(32))
@@ -144,7 +180,7 @@ def auth_kick():
     
     # Generate state for CSRF protection
     state = secrets.token_urlsafe(32)
-    print(f"🔑 Generated new state: {state} for Discord ID: {discord_id}", flush=True)
+    print(f"🔑 Generated new state for Discord ID: {discord_id}", flush=True)
     
     # Store state in database (survives across Gunicorn workers)
     with engine.begin() as conn:
@@ -185,13 +221,13 @@ def auth_kick():
 @app.route('/auth/kick/callback')
 def auth_kick_callback():
     """Handle OAuth callback from Kick."""
-    print(f"🔔 Callback received! Query params: {dict(request.args)}", flush=True)
+    print(f"🔔 Callback received!", flush=True)
     
     code = request.args.get('code')
     state = request.args.get('state')
     error = request.args.get('error')
     
-    print(f"📥 Code: {code[:20] if code else None}..., State: {state}, Error: {error}", flush=True)
+    print(f"📥 Code: {sanitize_for_logs(code, 'code')}, State: {sanitize_for_logs(state, 'state')}, Error: {error}", flush=True)
     
     if error:
         print(f"❌ Kick returned error: {error}", flush=True)
@@ -202,7 +238,7 @@ def auth_kick_callback():
         return render_error("Missing authorization code or state")
     
     # Verify state from database
-    print(f"🔍 Checking state in database... Looking for state: {state}", flush=True)
+    print(f"🔍 Checking state in database...", flush=True)
     with engine.connect() as conn:
         result = conn.execute(text("""
             SELECT discord_id, code_verifier, created_at FROM oauth_states WHERE state = :state
@@ -240,7 +276,8 @@ def auth_kick_callback():
             print(f"📊 Total states in database: {count}", flush=True)
             print(f"📋 Recent states:", flush=True)
             for s in recent_states:
-                print(f"   - State: {s[0]}, Discord ID: {s[1]}, Created: {s[2]}", flush=True)
+                # 🔒 OPSEC: Sanitize state tokens in debug output
+                print(f"   - State: {sanitize_for_logs(s[0], 'state')}, Discord ID: {s[1]}, Created: {s[2]}", flush=True)
         return render_error("Invalid or expired state. Please try linking again. The link expires after 30 minutes.")
     
     discord_id = result[0]
@@ -262,7 +299,8 @@ def auth_kick_callback():
         # Get user info from Kick's public API
         try:
             kick_user = get_kick_user_info(access_token)
-            print(f"📊 Got user info: {kick_user}", flush=True)
+            # 🔒 OPSEC: Sanitize user info before logging
+            print(f"📊 Got user info: {sanitize_for_logs(kick_user)}", flush=True)
         except Exception as e:
             print(f"❌ Failed to get user info: {e}", flush=True)
             return render_error(f"Failed to get your Kick username: {str(e)}")
@@ -374,7 +412,8 @@ def get_kick_user_info(access_token):
         
         if response.status_code == 200:
             data = response.json()
-            print(f"✅ Got user data: {data}", flush=True)
+            # 🔒 OPSEC: Sanitize user data before logging
+            print(f"✅ Got user data: {sanitize_for_logs(data)}", flush=True)
             
             # Kick's API returns: {"data": [{"user_id": ..., "name": "...", "email": "..."}], "message": "OK"}
             if 'data' in data and isinstance(data['data'], list) and len(data['data']) > 0:
