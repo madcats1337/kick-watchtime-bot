@@ -620,6 +620,11 @@ async def kick_chat_loop(channel_name: str):
                 })
                 await ws.send(subscribe_msg)
                 print(f"[Kick] Subscribed to chatrooms.{chatroom_id}.v2")
+                
+                # Initialize last_chat_activity to assume stream is live when we connect
+                global last_chat_activity
+                last_chat_activity = datetime.now(timezone.utc)
+                print(f"[Kick] Initialized chat activity tracking")
 
                 # Listen for messages
                 while True:
