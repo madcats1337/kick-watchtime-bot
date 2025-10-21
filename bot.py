@@ -548,6 +548,8 @@ BROWSER_HEADERS = {
 
 async def kick_chat_loop(channel_name: str):
     """Connect to Kick's Pusher WebSocket and listen for chat messages."""
+    global last_chat_activity, recent_chatters
+    
     while True:
         try:
             # Check if chatroom ID is hardcoded in environment (bypass for Cloudflare issues)
@@ -622,7 +624,6 @@ async def kick_chat_loop(channel_name: str):
                 print(f"[Kick] Subscribed to chatrooms.{chatroom_id}.v2")
                 
                 # Initialize last_chat_activity to assume stream is live when we connect
-                global last_chat_activity
                 last_chat_activity = datetime.now(timezone.utc)
                 print(f"[Kick] Initialized chat activity tracking")
 
@@ -646,7 +647,6 @@ async def kick_chat_loop(channel_name: str):
                             
                             # Handle chat message
                             if event_type == "App\\Events\\ChatMessageEvent":
-                                global last_chat_activity, recent_chatters
                                 now = datetime.now(timezone.utc)
                                 last_chat_activity = now  # Update stream activity
                                 
