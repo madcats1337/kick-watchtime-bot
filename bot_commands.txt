@@ -11,23 +11,6 @@
 
 ---
 
-### `!linkbio <kick_username>`
-**Alternative linking method using bio verification**
-- For users who prefer manual verification
-- You'll receive a code to add to your Kick bio temporarily
-- Use `!verify <kick_username>` after adding the code
-- Usage: `!linkbio madcats`
-
----
-
-### `!verify <kick_username>`
-**Verify your Kick account after using !linkbio**
-- Checks your Kick bio for the verification code
-- Completes the linking process
-- Usage: `!verify madcats`
-
----
-
 ### `!watchtime [kick_username]`
 **Check your watchtime or lookup another user's watchtime**
 - No arguments: Check your own watchtime (must be linked)
@@ -106,14 +89,9 @@
 
 **Link Verification:**
 - OAuth integration for instant, secure linking
-- Alternative bio verification method available
 - Prevents alt account abuse in giveaways
 - One Discord account = One Kick account
 
 ---
-
-## ❓ **Need Help?**
-
-If you have questions about any command, contact a moderator or admin!
 
 **Tip:** Most commands have cooldowns to prevent spam. If a command doesn't work, wait a few seconds and try again.
