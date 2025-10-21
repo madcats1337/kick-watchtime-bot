@@ -532,6 +532,8 @@ stream_tracking_enabled = True  # Admin can toggle this
 # When true, admins can force watchtime updates to run even if the live-detection
 # checks (unique chatters, recent activity) would normally block updates.
 tracking_force_override = False
+# When true, enables detailed debug logging for watchtime tracking
+watchtime_debug_enabled = True  # Admin can toggle this
 
 # Load tracking_force_override from database
 try:
@@ -686,7 +688,8 @@ async def kick_chat_loop(channel_name: str):
                                     recent_chatters[username_lower] = now
                                     content_text = event_data.get("content", "")
                                     print(f"[Kick] {username}: {content_text}")
-                                    print(f"[Watchtime Debug] Added {username_lower} to active viewers (total: {len(active_viewers)})")
+                                    if watchtime_debug_enabled:
+                                        print(f"[Watchtime Debug] Added {username_lower} to active viewers (total: {len(active_viewers)})")
                                     
                         except json.JSONDecodeError:
                             pass
@@ -716,7 +719,8 @@ async def update_watchtime_task():
     global stream_tracking_enabled, last_chat_activity, recent_chatters
     
     try:
-        print(f"[Watchtime Debug] Task running - tracking enabled: {stream_tracking_enabled}")
+        if watchtime_debug_enabled:
+            print(f"[Watchtime Debug] Task running - tracking enabled: {stream_tracking_enabled}")
         
         # Check if tracking is enabled by admin
         if not stream_tracking_enabled:
@@ -766,13 +770,16 @@ async def update_watchtime_task():
             if last_seen and last_seen >= cutoff
         }
         
-        print(f"[Watchtime Debug] Total tracked viewers: {len(active_viewers)}, Active in last 5min: {len(active_users)}")
+        if watchtime_debug_enabled:
+            print(f"[Watchtime Debug] Total tracked viewers: {len(active_viewers)}, Active in last 5min: {len(active_users)}")
         
         if not active_users:
-            print("[Watchtime Debug] No active users found to update (users must chat to be tracked)")
+            if watchtime_debug_enabled:
+                print("[Watchtime Debug] No active users found to update (users must chat to be tracked)")
             return  # No active users to update
             
-        print(f"[Watchtime Debug] Updating watchtime for {len(active_users)} active user(s): {list(active_users.keys())}")
+        if watchtime_debug_enabled:
+            print(f"[Watchtime Debug] Updating watchtime for {len(active_users)} active user(s): {list(active_users.keys())}")
             
         # Calculate minutes to add
         minutes_to_add = WATCH_INTERVAL_SECONDS / 60
@@ -818,7 +825,8 @@ async def update_watchtime_task():
                         "m": minutes_to_add,
                         "t": last_seen.isoformat()
                     })
-                    print(f"[Watchtime Debug] ✅ Updated {user}: +{minutes_to_add} minutes")
+                    if watchtime_debug_enabled:
+                        print(f"[Watchtime Debug] ✅ Updated {user}: +{minutes_to_add} minutes")
                 except Exception as e:
                     print(f"⚠️ Error updating watchtime for {user}: {e}")
                     continue  # Skip this user but continue with others
@@ -828,13 +836,15 @@ async def update_watchtime_task():
         import traceback
         traceback.print_exc()
     finally:
-        print(f"[Watchtime Debug] Task iteration complete, will run again in {WATCH_INTERVAL_SECONDS}s")
+        if watchtime_debug_enabled:
+            print(f"[Watchtime Debug] Task iteration complete, will run again in {WATCH_INTERVAL_SECONDS}s")
 
 @update_watchtime_task.before_loop
 async def before_watchtime_task():
     """Wait for bot to be ready before starting watchtime updates."""
     await bot.wait_until_ready()
-    print("[Watchtime Debug] Watchtime task waiting for bot ready - complete")
+    if watchtime_debug_enabled:
+        print("[Watchtime Debug] Watchtime task waiting for bot ready - complete")
 
 @update_watchtime_task.error
 async def update_watchtime_task_error(error):
@@ -1587,14 +1597,16 @@ async def toggle_tracking(ctx, action: str = None, subaction: str = None):
     Admin command to control watchtime tracking.
     Usage: !tracking on|off|status
            !tracking force on|off|status
+           !tracking debug on|off|status
     """
-    global stream_tracking_enabled, tracking_force_override
+    global stream_tracking_enabled, tracking_force_override, watchtime_debug_enabled
     
     # Support a force subcommand: !tracking force on|off|status
     if action is None or action.lower() == "status":
         status = "🟢 ENABLED" if stream_tracking_enabled else "🔴 DISABLED"
         force_status = "🟢 FORCE ON" if tracking_force_override else "🔴 FORCE OFF"
-        await ctx.send(f"**Watchtime Tracking Status:** {status}\n**Force override:** {force_status}")
+        debug_status = "🟢 DEBUG ON" if watchtime_debug_enabled else "🔴 DEBUG OFF"
+        await ctx.send(f"**Watchtime Tracking Status:** {status}\n**Force override:** {force_status}\n**Debug logging:** {debug_status}")
         return
 
     if action.lower() == "on":
@@ -1635,8 +1647,22 @@ async def toggle_tracking(ctx, action: str = None, subaction: str = None):
             await ctx.send("🔓 **Watchtime FORCE override DISABLED**\nLive-detection checks will be enforced again.")
         else:
             await ctx.send("❌ Invalid force option. Use: `!tracking force on` or `!tracking force off` or `!tracking force status`")
+    elif action.lower() == "debug":
+        if subaction is None or subaction.lower() == "status":
+            debug_status = "🟢 DEBUG ON" if watchtime_debug_enabled else "🔴 DEBUG OFF"
+            await ctx.send(f"**Debug logging:** {debug_status}")
+            return
+        
+        if subaction.lower() == "on":
+            watchtime_debug_enabled = True
+            await ctx.send("🐛 **Watchtime DEBUG logging ENABLED**\nDetailed debug messages will appear in logs.")
+        elif subaction.lower() == "off":
+            watchtime_debug_enabled = False
+            await ctx.send("🔇 **Watchtime DEBUG logging DISABLED**\nDebug messages will be suppressed.")
+        else:
+            await ctx.send("❌ Invalid debug option. Use: `!tracking debug on` or `!tracking debug off` or `!tracking debug status`")
     else:
-        await ctx.send("❌ Invalid option. Use: `!tracking on`, `!tracking off`, or `!tracking status` (or `!tracking force ...` for override)")
+        await ctx.send("❌ Invalid option. Use: `!tracking on`, `!tracking off`, `!tracking status`, or `!tracking force/debug ...`")
 
 @toggle_tracking.error
 async def tracking_error(ctx, error):
