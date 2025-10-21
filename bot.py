@@ -520,11 +520,14 @@ active_viewers = {}
 
 # Stream status tracking
 stream_tracking_enabled = True  # Admin can toggle this
+# When true, admins can force watchtime updates to run even if the live-detection
+# checks (unique chatters, recent activity) would normally block updates.
+tracking_force_override = False
 last_chat_activity = None  # Track last time we saw any chat activity
 
 # 🔒 SECURITY: Track unique chatters in recent window for stream-live detection
 recent_chatters = {}  # {username: timestamp} - rolling window of recent chat activity
-MIN_UNIQUE_CHATTERS = 3  # Require at least 3 different people chatting to consider stream "live"
+MIN_UNIQUE_CHATTERS = 2  # Require at least 2 different people chatting to consider stream "live"
 CHAT_ACTIVITY_WINDOW_MINUTES = 10  # Look back 10 minutes for unique chatters
 
 # 🔒 SECURITY: Semaphore to limit concurrent Playwright operations (prevent resource exhaustion)
@@ -701,34 +704,36 @@ async def update_watchtime_task():
         
         # 🔒 SECURITY: Multi-factor stream-live detection
         # Require multiple unique chatters to prevent single-user farming
-        
-        if last_chat_activity is None:
-            print("[Security] No chat activity detected yet - skipping watchtime update")
-            return
-        
-        # Check 1: Recent chat activity (within last 10 minutes)
-        time_since_last_chat = (now - last_chat_activity).total_seconds() / 60
-        if time_since_last_chat > CHAT_ACTIVITY_WINDOW_MINUTES:
-            print(f"[Security] No chat activity for {time_since_last_chat:.1f} minutes - stream likely offline")
-            return
-        
-        # Check 2: Count unique chatters in the recent window
-        chat_cutoff = now - timedelta(minutes=CHAT_ACTIVITY_WINDOW_MINUTES)
-        active_chatters = {
-            username: timestamp 
-            for username, timestamp in recent_chatters.items() 
-            if timestamp >= chat_cutoff
-        }
-        
-        unique_chatter_count = len(active_chatters)
-        
-        if unique_chatter_count < MIN_UNIQUE_CHATTERS:
-            print(f"[Security] Only {unique_chatter_count} unique chatter(s) in last {CHAT_ACTIVITY_WINDOW_MINUTES} min (need {MIN_UNIQUE_CHATTERS})")
-            print("[Security] Stream might be offline or being farmed - skipping watchtime update")
-            print("[Security] Tip: Use '!tracking on' to override if stream has low chat activity")
-            return
-        
-        print(f"[Security] ✅ Stream appears live: {unique_chatter_count} unique chatters in last {CHAT_ACTIVITY_WINDOW_MINUTES} min")
+        if not tracking_force_override:
+            if last_chat_activity is None:
+                print("[Security] No chat activity detected yet - skipping watchtime update")
+                return
+            
+            # Check 1: Recent chat activity (within last 10 minutes)
+            time_since_last_chat = (now - last_chat_activity).total_seconds() / 60
+            if time_since_last_chat > CHAT_ACTIVITY_WINDOW_MINUTES:
+                print(f"[Security] No chat activity for {time_since_last_chat:.1f} minutes - stream likely offline")
+                return
+            
+            # Check 2: Count unique chatters in the recent window
+            chat_cutoff = now - timedelta(minutes=CHAT_ACTIVITY_WINDOW_MINUTES)
+            active_chatters = {
+                username: timestamp 
+                for username, timestamp in recent_chatters.items() 
+                if timestamp >= chat_cutoff
+            }
+            
+            unique_chatter_count = len(active_chatters)
+            
+            if unique_chatter_count < MIN_UNIQUE_CHATTERS:
+                print(f"[Security] Only {unique_chatter_count} unique chatter(s) in last {CHAT_ACTIVITY_WINDOW_MINUTES} min (need {MIN_UNIQUE_CHATTERS})")
+                print("[Security] Stream might be offline or being farmed - skipping watchtime update")
+                print("[Security] Tip: Use '!tracking force on' to override if stream has low chat activity")
+                return
+            
+            print(f"[Security] ✅ Stream appears live: {unique_chatter_count} unique chatters in last {CHAT_ACTIVITY_WINDOW_MINUTES} min")
+        else:
+            print("[Security] Force override enabled - skipping multi-factor live detection")
         
         cutoff = now - timedelta(minutes=5)
         
@@ -1562,19 +1567,39 @@ async def toggle_tracking(ctx, action: str = None):
     """
     global stream_tracking_enabled
     
+    # Support a force subcommand: !tracking force on|off|status
     if action is None or action.lower() == "status":
         status = "🟢 ENABLED" if stream_tracking_enabled else "🔴 DISABLED"
-        await ctx.send(f"**Watchtime Tracking Status:** {status}")
+        force_status = "🟢 FORCE ON" if tracking_force_override else "🔴 FORCE OFF"
+        await ctx.send(f"**Watchtime Tracking Status:** {status}\n**Force override:** {force_status}")
         return
-    
+
     if action.lower() == "on":
         stream_tracking_enabled = True
         await ctx.send("✅ **Watchtime tracking ENABLED**\nUsers will now earn watchtime from chat activity.")
     elif action.lower() == "off":
         stream_tracking_enabled = False
         await ctx.send("⏸️ **Watchtime tracking DISABLED**\nUsers will NOT earn watchtime until re-enabled.")
+    elif action.lower().startswith("force"):
+        # allow: force, force:on, force on, forceoff, force off
+        parts = action.lower().replace(":", " ").split()
+        if len(parts) == 1:
+            await ctx.send("❌ Invalid force option. Use: `!tracking force on` or `!tracking force off` or `!tracking force status`")
+            return
+        sub = parts[1]
+        if sub == "on":
+            tracking_force_override = True
+            await ctx.send("🔒 **Watchtime FORCE override ENABLED**\nWatchtime updates will run regardless of live-detection checks.")
+        elif sub == "off":
+            tracking_force_override = False
+            await ctx.send("🔓 **Watchtime FORCE override DISABLED**\nLive-detection checks will be enforced again.")
+        elif sub == "status":
+            force_status = "🟢 FORCE ON" if tracking_force_override else "🔴 FORCE OFF"
+            await ctx.send(f"**Force override:** {force_status}")
+        else:
+            await ctx.send("❌ Invalid force option. Use: `!tracking force on` or `!tracking force off` or `!tracking force status`")
     else:
-        await ctx.send("❌ Invalid option. Use: `!tracking on`, `!tracking off`, or `!tracking status`")
+        await ctx.send("❌ Invalid option. Use: `!tracking on`, `!tracking off`, or `!tracking status` (or `!tracking force ...` for override)")
 
 @toggle_tracking.error
 async def tracking_error(ctx, error):
