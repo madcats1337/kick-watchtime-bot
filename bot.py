@@ -500,6 +500,15 @@ try:
             UNIQUE(guild_id, channel_id, message_id)
         );
         """))
+        
+        # Create bot_settings table for persistent configuration
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS bot_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """))
     print("✅ Database tables initialized successfully")
 except Exception as e:
     print(f"⚠️ Database initialization error: {e}")
@@ -523,6 +532,19 @@ stream_tracking_enabled = True  # Admin can toggle this
 # When true, admins can force watchtime updates to run even if the live-detection
 # checks (unique chatters, recent activity) would normally block updates.
 tracking_force_override = False
+
+# Load tracking_force_override from database
+try:
+    with engine.connect() as conn:
+        result = conn.execute(text("""
+            SELECT value FROM bot_settings WHERE key = 'tracking_force_override'
+        """)).fetchone()
+        if result:
+            tracking_force_override = result[0].lower() == 'true'
+            print(f"🔧 Loaded tracking_force_override from database: {tracking_force_override}")
+except Exception as e:
+    print(f"ℹ️ Could not load tracking_force_override from database (using default): {e}")
+
 last_chat_activity = None  # Track last time we saw any chat activity
 
 # 🔒 SECURITY: Track unique chatters in recent window for stream-live detection
@@ -1565,7 +1587,7 @@ async def toggle_tracking(ctx, action: str = None):
     Admin command to control watchtime tracking.
     Usage: !tracking on|off|status
     """
-    global stream_tracking_enabled
+    global stream_tracking_enabled, tracking_force_override
     
     # Support a force subcommand: !tracking force on|off|status
     if action is None or action.lower() == "status":
@@ -1589,9 +1611,27 @@ async def toggle_tracking(ctx, action: str = None):
         sub = parts[1]
         if sub == "on":
             tracking_force_override = True
+            # Save to database
+            with engine.begin() as conn:
+                conn.execute(text("""
+                    INSERT INTO bot_settings (key, value, updated_at)
+                    VALUES ('tracking_force_override', 'true', CURRENT_TIMESTAMP)
+                    ON CONFLICT (key) DO UPDATE SET 
+                        value = 'true',
+                        updated_at = CURRENT_TIMESTAMP
+                """))
             await ctx.send("🔒 **Watchtime FORCE override ENABLED**\nWatchtime updates will run regardless of live-detection checks.")
         elif sub == "off":
             tracking_force_override = False
+            # Save to database
+            with engine.begin() as conn:
+                conn.execute(text("""
+                    INSERT INTO bot_settings (key, value, updated_at)
+                    VALUES ('tracking_force_override', 'false', CURRENT_TIMESTAMP)
+                    ON CONFLICT (key) DO UPDATE SET 
+                        value = 'false',
+                        updated_at = CURRENT_TIMESTAMP
+                """))
             await ctx.send("🔓 **Watchtime FORCE override DISABLED**\nLive-detection checks will be enforced again.")
         elif sub == "status":
             force_status = "🟢 FORCE ON" if tracking_force_override else "🔴 FORCE OFF"
