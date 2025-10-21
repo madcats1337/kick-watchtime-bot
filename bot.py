@@ -800,7 +800,8 @@ async def update_watchtime_task():
         print(f"⚠️ Error in watchtime update task: {e}")
         import traceback
         traceback.print_exc()
-        await asyncio.sleep(5)  # Wait before retrying
+    finally:
+        print(f"[Watchtime Debug] Task iteration complete, will run again in {WATCH_INTERVAL_SECONDS}s")
 
 @update_watchtime_task.before_loop
 async def before_watchtime_task():
