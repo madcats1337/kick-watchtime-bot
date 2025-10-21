@@ -661,6 +661,7 @@ async def kick_chat_loop(channel_name: str):
                                     recent_chatters[username_lower] = now
                                     content_text = event_data.get("content", "")
                                     print(f"[Kick] {username}: {content_text}")
+                                    print(f"[Watchtime Debug] Added {username_lower} to active viewers (total: {len(active_viewers)})")
                                     
                         except json.JSONDecodeError:
                             pass
@@ -738,8 +739,10 @@ async def update_watchtime_task():
             if last_seen and last_seen >= cutoff
         }
         
+        print(f"[Watchtime Debug] Total tracked viewers: {len(active_viewers)}, Active in last 5min: {len(active_users)}")
+        
         if not active_users:
-            print("[Watchtime Debug] No active users found to update")
+            print("[Watchtime Debug] No active users found to update (users must chat to be tracked)")
             return  # No active users to update
             
         print(f"[Watchtime Debug] Updating watchtime for {len(active_users)} active user(s): {list(active_users.keys())}")
