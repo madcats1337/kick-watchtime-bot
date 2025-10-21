@@ -770,6 +770,10 @@ async def update_watchtime_task():
                         # PostgreSQL returns datetime objects directly
                         if last_active is None:
                             last_active = today_start
+                        else:
+                            # Ensure timezone-aware comparison
+                            if last_active.tzinfo is None:
+                                last_active = last_active.replace(tzinfo=timezone.utc)
                         
                         # If last active was today and they've hit the cap, skip
                         if last_active >= today_start and existing_minutes >= MAX_DAILY_MINUTES:
