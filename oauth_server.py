@@ -39,11 +39,23 @@ def verify_discord_id_signature(discord_id: str, timestamp: int, signature: str)
     """
     # Check timestamp is not too old (max 1 hour)
     now = int(datetime.now(timezone.utc).timestamp())
-    if abs(now - timestamp) > 3600:  # 1 hour expiry
+    age_seconds = abs(now - timestamp)
+    if age_seconds > 3600:  # 1 hour expiry
+        print(f"⚠️ OAuth signature expired: {age_seconds}s old (max 3600s)", flush=True)
         return False
     
     expected_sig = sign_discord_id(discord_id, timestamp)
-    return hmac.compare_digest(expected_sig, signature)
+    is_valid = hmac.compare_digest(expected_sig, signature)
+    
+    if not is_valid:
+        print(f"🔍 Debug - Signature mismatch:", flush=True)
+        print(f"   Discord ID: {discord_id}", flush=True)
+        print(f"   Timestamp: {timestamp} (age: {age_seconds}s)", flush=True)
+        print(f"   Received sig: {signature}", flush=True)
+        print(f"   Expected sig: {expected_sig}", flush=True)
+        print(f"   Secret key set: {'Yes' if OAUTH_SECRET_KEY else 'No'}", flush=True)
+    
+    return is_valid
 
 # -------------------------
 # 🔒 OPSEC: Data Sanitization
