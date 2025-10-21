@@ -808,6 +808,13 @@ async def before_watchtime_task():
     await bot.wait_until_ready()
     print("[Watchtime Debug] Watchtime task waiting for bot ready - complete")
 
+@update_watchtime_task.error
+async def update_watchtime_task_error(error):
+    """Handle errors in the watchtime task loop."""
+    print(f"❌ Watchtime task encountered an error: {error}")
+    import traceback
+    traceback.print_exc()
+
 # -------------------------
 # Role updater task
 # -------------------------
