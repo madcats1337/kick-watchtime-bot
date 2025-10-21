@@ -1607,6 +1607,72 @@ async def setup_link_panel_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need 'Manage Server' permission to use this command.")
 
+@bot.command(name="post_link_info")
+@commands.has_permissions(manage_guild=True)
+@in_guild()
+async def post_link_info(ctx):
+    """
+    Admin command to post an informational embed explaining why users should link their accounts.
+    Usage: !post_link_info
+    
+    This creates a detailed explanation of the benefits of linking Kick accounts.
+    """
+    
+    # Create the detailed embed
+    embed = discord.Embed(
+        title="🔗 Link Your Kick Account to Discord!",
+        description="Connect your Kick account to unlock exclusive benefits in Maikelele's community!",
+        color=0x53FC18
+    )
+    
+    embed.add_field(
+        name="📝 Why Link Your Account?",
+        value="** **",  # Spacer
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🎁 Enter Giveaways",
+        value="• Only linked accounts can participate\n• Ensures fair distribution to real viewers\n• No alt accounts allowed",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🏆 Automatic Role Rewards",
+        value="• Earn roles based on Kick chat activity\n• Get recognized for your watch time\n• Unlock member-only channels",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🛡️ Verified Member Status",
+        value="• Prove you're a real supporter\n• Stand out in the community\n• Help keep the server authentic",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="⚡ How to Link (Easy!)",
+        value="React with 🔗 on the pinned message above!\n\n1. Click the 🔗 reaction\n2. Check your DMs for a secure link\n3. Authorize with your Kick account\n4. Done! Your accounts are now linked\n\n*Note: Contact an admin if you need to unlink*",
+        inline=False
+    )
+    
+    embed.set_footer(text="🔒 Your data is secure • Takes less than 30 seconds")
+    
+    # Send the embed
+    await ctx.send(embed=embed)
+    
+    # Delete the command message to keep the channel clean
+    try:
+        await ctx.message.delete()
+    except discord.Forbidden:
+        pass  # If we can't delete, no big deal
+    except discord.HTTPException:
+        pass
+
+@post_link_info.error
+async def post_link_info_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You need 'Manage Server' permission to use this command.")
+
 # -------------------------
 # Bot events
 # -------------------------
