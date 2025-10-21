@@ -1639,7 +1639,7 @@ async def post_link_info(ctx):
     
     embed.add_field(
         name="🏆 Automatic Role Rewards",
-        value="• Earn roles based on Kick chat activity\n• Get recognized for your watch time\n• Unlock member-only channels",
+        value="• Earn roles based on Kick chat activity\n• Get recognized for your watch time",
         inline=False
     )
     
