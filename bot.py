@@ -798,7 +798,15 @@ async def update_watchtime_task():
                     
     except Exception as e:
         print(f"⚠️ Error in watchtime update task: {e}")
+        import traceback
+        traceback.print_exc()
         await asyncio.sleep(5)  # Wait before retrying
+
+@update_watchtime_task.before_loop
+async def before_watchtime_task():
+    """Wait for bot to be ready before starting watchtime updates."""
+    await bot.wait_until_ready()
+    print("[Watchtime Debug] Watchtime task waiting for bot ready - complete")
 
 # -------------------------
 # Role updater task
