@@ -685,6 +685,8 @@ async def update_watchtime_task():
     global stream_tracking_enabled, last_chat_activity, recent_chatters
     
     try:
+        print(f"[Watchtime Debug] Task running - tracking enabled: {stream_tracking_enabled}")
+        
         # Check if tracking is enabled by admin
         if not stream_tracking_enabled:
             return
@@ -732,7 +734,10 @@ async def update_watchtime_task():
         }
         
         if not active_users:
+            print("[Watchtime Debug] No active users found to update")
             return  # No active users to update
+            
+        print(f"[Watchtime Debug] Updating watchtime for {len(active_users)} active user(s): {list(active_users.keys())}")
             
         # Calculate minutes to add
         minutes_to_add = WATCH_INTERVAL_SECONDS / 60
@@ -774,6 +779,7 @@ async def update_watchtime_task():
                         "m": minutes_to_add,
                         "t": last_seen.isoformat()
                     })
+                    print(f"[Watchtime Debug] ✅ Updated {user}: +{minutes_to_add} minutes")
                 except Exception as e:
                     print(f"⚠️ Error updating watchtime for {user}: {e}")
                     continue  # Skip this user but continue with others
