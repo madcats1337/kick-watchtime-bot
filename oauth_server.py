@@ -144,20 +144,23 @@ def auth_kick():
     
     # Generate state for CSRF protection
     state = secrets.token_urlsafe(32)
+    print(f"🔑 Generated new state: {state} for Discord ID: {discord_id}", flush=True)
     
     # Store state in database (survives across Gunicorn workers)
     with engine.begin() as conn:
-        # Clean up old states (older than 10 minutes)
-        conn.execute(text("""
+        # Clean up old states (older than 30 minutes)
+        deleted_count = conn.execute(text("""
             DELETE FROM oauth_states 
-            WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '10 minutes'
-        """))
+            WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes'
+        """)).rowcount
+        print(f"🧹 Cleaned up {deleted_count} expired state(s)", flush=True)
         
         # Store new state
         conn.execute(text("""
             INSERT INTO oauth_states (state, discord_id, code_verifier, created_at)
             VALUES (:state, :discord_id, :code_verifier, CURRENT_TIMESTAMP)
         """), {"state": state, "discord_id": int(discord_id), "code_verifier": code_verifier})
+        print(f"✅ State saved to database", flush=True)
     
     # Build authorization URL with user:read scope and PKCE
     redirect_uri = f"{OAUTH_BASE_URL}/auth/kick/callback"
@@ -199,20 +202,52 @@ def auth_kick_callback():
         return render_error("Missing authorization code or state")
     
     # Verify state from database
+    print(f"🔍 Checking state in database... Looking for state: {state}", flush=True)
     with engine.connect() as conn:
         result = conn.execute(text("""
-            SELECT discord_id, code_verifier FROM oauth_states WHERE state = :state
+            SELECT discord_id, code_verifier, created_at FROM oauth_states WHERE state = :state
         """), {"state": state}).fetchone()
+        
+        # Check if this state was recently used (check links table for recent activity)
+        if not result:
+            recent_link = conn.execute(text("""
+                SELECT discord_id, kick_name, linked_at 
+                FROM links 
+                WHERE linked_at > CURRENT_TIMESTAMP - INTERVAL '2 minutes'
+                ORDER BY linked_at DESC
+                LIMIT 1
+            """)).fetchone()
     
-    print(f"🔍 Checking state in database...", flush=True)
     if not result:
         print(f"❌ State not found or expired", flush=True)
-        return render_error("Invalid or expired state. Please try linking again.")
+        
+        # If there was a recent successful link, this is likely a duplicate callback
+        if recent_link:
+            print(f"ℹ️ Recent link found: Discord {recent_link[0]} -> Kick {recent_link[1]} at {recent_link[2]}", flush=True)
+            print(f"ℹ️ This appears to be a duplicate callback (browser auto-retry)", flush=True)
+            # Return success page since linking already completed
+            return render_success(recent_link[1], recent_link[0])
+        
+        # Debug: Check if state exists at all and show recent states
+        with engine.connect() as conn:
+            count = conn.execute(text("SELECT COUNT(*) FROM oauth_states")).fetchone()[0]
+            recent_states = conn.execute(text("""
+                SELECT state, discord_id, created_at 
+                FROM oauth_states 
+                ORDER BY created_at DESC 
+                LIMIT 5
+            """)).fetchall()
+            print(f"📊 Total states in database: {count}", flush=True)
+            print(f"📋 Recent states:", flush=True)
+            for s in recent_states:
+                print(f"   - State: {s[0]}, Discord ID: {s[1]}, Created: {s[2]}", flush=True)
+        return render_error("Invalid or expired state. Please try linking again. The link expires after 30 minutes.")
     
     discord_id = result[0]
     code_verifier = result[1]
+    created_at = result[2]
     
-    print(f"✅ State valid, Discord ID: {discord_id}", flush=True)
+    print(f"✅ State valid, Discord ID: {discord_id}, Created: {created_at}", flush=True)
     
     # Exchange code for access token
     try:
