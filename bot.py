@@ -1582,10 +1582,11 @@ async def cmd_watchtime(ctx, kick_username: str = None):
 @bot.command(name="tracking")
 @commands.has_permissions(administrator=True)
 @in_guild()  # 🔒 SECURITY: Ensure command only works in the configured guild
-async def toggle_tracking(ctx, action: str = None):
+async def toggle_tracking(ctx, action: str = None, subaction: str = None):
     """
     Admin command to control watchtime tracking.
     Usage: !tracking on|off|status
+           !tracking force on|off|status
     """
     global stream_tracking_enabled, tracking_force_override
     
@@ -1602,14 +1603,13 @@ async def toggle_tracking(ctx, action: str = None):
     elif action.lower() == "off":
         stream_tracking_enabled = False
         await ctx.send("⏸️ **Watchtime tracking DISABLED**\nUsers will NOT earn watchtime until re-enabled.")
-    elif action.lower().startswith("force"):
-        # allow: force, force:on, force on, forceoff, force off
-        parts = action.lower().replace(":", " ").split()
-        if len(parts) == 1:
-            await ctx.send("❌ Invalid force option. Use: `!tracking force on` or `!tracking force off` or `!tracking force status`")
+    elif action.lower() == "force":
+        if subaction is None or subaction.lower() == "status":
+            force_status = "🟢 FORCE ON" if tracking_force_override else "🔴 FORCE OFF"
+            await ctx.send(f"**Force override:** {force_status}")
             return
-        sub = parts[1]
-        if sub == "on":
+        
+        if subaction.lower() == "on":
             tracking_force_override = True
             # Save to database
             with engine.begin() as conn:
@@ -1621,7 +1621,7 @@ async def toggle_tracking(ctx, action: str = None):
                         updated_at = CURRENT_TIMESTAMP
                 """))
             await ctx.send("🔒 **Watchtime FORCE override ENABLED**\nWatchtime updates will run regardless of live-detection checks.")
-        elif sub == "off":
+        elif subaction.lower() == "off":
             tracking_force_override = False
             # Save to database
             with engine.begin() as conn:
@@ -1633,9 +1633,6 @@ async def toggle_tracking(ctx, action: str = None):
                         updated_at = CURRENT_TIMESTAMP
                 """))
             await ctx.send("🔓 **Watchtime FORCE override DISABLED**\nLive-detection checks will be enforced again.")
-        elif sub == "status":
-            force_status = "🟢 FORCE ON" if tracking_force_override else "🔴 FORCE OFF"
-            await ctx.send(f"**Force override:** {force_status}")
         else:
             await ctx.send("❌ Invalid force option. Use: `!tracking force on` or `!tracking force off` or `!tracking force status`")
     else:
