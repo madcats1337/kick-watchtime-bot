@@ -753,8 +753,10 @@ async def update_watchtime_task():
                     """), {"u": user}).fetchone()
                     
                     if daily_check:
-                        existing_minutes, last_active_str = daily_check
-                        last_active = datetime.fromisoformat(last_active_str) if last_active_str else today_start
+                        existing_minutes, last_active = daily_check
+                        # PostgreSQL returns datetime objects directly
+                        if last_active is None:
+                            last_active = today_start
                         
                         # If last active was today and they've hit the cap, skip
                         if last_active >= today_start and existing_minutes >= MAX_DAILY_MINUTES:
