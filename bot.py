@@ -87,6 +87,12 @@ OAUTH_BASE_URL = os.getenv("OAUTH_BASE_URL", "")  # e.g., https://your-app.up.ra
 KICK_CLIENT_ID = os.getenv("KICK_CLIENT_ID", "")
 OAUTH_SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "")
 
+# Debug: Log secret key status at startup (don't log the actual key!)
+if OAUTH_SECRET_KEY:
+    print(f"[Bot] FLASK_SECRET_KEY loaded: {len(OAUTH_SECRET_KEY)} chars, hash={hash(OAUTH_SECRET_KEY) % 10000}", flush=True)
+else:
+    print(f"[Bot] ⚠️ WARNING: FLASK_SECRET_KEY is empty!", flush=True)
+
 # -------------------------
 # 🔒 Security: OAuth URL Signing
 # -------------------------
