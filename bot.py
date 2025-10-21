@@ -552,7 +552,7 @@ last_chat_activity = None  # Track last time we saw any chat activity
 # 🔒 SECURITY: Track unique chatters in recent window for stream-live detection
 recent_chatters = {}  # {username: timestamp} - rolling window of recent chat activity
 MIN_UNIQUE_CHATTERS = 2  # Require at least 2 different people chatting to consider stream "live"
-CHAT_ACTIVITY_WINDOW_MINUTES = 10  # Look back 10 minutes for unique chatters
+CHAT_ACTIVITY_WINDOW_MINUTES = 5  # Look back 5 minutes for unique chatters
 
 # 🔒 SECURITY: Semaphore to limit concurrent Playwright operations (prevent resource exhaustion)
 playwright_semaphore = asyncio.Semaphore(2)  # Max 2 concurrent browser instances
