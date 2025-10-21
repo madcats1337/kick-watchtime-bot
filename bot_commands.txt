@@ -1,0 +1,119 @@
+# 🤖 **Bot Commands Guide**
+
+## 📌 **User Commands**
+
+### `!link`
+**Link your Kick account via OAuth (instant)**
+- Opens a secure OAuth link to connect your Kick account
+- No bio editing required - completely automated
+- One-time setup to access giveaways and features
+- Usage: `!link`
+
+---
+
+### `!linkbio <kick_username>`
+**Alternative linking method using bio verification**
+- For users who prefer manual verification
+- You'll receive a code to add to your Kick bio temporarily
+- Use `!verify <kick_username>` after adding the code
+- Usage: `!linkbio madcats`
+
+---
+
+### `!verify <kick_username>`
+**Verify your Kick account after using !linkbio**
+- Checks your Kick bio for the verification code
+- Completes the linking process
+- Usage: `!verify madcats`
+
+---
+
+### `!watchtime [kick_username]`
+**Check your watchtime or lookup another user's watchtime**
+- No arguments: Check your own watchtime (must be linked)
+- With username: Admins can check any user's watchtime
+- Shows total minutes watched and approximate hours
+- Usage: `!watchtime` or `!watchtime madcats` (admin only)
+
+---
+
+### `!leaderboard [top]`
+**View the top viewers by watchtime**
+- Shows top 10 viewers by default
+- Optional: Specify how many to show (max 25)
+- Displays username and total watch hours
+- Usage: `!leaderboard` or `!leaderboard 25`
+
+---
+
+## 🛡️ **Admin Commands**
+
+### `!tracking [action] [subaction]`
+**Control watchtime tracking system** *(Admin Only)*
+
+**Main Commands:**
+- `!tracking status` - View current tracking status
+- `!tracking on` - Enable watchtime tracking
+- `!tracking off` - Disable watchtime tracking
+
+**Force Override** (bypass security checks):
+- `!tracking force status` - Check force override status
+- `!tracking force on` - Enable force mode (bypass anti-farming checks)
+- `!tracking force off` - Disable force mode (enforce security)
+
+**Debug Logging:**
+- `!tracking debug status` - Check debug logging status
+- `!tracking debug on` - Enable detailed debug logs
+- `!tracking debug off` - Disable debug logs (cleaner output)
+
+---
+
+### `!unlink @user`
+**Unlink a user's Kick account** *(Admin Only)*
+- Removes the connection between Discord and Kick account
+- Must mention the Discord user to unlink
+- Useful for troubleshooting or handling abuse
+- Usage: `!unlink @username`
+
+---
+
+### `!setup_link_panel [emoji]`
+**Create a reaction-based linking panel** *(Manage Server Permission)*
+- Posts a pinned message users can react to for linking
+- Default emoji: 🔗 (customizable)
+- Users react to receive OAuth link in DMs
+- Usage: `!setup_link_panel` or `!setup_link_panel ✅`
+
+---
+
+### `!post_link_info`
+**Post informational embed about account linking** *(Manage Server Permission)*
+- Creates a detailed explanation of linking benefits
+- Explains security features and giveaway eligibility
+- Great for announcement channels
+- Usage: `!post_link_info`
+
+---
+
+## 🔒 **Security Features**
+
+**Anti-Farming Protection:**
+- Requires at least 2 unique chatters in 5-minute windows
+- Prevents single users from farming watchtime
+- Tracks active chat participation, not passive viewing
+- 5-minute activity window (must chat to earn watchtime)
+- 18-hour daily watchtime cap per user
+
+**Link Verification:**
+- OAuth integration for instant, secure linking
+- Alternative bio verification method available
+- Prevents alt account abuse in giveaways
+- One Discord account = One Kick account
+
+---
+
+## ❓ **Need Help?**
+
+If you have questions about any command, contact a moderator or admin!
+
+**Tip:** Most commands have cooldowns to prevent spam. If a command doesn't work, wait a few seconds and try again.
