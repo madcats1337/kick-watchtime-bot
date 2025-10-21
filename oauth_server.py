@@ -310,26 +310,9 @@ def auth_kick_callback():
         result = conn.execute(text("""
             SELECT discord_id, code_verifier, created_at FROM oauth_states WHERE state = :state
         """), {"state": state}).fetchone()
-        
-        # Check if this state was recently used (check links table for recent activity)
-        if not result:
-            recent_link = conn.execute(text("""
-                SELECT discord_id, kick_name, linked_at 
-                FROM links 
-                WHERE linked_at > CURRENT_TIMESTAMP - INTERVAL '2 minutes'
-                ORDER BY linked_at DESC
-                LIMIT 1
-            """)).fetchone()
     
     if not result:
         print(f"❌ State not found or expired", flush=True)
-        
-        # If there was a recent successful link, this is likely a duplicate callback
-        if recent_link:
-            print(f"ℹ️ Recent link found: Discord {recent_link[0]} -> Kick {recent_link[1]} at {recent_link[2]}", flush=True)
-            print(f"ℹ️ This appears to be a duplicate callback (browser auto-retry)", flush=True)
-            # Return success page since linking already completed
-            return render_success(recent_link[1], recent_link[0])
         
         # Debug: Check if state exists at all and show recent states
         with engine.connect() as conn:
