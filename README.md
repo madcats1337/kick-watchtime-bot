@@ -79,8 +79,8 @@ Users can type `!link` to get their personal OAuth link via DM.
 
 1. **Clone the repository**
 ```bash
-git clone <your-repo-url>
-cd kick-discord-bot
+git clone https://github.com/madcats1337/kick-watchtime-bot.git
+cd kick-watchtime-bot
 ```
 
 2. **Install dependencies**
