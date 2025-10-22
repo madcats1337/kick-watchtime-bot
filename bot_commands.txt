@@ -60,6 +60,33 @@
 
 ---
 
+### `!linklogs [action]`
+**Configure account linking logging** *(Admin Only)*
+- Enable/disable logging of link attempts to a channel
+- Shows Discord user, Kick username, and timestamp
+
+- `!linklogs on` - Enable in current channel
+- `!linklogs off` - Disable logging
+- `!linklogs status` - Check status
+
+---
+
+### `!roles [action]`
+**Manage watchtime role thresholds** *(Admin Only)*
+- Configure role requirements without code changes
+- Changes take effect immediately
+
+- `!roles list` - Show current roles
+- `!roles add <name> <minutes>` - Add role
+- `!roles update <name> <minutes>` - Update role
+- `!roles remove <name>` - Remove role
+- `!roles enable/disable <name>` - Toggle role
+- `!roles members <name>` - List members with role
+
+Example: `!roles members "Tier 1"`
+
+---
+
 ### `!setup_link_panel [emoji]`
 **Create a reaction-based linking panel** *(Manage Server Permission)*
 - Posts a pinned message users can react to for linking
