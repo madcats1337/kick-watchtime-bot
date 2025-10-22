@@ -1837,11 +1837,208 @@ async def post_link_info_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need 'Manage Server' permission to use this command.")
 
+@bot.command(name="health")
+@commands.has_permissions(manage_guild=True)
+@in_guild()
+async def health_check(ctx):
+    """
+    Admin command to check if all bot systems are functioning correctly.
+    Usage: !health
+    
+    Checks:
+    - Discord connection
+    - Database connection
+    - Kick API accessibility
+    - OAuth configuration
+    - Background tasks status
+    - WebSocket connection
+    """
+    
+    embed = discord.Embed(
+        title="🏥 System Health Check",
+        description="Checking all bot systems...",
+        color=0x3498db
+    )
+    
+    status_msg = await ctx.send(embed=embed)
+    
+    checks = []
+    overall_status = "✅ All Systems Operational"
+    has_warnings = False
+    has_errors = False
+    
+    # 1. Discord Connection
+    try:
+        latency_ms = round(bot.latency * 1000, 2)
+        if latency_ms < 200:
+            checks.append(f"✅ **Discord Connection**: {latency_ms}ms")
+        elif latency_ms < 500:
+            checks.append(f"⚠️ **Discord Connection**: {latency_ms}ms (Slow)")
+            has_warnings = True
+        else:
+            checks.append(f"❌ **Discord Connection**: {latency_ms}ms (Very Slow)")
+            has_errors = True
+    except Exception as e:
+        checks.append(f"❌ **Discord Connection**: Error - {str(e)}")
+        has_errors = True
+    
+    # 2. Database Connection
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT 1"))
+            result.fetchone()
+        db_type = "PostgreSQL" if "postgresql" in DATABASE_URL else "SQLite"
+        checks.append(f"✅ **Database Connection**: {db_type} OK")
+    except Exception as e:
+        checks.append(f"❌ **Database Connection**: {str(e)[:50]}")
+        has_errors = True
+    
+    # 3. Kick API Check
+    try:
+        if KICK_CHATROOM_ID:
+            checks.append(f"✅ **Kick Chatroom ID**: Configured ({KICK_CHATROOM_ID})")
+        else:
+            chatroom_id = await asyncio.to_thread(fetch_chatroom_id, KICK_CHANNEL)
+            if chatroom_id:
+                checks.append(f"✅ **Kick API**: Accessible (ID: {chatroom_id})")
+            else:
+                checks.append(f"⚠️ **Kick API**: Could not fetch chatroom ID")
+                has_warnings = True
+    except Exception as e:
+        checks.append(f"❌ **Kick API**: {str(e)[:50]}")
+        has_errors = True
+    
+    # 4. OAuth Configuration
+    oauth_checks = []
+    if OAUTH_BASE_URL:
+        oauth_checks.append("✅ Base URL configured")
+    else:
+        oauth_checks.append("❌ Base URL missing")
+        has_errors = True
+    
+    if KICK_CLIENT_ID:
+        oauth_checks.append("✅ Client ID configured")
+    else:
+        oauth_checks.append("❌ Client ID missing")
+        has_errors = True
+    
+    if OAUTH_SECRET_KEY:
+        oauth_checks.append("✅ Secret key configured")
+    else:
+        oauth_checks.append("❌ Secret key missing")
+        has_errors = True
+    
+    oauth_status = " | ".join(oauth_checks)
+    checks.append(f"**OAuth Config**: {oauth_status}")
+    
+    # 5. Background Tasks
+    task_statuses = []
+    
+    if update_watchtime_task.is_running():
+        task_statuses.append("✅ Watchtime tracker")
+    else:
+        task_statuses.append("❌ Watchtime tracker")
+        has_errors = True
+    
+    if update_roles_task.is_running():
+        task_statuses.append("✅ Role updater")
+    else:
+        task_statuses.append("❌ Role updater")
+        has_errors = True
+    
+    if check_oauth_notifications_task.is_running():
+        task_statuses.append("✅ OAuth checker")
+    else:
+        task_statuses.append("❌ OAuth checker")
+        has_errors = True
+    
+    if cleanup_pending_links_task.is_running():
+        task_statuses.append("✅ Cleanup task")
+    else:
+        task_statuses.append("❌ Cleanup task")
+        has_errors = True
+    
+    checks.append(f"**Background Tasks**: {' | '.join(task_statuses)}")
+    
+    # 6. Database Tables Check
+    try:
+        with engine.connect() as conn:
+            tables_check = []
+            
+            # Check watchtime table
+            result = conn.execute(text("SELECT COUNT(*) FROM watchtime"))
+            watchtime_count = result.fetchone()[0]
+            tables_check.append(f"{watchtime_count} viewers")
+            
+            # Check links table
+            result = conn.execute(text("SELECT COUNT(*) FROM links"))
+            links_count = result.fetchone()[0]
+            tables_check.append(f"{links_count} linked accounts")
+            
+            # Check watchtime_roles table
+            result = conn.execute(text("SELECT COUNT(*) FROM watchtime_roles WHERE enabled = true"))
+            roles_count = result.fetchone()[0]
+            tables_check.append(f"{roles_count} active roles")
+            
+            checks.append(f"✅ **Database Stats**: {' | '.join(tables_check)}")
+    except Exception as e:
+        checks.append(f"⚠️ **Database Stats**: {str(e)[:50]}")
+        has_warnings = True
+    
+    # 7. WebSocket Status
+    if hasattr(bot, 'ws') and bot.ws:
+        checks.append(f"✅ **WebSocket**: Connected")
+    else:
+        checks.append(f"⚠️ **WebSocket**: Not connected")
+        has_warnings = True
+    
+    # 8. Uptime
+    if hasattr(bot, 'uptime_start'):
+        uptime = datetime.now() - bot.uptime_start
+        hours, remainder = divmod(int(uptime.total_seconds()), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        checks.append(f"⏱️ **Uptime**: {hours}h {minutes}m {seconds}s")
+    
+    # Determine overall status
+    if has_errors:
+        overall_status = "❌ System Issues Detected"
+        color = 0xe74c3c  # Red
+    elif has_warnings:
+        overall_status = "⚠️ System Operational with Warnings"
+        color = 0xf39c12  # Orange
+    else:
+        overall_status = "✅ All Systems Operational"
+        color = 0x2ecc71  # Green
+    
+    # Update embed
+    embed = discord.Embed(
+        title="🏥 System Health Check",
+        description=overall_status,
+        color=color,
+        timestamp=datetime.now()
+    )
+    
+    for check in checks:
+        embed.add_field(name="\u200b", value=check, inline=False)
+    
+    embed.set_footer(text=f"Requested by {ctx.author.display_name}")
+    
+    await status_msg.edit(embed=embed)
+
+@health_check.error
+async def health_check_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You need 'Manage Server' permission to use this command.")
+
 # -------------------------
 # Bot events
 # -------------------------
 @bot.event
 async def on_ready():
+    # Track bot uptime for health checks
+    if not hasattr(bot, 'uptime_start'):
+        bot.uptime_start = datetime.now()
+    
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
     print(f"📺 Monitoring Kick channel: {KICK_CHANNEL}")
     
