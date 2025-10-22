@@ -1639,23 +1639,18 @@ async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: 
             await ctx.send(f"📋 No members have the **{role_name}** role yet.")
             return
         
-        # Create embed
-        embed = discord.Embed(
-            title=f"👥 Members with {role_name}",
-            description=f"Total: **{len(members)}** member{'s' if len(members) != 1 else ''}",
-            color=role.color if role.color != discord.Color.default() else 0x53FC18
-        )
-        
-        # Get watchtime for linked members
+        # Get watchtime for linked members only
         member_list = []
+        linked_count = 0
         with engine.connect() as conn:
-            for member in members[:25]:  # Limit to 25 to avoid huge embeds
+            for member in members[:50]:  # Check up to 50, but only show linked ones
                 # Try to get their watchtime
                 link = conn.execute(text(
                     "SELECT kick_name FROM links WHERE discord_id = :d"
                 ), {"d": member.id}).fetchone()
                 
-                if link:
+                if link:  # Only add linked members
+                    linked_count += 1
                     kick_name = link[0]
                     watchtime = conn.execute(text(
                         "SELECT minutes FROM watchtime WHERE username = :u"
@@ -1667,22 +1662,34 @@ async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: 
                         member_list.append(f"• {member.mention} - **{kick_name}** ({minutes:,} min / {hours:.1f}h)")
                     else:
                         member_list.append(f"• {member.mention} - **{kick_name}** (0 min)")
-                else:
-                    member_list.append(f"• {member.mention} - *(not linked)*")
+                    
+                    # Stop if we have 25 linked members
+                    if linked_count >= 25:
+                        break
+        
+        if not member_list:
+            await ctx.send(f"📋 No linked members have the **{role_name}** role yet.")
+            return
+        
+        # Create embed
+        embed = discord.Embed(
+            title=f"👥 Linked Members with {role_name}",
+            description=f"Showing **{len(member_list)}** linked member{'s' if len(member_list) != 1 else ''} (Total with role: {len(members)})",
+            color=role.color if role.color != discord.Color.default() else 0x53FC18
+        )
         
         # Split into chunks if too many
-        if member_list:
-            chunk_size = 20
-            for i in range(0, len(member_list), chunk_size):
-                chunk = member_list[i:i+chunk_size]
-                embed.add_field(
-                    name=f"Members {i+1}-{min(i+chunk_size, len(member_list))}" if len(member_list) > chunk_size else "Members",
-                    value="\n".join(chunk),
-                    inline=False
-                )
+        chunk_size = 20
+        for i in range(0, len(member_list), chunk_size):
+            chunk = member_list[i:i+chunk_size]
+            embed.add_field(
+                name=f"Members {i+1}-{min(i+chunk_size, len(member_list))}" if len(member_list) > chunk_size else "Members",
+                value="\n".join(chunk),
+                inline=False
+            )
         
-        if len(members) > 25:
-            embed.set_footer(text=f"Showing first 25 of {len(members)} members")
+        if linked_count >= 25 and len(members) > linked_count:
+            embed.set_footer(text=f"Showing first 25 linked members • {len(members) - linked_count} unlinked not shown")
         
         await ctx.send(embed=embed)
     
