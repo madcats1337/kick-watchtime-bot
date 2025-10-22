@@ -159,6 +159,7 @@ This starts both the Discord bot and OAuth Flask server. You should see:
 ### Admin Commands
 | Command | Description | Example |
 |---------|-------------|---------|
+| `!health` | **[Admin]** Check system status and diagnostics | `!health` |
 | `!tracking on/off/status` | Enable/disable watchtime tracking | `!tracking on` |
 | `!linklogs on/off/status` | Enable/disable link attempt logging | `!linklogs on` |
 | `!roles list` | Show all configured watchtime roles | `!roles list` |
