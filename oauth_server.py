@@ -211,6 +211,250 @@ def health():
     return jsonify({"status": "healthy", "oauth_configured": bool(KICK_CLIENT_ID and KICK_CLIENT_SECRET)}), 200
 
 
+@app.route('/terms')
+@app.route('/terms-of-service')
+def terms_of_service():
+    """Serve Terms of Service page."""
+    try:
+        with open('TERMS_OF_SERVICE.md', 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Simple markdown to HTML conversion
+        lines = content.split('\n')
+        html_parts = []
+        
+        for line in lines:
+            if line.startswith('# '):
+                html_parts.append(f'<h1>{line[2:]}</h1>')
+            elif line.startswith('## '):
+                html_parts.append(f'<h2>{line[3:]}</h2>')
+            elif line.startswith('### '):
+                html_parts.append(f'<h3>{line[4:]}</h3>')
+            elif line.strip():
+                # Bold text
+                line = line.replace('**', '<strong>', 1)
+                line = line.replace('**', '</strong>', 1)
+                html_parts.append(f'<p>{line}</p>')
+            else:
+                html_parts.append('<br>')
+        
+        html_content = '\n'.join(html_parts)
+        
+        return f"""
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Terms of Service - Kick Watchtime Bot</title>
+            <style>
+                * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+                body {{
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                    line-height: 1.6;
+                    color: #2c3e50;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    min-height: 100vh;
+                    padding: 20px;
+                }}
+                .container {{
+                    max-width: 900px;
+                    margin: 0 auto;
+                    background: white;
+                    padding: 40px;
+                    border-radius: 15px;
+                    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+                }}
+                h1 {{
+                    color: #5865F2;
+                    font-size: 2.5em;
+                    margin-bottom: 20px;
+                    padding-bottom: 15px;
+                    border-bottom: 3px solid #5865F2;
+                }}
+                h2 {{
+                    color: #2c3e50;
+                    font-size: 1.8em;
+                    margin-top: 30px;
+                    margin-bottom: 15px;
+                }}
+                h3 {{
+                    color: #34495e;
+                    font-size: 1.3em;
+                    margin-top: 20px;
+                    margin-bottom: 10px;
+                }}
+                p {{
+                    margin-bottom: 15px;
+                    color: #555;
+                }}
+                strong {{
+                    color: #2c3e50;
+                }}
+                .footer {{
+                    margin-top: 40px;
+                    padding-top: 20px;
+                    border-top: 2px solid #ecf0f1;
+                    text-align: center;
+                }}
+                .footer a {{
+                    color: #5865F2;
+                    text-decoration: none;
+                    margin: 0 15px;
+                    font-weight: 500;
+                    transition: color 0.3s;
+                }}
+                .footer a:hover {{
+                    color: #4752c4;
+                    text-decoration: underline;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                {html_content}
+                <div class="footer">
+                    <p>
+                        <a href="/privacy">Privacy Policy</a> |
+                        <a href="/terms">Terms of Service</a> |
+                        <a href="https://github.com/madcats1337/kick-watchtime-bot">GitHub</a>
+                    </p>
+                    <p style="color: #7f8c8d; font-size: 0.9em; margin-top: 10px;">
+                        Kick Watchtime Bot &copy; 2025
+                    </p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+    except FileNotFoundError:
+        return "<h1>Terms of Service</h1><p>Document not found.</p>", 404
+    except Exception as e:
+        return f"<h1>Error</h1><p>Error loading Terms of Service: {{str(e)}}</p>", 500
+
+
+@app.route('/privacy')
+@app.route('/privacy-policy')
+def privacy_policy():
+    """Serve Privacy Policy page."""
+    try:
+        with open('PRIVACY_POLICY.md', 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Simple markdown to HTML conversion
+        lines = content.split('\n')
+        html_parts = []
+        
+        for line in lines:
+            if line.startswith('# '):
+                html_parts.append(f'<h1>{line[2:]}</h1>')
+            elif line.startswith('## '):
+                html_parts.append(f'<h2>{line[3:]}</h2>')
+            elif line.startswith('### '):
+                html_parts.append(f'<h3>{line[4:]}</h3>')
+            elif line.strip():
+                # Bold text
+                line = line.replace('**', '<strong>', 1)
+                line = line.replace('**', '</strong>', 1)
+                html_parts.append(f'<p>{line}</p>')
+            else:
+                html_parts.append('<br>')
+        
+        html_content = '\n'.join(html_parts)
+        
+        return f"""
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Privacy Policy - Kick Watchtime Bot</title>
+            <style>
+                * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+                body {{
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                    line-height: 1.6;
+                    color: #2c3e50;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    min-height: 100vh;
+                    padding: 20px;
+                }}
+                .container {{
+                    max-width: 900px;
+                    margin: 0 auto;
+                    background: white;
+                    padding: 40px;
+                    border-radius: 15px;
+                    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+                }}
+                h1 {{
+                    color: #5865F2;
+                    font-size: 2.5em;
+                    margin-bottom: 20px;
+                    padding-bottom: 15px;
+                    border-bottom: 3px solid #5865F2;
+                }}
+                h2 {{
+                    color: #2c3e50;
+                    font-size: 1.8em;
+                    margin-top: 30px;
+                    margin-bottom: 15px;
+                }}
+                h3 {{
+                    color: #34495e;
+                    font-size: 1.3em;
+                    margin-top: 20px;
+                    margin-bottom: 10px;
+                }}
+                p {{
+                    margin-bottom: 15px;
+                    color: #555;
+                }}
+                strong {{
+                    color: #2c3e50;
+                }}
+                .footer {{
+                    margin-top: 40px;
+                    padding-top: 20px;
+                    border-top: 2px solid #ecf0f1;
+                    text-align: center;
+                }}
+                .footer a {{
+                    color: #5865F2;
+                    text-decoration: none;
+                    margin: 0 15px;
+                    font-weight: 500;
+                    transition: color 0.3s;
+                }}
+                .footer a:hover {{
+                    color: #4752c4;
+                    text-decoration: underline;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                {html_content}
+                <div class="footer">
+                    <p>
+                        <a href="/privacy">Privacy Policy</a> |
+                        <a href="/terms">Terms of Service</a> |
+                        <a href="https://github.com/madcats1337/kick-watchtime-bot">GitHub</a>
+                    </p>
+                    <p style="color: #7f8c8d; font-size: 0.9em; margin-top: 10px;">
+                        Kick Watchtime Bot &copy; 2025
+                    </p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+    except FileNotFoundError:
+        return "<h1>Privacy Policy</h1><p>Document not found.</p>", 404
+    except Exception as e:
+        return f"<h1>Error</h1><p>Error loading Privacy Policy: {{str(e)}}</p>", 500
+
+
 @app.route('/auth/kick')
 def auth_kick():
     """
