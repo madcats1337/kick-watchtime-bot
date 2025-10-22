@@ -247,66 +247,105 @@ def terms_of_service():
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>Terms of Service - Kick Watchtime Bot</title>
+            <link rel="preconnect" href="https://fonts.googleapis.com">
+            <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+            <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
             <style>
                 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+                :root {{
+                    --background: #1a2332;
+                    --foreground: #f9fafb;
+                    --card: #242d3d;
+                    --card-foreground: #f9fafb;
+                    --primary: #3b82f6;
+                    --primary-foreground: #f9fafb;
+                    --muted: #374151;
+                    --muted-foreground: #9ca3af;
+                    --border: #374151;
+                    --radius: 0.625rem;
+                }}
                 body {{
-                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
                     line-height: 1.6;
-                    color: #2c3e50;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: var(--foreground);
+                    background: var(--background);
                     min-height: 100vh;
                     padding: 20px;
+                    -webkit-font-smoothing: antialiased;
+                    -moz-osx-font-smoothing: grayscale;
                 }}
                 .container {{
                     max-width: 900px;
                     margin: 0 auto;
-                    background: white;
-                    padding: 40px;
-                    border-radius: 15px;
-                    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+                    background: var(--card);
+                    padding: 48px;
+                    border-radius: var(--radius);
+                    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2);
+                    border: 1px solid var(--border);
                 }}
                 h1 {{
-                    color: #5865F2;
+                    color: var(--foreground);
                     font-size: 2.5em;
-                    margin-bottom: 20px;
-                    padding-bottom: 15px;
-                    border-bottom: 3px solid #5865F2;
+                    font-weight: 700;
+                    margin-bottom: 24px;
+                    padding-bottom: 16px;
+                    border-bottom: 2px solid var(--primary);
+                    letter-spacing: -0.025em;
                 }}
                 h2 {{
-                    color: #2c3e50;
+                    color: var(--foreground);
                     font-size: 1.8em;
-                    margin-top: 30px;
-                    margin-bottom: 15px;
+                    font-weight: 600;
+                    margin-top: 36px;
+                    margin-bottom: 16px;
+                    letter-spacing: -0.015em;
                 }}
                 h3 {{
-                    color: #34495e;
-                    font-size: 1.3em;
-                    margin-top: 20px;
-                    margin-bottom: 10px;
+                    color: var(--card-foreground);
+                    font-size: 1.4em;
+                    font-weight: 600;
+                    margin-top: 24px;
+                    margin-bottom: 12px;
                 }}
                 p {{
-                    margin-bottom: 15px;
-                    color: #555;
+                    margin-bottom: 16px;
+                    color: var(--muted-foreground);
+                    font-size: 1em;
                 }}
                 strong {{
-                    color: #2c3e50;
+                    color: var(--foreground);
+                    font-weight: 600;
                 }}
                 .footer {{
-                    margin-top: 40px;
-                    padding-top: 20px;
-                    border-top: 2px solid #ecf0f1;
+                    margin-top: 48px;
+                    padding-top: 24px;
+                    border-top: 1px solid var(--border);
                     text-align: center;
                 }}
                 .footer a {{
-                    color: #5865F2;
+                    color: var(--primary);
                     text-decoration: none;
-                    margin: 0 15px;
+                    margin: 0 16px;
                     font-weight: 500;
-                    transition: color 0.3s;
+                    transition: all 0.2s ease;
                 }}
                 .footer a:hover {{
-                    color: #4752c4;
+                    color: #60a5fa;
                     text-decoration: underline;
+                }}
+                .footer p {{
+                    color: var(--muted-foreground);
+                }}
+                @media (max-width: 768px) {{
+                    .container {{
+                        padding: 32px 24px;
+                    }}
+                    h1 {{
+                        font-size: 2em;
+                    }}
+                    h2 {{
+                        font-size: 1.5em;
+                    }}
                 }}
             </style>
         </head>
@@ -319,7 +358,7 @@ def terms_of_service():
                         <a href="/terms">Terms of Service</a> |
                         <a href="https://github.com/madcats1337/kick-watchtime-bot">GitHub</a>
                     </p>
-                    <p style="color: #7f8c8d; font-size: 0.9em; margin-top: 10px;">
+                    <p style="font-size: 0.9em; margin-top: 12px;">
                         Kick Watchtime Bot &copy; 2025
                     </p>
                 </div>
@@ -369,66 +408,105 @@ def privacy_policy():
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>Privacy Policy - Kick Watchtime Bot</title>
+            <link rel="preconnect" href="https://fonts.googleapis.com">
+            <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+            <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
             <style>
                 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+                :root {{
+                    --background: #1a2332;
+                    --foreground: #f9fafb;
+                    --card: #242d3d;
+                    --card-foreground: #f9fafb;
+                    --primary: #3b82f6;
+                    --primary-foreground: #f9fafb;
+                    --muted: #374151;
+                    --muted-foreground: #9ca3af;
+                    --border: #374151;
+                    --radius: 0.625rem;
+                }}
                 body {{
-                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
                     line-height: 1.6;
-                    color: #2c3e50;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: var(--foreground);
+                    background: var(--background);
                     min-height: 100vh;
                     padding: 20px;
+                    -webkit-font-smoothing: antialiased;
+                    -moz-osx-font-smoothing: grayscale;
                 }}
                 .container {{
                     max-width: 900px;
                     margin: 0 auto;
-                    background: white;
-                    padding: 40px;
-                    border-radius: 15px;
-                    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+                    background: var(--card);
+                    padding: 48px;
+                    border-radius: var(--radius);
+                    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2);
+                    border: 1px solid var(--border);
                 }}
                 h1 {{
-                    color: #5865F2;
+                    color: var(--foreground);
                     font-size: 2.5em;
-                    margin-bottom: 20px;
-                    padding-bottom: 15px;
-                    border-bottom: 3px solid #5865F2;
+                    font-weight: 700;
+                    margin-bottom: 24px;
+                    padding-bottom: 16px;
+                    border-bottom: 2px solid var(--primary);
+                    letter-spacing: -0.025em;
                 }}
                 h2 {{
-                    color: #2c3e50;
+                    color: var(--foreground);
                     font-size: 1.8em;
-                    margin-top: 30px;
-                    margin-bottom: 15px;
+                    font-weight: 600;
+                    margin-top: 36px;
+                    margin-bottom: 16px;
+                    letter-spacing: -0.015em;
                 }}
                 h3 {{
-                    color: #34495e;
-                    font-size: 1.3em;
-                    margin-top: 20px;
-                    margin-bottom: 10px;
+                    color: var(--card-foreground);
+                    font-size: 1.4em;
+                    font-weight: 600;
+                    margin-top: 24px;
+                    margin-bottom: 12px;
                 }}
                 p {{
-                    margin-bottom: 15px;
-                    color: #555;
+                    margin-bottom: 16px;
+                    color: var(--muted-foreground);
+                    font-size: 1em;
                 }}
                 strong {{
-                    color: #2c3e50;
+                    color: var(--foreground);
+                    font-weight: 600;
                 }}
                 .footer {{
-                    margin-top: 40px;
-                    padding-top: 20px;
-                    border-top: 2px solid #ecf0f1;
+                    margin-top: 48px;
+                    padding-top: 24px;
+                    border-top: 1px solid var(--border);
                     text-align: center;
                 }}
                 .footer a {{
-                    color: #5865F2;
+                    color: var(--primary);
                     text-decoration: none;
-                    margin: 0 15px;
+                    margin: 0 16px;
                     font-weight: 500;
-                    transition: color 0.3s;
+                    transition: all 0.2s ease;
                 }}
                 .footer a:hover {{
-                    color: #4752c4;
+                    color: #60a5fa;
                     text-decoration: underline;
+                }}
+                .footer p {{
+                    color: var(--muted-foreground);
+                }}
+                @media (max-width: 768px) {{
+                    .container {{
+                        padding: 32px 24px;
+                    }}
+                    h1 {{
+                        font-size: 2em;
+                    }}
+                    h2 {{
+                        font-size: 1.5em;
+                    }}
                 }}
             </style>
         </head>
@@ -441,7 +519,7 @@ def privacy_policy():
                         <a href="/terms">Terms of Service</a> |
                         <a href="https://github.com/madcats1337/kick-watchtime-bot">GitHub</a>
                     </p>
-                    <p style="color: #7f8c8d; font-size: 0.9em; margin-top: 10px;">
+                    <p style="font-size: 0.9em; margin-top: 12px;">
                         Kick Watchtime Bot &copy; 2025
                     </p>
                 </div>
