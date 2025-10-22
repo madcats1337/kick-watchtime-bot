@@ -87,11 +87,15 @@ OAUTH_BASE_URL = os.getenv("OAUTH_BASE_URL", "")  # e.g., https://your-app.up.ra
 KICK_CLIENT_ID = os.getenv("KICK_CLIENT_ID", "")
 OAUTH_SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "")
 
-# Debug: Log secret key status at startup (don't log the actual key!)
-if OAUTH_SECRET_KEY:
-    print(f"[Bot] FLASK_SECRET_KEY loaded: {len(OAUTH_SECRET_KEY)} chars, hash={hash(OAUTH_SECRET_KEY) % 10000}", flush=True)
+# CRITICAL: If FLASK_SECRET_KEY is not set, OAuth will not work!
+if not OAUTH_SECRET_KEY:
+    print("=" * 80, flush=True)
+    print("⚠️  CRITICAL: FLASK_SECRET_KEY environment variable is NOT SET!", flush=True)
+    print("⚠️  OAuth linking will NOT WORK without this key!", flush=True)
+    print("⚠️  Please set FLASK_SECRET_KEY in Railway environment variables.", flush=True)
+    print("=" * 80, flush=True)
 else:
-    print(f"[Bot] ⚠️ WARNING: FLASK_SECRET_KEY is empty!", flush=True)
+    print(f"[Bot] FLASK_SECRET_KEY loaded: {len(OAUTH_SECRET_KEY)} chars, hash={hash(OAUTH_SECRET_KEY) % 10000}", flush=True)
 
 # -------------------------
 # 🔒 Security: OAuth URL Signing
@@ -312,6 +316,17 @@ try:
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """))
+        
+        # Create link_logs_config table for Discord logging configuration
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS link_logs_config (
+            guild_id BIGINT PRIMARY KEY,
+            channel_id BIGINT NOT NULL,
+            enabled BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """))
     print("✅ Database tables initialized successfully")
 except Exception as e:
     print(f"⚠️ Database initialization error: {e}")
@@ -356,6 +371,52 @@ last_chat_activity = None  # Track last time we saw any chat activity
 recent_chatters = {}  # {username: timestamp} - rolling window of recent chat activity
 MIN_UNIQUE_CHATTERS = 2  # Require at least 2 different people chatting to consider stream "live"
 CHAT_ACTIVITY_WINDOW_MINUTES = 5  # Look back 5 minutes for unique chatters
+
+# -------------------------
+# Link logging helper
+# -------------------------
+async def log_link_attempt(discord_user, kick_username: str, success: bool, error_message: str = None):
+    """Log account linking attempts to configured Discord channel."""
+    if not DISCORD_GUILD_ID:
+        return
+    
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT channel_id, enabled FROM link_logs_config 
+                WHERE guild_id = :guild_id
+            """), {"guild_id": DISCORD_GUILD_ID}).fetchone()
+            
+            if not result or not result[1]:  # Not configured or disabled
+                return
+            
+            channel_id = result[0]
+        
+        # Get the channel
+        channel = bot.get_channel(channel_id)
+        if not channel:
+            return
+        
+        # Create embed
+        embed = discord.Embed(
+            title="🔗 Account Link Attempt" if success else "❌ Account Link Failed",
+            color=0x53FC18 if success else 0xFF0000,
+            timestamp=datetime.now(timezone.utc)
+        )
+        
+        embed.add_field(name="Discord User", value=f"{discord_user.mention} ({discord_user})", inline=False)
+        embed.add_field(name="Kick Username", value=kick_username, inline=True)
+        embed.add_field(name="Status", value="✅ Success" if success else "❌ Failed", inline=True)
+        
+        if not success and error_message:
+            embed.add_field(name="Error", value=error_message, inline=False)
+        
+        embed.set_footer(text=f"Discord ID: {discord_user.id}")
+        
+        await channel.send(embed=embed)
+        
+    except Exception as e:
+        print(f"⚠️ Failed to log link attempt: {e}")
 
 # -------------------------
 # Kick listener functions
@@ -759,6 +820,24 @@ async def check_oauth_notifications_task():
             
             for notification_id, discord_id, kick_username, channel_id, message_id in notifications:
                 try:
+                    # Check if this is a failed attempt (kick_username starts with "FAILED:")
+                    is_failed = kick_username.startswith("FAILED:")
+                    actual_kick_username = None
+                    error_message = None
+                    
+                    if is_failed:
+                        # Parse failed attempt: "FAILED:<username>:<error>"
+                        parts = kick_username.split(":", 2)
+                        actual_kick_username = parts[1] if len(parts) > 1 else "unknown"
+                        error_type = parts[2] if len(parts) > 2 else "unknown_error"
+                        
+                        if error_type == "already_linked":
+                            error_message = "This Kick account is already linked to another Discord user"
+                        else:
+                            error_message = f"Error: {error_type}"
+                    else:
+                        actual_kick_username = kick_username
+                    
                     # Delete the original "Link with Kick OAuth" message if we have the IDs
                     if channel_id and message_id:
                         try:
@@ -776,23 +855,36 @@ async def check_oauth_notifications_task():
                     # Get the user
                     user = await bot.fetch_user(int(discord_id))
                     if user:
-                        # Send success message via DM
-                        try:
-                            await user.send(f"✅ **Verification Successful!**\n\nYour Discord account has been linked to Kick account **{kick_username}**.")
-                        except discord.Forbidden:
-                            # If DM fails, try to find a guild channel
-                            if DISCORD_GUILD_ID:
-                                guild = bot.get_guild(DISCORD_GUILD_ID)
-                                if guild:
-                                    member = guild.get_member(int(discord_id))
-                                    if member:
-                                        # Try to send in the same channel as original message, or system channel
-                                        target_channel = bot.get_channel(int(channel_id)) if channel_id else None
-                                        if not target_channel or not target_channel.permissions_for(guild.me).send_messages:
-                                            target_channel = guild.system_channel or next((ch for ch in guild.text_channels if ch.permissions_for(guild.me).send_messages), None)
-                                        
-                                        if target_channel:
-                                            await target_channel.send(f"{member.mention} ✅ **Verification Successful!** Your account has been linked to Kick **{kick_username}**.")
+                        if is_failed:
+                            # Send failure message via DM
+                            try:
+                                await user.send(f"❌ **Link Failed**\n\n{error_message}\n\nKick account: **{actual_kick_username}**")
+                            except discord.Forbidden:
+                                pass  # User has DMs disabled
+                            
+                            # Log the failed attempt
+                            await log_link_attempt(user, actual_kick_username, success=False, error_message=error_message)
+                        else:
+                            # Send success message via DM
+                            try:
+                                await user.send(f"✅ **Verification Successful!**\n\nYour Discord account has been linked to Kick account **{actual_kick_username}**.")
+                            except discord.Forbidden:
+                                # If DM fails, try to find a guild channel
+                                if DISCORD_GUILD_ID:
+                                    guild = bot.get_guild(DISCORD_GUILD_ID)
+                                    if guild:
+                                        member = guild.get_member(int(discord_id))
+                                        if member:
+                                            # Try to send in the same channel as original message, or system channel
+                                            target_channel = bot.get_channel(int(channel_id)) if channel_id else None
+                                            if not target_channel or not target_channel.permissions_for(guild.me).send_messages:
+                                                target_channel = guild.system_channel or next((ch for ch in guild.text_channels if ch.permissions_for(guild.me).send_messages), None)
+                                            
+                                            if target_channel:
+                                                await target_channel.send(f"{member.mention} ✅ **Verification Successful!** Your account has been linked to Kick **{actual_kick_username}**.")
+                            
+                            # Log the successful link attempt
+                            await log_link_attempt(user, actual_kick_username, success=True)
                     
                     # Mark as processed
                     conn.execute(text("""
@@ -801,7 +893,7 @@ async def check_oauth_notifications_task():
                         WHERE id = :id
                     """), {"id": notification_id})
                     
-                    print(f"✅ Sent OAuth success notification to Discord {discord_id}", flush=True)
+                    print(f"✅ Sent OAuth notification to Discord {discord_id}", flush=True)
                     
                 except Exception as e:
                     print(f"⚠️ Error sending OAuth notification to {discord_id}: {e}", flush=True)
@@ -1262,6 +1354,79 @@ async def toggle_tracking(ctx, action: str = None, subaction: str = None):
 
 @toggle_tracking.error
 async def tracking_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You need administrator permissions to use this command.")
+
+@bot.command(name="linklogs")
+@commands.has_permissions(administrator=True)
+@in_guild()
+async def link_logs_toggle(ctx, action: str = None):
+    """
+    Admin command to configure link attempt logging to Discord channel.
+    Usage: !linklogs on|off|status
+    
+    When enabled, all account linking attempts (successful and failed) will be logged
+    to the channel where this command is run.
+    """
+    guild_id = ctx.guild.id
+    channel_id = ctx.channel.id
+    
+    if action is None or action.lower() == "status":
+        # Check current status
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT channel_id, enabled FROM link_logs_config 
+                WHERE guild_id = :guild_id
+            """), {"guild_id": guild_id}).fetchone()
+            
+            if not result:
+                await ctx.send("📊 **Link Logging Status:** 🔴 NOT CONFIGURED\nUse `!linklogs on` to enable logging in this channel.")
+                return
+            
+            log_channel = bot.get_channel(result[0])
+            status = "🟢 ENABLED" if result[1] else "🔴 DISABLED"
+            channel_mention = log_channel.mention if log_channel else f"<#{result[0]}>"
+            await ctx.send(f"📊 **Link Logging Status:** {status}\n**Log Channel:** {channel_mention}")
+            return
+    
+    if action.lower() == "on":
+        # Enable logging in current channel
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO link_logs_config (guild_id, channel_id, enabled, updated_at)
+                VALUES (:guild_id, :channel_id, TRUE, CURRENT_TIMESTAMP)
+                ON CONFLICT (guild_id) DO UPDATE SET
+                    channel_id = :channel_id,
+                    enabled = TRUE,
+                    updated_at = CURRENT_TIMESTAMP
+            """), {"guild_id": guild_id, "channel_id": channel_id})
+        
+        await ctx.send(
+            f"✅ **Link logging ENABLED** in {ctx.channel.mention}\n\n"
+            f"All account linking attempts will be logged here with:\n"
+            f"• Discord user attempting to link\n"
+            f"• Success/failure status\n"
+            f"• Kick username\n"
+            f"• Timestamp\n\n"
+            f"Use `!linklogs off` to disable logging."
+        )
+    
+    elif action.lower() == "off":
+        # Disable logging
+        with engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE link_logs_config 
+                SET enabled = FALSE, updated_at = CURRENT_TIMESTAMP
+                WHERE guild_id = :guild_id
+            """), {"guild_id": guild_id})
+        
+        await ctx.send("⏸️ **Link logging DISABLED**\nAccount linking attempts will no longer be logged.")
+    
+    else:
+        await ctx.send("❌ Invalid option. Use: `!linklogs on`, `!linklogs off`, or `!linklogs status`")
+
+@link_logs_toggle.error
+async def link_logs_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need administrator permissions to use this command.")
 
