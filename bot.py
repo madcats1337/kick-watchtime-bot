@@ -1621,6 +1621,71 @@ async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: 
         except Exception as e:
             await ctx.send(f"❌ Error updating role: {e}")
     
+    elif action.lower() == "members":
+        if not role_name:
+            await ctx.send("❌ Usage: `!roles members <role_name>`\nExample: `!roles members \"Tier 1\"`")
+            return
+        
+        # Find the Discord role
+        role = discord.utils.get(ctx.guild.roles, name=role_name)
+        if not role:
+            await ctx.send(f"❌ Discord role **{role_name}** not found in this server.")
+            return
+        
+        # Get members with this role
+        members = role.members
+        
+        if not members:
+            await ctx.send(f"📋 No members have the **{role_name}** role yet.")
+            return
+        
+        # Create embed
+        embed = discord.Embed(
+            title=f"👥 Members with {role_name}",
+            description=f"Total: **{len(members)}** member{'s' if len(members) != 1 else ''}",
+            color=role.color if role.color != discord.Color.default() else 0x53FC18
+        )
+        
+        # Get watchtime for linked members
+        member_list = []
+        with engine.connect() as conn:
+            for member in members[:25]:  # Limit to 25 to avoid huge embeds
+                # Try to get their watchtime
+                link = conn.execute(text(
+                    "SELECT kick_name FROM links WHERE discord_id = :d"
+                ), {"d": member.id}).fetchone()
+                
+                if link:
+                    kick_name = link[0]
+                    watchtime = conn.execute(text(
+                        "SELECT minutes FROM watchtime WHERE username = :u"
+                    ), {"u": kick_name}).fetchone()
+                    
+                    if watchtime:
+                        minutes = watchtime[0]
+                        hours = minutes / 60
+                        member_list.append(f"• {member.mention} - **{kick_name}** ({minutes:,} min / {hours:.1f}h)")
+                    else:
+                        member_list.append(f"• {member.mention} - **{kick_name}** (0 min)")
+                else:
+                    member_list.append(f"• {member.mention} - *(not linked)*")
+        
+        # Split into chunks if too many
+        if member_list:
+            chunk_size = 20
+            for i in range(0, len(member_list), chunk_size):
+                chunk = member_list[i:i+chunk_size]
+                embed.add_field(
+                    name=f"Members {i+1}-{min(i+chunk_size, len(member_list))}" if len(member_list) > chunk_size else "Members",
+                    value="\n".join(chunk),
+                    inline=False
+                )
+        
+        if len(members) > 25:
+            embed.set_footer(text=f"Showing first 25 of {len(members)} members")
+        
+        await ctx.send(embed=embed)
+    
     else:
         await ctx.send(
             "❌ Invalid action. Available actions:\n"
@@ -1628,7 +1693,8 @@ async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: 
             "• `!roles add <name> <minutes>` - Add new role\n"
             "• `!roles update <name> <minutes>` - Update role threshold\n"
             "• `!roles remove <name>` - Remove role\n"
-            "• `!roles enable/disable <name>` - Enable/disable role"
+            "• `!roles enable/disable <name>` - Enable/disable role\n"
+            "• `!roles members <name>` - List members with a role"
         )
 
 @manage_roles.error
