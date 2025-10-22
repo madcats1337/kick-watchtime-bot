@@ -151,9 +151,9 @@ KICK_CHAT_WS = f"wss://ws-{PUSHER_CONFIG['cluster']}.pusher.com/app/{PUSHER_CONF
 
 # Role thresholds in minutes
 WATCHTIME_ROLES = [
-    {"name": "Tier 1", "minutes": 60},
-    {"name": "Tier 2", "minutes": 300},
-    {"name": "Tier 3", "minutes": 1000},
+    {"name": "Tier 1", "minutes": 120},
+    {"name": "Tier 2", "minutes": 600},
+    {"name": "Tier 3", "minutes": 2000},
 ]
 
 BROWSER_HEADERS = {
@@ -327,6 +327,30 @@ try:
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """))
+        
+        # Create watchtime_roles table for configurable role thresholds
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS watchtime_roles (
+            id SERIAL PRIMARY KEY,
+            role_name TEXT NOT NULL,
+            minutes_required INTEGER NOT NULL,
+            display_order INTEGER NOT NULL,
+            enabled BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """))
+        
+        # Insert default roles if table is empty
+        role_count = conn.execute(text("SELECT COUNT(*) FROM watchtime_roles")).fetchone()[0]
+        if role_count == 0:
+            print("📝 Initializing default watchtime roles...")
+            for idx, role in enumerate(WATCHTIME_ROLES, 1):
+                conn.execute(text("""
+                    INSERT INTO watchtime_roles (role_name, minutes_required, display_order, enabled)
+                    VALUES (:name, :minutes, :order, TRUE)
+                """), {"name": role["name"], "minutes": role["minutes"], "order": idx})
+            print("✅ Default watchtime roles created")
     print("✅ Database tables initialized successfully")
 except Exception as e:
     print(f"⚠️ Database initialization error: {e}")
@@ -371,6 +395,31 @@ last_chat_activity = None  # Track last time we saw any chat activity
 recent_chatters = {}  # {username: timestamp} - rolling window of recent chat activity
 MIN_UNIQUE_CHATTERS = 2  # Require at least 2 different people chatting to consider stream "live"
 CHAT_ACTIVITY_WINDOW_MINUTES = 5  # Look back 5 minutes for unique chatters
+
+# -------------------------
+# Role configuration helper
+# -------------------------
+def load_watchtime_roles():
+    """Load watchtime role configuration from database."""
+    try:
+        with engine.connect() as conn:
+            roles = conn.execute(text("""
+                SELECT role_name, minutes_required 
+                FROM watchtime_roles 
+                WHERE enabled = TRUE 
+                ORDER BY display_order ASC
+            """)).fetchall()
+            
+            if roles:
+                role_list = [{"name": r[0], "minutes": r[1]} for r in roles]
+                print(f"🎯 Loaded {len(role_list)} watchtime roles from database")
+                return role_list
+            else:
+                print("⚠️ No roles found in database, using hardcoded defaults")
+                return WATCHTIME_ROLES
+    except Exception as e:
+        print(f"⚠️ Could not load roles from database: {e}")
+        return WATCHTIME_ROLES
 
 # -------------------------
 # Link logging helper
@@ -735,9 +784,12 @@ async def update_roles_task():
             print("⚠️ Bot lacks manage_roles permission!")
             return
             
+        # Load current role configuration from database
+        current_roles = load_watchtime_roles()
+        
         # Cache role objects and validate they exist
         role_cache = {}
-        for role_info in WATCHTIME_ROLES:
+        for role_info in current_roles:
             role = discord.utils.get(guild.roles, name=role_info["name"])
             if not role:
                 print(f"⚠️ Role {role_info['name']} not found in server!")
@@ -761,7 +813,7 @@ async def update_roles_task():
             continue
 
         # Assign all eligible roles
-        for role_info in WATCHTIME_ROLES:
+        for role_info in current_roles:
             role = discord.utils.get(guild.roles, name=role_info["name"])
             if role and minutes >= role_info["minutes"] and role not in member.roles:
                 try:
@@ -1246,9 +1298,12 @@ async def cmd_watchtime(ctx, kick_username: str = None):
     minutes = watchtime[0]
     hours = minutes / 60
     
+    # Load current role configuration
+    current_roles = load_watchtime_roles()
+    
     # Check which roles they've earned
     earned_roles = []
-    for role_info in WATCHTIME_ROLES:
+    for role_info in current_roles:
         if minutes >= role_info["minutes"]:
             earned_roles.append(role_info["name"])
     
@@ -1262,7 +1317,7 @@ async def cmd_watchtime(ctx, kick_username: str = None):
         embed.add_field(name="Earned Roles", value="\n".join(earned_roles), inline=False)
     else:
         # Show next role milestone
-        for role_info in WATCHTIME_ROLES:
+        for role_info in current_roles:
             if minutes < role_info["minutes"]:
                 remaining = role_info["minutes"] - minutes
                 embed.add_field(
@@ -1430,6 +1485,157 @@ async def link_logs_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need administrator permissions to use this command.")
 
+@bot.command(name="roles")
+@commands.has_permissions(administrator=True)
+@in_guild()
+async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: int = None):
+    """
+    Admin command to manage watchtime role thresholds.
+    Usage:
+      !roles list - Show current role configuration
+      !roles add <role_name> <minutes> - Add a new role threshold
+      !roles update <role_name> <minutes> - Update existing role threshold
+      !roles remove <role_name> - Remove a role threshold
+      !roles enable <role_name> - Enable a role
+      !roles disable <role_name> - Disable a role
+    
+    Example: !roles add "Tier 4" 5000
+    """
+    
+    if action is None or action.lower() == "list":
+        # Show current configuration
+        with engine.connect() as conn:
+            roles = conn.execute(text("""
+                SELECT role_name, minutes_required, enabled, display_order
+                FROM watchtime_roles
+                ORDER BY display_order ASC
+            """)).fetchall()
+        
+        if not roles:
+            await ctx.send("📋 No roles configured.")
+            return
+        
+        embed = discord.Embed(
+            title="🎯 Watchtime Role Configuration",
+            description="Current role thresholds for automatic role assignment",
+            color=0x53FC18
+        )
+        
+        for role_name, minutes, enabled, order in roles:
+            hours = minutes / 60
+            status = "✅ Enabled" if enabled else "❌ Disabled"
+            embed.add_field(
+                name=f"{order}. {role_name}",
+                value=f"**{minutes:,} minutes** ({hours:.1f} hours)\n{status}",
+                inline=False
+            )
+        
+        embed.set_footer(text="Use !roles add/update/remove to modify • Changes take effect immediately")
+        await ctx.send(embed=embed)
+        return
+    
+    if action.lower() == "add":
+        if not role_name or minutes is None:
+            await ctx.send("❌ Usage: `!roles add <role_name> <minutes>`\nExample: `!roles add \"Tier 4\" 5000`")
+            return
+        
+        try:
+            with engine.begin() as conn:
+                # Get highest display order
+                max_order = conn.execute(text("SELECT COALESCE(MAX(display_order), 0) FROM watchtime_roles")).fetchone()[0]
+                
+                # Insert new role
+                conn.execute(text("""
+                    INSERT INTO watchtime_roles (role_name, minutes_required, display_order, enabled)
+                    VALUES (:name, :minutes, :order, TRUE)
+                """), {"name": role_name, "minutes": minutes, "order": max_order + 1})
+            
+            await ctx.send(f"✅ Added role **{role_name}** at **{minutes:,} minutes** ({minutes/60:.1f} hours)")
+        except Exception as e:
+            await ctx.send(f"❌ Error adding role: {e}")
+    
+    elif action.lower() == "update":
+        if not role_name or minutes is None:
+            await ctx.send("❌ Usage: `!roles update <role_name> <minutes>`\nExample: `!roles update \"Tier 1\" 180`")
+            return
+        
+        try:
+            with engine.begin() as conn:
+                result = conn.execute(text("""
+                    UPDATE watchtime_roles
+                    SET minutes_required = :minutes, updated_at = CURRENT_TIMESTAMP
+                    WHERE role_name = :name
+                    RETURNING id
+                """), {"name": role_name, "minutes": minutes}).fetchone()
+                
+                if not result:
+                    await ctx.send(f"❌ Role **{role_name}** not found.")
+                    return
+            
+            await ctx.send(f"✅ Updated **{role_name}** to **{minutes:,} minutes** ({minutes/60:.1f} hours)")
+        except Exception as e:
+            await ctx.send(f"❌ Error updating role: {e}")
+    
+    elif action.lower() == "remove":
+        if not role_name:
+            await ctx.send("❌ Usage: `!roles remove <role_name>`\nExample: `!roles remove \"Tier 4\"`")
+            return
+        
+        try:
+            with engine.begin() as conn:
+                result = conn.execute(text("""
+                    DELETE FROM watchtime_roles
+                    WHERE role_name = :name
+                    RETURNING id
+                """), {"name": role_name}).fetchone()
+                
+                if not result:
+                    await ctx.send(f"❌ Role **{role_name}** not found.")
+                    return
+            
+            await ctx.send(f"✅ Removed role **{role_name}** from configuration")
+        except Exception as e:
+            await ctx.send(f"❌ Error removing role: {e}")
+    
+    elif action.lower() in ["enable", "disable"]:
+        if not role_name:
+            await ctx.send(f"❌ Usage: `!roles {action} <role_name>`")
+            return
+        
+        enabled = action.lower() == "enable"
+        try:
+            with engine.begin() as conn:
+                result = conn.execute(text("""
+                    UPDATE watchtime_roles
+                    SET enabled = :enabled, updated_at = CURRENT_TIMESTAMP
+                    WHERE role_name = :name
+                    RETURNING id
+                """), {"name": role_name, "enabled": enabled}).fetchone()
+                
+                if not result:
+                    await ctx.send(f"❌ Role **{role_name}** not found.")
+                    return
+            
+            status = "enabled" if enabled else "disabled"
+            await ctx.send(f"✅ Role **{role_name}** {status}")
+        except Exception as e:
+            await ctx.send(f"❌ Error updating role: {e}")
+    
+    else:
+        await ctx.send(
+            "❌ Invalid action. Available actions:\n"
+            "• `!roles list` - Show current roles\n"
+            "• `!roles add <name> <minutes>` - Add new role\n"
+            "• `!roles update <name> <minutes>` - Update role threshold\n"
+            "• `!roles remove <name>` - Remove role\n"
+            "• `!roles enable/disable <name>` - Enable/disable role"
+        )
+
+@manage_roles.error
+async def manage_roles_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You need administrator permissions to use this command.")
+
 @bot.command(name="setup_link_panel")
 @commands.has_permissions(manage_guild=True)
 @in_guild()
@@ -1581,8 +1787,9 @@ async def on_ready():
                 return
             
             # Validate roles exist
+            current_roles = load_watchtime_roles()
             existing_roles = {role.name for role in guild.roles}
-            for role_config in WATCHTIME_ROLES:
+            for role_config in current_roles:
                 if role_config["name"] not in existing_roles:
                     print(f"⚠️ Role {role_config['name']} does not exist in the server!")
         
