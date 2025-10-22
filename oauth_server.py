@@ -368,6 +368,11 @@ def auth_kick_callback():
             ), {"k": kick_username.lower()}).fetchone()
             
             if existing and existing[0] != discord_id:
+                # Store failed attempt for logging
+                conn.execute(text("""
+                    INSERT INTO oauth_notifications (discord_id, kick_username, processed)
+                    VALUES (:d, :k, FALSE)
+                """), {"d": discord_id, "k": f"FAILED:{kick_username}:already_linked"})
                 return render_error(
                     f"Kick account '{kick_username}' is already linked to another Discord user."
                 )
