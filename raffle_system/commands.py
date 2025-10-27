@@ -162,8 +162,8 @@ Use `!leaderboard` to see top participants!
 
 **Commands**:
 • `!tickets` - Check your ticket balance
-• `!leaderboard` - View top participants
-• `!link shuffle <username>` - Link your Shuffle account
+• `!raffleboard` - View top participants
+• `!linkshuffle <username>` - Link your Shuffle account
             """
             
             if last_winner:
