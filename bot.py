@@ -2135,7 +2135,6 @@ async def on_ready():
             current_period = get_current_period(engine)
             if not current_period:
                 # Create initial raffle period for this month
-                from datetime import datetime
                 start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
                 if start.month == 12:
                     end = start.replace(year=start.year + 1, month=1, day=1) - timedelta(seconds=1)
