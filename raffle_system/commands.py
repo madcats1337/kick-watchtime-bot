@@ -173,7 +173,7 @@ Use `!leaderboard` to see top participants!
 
 **Commands**:
 • `!tickets` - Check your ticket balance
-• `!linkshuffle <username>` - Link Shuffle account for automatic ticket earning
+• **Shuffle Verification** - Create a ticket to link your Shuffle account
 
 Get ready to participate when the period starts!
                 """
@@ -215,7 +215,7 @@ Get ready to participate when the period starts!
 **Commands**:
 • `!tickets` - Check your ticket balance
 • `!raffleboard` - View top participants
-• `!linkshuffle <username>` - Link Shuffle account for automatic ticket earning
+• **Shuffle Verification** - Create a ticket to link your Shuffle account
                 """
                 
                 if last_winner:
