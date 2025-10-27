@@ -189,7 +189,11 @@ This starts both the Discord bot and OAuth Flask server. You should see:
 | `!rafflegive @user <amount> [reason]` | **[Admin]** Award bonus tickets | `!rafflegive @user 100 Event winner` |
 | `!raffleremove @user <amount> [reason]` | **[Admin]** Remove tickets | `!raffleremove @user 50 Violation` |
 | `!raffledraw` | **[Admin]** Manually draw a winner | `!raffledraw` |
-| `!rafflestats` | **[Admin]** View detailed raffle statistics | `!rafflestats` |
+| `!rafflestats [@user]` | **[Admin]** View detailed raffle statistics | `!rafflestats @user` |
+| `!rafflestart [start_day] [end_day]` | **[Admin]** Start a new raffle period | `!rafflestart 1 30` |
+| `!raffleend` | **[Admin]** End the current raffle period | `!raffleend` |
+| `!rafflerestart` | **[Admin]** End current & start new period | `!rafflerestart` |
+| `!rafflesetdate <start> <end>` | **[Admin]** Update period dates | `!rafflesetdate 2025-11-01 2025-11-30` |
 
 ### Admin Commands
 | Command | Description | Example |
