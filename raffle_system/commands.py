@@ -5,6 +5,7 @@ Handles user and admin commands for raffle participation
 
 import logging
 from datetime import datetime
+import discord
 from discord.ext import commands
 from sqlalchemy import text
 from .tickets import TicketManager
@@ -479,7 +480,7 @@ Congratulations! 🎊
     
     @commands.command(name='rafflestats')
     @commands.has_permissions(administrator=True)
-    async def raffle_stats(self, ctx, user: commands.UserConverter = None):
+    async def raffle_stats(self, ctx, user: discord.Member = None):
         """
         [ADMIN] View detailed raffle statistics
         Usage: !rafflestats [@user]
