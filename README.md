@@ -178,7 +178,7 @@ This starts both the Discord bot and OAuth Flask server. You should see:
 | Command | Description | Example |
 |---------|-------------|---------|
 | `!tickets` | Check your raffle ticket balance | `!tickets` |
-| `!leaderboard` | View raffle ticket leaderboard (top 10) | `!leaderboard` |
+| `!raffleboard [limit]` | View raffle ticket leaderboard | `!raffleboard 20` |
 | `!raffleinfo` | View current raffle period stats | `!raffleinfo` |
 | `!linkshuffle <username>` | Link your Shuffle account (requires verification) | `!linkshuffle JohnDoe123` |
 
