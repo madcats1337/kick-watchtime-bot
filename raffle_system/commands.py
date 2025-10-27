@@ -528,13 +528,17 @@ Congratulations! 🎊
                     """), {'discord_id': discord_id})
                     shuffle_row = shuffle_result.fetchone()
                     total_wager = shuffle_row[0] if shuffle_row else 0
+                
+                # Get win probability
+                win_prob = self.raffle_draw.get_user_win_probability(discord_id, stats['period_id'])
+                win_prob_text = f"{win_prob['probability_percent']:.2f}%" if win_prob else "N/A"
                     
                 response = f"""
 📊 **Detailed Stats for {user.display_name}**
 
 **Rank**: #{rank} of {stats['total_participants']}
 **Total Tickets**: {tickets['total_tickets']:,}
-**Win Probability**: {self.raffle_draw.get_user_win_probability(discord_id, stats['period_id']):.2%}
+**Win Probability**: {win_prob_text}
 
 **Watchtime**: {tickets['watchtime_tickets']} tickets
 • Total watch time: {total_minutes/60:.1f} hours
