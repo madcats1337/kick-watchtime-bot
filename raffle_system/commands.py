@@ -781,6 +781,84 @@ Use `!rafflestats @user` to see individual stats
         except Exception as e:
             logger.error(f"Error setting raffle dates: {e}")
             await ctx.send(f"❌ Error updating dates: {str(e)}")
+    
+    @commands.command(name='shuffledebug')
+    @commands.has_permissions(administrator=True)
+    async def shuffle_debug(self, ctx):
+        """
+        [ADMIN] Debug Shuffle wager tracking
+        Usage: !shuffledebug
+        """
+        try:
+            await ctx.send("🔍 Fetching Shuffle affiliate data...")
+            
+            # Fetch raw data
+            import aiohttp
+            from .config import SHUFFLE_AFFILIATE_URL, SHUFFLE_CAMPAIGN_CODE
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(SHUFFLE_AFFILIATE_URL, timeout=30) as response:
+                    if response.status != 200:
+                        await ctx.send(f"❌ API returned status {response.status}")
+                        return
+                    
+                    data = await response.json()
+                    
+                    if not isinstance(data, list):
+                        await ctx.send(f"❌ Unexpected data format: {type(data)}")
+                        return
+                    
+                    # Show total users
+                    await ctx.send(f"📊 Total users in affiliate data: {len(data)}")
+                    
+                    # Show all campaign codes found
+                    campaign_codes = set(user.get('campaignCode', 'NONE') for user in data)
+                    await ctx.send(f"📋 Campaign codes found: {', '.join(sorted(campaign_codes))}")
+                    
+                    # Filter for our campaign code
+                    filtered = [
+                        user for user in data 
+                        if user.get('campaignCode', '').lower() == SHUFFLE_CAMPAIGN_CODE.lower()
+                    ]
+                    
+                    await ctx.send(f"🎯 Users with code '{SHUFFLE_CAMPAIGN_CODE}': {len(filtered)}")
+                    
+                    # Show first 5 users with the code
+                    if filtered:
+                        response_text = "**Sample users:**\n"
+                        for user in filtered[:5]:
+                            username = user.get('username', 'Unknown')
+                            wager = user.get('wagerAmount', 0)
+                            code = user.get('campaignCode', 'NONE')
+                            response_text += f"• {username}: ${wager:.2f} (code: {code})\n"
+                        
+                        await ctx.send(response_text)
+                    
+                    # Check database tracking
+                    with self.engine.begin() as conn:
+                        result = conn.execute(text("""
+                            SELECT shuffle_username, total_wager_usd, last_known_wager, 
+                                   tickets_awarded, kick_name, discord_id
+                            FROM raffle_shuffle_wagers
+                            WHERE period_id = (SELECT id FROM raffle_periods WHERE status = 'active')
+                            ORDER BY total_wager_usd DESC
+                            LIMIT 5
+                        """))
+                        
+                        rows = result.fetchall()
+                        if rows:
+                            db_text = "**Database tracking:**\n"
+                            for row in rows:
+                                db_text += f"• {row[0]}: ${row[1]:.2f} (last: ${row[2]:.2f}, tickets: {row[3]}, linked: {'Yes' if row[4] else 'No'})\n"
+                            await ctx.send(db_text)
+                        else:
+                            await ctx.send("No Shuffle wagers tracked in database yet")
+                    
+        except Exception as e:
+            logger.error(f"Shuffle debug error: {e}")
+            import traceback
+            traceback.print_exc()
+            await ctx.send(f"❌ Error: {str(e)}")
 
 
 async def setup(bot, engine):
