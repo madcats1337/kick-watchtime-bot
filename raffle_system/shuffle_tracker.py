@@ -180,47 +180,26 @@ class ShuffleWagerTracker:
                         discord_id = link_row[0] if link_row else None
                         kick_name = link_row[1] if link_row else None
                         
-                        # Calculate initial tickets
-                        initial_tickets = int((current_wager / 1000.0) * SHUFFLE_TICKETS_PER_1000_USD)
-                        
                         # Create wager tracking entry
+                        # Set last_known_wager = total_wager so only FUTURE wagers earn tickets
                         conn.execute(text("""
                             INSERT INTO raffle_shuffle_wagers
                                 (period_id, shuffle_username, kick_name, discord_id,
                                  total_wager_usd, last_known_wager, tickets_awarded)
                             VALUES
                                 (:period_id, :username, :kick_name, :discord_id,
-                                 :wager, :wager, :tickets)
+                                 :wager, :wager, 0)
                         """), {
                             'period_id': period_id,
                             'username': shuffle_username,
                             'kick_name': kick_name,
                             'discord_id': discord_id,
-                            'wager': current_wager,
-                            'tickets': initial_tickets if discord_id else 0
+                            'wager': current_wager
                         })
                         
-                        # Award tickets if linked
-                        if discord_id and kick_name and initial_tickets > 0:
-                            success = self.ticket_manager.award_tickets(
-                                discord_id=discord_id,
-                                kick_name=kick_name,
-                                tickets=initial_tickets,
-                                source='shuffle_wager',
-                                description=f"Shuffle initial wager: ${current_wager:.2f}",
-                                period_id=period_id
-                            )
-                            
-                            if success:
-                                updates.append({
-                                    'shuffle_username': shuffle_username,
-                                    'kick_name': kick_name,
-                                    'wager_delta': current_wager,
-                                    'tickets_awarded': initial_tickets,
-                                    'total_wager': current_wager
-                                })
-                                
-                                logger.info(f"💰 NEW: {kick_name} ({shuffle_username}): ${current_wager:.2f} → {initial_tickets} tickets")
+                        # No tickets awarded for initial/existing wagers
+                        logger.info(f"📊 Tracking new Shuffle user: {shuffle_username} (${current_wager:.2f}) - "
+                                  f"{'Linked to ' + kick_name if kick_name else 'Not linked'}")
             
             return {
                 'status': 'success',
