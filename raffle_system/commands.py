@@ -135,60 +135,115 @@ Use `!leaderboard` to see top participants!
         Usage: !raffleinfo
         """
         try:
+            from datetime import datetime
+            import os
+            
             stats = self.ticket_manager.get_period_stats()
             
             if not stats:
                 await ctx.send("❌ No active raffle period!")
                 return
             
-            # Get draw history
-            history = self.raffle_draw.get_draw_history(limit=1)
-            last_winner = history[0] if history else None
+            # Check if period hasn't started yet
+            now = datetime.now()
+            start_date = stats['start_date']
+            end_date = stats['end_date']
             
-            response = f"""
-🎰 **Current Raffle Information**
+            if now < start_date:
+                # Period hasn't started
+                days_until = (start_date - now).days
+                hours_until = ((start_date - now).seconds // 3600)
+                time_msg = f"{days_until} days" if days_until > 0 else f"{hours_until} hours"
+                
+                response = f"""
+🎰 **Raffle Period Information**
 
 **Period**: #{stats['period_id']}
-**Started**: {stats['start_date'].strftime('%B %d, %Y')}
-**Ends**: {stats['end_date'].strftime('%B %d, %Y')}
+**Starts**: {start_date.strftime('%B %d, %Y')}
+**Ends**: {end_date.strftime('%B %d, %Y')}
+**Status**: PENDING (starts in {time_msg})
+
+⏳ **The raffle period has not started yet.**
+
+**How to Earn Tickets** (once period starts):
+⏱️ **Watch Streams** - 10 tickets per hour
+🎁 **Gift Subs** - 15 tickets per sub
+🎲 **Shuffle Wagers** - 20 tickets per $1000 wagered (code 'lele')
+⭐ **Bonus** - Admin awarded for events
+
+**Commands**:
+• `!tickets` - Check your ticket balance
+• `!linkshuffle <username>` - Link Shuffle account for automatic ticket earning
+
+Get ready to participate when the period starts!
+                """
+            else:
+                # Period is active
+                # Get draw history
+                history = self.raffle_draw.get_draw_history(limit=1)
+                last_winner = history[0] if history else None
+                
+                # Check if auto-leaderboard is configured
+                leaderboard_channel_id = os.getenv('RAFFLE_LEADERBOARD_CHANNEL_ID')
+                leaderboard_note = ""
+                if leaderboard_channel_id:
+                    try:
+                        channel = self.bot.get_channel(int(leaderboard_channel_id))
+                        if channel:
+                            leaderboard_note = f"\n📊 **Live Leaderboard**: Check <#{leaderboard_channel_id}> for real-time standings!"
+                    except:
+                        pass
+                
+                response = f"""
+🎰 **Current Raffle Period**
+
+**Period**: #{stats['period_id']}
+**Started**: {start_date.strftime('%B %d, %Y')}
+**Ends**: {end_date.strftime('%B %d, %Y')}
 **Status**: {stats['status'].upper()}
 
 **Statistics**:
 • Total Tickets: {stats['total_tickets']:,}
-• Total Participants: {stats['total_participants']}
+• Total Participants: {stats['total_participants']}{leaderboard_note}
 
 **How to Earn Tickets**:
-• Watch streams: 10 tickets per hour
-• Gift subs: 15 tickets per sub
-• Wager on Shuffle.com (code 'lele'): 20 tickets per $1000
+⏱️ **Watch Streams** - 10 tickets per hour
+🎁 **Gift Subs** - 15 tickets per sub
+🎲 **Shuffle Wagers** - 20 tickets per $1000 wagered (code 'lele')
+⭐ **Bonus** - Admin awarded for events
 
 **Commands**:
 • `!tickets` - Check your ticket balance
 • `!raffleboard` - View top participants
-• `!linkshuffle <username>` - Link your Shuffle account
-            """
-            
-            if last_winner:
-                response += f"\n**Last Winner**: {last_winner['winner_kick_name']} ({last_winner['total_tickets']:,} tickets, {last_winner['win_probability']:.2%} chance)"
+• `!linkshuffle <username>` - Link Shuffle account for automatic ticket earning
+                """
+                
+                if last_winner:
+                    response += f"\n**Last Winner**: {last_winner['winner_kick_name']} ({last_winner['total_tickets']:,} tickets, {last_winner['win_probability']:.2%} chance)"
             
             await ctx.send(response.strip())
             
         except Exception as e:
             logger.error(f"Error showing raffle info: {e}")
+            import traceback
+            traceback.print_exc()
             await ctx.send(f"❌ Error loading raffle info. Please try again.")
     
     @commands.command(name='linkshuffle')
     async def link_shuffle(self, ctx, shuffle_username: str = None):
         """
-        Link your Shuffle.com account to earn tickets from wagers
+        Link your Shuffle.com account to earn raffle tickets automatically
         Usage: !linkshuffle <shuffle_username>
         Example: !linkshuffle CryptoKing420
+        
+        Earn 20 tickets per $1000 wagered when using affiliate code 'lele'
         """
         try:
             if not shuffle_username:
-                await ctx.send(f"❌ {ctx.author.mention} Please provide your Shuffle username!\n"
-                             f"Usage: `!linkshuffle <your_shuffle_username>`\n"
-                             f"Example: `!linkshuffle CryptoKing420`")
+                await ctx.send(f"❌ {ctx.author.mention} Please provide your Shuffle username!\n\n"
+                             f"**Usage**: `!linkshuffle <your_shuffle_username>`\n"
+                             f"**Example**: `!linkshuffle CryptoKing420`\n\n"
+                             f"💡 **Tip**: Use code **'lele'** on Shuffle to earn 20 tickets per $1000 wagered!")
                 return
             
             discord_id = ctx.author.id
@@ -202,7 +257,7 @@ Use `!leaderboard` to see top participants!
                 row = result.fetchone()
                 if not row:
                     await ctx.send(f"❌ {ctx.author.mention} You must link your Kick account first!\n"
-                                 f"Ask an admin to link your Discord to your Kick account.")
+                                 f"React to the link panel or use `!link` to get started.")
                     return
                 
                 kick_name = row[0]
@@ -216,11 +271,14 @@ Use `!leaderboard` to see top participants!
             )
             
             if result['status'] == 'success':
-                await ctx.send(f"✅ {ctx.author.mention} Link request created!\n"
-                             f"**Shuffle**: {shuffle_username} → **Kick**: {kick_name}\n\n"
-                             f"⏳ **Pending admin verification**\n"
-                             f"An admin will review your request. Once verified, your Shuffle wagers "
-                             f"under code 'lele' will earn raffle tickets!")
+                await ctx.send(f"✅ {ctx.author.mention} Shuffle link request created!\n\n"
+                             f"**Shuffle**: `{shuffle_username}`\n"
+                             f"**Kick**: `{kick_name}`\n\n"
+                             f"⏳ **Pending Admin Verification**\n"
+                             f"An admin will review your request. Once verified:\n"
+                             f"• Your Shuffle wagers under code **'lele'** will earn **20 tickets per $1000**\n"
+                             f"• Tickets are awarded automatically for future wagers\n"
+                             f"• Use `!tickets` to check your balance!")
                 
                 # Notify admins (optional - send to admin channel)
                 logger.info(f"🔗 New Shuffle link request: {shuffle_username} → {kick_name} (Discord: {discord_id})")
