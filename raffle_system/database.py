@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS raffle_shuffle_wagers (
     tickets_awarded INTEGER DEFAULT 0,
     
     -- Metadata
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_checked TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
@@ -345,6 +346,46 @@ def create_new_period(engine, start_date, end_date):
     except Exception as e:
         logger.error(f"Failed to create new period: {e}")
         return None
+
+
+def migrate_add_created_at_to_shuffle_wagers(engine):
+    """
+    Migration: Add created_at column to raffle_shuffle_wagers table
+    This is needed to determine if wagers were made during the current period
+    """
+    try:
+        with engine.begin() as conn:
+            # Check if column already exists
+            result = conn.execute(text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'raffle_shuffle_wagers' 
+                AND column_name = 'created_at'
+            """))
+            
+            if result.fetchone():
+                logger.info("✓ Column 'created_at' already exists in raffle_shuffle_wagers")
+                return True
+            
+            # Add the column
+            conn.execute(text("""
+                ALTER TABLE raffle_shuffle_wagers
+                ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            """))
+            
+            # Set created_at for existing rows to last_checked (best approximation)
+            conn.execute(text("""
+                UPDATE raffle_shuffle_wagers
+                SET created_at = last_checked
+                WHERE created_at IS NULL
+            """))
+            
+            logger.info("✅ Added 'created_at' column to raffle_shuffle_wagers table")
+            return True
+            
+    except Exception as e:
+        logger.error(f"Migration failed: {e}")
+        return False
 
 
 if __name__ == "__main__":
