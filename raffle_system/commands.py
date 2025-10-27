@@ -576,9 +576,210 @@ Use `!rafflestats @user` to see individual stats
         except Exception as e:
             logger.error(f"Error showing raffle stats: {e}")
             await ctx.send(f"❌ Error loading stats. Please try again.")
+    
+    # ========================================
+    # PERIOD MANAGEMENT COMMANDS
+    # ========================================
+    
+    @commands.command(name='raffleend', aliases=['endraffle'])
+    @commands.has_permissions(administrator=True)
+    async def end_raffle(self, ctx):
+        """
+        [ADMIN] End the current raffle period
+        Usage: !raffleend
+        """
+        try:
+            with self.engine.begin() as conn:
+                # Get current period
+                result = conn.execute(text("""
+                    SELECT id, start_date, end_date, status
+                    FROM raffle_periods
+                    WHERE status = 'active'
+                    ORDER BY start_date DESC
+                    LIMIT 1
+                """))
+                period = result.fetchone()
+                
+                if not period:
+                    await ctx.send("❌ No active raffle period to end!")
+                    return
+                
+                # End the period
+                conn.execute(text("""
+                    UPDATE raffle_periods
+                    SET status = 'ended', end_date = CURRENT_TIMESTAMP
+                    WHERE id = :period_id
+                """), {'period_id': period[0]})
+                
+                await ctx.send(f"✅ Raffle period #{period[0]} has been ended.\n"
+                             f"Use `!raffledraw` to select a winner, then `!rafflestart` to begin a new period.")
+            
+        except Exception as e:
+            logger.error(f"Error ending raffle period: {e}")
+            await ctx.send(f"❌ Error ending raffle period: {str(e)}")
+    
+    @commands.command(name='rafflestart', aliases=['newraffle'])
+    @commands.has_permissions(administrator=True)
+    async def start_raffle(self, ctx, start_day: int = None, end_day: int = None):
+        """
+        [ADMIN] Start a new raffle period
+        Usage: !rafflestart [start_day] [end_day]
+        Example: !rafflestart 1 30  (1st to 30th of current month)
+        If no dates provided, uses current month (1st to last day)
+        """
+        try:
+            from datetime import datetime
+            from dateutil.relativedelta import relativedelta
+            
+            # Check if there's already an active period
+            with self.engine.begin() as conn:
+                result = conn.execute(text("""
+                    SELECT id FROM raffle_periods
+                    WHERE status = 'active'
+                    LIMIT 1
+                """))
+                if result.fetchone():
+                    await ctx.send("❌ There's already an active raffle period! Use `!raffleend` first.")
+                    return
+                
+                # Calculate dates
+                now = datetime.now()
+                
+                if start_day and end_day:
+                    start = now.replace(day=start_day, hour=0, minute=0, second=0, microsecond=0)
+                    end = now.replace(day=end_day, hour=23, minute=59, second=59, microsecond=0)
+                else:
+                    # Default: current month
+                    start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                    next_month = start + relativedelta(months=1)
+                    end = next_month - relativedelta(seconds=1)
+                
+                # Create new period
+                result = conn.execute(text("""
+                    INSERT INTO raffle_periods (start_date, end_date, status)
+                    VALUES (:start, :end, 'active')
+                    RETURNING id
+                """), {'start': start, 'end': end})
+                period_id = result.fetchone()[0]
+                
+                await ctx.send(f"✅ New raffle period #{period_id} started!\n"
+                             f"**Duration**: {start.strftime('%b %d, %Y')} - {end.strftime('%b %d, %Y')}\n"
+                             f"Users can now earn tickets!")
+            
+        except Exception as e:
+            logger.error(f"Error starting raffle period: {e}")
+            await ctx.send(f"❌ Error starting raffle period: {str(e)}")
+    
+    @commands.command(name='rafflerestart', aliases=['resetraffle'])
+    @commands.has_permissions(administrator=True)
+    async def restart_raffle(self, ctx):
+        """
+        [ADMIN] End current period and immediately start a new one for next month
+        Usage: !rafflerestart
+        """
+        try:
+            from datetime import datetime
+            from dateutil.relativedelta import relativedelta
+            
+            with self.engine.begin() as conn:
+                # Get current period
+                result = conn.execute(text("""
+                    SELECT id, total_tickets
+                    FROM raffle_periods
+                    WHERE status = 'active'
+                    ORDER BY start_date DESC
+                    LIMIT 1
+                """))
+                current_period = result.fetchone()
+                
+                if current_period:
+                    # End current period
+                    conn.execute(text("""
+                        UPDATE raffle_periods
+                        SET status = 'ended', end_date = CURRENT_TIMESTAMP
+                        WHERE id = :period_id
+                    """), {'period_id': current_period[0]})
+                    
+                    old_tickets = current_period[1]
+                else:
+                    old_tickets = 0
+                
+                # Create new period for next month
+                now = datetime.now()
+                next_month = now + relativedelta(months=1)
+                start = next_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                end = (start + relativedelta(months=1)) - relativedelta(seconds=1)
+                
+                result = conn.execute(text("""
+                    INSERT INTO raffle_periods (start_date, end_date, status)
+                    VALUES (:start, :end, 'active')
+                    RETURNING id
+                """), {'start': start, 'end': end})
+                new_period_id = result.fetchone()[0]
+                
+                await ctx.send(f"✅ Raffle reset complete!\n\n"
+                             f"**Old Period**: Ended with {old_tickets:,} total tickets\n"
+                             f"**New Period #{new_period_id}**: {start.strftime('%b %d, %Y')} - {end.strftime('%b %d, %Y')}\n\n"
+                             f"💡 Don't forget to draw a winner from the old period: `!raffledraw`")
+            
+        except Exception as e:
+            logger.error(f"Error restarting raffle: {e}")
+            await ctx.send(f"❌ Error restarting raffle: {str(e)}")
+    
+    @commands.command(name='rafflesetdate', aliases=['raffledates'])
+    @commands.has_permissions(administrator=True)
+    async def set_raffle_dates(self, ctx, start_date: str, end_date: str):
+        """
+        [ADMIN] Update the current raffle period dates
+        Usage: !rafflesetdate YYYY-MM-DD YYYY-MM-DD
+        Example: !rafflesetdate 2025-11-01 2025-11-30
+        """
+        try:
+            from datetime import datetime
+            
+            # Parse dates
+            try:
+                start = datetime.strptime(start_date, '%Y-%m-%d')
+                end = datetime.strptime(end_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59)
+            except ValueError:
+                await ctx.send("❌ Invalid date format! Use YYYY-MM-DD (e.g., 2025-11-01)")
+                return
+            
+            if start >= end:
+                await ctx.send("❌ Start date must be before end date!")
+                return
+            
+            with self.engine.begin() as conn:
+                # Get current active period
+                result = conn.execute(text("""
+                    SELECT id FROM raffle_periods
+                    WHERE status = 'active'
+                    ORDER BY start_date DESC
+                    LIMIT 1
+                """))
+                period = result.fetchone()
+                
+                if not period:
+                    await ctx.send("❌ No active raffle period! Use `!rafflestart` to create one.")
+                    return
+                
+                # Update dates
+                conn.execute(text("""
+                    UPDATE raffle_periods
+                    SET start_date = :start, end_date = :end
+                    WHERE id = :period_id
+                """), {'start': start, 'end': end, 'period_id': period[0]})
+                
+                await ctx.send(f"✅ Raffle period #{period[0]} dates updated!\n"
+                             f"**New Duration**: {start.strftime('%b %d, %Y')} - {end.strftime('%b %d, %Y')}")
+            
+        except Exception as e:
+            logger.error(f"Error setting raffle dates: {e}")
+            await ctx.send(f"❌ Error updating dates: {str(e)}")
 
 
 async def setup(bot, engine):
     """Add raffle commands to bot"""
     await bot.add_cog(RaffleCommands(bot, engine))
     logger.info("✅ Raffle commands loaded")
+
