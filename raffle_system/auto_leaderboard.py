@@ -116,7 +116,7 @@ class AutoLeaderboard:
                 start_date = period_row[1]
                 end_date = period_row[2]
                 
-                # Get top 15 participants
+                # Get top 5 participants
                 result = conn.execute(text("""
                     SELECT 
                         kick_name,
@@ -128,7 +128,7 @@ class AutoLeaderboard:
                     FROM raffle_tickets
                     WHERE period_id = :period_id
                     ORDER BY total_tickets DESC
-                    LIMIT 15
+                    LIMIT 5
                 """), {'period_id': period_id})
                 
                 rows = result.fetchall()
@@ -158,7 +158,7 @@ class AutoLeaderboard:
             if not rows:
                 embed.add_field(
                     name="No Participants Yet",
-                    value="Be the first to earn tickets!\n• Watch streams\n• Gift subs\n• Wager on Shuffle.com",
+                    value="Be the first to earn tickets!",
                     inline=False
                 )
             else:
@@ -175,7 +175,7 @@ class AutoLeaderboard:
                     bonus = row[5]
                     
                     # Medal or rank number
-                    rank = medals[idx-1] if idx <= 3 else f"`{idx:2d}.`"
+                    rank = medals[idx-1] if idx <= 3 else f"`{idx}.`"
                     
                     # Calculate win probability
                     win_prob = (total / total_tickets * 100) if total_tickets > 0 else 0
@@ -184,12 +184,25 @@ class AutoLeaderboard:
                     leaderboard_text += f"    ⏱️ {watchtime} 🎁 {gifted} 🎲 {shuffle} ⭐ {bonus}\n"
                 
                 embed.add_field(
-                    name="Top Participants",
+                    name="🏆 Top 5",
                     value=leaderboard_text,
                     inline=False
                 )
             
-            embed.set_footer(text="Updates every hour • Use !tickets to check your balance")
+            # Add how to earn tickets section
+            embed.add_field(
+                name="📋 How to Earn Tickets",
+                value=(
+                    "⏱️ **Watch Streams** - 10 tickets per hour\n"
+                    "🎁 **Gift Subs** - 15 tickets per sub\n"
+                    "🎲 **Shuffle Wagers** - 20 tickets per $1000 wagered\n"
+                    "⭐ **Bonus** - Admin awarded for events\n\n"
+                    "Use `!tickets` to check your balance!"
+                ),
+                inline=False
+            )
+            
+            embed.set_footer(text="Updates every hour")
             
             return embed
             
