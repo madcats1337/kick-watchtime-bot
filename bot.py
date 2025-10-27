@@ -23,6 +23,14 @@ from kick_api import fetch_chatroom_id, check_stream_live, KickAPI, USER_AGENTS 
 import discord
 from discord.ext import commands, tasks
 
+# Raffle system imports
+from raffle_system.database import setup_raffle_database, get_current_period, create_new_period
+from raffle_system.watchtime_converter import setup_watchtime_converter
+from raffle_system.gifted_sub_tracker import setup_gifted_sub_handler
+from raffle_system.shuffle_tracker import setup_shuffle_tracker
+from raffle_system.commands import setup as setup_raffle_commands
+from raffle_system.scheduler import setup_raffle_scheduler
+
 # -------------------------
 # Command checks and utils
 # -------------------------
@@ -393,6 +401,10 @@ last_chat_activity = None  # Track last time we saw any chat activity
 
 # 🔒 SECURITY: Track unique chatters in recent window for stream-live detection
 recent_chatters = {}  # {username: timestamp} - rolling window of recent chat activity
+
+# Raffle system global tracker
+gifted_sub_tracker = None  # Will be initialized in on_ready()
+shuffle_tracker = None  # Will be initialized in on_ready()
 MIN_UNIQUE_CHATTERS = 2  # Require at least 2 different people chatting to consider stream "live"
 CHAT_ACTIVITY_WINDOW_MINUTES = 5  # Look back 5 minutes for unique chatters
 
@@ -600,6 +612,38 @@ async def kick_chat_loop(channel_name: str):
                                     print(f"[Kick] {username}: {content_text}")
                                     if watchtime_debug_enabled:
                                         print(f"[Watchtime Debug] Added {username_lower} to active viewers (total: {len(active_viewers)})")
+                            
+                            # Handle gifted subscription events
+                            # Kick may use different event types for gifts, so we check multiple possibilities
+                            if event_type in [
+                                "App\\Events\\GiftedSubscriptionsEvent",
+                                "App\\Events\\SubscriptionEvent",
+                                "App\\Events\\ChatMessageEvent"  # Sometimes gifts come as special chat messages
+                            ]:
+                                event_data = json.loads(data.get("data", "{}"))
+                                
+                                # Check if this is a gifted sub (might be in message type or metadata)
+                                message_type = event_data.get("type")
+                                is_gift = (
+                                    "gift" in str(message_type).lower() or
+                                    "subscription" in str(message_type).lower() or
+                                    event_data.get("gifted_usernames") is not None or
+                                    event_data.get("gift_count") is not None
+                                )
+                                
+                                if is_gift and gifted_sub_tracker:
+                                    # Handle the gifted sub event
+                                    result = await gifted_sub_tracker.handle_gifted_sub_event(event_data)
+                                    
+                                    if result['status'] == 'success':
+                                        print(f"[Raffle] 🎁 {result['gifter']} gifted {result['gift_count']} sub(s) → +{result['tickets_awarded']} tickets")
+                                    elif result['status'] == 'not_linked':
+                                        print(f"[Raffle] 🎁 {result['kick_name']} gifted sub(s) but account not linked")
+                                    elif result['status'] == 'duplicate':
+                                        # Already processed, silent skip
+                                        pass
+                                    else:
+                                        print(f"[Raffle] ⚠️ Failed to process gifted sub: {result}")
                                     
                         except json.JSONDecodeError:
                             pass
@@ -2079,6 +2123,62 @@ async def on_ready():
         if not check_oauth_notifications_task.is_running():
             check_oauth_notifications_task.start()
             print("✅ OAuth notifications task started")
+        
+        # Initialize raffle system
+        try:
+            global gifted_sub_tracker, shuffle_tracker
+            
+            # Setup raffle database (creates tables if needed)
+            setup_raffle_database(engine)
+            
+            # Ensure there's an active raffle period
+            current_period = get_current_period(engine)
+            if not current_period:
+                # Create initial raffle period for this month
+                from datetime import datetime
+                start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                if start.month == 12:
+                    end = start.replace(year=start.year + 1, month=1, day=1) - timedelta(seconds=1)
+                else:
+                    end = start.replace(month=start.month + 1, day=1) - timedelta(seconds=1)
+                
+                period_id = create_new_period(engine, start, end)
+                print(f"✅ Created initial raffle period #{period_id}")
+            else:
+                print(f"✅ Active raffle period found (#{current_period['id']})")
+            
+            # Setup watchtime converter (runs every hour)
+            await setup_watchtime_converter(bot, engine)
+            
+            # Setup gifted sub tracker
+            gifted_sub_tracker = setup_gifted_sub_handler(engine)
+            
+            # Setup Shuffle wager tracker (runs every 15 minutes)
+            shuffle_tracker = await setup_shuffle_tracker(bot, engine)
+            
+            # Setup raffle commands
+            await setup_raffle_commands(bot, engine)
+            
+            # Setup raffle scheduler (monthly reset + auto-draw)
+            raffle_auto_draw = os.getenv("RAFFLE_AUTO_DRAW", "false").lower() == "true"
+            raffle_channel_id = os.getenv("RAFFLE_ANNOUNCEMENT_CHANNEL_ID")
+            raffle_channel_id = int(raffle_channel_id) if raffle_channel_id else None
+            
+            await setup_raffle_scheduler(
+                bot=bot,
+                engine=engine,
+                auto_draw=raffle_auto_draw,
+                announcement_channel_id=raffle_channel_id
+            )
+            
+            print("✅ Raffle system initialized")
+            print(f"   • Auto-draw: {raffle_auto_draw}")
+            print(f"   • Announcement channel: {raffle_channel_id or 'Not configured'}")
+            
+        except Exception as e:
+            print(f"⚠️ Failed to initialize raffle system: {e}")
+            import traceback
+            traceback.print_exc()
             
     except Exception as e:
         print(f"⚠️ Error during startup: {e}")
