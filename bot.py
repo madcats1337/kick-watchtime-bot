@@ -2079,7 +2079,7 @@ async def health_check_error(ctx, error):
 # Helper Functions
 # -------------------------
 async def sync_shuffle_role_on_startup(bot, engine):
-    """Sync Shuffle code user role with verified links on bot startup"""
+    """Sync Shuffle Code User role with verified links on bot startup"""
     try:
         # Get the guild
         if not DISCORD_GUILD_ID:
@@ -2089,10 +2089,10 @@ async def sync_shuffle_role_on_startup(bot, engine):
         if not guild:
             return
         
-        # Get the "Shuffle code user" role
-        shuffle_role = discord.utils.get(guild.roles, name="Shuffle code user")
+        # Get the "Shuffle Code User" role
+        shuffle_role = discord.utils.get(guild.roles, name="Shuffle Code User")
         if not shuffle_role:
-            print("⚠️ 'Shuffle code user' role not found - skipping sync")
+            print("⚠️ 'Shuffle Code User' role not found - skipping sync")
             return
         
         # Get all verified Shuffle links
