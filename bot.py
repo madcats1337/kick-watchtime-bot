@@ -2076,6 +2076,64 @@ async def health_check_error(ctx, error):
         await ctx.send("❌ You need 'Manage Server' permission to use this command.")
 
 # -------------------------
+# Helper Functions
+# -------------------------
+async def sync_shuffle_role_on_startup(bot, engine):
+    """Sync Shuffle code user role with verified links on bot startup"""
+    try:
+        # Get the guild
+        if not DISCORD_GUILD_ID:
+            return
+        
+        guild = bot.get_guild(DISCORD_GUILD_ID)
+        if not guild:
+            return
+        
+        # Get the "Shuffle code user" role
+        shuffle_role = discord.utils.get(guild.roles, name="Shuffle code user")
+        if not shuffle_role:
+            print("⚠️ 'Shuffle code user' role not found - skipping sync")
+            return
+        
+        # Get all verified Shuffle links
+        with engine.begin() as conn:
+            result = conn.execute(text("""
+                SELECT DISTINCT discord_id
+                FROM raffle_shuffle_links
+                WHERE verified = TRUE
+            """))
+            verified_discord_ids = {row[0] for row in result.fetchall()}
+        
+        added = 0
+        removed = 0
+        
+        # Remove role from users without verified links
+        members_with_role = shuffle_role.members
+        for member in members_with_role:
+            if member.id not in verified_discord_ids:
+                try:
+                    await member.remove_roles(shuffle_role, reason="Startup sync: No verified Shuffle link")
+                    removed += 1
+                except Exception as e:
+                    print(f"⚠️ Could not remove Shuffle role from {member}: {e}")
+        
+        # Add role to verified users who don't have it
+        for discord_id in verified_discord_ids:
+            member = guild.get_member(discord_id)
+            if member and shuffle_role not in member.roles:
+                try:
+                    await member.add_roles(shuffle_role, reason="Startup sync: Has verified Shuffle link")
+                    added += 1
+                except Exception as e:
+                    print(f"⚠️ Could not add Shuffle role to {member}: {e}")
+        
+        if added > 0 or removed > 0:
+            print(f"✅ Shuffle role sync: +{added}, -{removed}")
+        
+    except Exception as e:
+        print(f"⚠️ Error syncing Shuffle roles on startup: {e}")
+
+# -------------------------
 # Bot events
 # -------------------------
 @bot.event
@@ -2180,6 +2238,9 @@ async def on_ready():
             print("✅ Raffle system initialized")
             print(f"   • Auto-draw: {raffle_auto_draw}")
             print(f"   • Announcement channel: {raffle_channel_id or 'Not configured'}")
+            
+            # Sync Shuffle code user role on startup
+            await sync_shuffle_role_on_startup(bot, engine)
             
         except Exception as e:
             print(f"⚠️ Failed to initialize raffle system: {e}")
