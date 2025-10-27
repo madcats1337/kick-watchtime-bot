@@ -185,7 +185,7 @@ This starts both the Discord bot and OAuth Flask server. You should see:
 ### 🎟️ Raffle Admin Commands
 | Command | Description | Example |
 |---------|-------------|---------|
-| `!raffleverify @user` | **[Admin]** Verify user's Shuffle account link | `!raffleverify @user` |
+| `!verifyshuffle @user <username>` | **[Admin]** Verify user's Shuffle account link | `!verifyshuffle @user madcats` |
 | `!rafflegive @user <amount> [reason]` | **[Admin]** Award bonus tickets | `!rafflegive @user 100 Event winner` |
 | `!raffleremove @user <amount> [reason]` | **[Admin]** Remove tickets | `!raffleremove @user 50 Violation` |
 | `!raffledraw` | **[Admin]** Manually draw a winner | `!raffledraw` |
