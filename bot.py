@@ -28,6 +28,7 @@ from raffle_system.database import setup_raffle_database, get_current_period, cr
 from raffle_system.watchtime_converter import setup_watchtime_converter
 from raffle_system.gifted_sub_tracker import setup_gifted_sub_handler
 from raffle_system.shuffle_tracker import setup_shuffle_tracker
+from raffle_system.auto_leaderboard import setup_auto_leaderboard
 from raffle_system.commands import setup as setup_raffle_commands
 from raffle_system.scheduler import setup_raffle_scheduler
 
@@ -2154,6 +2155,9 @@ async def on_ready():
             
             # Setup Shuffle wager tracker (runs every 15 minutes)
             shuffle_tracker = await setup_shuffle_tracker(bot, engine)
+            
+            # Setup auto-updating leaderboard (runs every hour)
+            auto_leaderboard = await setup_auto_leaderboard(bot, engine)
             
             # Setup raffle commands
             await setup_raffle_commands(bot, engine)

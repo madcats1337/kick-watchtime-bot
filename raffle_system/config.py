@@ -36,3 +36,5 @@ REQUIRE_SHUFFLE_VERIFICATION = True  # Require admin verification for Shuffle li
 # Leaderboard settings
 DEFAULT_LEADERBOARD_SIZE = 10
 MAX_LEADERBOARD_SIZE = 25
+AUTO_LEADERBOARD_UPDATE_INTERVAL = 3600  # 1 hour in seconds
+
