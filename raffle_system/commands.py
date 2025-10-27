@@ -248,7 +248,7 @@ Use `!leaderboard` to see top participants!
     @commands.has_permissions(administrator=True)
     async def verify_shuffle_link(self, ctx, user: commands.UserConverter, shuffle_username: str):
         """
-        [ADMIN] Verify a Shuffle account link
+        [ADMIN] Verify and link a Shuffle account (creates link if it doesn't exist)
         Usage: !verifyshuffle @user <shuffle_username>
         Example: !verifyshuffle @John CryptoKing420
         """
@@ -256,23 +256,7 @@ Use `!leaderboard` to see top participants!
             discord_id = user.id
             admin_id = ctx.author.id
             
-            # Check if link exists and is unverified
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
-                    SELECT verified FROM raffle_shuffle_links
-                    WHERE discord_id = :discord_id AND shuffle_username = :username
-                """), {'discord_id': discord_id, 'username': shuffle_username})
-                
-                row = result.fetchone()
-                
-                if not row:
-                    await ctx.send(f"❌ No link request found for {user.mention} with Shuffle username '{shuffle_username}'")
-                    return
-                
-                if row[0]:  # already verified
-                    await ctx.send(f"ℹ️ This link is already verified!")
-                    return
-                
                 # Get kick name from links table
                 link_result = conn.execute(text("""
                     SELECT kick_name FROM links WHERE discord_id = :discord_id
@@ -284,6 +268,57 @@ Use `!leaderboard` to see top participants!
                     return
                 
                 kick_name = link_row[0]
+                
+                # Check if link already exists
+                result = conn.execute(text("""
+                    SELECT verified FROM raffle_shuffle_links
+                    WHERE discord_id = :discord_id AND shuffle_username = :username
+                """), {'discord_id': discord_id, 'username': shuffle_username})
+                
+                row = result.fetchone()
+                
+                if row and row[0]:  # already verified
+                    await ctx.send(f"ℹ️ This link is already verified!")
+                    return
+                
+                # Create or update the link
+                if not row:
+                    # Create new link
+                    conn.execute(text("""
+                        INSERT INTO raffle_shuffle_links 
+                        (shuffle_username, kick_name, discord_id, verified, verified_by_discord_id, verified_at)
+                        VALUES (:username, :kick_name, :discord_id, TRUE, :admin_id, CURRENT_TIMESTAMP)
+                        ON CONFLICT (shuffle_username) 
+                        DO UPDATE SET 
+                            kick_name = EXCLUDED.kick_name,
+                            discord_id = EXCLUDED.discord_id,
+                            verified = TRUE,
+                            verified_by_discord_id = EXCLUDED.verified_by_discord_id,
+                            verified_at = CURRENT_TIMESTAMP
+                    """), {
+                        'username': shuffle_username,
+                        'kick_name': kick_name,
+                        'discord_id': discord_id,
+                        'admin_id': admin_id
+                    })
+                    logger.info(f"✅ Admin {ctx.author} created and verified Shuffle link: {shuffle_username} → {kick_name} (Discord {discord_id})")
+                else:
+                    # Update existing unverified link
+                    conn.execute(text("""
+                        UPDATE raffle_shuffle_links
+                        SET 
+                            verified = TRUE,
+                            verified_by_discord_id = :admin_id,
+                            verified_at = CURRENT_TIMESTAMP,
+                            kick_name = :kick_name
+                        WHERE discord_id = :discord_id AND shuffle_username = :username
+                    """), {
+                        'admin_id': admin_id,
+                        'discord_id': discord_id,
+                        'username': shuffle_username,
+                        'kick_name': kick_name
+                    })
+                    logger.info(f"✅ Admin {ctx.author} verified existing Shuffle link: {shuffle_username} → {kick_name} (Discord {discord_id})")
                 
                 # Get current period info
                 period_result = conn.execute(text("""
@@ -297,22 +332,6 @@ Use `!leaderboard` to see top participants!
                 
                 period_id = period_row[0]
                 period_start = period_row[1]
-                
-                # Verify the link
-                conn.execute(text("""
-                    UPDATE raffle_shuffle_links
-                    SET 
-                        verified = TRUE,
-                        verified_by_discord_id = :admin_id,
-                        verified_at = CURRENT_TIMESTAMP,
-                        kick_name = :kick_name
-                    WHERE discord_id = :discord_id AND shuffle_username = :username
-                """), {
-                    'admin_id': admin_id,
-                    'discord_id': discord_id,
-                    'username': shuffle_username,
-                    'kick_name': kick_name
-                })
                 
                 # Check if user has wager tracking for current period
                 wager_result = conn.execute(text("""
