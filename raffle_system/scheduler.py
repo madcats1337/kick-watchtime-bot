@@ -118,25 +118,25 @@ class RaffleScheduler:
             
             logger.info(f"✅ Period #{old_period['id']} closed")
             
-            # Step 3: Create new period for next month
-            now = datetime.now()
+            # Step 3: Create new period
+            # New period starts the day after the old one ended
+            old_end = old_period['end_date']
+            if isinstance(old_end, str):
+                old_end = datetime.fromisoformat(old_end)
             
-            # Start on 1st of next month
-            if now.month == 12:
-                start = datetime(now.year + 1, 1, 1, 0, 0, 0, 0)
-            else:
-                start = datetime(now.year, now.month + 1, 1, 0, 0, 0, 0)
+            # Start new period the day after old period ended
+            start = old_end + timedelta(days=1)
+            start = start.replace(hour=0, minute=0, second=0, microsecond=0)
             
-            # End on last day of that month
-            if start.month == 12:
-                end = datetime(start.year + 1, 1, 1, 0, 0, 0, 0) - timedelta(seconds=1)
-            else:
-                end = datetime(start.year, start.month + 1, 1, 0, 0, 0, 0) - timedelta(seconds=1)
+            # Default to 30-day period (can be adjusted by admin with !rafflesetdate)
+            end = start + timedelta(days=30) - timedelta(seconds=1)
+            end = end.replace(hour=23, minute=59, second=59, microsecond=999999)
             
             new_period_id = create_new_period(self.engine, start, end)
             transition_info['new_period_id'] = new_period_id
             
             logger.info(f"✅ New period #{new_period_id} created ({start.strftime('%b %d')} - {end.strftime('%b %d, %Y')})")
+            logger.info("📝 Admins can adjust dates with !rafflesetdate command")
             
             return transition_info
             

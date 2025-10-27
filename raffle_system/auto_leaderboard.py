@@ -116,6 +116,26 @@ class AutoLeaderboard:
                 start_date = period_row[1]
                 end_date = period_row[2]
                 
+                # Check if period hasn't started yet
+                now = datetime.now()
+                if now < start_date:
+                    days_until_start = (start_date - now).days
+                    hours_until_start = ((start_date - now).seconds // 3600)
+                    
+                    time_msg = f"{days_until_start} days" if days_until_start > 0 else f"{hours_until_start} hours"
+                    
+                    return discord.Embed(
+                        title="🎟️ Raffle Ticket Leaderboard",
+                        description=(
+                            f"**Raffle Period Not Started Yet**\n\n"
+                            f"📅 **Starts:** {start_date.strftime('%b %d, %Y at %I:%M %p')}\n"
+                            f"📅 **Ends:** {end_date.strftime('%b %d, %Y at %I:%M %p')}\n\n"
+                            f"⏳ **Time until start:** {time_msg}\n\n"
+                            f"Get ready to earn tickets by watching streams, gifting subs, and wagering on Shuffle!"
+                        ),
+                        color=discord.Color.blue()
+                    )
+                
                 # Get top 5 participants
                 result = conn.execute(text("""
                     SELECT 
