@@ -285,6 +285,19 @@ Use `!leaderboard` to see top participants!
                 
                 kick_name = link_row[0]
                 
+                # Get current period info
+                period_result = conn.execute(text("""
+                    SELECT id, start_date FROM raffle_periods WHERE status = 'active'
+                """))
+                period_row = period_result.fetchone()
+                
+                if not period_row:
+                    await ctx.send(f"❌ No active raffle period!")
+                    return
+                
+                period_id = period_row[0]
+                period_start = period_row[1]
+                
                 # Verify the link
                 conn.execute(text("""
                     UPDATE raffle_shuffle_links
@@ -301,26 +314,83 @@ Use `!leaderboard` to see top participants!
                     'kick_name': kick_name
                 })
                 
-                # Update existing wager tracking entries to link them
-                # Set last_known_wager to current total_wager so only FUTURE wagers earn tickets
-                conn.execute(text("""
-                    UPDATE raffle_shuffle_wagers
-                    SET 
-                        discord_id = :discord_id,
-                        kick_name = :kick_name,
-                        last_known_wager = total_wager_usd
-                    WHERE shuffle_username = :username
-                      AND period_id = (SELECT id FROM raffle_periods WHERE status = 'active')
+                # Check if user has wager tracking for current period
+                wager_result = conn.execute(text("""
+                    SELECT total_wager_usd, created_at
+                    FROM raffle_shuffle_wagers
+                    WHERE shuffle_username = :username AND period_id = :period_id
                 """), {
-                    'discord_id': discord_id,
-                    'kick_name': kick_name,
-                    'username': shuffle_username
+                    'username': shuffle_username,
+                    'period_id': period_id
                 })
+                
+                wager_row = wager_result.fetchone()
+                tickets_awarded = 0
+                
+                if wager_row:
+                    total_wager = wager_row[0]
+                    wager_created = wager_row[1]
+                    
+                    # If wager tracking was created AFTER period started, award tickets for the wager
+                    if wager_created >= period_start and total_wager > 0:
+                        from .config import SHUFFLE_TICKETS_PER_1000_USD
+                        tickets_awarded = int((total_wager / 1000.0) * SHUFFLE_TICKETS_PER_1000_USD)
+                        
+                        if tickets_awarded > 0:
+                            # Award the tickets
+                            success = self.ticket_manager.award_tickets(
+                                discord_id=discord_id,
+                                kick_name=kick_name,
+                                tickets=tickets_awarded,
+                                source='shuffle_wager',
+                                description=f"Shuffle wagers during period (pre-verification): ${total_wager:.2f}",
+                                period_id=period_id
+                            )
+                            
+                            if success:
+                                # Update wager tracking
+                                conn.execute(text("""
+                                    UPDATE raffle_shuffle_wagers
+                                    SET 
+                                        discord_id = :discord_id,
+                                        kick_name = :kick_name,
+                                        last_known_wager = total_wager_usd,
+                                        tickets_awarded = :tickets
+                                    WHERE shuffle_username = :username AND period_id = :period_id
+                                """), {
+                                    'discord_id': discord_id,
+                                    'kick_name': kick_name,
+                                    'tickets': tickets_awarded,
+                                    'username': shuffle_username,
+                                    'period_id': period_id
+                                })
+                                
+                                logger.info(f"💰 Awarded {tickets_awarded} tickets for pre-verification wagers: {shuffle_username} (${total_wager:.2f})")
+                    else:
+                        # Wagers were from previous period, don't award tickets
+                        conn.execute(text("""
+                            UPDATE raffle_shuffle_wagers
+                            SET 
+                                discord_id = :discord_id,
+                                kick_name = :kick_name,
+                                last_known_wager = total_wager_usd
+                            WHERE shuffle_username = :username AND period_id = :period_id
+                        """), {
+                            'discord_id': discord_id,
+                            'kick_name': kick_name,
+                            'username': shuffle_username,
+                            'period_id': period_id
+                        })
             
-            await ctx.send(f"✅ **Verified!** {user.mention}'s Shuffle account '{shuffle_username}' is now linked.\n"
-                         f"**Only future wagers** under code 'lele' will earn raffle tickets!")
+            if tickets_awarded > 0:
+                await ctx.send(f"✅ **Verified!** {user.mention}'s Shuffle account '{shuffle_username}' is now linked.\n"
+                             f"🎟️ **Awarded {tickets_awarded:,} tickets** for ${wager_row[0]:.2f} wagered this period!\n"
+                             f"Future wagers under code 'lele' will continue earning tickets.")
+            else:
+                await ctx.send(f"✅ **Verified!** {user.mention}'s Shuffle account '{shuffle_username}' is now linked.\n"
+                             f"Future wagers under code 'lele' will earn raffle tickets!")
             
-            logger.info(f"✅ Admin {ctx.author} verified Shuffle link: {shuffle_username} → {kick_name} (Discord {discord_id})")
+            logger.info(f"✅ Admin {ctx.author} verified Shuffle link: {shuffle_username} → {kick_name} (Discord {discord_id}) - {tickets_awarded} tickets awarded")
             
         except commands.BadArgument:
             await ctx.send(f"❌ Invalid user mention. Usage: `!verifyshuffle @user <shuffle_username>`")
