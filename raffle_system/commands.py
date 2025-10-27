@@ -53,14 +53,15 @@ class RaffleCommands(commands.Cog):
             total_participants = stats['total_participants'] if stats else 0
             
             # Calculate win probability
-            win_prob = self.raffle_draw.get_user_win_probability(discord_id)
+            win_prob = self.raffle_draw.get_user_win_probability(discord_id, stats['period_id']) if stats else None
+            win_prob_text = f"{win_prob['probability_percent']:.2f}%" if win_prob else "N/A"
             
             embed_text = f"""
 🎫 **Raffle Tickets for {ctx.author.display_name}**
 
 **Total Tickets**: {tickets['total_tickets']:,}
 **Rank**: #{rank} of {total_participants}
-**Win Probability**: {win_prob:.2%}
+**Win Probability**: {win_prob_text}
 
 **Breakdown**:
 • Watchtime: {tickets['watchtime_tickets']} tickets
@@ -859,10 +860,53 @@ Use `!rafflestats @user` to see individual stats
             import traceback
             traceback.print_exc()
             await ctx.send(f"❌ Error: {str(e)}")
+    
+    @commands.command(name='shuffleunlinked')
+    @commands.has_permissions(administrator=True)
+    async def shuffle_unlinked(self, ctx, limit: int = 20):
+        """
+        [ADMIN] Show unlinked Shuffle accounts with wagers
+        Usage: !shuffleunlinked [limit]
+        """
+        try:
+            with self.engine.begin() as conn:
+                result = conn.execute(text("""
+                    SELECT shuffle_username, total_wager_usd, last_checked
+                    FROM raffle_shuffle_wagers
+                    WHERE period_id = (SELECT id FROM raffle_periods WHERE status = 'active')
+                      AND (discord_id IS NULL OR kick_name IS NULL)
+                      AND total_wager_usd > 0
+                    ORDER BY total_wager_usd DESC
+                    LIMIT :limit
+                """), {'limit': limit})
+                
+                rows = result.fetchall()
+                
+                if not rows:
+                    await ctx.send("✅ All Shuffle users with wagers are linked!")
+                    return
+                
+                response = f"**Unlinked Shuffle Accounts ({len(rows)}):**\n\n"
+                response += "These users have wagers but need to link their accounts:\n\n"
+                
+                for row in rows:
+                    username = row[0]
+                    wager = row[1]
+                    last_check = row[2].strftime('%Y-%m-%d %H:%M') if row[2] else 'Never'
+                    response += f"• **{username}**: ${wager:,.2f} wagered (last checked: {last_check})\n"
+                
+                response += f"\n**To link:** Users run `!linkshuffle <username>`, then you verify with `!verifyshuffle @user <username>`"
+                
+                await ctx.send(response)
+                
+        except Exception as e:
+            logger.error(f"Error showing unlinked Shuffle users: {e}")
+            await ctx.send(f"❌ Error: {str(e)}")
 
 
 async def setup(bot, engine):
     """Add raffle commands to bot"""
     await bot.add_cog(RaffleCommands(bot, engine))
     logger.info("✅ Raffle commands loaded")
+
 
