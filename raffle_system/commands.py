@@ -534,7 +534,7 @@ Congratulations! 🎊
 
 **Rank**: #{rank} of {stats['total_participants']}
 **Total Tickets**: {tickets['total_tickets']:,}
-**Win Probability**: {self.raffle_draw.get_user_win_probability(discord_id):.2%}
+**Win Probability**: {self.raffle_draw.get_user_win_probability(discord_id, stats['period_id']):.2%}
 
 **Watchtime**: {tickets['watchtime_tickets']} tickets
 • Total watch time: {total_minutes/60:.1f} hours
