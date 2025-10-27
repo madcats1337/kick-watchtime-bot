@@ -179,13 +179,13 @@ This starts both the Discord bot and OAuth Flask server. You should see:
 |---------|-------------|---------|
 | `!tickets` | Check your raffle ticket balance | `!tickets` |
 | `!raffleboard [limit]` | View raffle ticket leaderboard | `!raffleboard 20` |
-| `!raffleinfo` | View current raffle period stats | `!raffleinfo` |
-| `!linkshuffle <username>` | Link your Shuffle account (requires verification) | `!linkshuffle JohnDoe123` |
+| `!raffleinfo` | View current raffle period and ticket earning info | `!raffleinfo` |
+| `!linkshuffle <username>` | Link Shuffle account to earn 20 tickets/$1000 (code 'lele') | `!linkshuffle JohnDoe123` |
 
 ### 🎟️ Raffle Admin Commands
 | Command | Description | Example |
 |---------|-------------|---------|
-| `!verifyshuffle @user <username>` | **[Admin]** Verify user's Shuffle account link | `!verifyshuffle @user madcats` |
+| `!verifyshuffle @user <username>` | **[Admin]** Verify and link user's Shuffle account | `!verifyshuffle @user madcats` |
 | `!rafflegive @user <amount> [reason]` | **[Admin]** Award bonus tickets | `!rafflegive @user 100 Event winner` |
 | `!raffleremove @user <amount> [reason]` | **[Admin]** Remove tickets | `!raffleremove @user 50 Violation` |
 | `!raffledraw` | **[Admin]** Manually draw a winner | `!raffledraw` |
@@ -193,7 +193,7 @@ This starts both the Discord bot and OAuth Flask server. You should see:
 | `!rafflestart [start_day] [end_day]` | **[Admin]** Start a new raffle period | `!rafflestart 1 30` |
 | `!raffleend` | **[Admin]** End the current raffle period | `!raffleend` |
 | `!rafflerestart` | **[Admin]** End current & start new period | `!rafflerestart` |
-| `!rafflesetdate <start> <end>` | **[Admin]** Update period dates | `!rafflesetdate 2025-11-01 2025-11-30` |
+| `!rafflesetdate <start> <end>` | **[Admin]** Set custom period dates (auto-transitions when ends) | `!rafflesetdate 2025-11-01 2025-11-30` |
 
 ### Admin Commands
 | Command | Description | Example |
