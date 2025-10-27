@@ -1,18 +1,30 @@
-# 🎮 Kick.com Watchtime Discord Bot
+# 🎮 Kick.com Discord Bot with Raffle System
 
-A Discord bot that tracks viewer watchtime on Kick.com and rewards loyal fans with Discord roles. Features **OAuth 2.0 linking** and **reaction-based link panels** for seamless account verification.
+A comprehensive Discord bot that tracks viewer watchtime on Kick.com, rewards loyal fans with Discord roles, and runs monthly raffles with tickets earned from watchtime, gifted subs, and Shuffle wagers. Features **OAuth 2.0 linking** and **reaction-based link panels** for seamless account verification.
 
 ## ✨ Features
 
+### Core Features
 - **🔗 OAuth Account Linking**: Instant linking with Kick OAuth (no manual bio editing!)
 - **📌 Reaction Link Panels**: Users react to a pinned message to start linking (no command spam!)
 - **⏱️ Watchtime Tracking**: Automatically tracks viewer activity in your Kick chat
 - **🏆 Role Rewards**: Assigns Discord roles based on watchtime milestones
 - **⚙️ Database-Configurable Roles**: Manage role thresholds without code changes
 - **📊 Leaderboards**: Shows top viewers with interactive embeds
-- **� Link Attempt Logging**: Monitor account linking activity (admin feature)
 - **🔒 HMAC-SHA256 Security**: Cryptographically signed OAuth URLs with 1-hour expiry
-- **�🔄 Real-time Sync**: Updates watchtime every minute
+- **🔄 Real-time Sync**: Updates watchtime every minute
+
+### 🎟️ Raffle System (NEW!)
+- **🎁 Gifted Sub Tracking**: Earn 15 tickets per gifted sub (real-time)
+- **⏰ Watchtime Conversion**: Earn 10 tickets per hour watched
+- **� Shuffle Wager Tracking**: Earn 20 tickets per $1000 wagered
+- **🎲 Fair Drawing**: Cryptographically random winner selection
+- **📅 Monthly Resets**: Automatic period transitions on the 1st
+- **🏅 Ticket Leaderboard**: Track your progress and compete
+- **� Shuffle Integration**: Link your Shuffle.com account with verification
+- **📈 Detailed Statistics**: View raffle stats and ticket breakdown
+
+### Deployment
 - **🐳 Dockerized**: Easy deployment to Railway, Heroku, Render, or any container platform
 - **☁️ Cloud-Ready**: PostgreSQL support for production deployments
 - **📄 Legal Compliance**: Built-in Terms of Service and Privacy Policy
@@ -112,9 +124,15 @@ FLASK_SECRET_KEY=random_secret_key_here          # Generate with: python -c "imp
 # Optional: Customize intervals
 WATCH_INTERVAL_SECONDS=60
 ROLE_UPDATE_INTERVAL_SECONDS=600
+
+# Optional: Raffle System
+RAFFLE_AUTO_DRAW=true                          # Auto-draw winner on 1st of month
+RAFFLE_ANNOUNCEMENT_CHANNEL_ID=123456789       # Channel for raffle announcements
 ```
 
 **Note:** OAuth linking requires deploying the OAuth server (see [docs/OAUTH_SETUP.md](docs/OAUTH_SETUP.md)).
+
+**Raffle System:** See [docs/implementation/RAFFLE_SYSTEM_IMPLEMENTATION_PLAN.md](docs/implementation/RAFFLE_SYSTEM_IMPLEMENTATION_PLAN.md) for complete documentation on ticket earning and raffle mechanics.
 
 4. **Initialize the database**
 ```bash
@@ -155,6 +173,23 @@ This starts both the Discord bot and OAuth Flask server. You should see:
 |---------|-------------|---------|
 | `!watchtime` | Check your current watchtime | `!watchtime` |
 | `!leaderboard [top]` | Show top viewers (default: 10, max: 25) | `!leaderboard 15` |
+
+### 🎟️ Raffle Commands
+| Command | Description | Example |
+|---------|-------------|---------|
+| `!tickets` | Check your raffle ticket balance | `!tickets` |
+| `!leaderboard` | View raffle ticket leaderboard (top 10) | `!leaderboard` |
+| `!raffleinfo` | View current raffle period stats | `!raffleinfo` |
+| `!linkshuffle <username>` | Link your Shuffle account (requires verification) | `!linkshuffle JohnDoe123` |
+
+### 🎟️ Raffle Admin Commands
+| Command | Description | Example |
+|---------|-------------|---------|
+| `!raffleverify @user` | **[Admin]** Verify user's Shuffle account link | `!raffleverify @user` |
+| `!rafflegive @user <amount> [reason]` | **[Admin]** Award bonus tickets | `!rafflegive @user 100 Event winner` |
+| `!raffleremove @user <amount> [reason]` | **[Admin]** Remove tickets | `!raffleremove @user 50 Violation` |
+| `!raffledraw` | **[Admin]** Manually draw a winner | `!raffledraw` |
+| `!rafflestats` | **[Admin]** View detailed raffle statistics | `!rafflestats` |
 
 ### Admin Commands
 | Command | Description | Example |
@@ -418,6 +453,9 @@ link_logs_config (
 ## 📚 Documentation
 
 This bot includes comprehensive documentation in the `docs/` folder:
+
+### Bonus Hunt (Kick chat → Discord buttons)
+- **[integrations/bonus_hunt_kick_chat/](integrations/bonus_hunt_kick_chat/)** - Packaged integration for Kick slot requests with Discord button workflow (ready for reuse)
 
 ### Setup Guides
 - **[docs/LINK_PANEL_QUICKSTART.md](docs/LINK_PANEL_QUICKSTART.md)** - Quick start guide for reaction-based link panels

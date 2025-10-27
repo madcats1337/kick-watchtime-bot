@@ -38,6 +38,10 @@ watchtime.db
 # Old API versions (archived)
 old_api_versions/
 
+# Test/Development folders
+webpage_test/
+integrations/
+
 # IDE
 .vscode/
 .idea/
