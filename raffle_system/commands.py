@@ -242,13 +242,13 @@ Use `!leaderboard` to see top participants!
     # ADMIN COMMANDS
     # ========================================
     
-    @commands.command(name='raffleverify')
+    @commands.command(name='verifyshuffle', aliases=['shuffleverify', 'raffleverify'])
     @commands.has_permissions(administrator=True)
     async def verify_shuffle_link(self, ctx, user: commands.UserConverter, shuffle_username: str):
         """
         [ADMIN] Verify a Shuffle account link
-        Usage: !raffleverify @user <shuffle_username>
-        Example: !raffleverify @John CryptoKing420
+        Usage: !verifyshuffle @user <shuffle_username>
+        Example: !verifyshuffle @John CryptoKing420
         """
         try:
             discord_id = user.id
@@ -291,7 +291,7 @@ Use `!leaderboard` to see top participants!
             logger.info(f"✅ Admin {ctx.author} verified Shuffle link: {shuffle_username} → Discord {discord_id}")
             
         except commands.BadArgument:
-            await ctx.send(f"❌ Invalid user mention. Usage: `!raffleverify @user <shuffle_username>`")
+            await ctx.send(f"❌ Invalid user mention. Usage: `!verifyshuffle @user <shuffle_username>`")
         except Exception as e:
             logger.error(f"Error verifying Shuffle link: {e}")
             await ctx.send(f"❌ Error verifying link. Please try again.")
