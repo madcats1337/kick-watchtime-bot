@@ -459,13 +459,33 @@ Get ready to participate when the period starts!
                             'period_id': period_id
                         })
             
+            # Assign "Shuffle code user" role
+            role_assigned = False
+            try:
+                # Get the guild member
+                member = ctx.guild.get_member(discord_id)
+                if member:
+                    # Find the "Shuffle code user" role (case-insensitive)
+                    shuffle_role = discord.utils.get(ctx.guild.roles, name="Shuffle code user")
+                    if shuffle_role:
+                        if shuffle_role not in member.roles:
+                            await member.add_roles(shuffle_role, reason=f"Verified Shuffle account by {ctx.author}")
+                            role_assigned = True
+                            logger.info(f"🎭 Assigned 'Shuffle code user' role to {member} ({discord_id})")
+                    else:
+                        logger.warning(f"⚠️ 'Shuffle code user' role not found in guild {ctx.guild.id}")
+            except Exception as e:
+                logger.error(f"Error assigning Shuffle code user role: {e}")
+            
             if tickets_awarded > 0:
+                role_msg = "\n🎭 **Role assigned:** Shuffle code user" if role_assigned else ""
                 await ctx.send(f"✅ **Verified!** {user.mention}'s Shuffle account '{shuffle_username}' is now linked.\n"
                              f"🎟️ **Awarded {tickets_awarded:,} tickets** for ${wager_row[0]:.2f} wagered this period!\n"
-                             f"Future wagers under code 'lele' will continue earning tickets.")
+                             f"Future wagers under code 'lele' will continue earning tickets.{role_msg}")
             else:
+                role_msg = "\n🎭 **Role assigned:** Shuffle code user" if role_assigned else ""
                 await ctx.send(f"✅ **Verified!** {user.mention}'s Shuffle account '{shuffle_username}' is now linked.\n"
-                             f"Future wagers under code 'lele' will earn raffle tickets!")
+                             f"Future wagers under code 'lele' will earn raffle tickets!{role_msg}")
             
             logger.info(f"✅ Admin {ctx.author} verified Shuffle link: {shuffle_username} → {kick_name} (Discord {discord_id}) - {tickets_awarded} tickets awarded")
             
@@ -1079,6 +1099,75 @@ Use `!rafflestats @user` to see individual stats
         except Exception as e:
             logger.error(f"Error showing unlinked Shuffle users: {e}")
             await ctx.send(f"❌ Error: {str(e)}")
+    
+    @commands.command(name='shufflesync', aliases=['syncshuffle'])
+    @commands.has_permissions(administrator=True)
+    async def sync_shuffle_roles(self, ctx):
+        """
+        [ADMIN] Sync "Shuffle code user" role with verified Shuffle links
+        Adds role to verified users, removes from unverified/unlinked users
+        Usage: !shufflesync
+        """
+        try:
+            await ctx.send("🔄 Syncing Shuffle code user roles...")
+            
+            # Get the "Shuffle code user" role
+            shuffle_role = discord.utils.get(ctx.guild.roles, name="Shuffle code user")
+            if not shuffle_role:
+                await ctx.send("❌ 'Shuffle code user' role not found in this server!")
+                return
+            
+            # Get all verified Shuffle links
+            with self.engine.begin() as conn:
+                result = conn.execute(text("""
+                    SELECT DISTINCT discord_id
+                    FROM raffle_shuffle_links
+                    WHERE verified = TRUE
+                """))
+                verified_discord_ids = {row[0] for row in result.fetchall()}
+            
+            added = 0
+            removed = 0
+            errors = 0
+            
+            # Check all members with the role
+            members_with_role = shuffle_role.members
+            for member in members_with_role:
+                if member.id not in verified_discord_ids:
+                    try:
+                        await member.remove_roles(shuffle_role, reason="Shuffle sync: No verified link")
+                        removed += 1
+                        logger.info(f"🎭 Removed 'Shuffle code user' role from {member} (no verified link)")
+                    except Exception as e:
+                        logger.error(f"Error removing role from {member}: {e}")
+                        errors += 1
+            
+            # Check all verified users
+            for discord_id in verified_discord_ids:
+                member = ctx.guild.get_member(discord_id)
+                if member and shuffle_role not in member.roles:
+                    try:
+                        await member.add_roles(shuffle_role, reason="Shuffle sync: Verified link found")
+                        added += 1
+                        logger.info(f"🎭 Added 'Shuffle code user' role to {member} (verified link)")
+                    except Exception as e:
+                        logger.error(f"Error adding role to {member}: {e}")
+                        errors += 1
+            
+            # Build response
+            response = "✅ **Shuffle Role Sync Complete!**\n\n"
+            response += f"🎭 **Added role:** {added} user(s)\n"
+            response += f"🗑️ **Removed role:** {removed} user(s)\n"
+            if errors > 0:
+                response += f"⚠️ **Errors:** {errors} (check logs)\n"
+            response += f"\n📊 **Total verified links:** {len(verified_discord_ids)}"
+            
+            await ctx.send(response)
+            logger.info(f"✅ Shuffle role sync by {ctx.author}: +{added}, -{removed}, errors: {errors}")
+            
+        except Exception as e:
+            logger.error(f"Error syncing Shuffle roles: {e}")
+            await ctx.send(f"❌ Error syncing roles: {str(e)}")
 
 
 async def setup(bot, engine):
