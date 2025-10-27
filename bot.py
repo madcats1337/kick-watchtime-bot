@@ -24,7 +24,7 @@ import discord
 from discord.ext import commands, tasks
 
 # Raffle system imports
-from raffle_system.database import setup_raffle_database, get_current_period, create_new_period
+from raffle_system.database import setup_raffle_database, get_current_period, create_new_period, migrate_add_created_at_to_shuffle_wagers
 from raffle_system.watchtime_converter import setup_watchtime_converter
 from raffle_system.gifted_sub_tracker import setup_gifted_sub_handler
 from raffle_system.shuffle_tracker import setup_shuffle_tracker
@@ -2131,6 +2131,9 @@ async def on_ready():
             
             # Setup raffle database (creates tables if needed)
             setup_raffle_database(engine)
+            
+            # Run migrations
+            migrate_add_created_at_to_shuffle_wagers(engine)
             
             # Ensure there's an active raffle period
             current_period = get_current_period(engine)
