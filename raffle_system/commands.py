@@ -76,12 +76,12 @@ Use `!leaderboard` to see top participants!
             logger.error(f"Error checking tickets: {e}")
             await ctx.send(f"❌ Error checking tickets. Please try again.")
     
-    @commands.command(name='leaderboard', aliases=['top', 'rankings'])
-    async def leaderboard(self, ctx, limit: int = 10):
+    @commands.command(name='raffleboard', aliases=['raffletop', 'rafflerankings'])
+    async def raffle_leaderboard(self, ctx, limit: int = 10):
         """
-        View raffle leaderboard
-        Usage: !leaderboard [limit]
-        Example: !leaderboard 20
+        View raffle ticket leaderboard
+        Usage: !raffleboard [limit]
+        Example: !raffleboard 20
         """
         try:
             if limit < 1 or limit > 50:

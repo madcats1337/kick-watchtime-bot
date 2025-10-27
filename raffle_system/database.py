@@ -16,7 +16,7 @@ RAFFLE_SCHEMA_SQL = """
 
 -- Monthly raffle periods
 CREATE TABLE IF NOT EXISTS raffle_periods (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     start_date TIMESTAMP NOT NULL,
     end_date TIMESTAMP NOT NULL,
     status VARCHAR(20) DEFAULT 'active',  -- active, ended, archived
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS raffle_periods (
 
 -- User ticket balances (resets monthly)
 CREATE TABLE IF NOT EXISTS raffle_tickets (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     period_id INTEGER REFERENCES raffle_periods(id) ON DELETE CASCADE,
     discord_id BIGINT NOT NULL,
     kick_name TEXT NOT NULL,
@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS raffle_tickets (
 
 -- Watchtime conversion tracking (prevent double-counting)
 CREATE TABLE IF NOT EXISTS raffle_watchtime_converted (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     period_id INTEGER REFERENCES raffle_periods(id) ON DELETE CASCADE,
     kick_name TEXT NOT NULL,
     minutes_converted INTEGER NOT NULL,
@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS raffle_watchtime_converted (
 
 -- Gifted sub event log
 CREATE TABLE IF NOT EXISTS raffle_gifted_subs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     period_id INTEGER REFERENCES raffle_periods(id) ON DELETE CASCADE,
     gifter_kick_name TEXT NOT NULL,
     gifter_discord_id BIGINT,  -- NULL if not linked
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS raffle_gifted_subs (
 
 -- Shuffle.com wager tracking
 CREATE TABLE IF NOT EXISTS raffle_shuffle_wagers (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     period_id INTEGER REFERENCES raffle_periods(id) ON DELETE CASCADE,
     shuffle_username TEXT NOT NULL,
     kick_name TEXT,  -- If we can map shuffle→kick
@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS raffle_shuffle_wagers (
 
 -- Shuffle username → Kick/Discord mapping
 CREATE TABLE IF NOT EXISTS raffle_shuffle_links (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     shuffle_username TEXT NOT NULL UNIQUE,
     kick_name TEXT NOT NULL,
     discord_id BIGINT NOT NULL UNIQUE,  -- One Shuffle account per Discord user
@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS raffle_shuffle_links (
 
 -- Ticket transaction log (audit trail)
 CREATE TABLE IF NOT EXISTS raffle_ticket_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     period_id INTEGER REFERENCES raffle_periods(id) ON DELETE CASCADE,
     discord_id BIGINT NOT NULL,
     kick_name TEXT NOT NULL,
@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS raffle_ticket_log (
 
 -- Raffle draw history
 CREATE TABLE IF NOT EXISTS raffle_draws (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     period_id INTEGER REFERENCES raffle_periods(id) UNIQUE,
     total_tickets INTEGER NOT NULL,
     total_participants INTEGER NOT NULL,
