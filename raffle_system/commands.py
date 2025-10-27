@@ -273,24 +273,54 @@ Use `!leaderboard` to see top participants!
                     await ctx.send(f"ℹ️ This link is already verified!")
                     return
                 
+                # Get kick name from links table
+                link_result = conn.execute(text("""
+                    SELECT kick_name FROM links WHERE discord_id = :discord_id
+                """), {'discord_id': discord_id})
+                
+                link_row = link_result.fetchone()
+                if not link_row:
+                    await ctx.send(f"❌ {user.mention} must link their Kick account first! Use `!link`")
+                    return
+                
+                kick_name = link_row[0]
+                
                 # Verify the link
                 conn.execute(text("""
                     UPDATE raffle_shuffle_links
                     SET 
                         verified = TRUE,
                         verified_by_discord_id = :admin_id,
-                        verified_at = CURRENT_TIMESTAMP
+                        verified_at = CURRENT_TIMESTAMP,
+                        kick_name = :kick_name
                     WHERE discord_id = :discord_id AND shuffle_username = :username
                 """), {
                     'admin_id': admin_id,
                     'discord_id': discord_id,
+                    'username': shuffle_username,
+                    'kick_name': kick_name
+                })
+                
+                # Update existing wager tracking entries to link them
+                # Set last_known_wager to current total_wager so only FUTURE wagers earn tickets
+                conn.execute(text("""
+                    UPDATE raffle_shuffle_wagers
+                    SET 
+                        discord_id = :discord_id,
+                        kick_name = :kick_name,
+                        last_known_wager = total_wager_usd
+                    WHERE shuffle_username = :username
+                      AND period_id = (SELECT id FROM raffle_periods WHERE status = 'active')
+                """), {
+                    'discord_id': discord_id,
+                    'kick_name': kick_name,
                     'username': shuffle_username
                 })
             
             await ctx.send(f"✅ **Verified!** {user.mention}'s Shuffle account '{shuffle_username}' is now linked.\n"
-                         f"Future wagers under code 'lele' will earn raffle tickets!")
+                         f"**Only future wagers** under code 'lele' will earn raffle tickets!")
             
-            logger.info(f"✅ Admin {ctx.author} verified Shuffle link: {shuffle_username} → Discord {discord_id}")
+            logger.info(f"✅ Admin {ctx.author} verified Shuffle link: {shuffle_username} → {kick_name} (Discord {discord_id})")
             
         except commands.BadArgument:
             await ctx.send(f"❌ Invalid user mention. Usage: `!verifyshuffle @user <shuffle_username>`")
