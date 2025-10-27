@@ -110,6 +110,18 @@ def handle_404(e):
     print(f"ℹ️ 404: {request.method} {request.path}", flush=True)
     return jsonify({"error": "Not Found"}), 404
 
+# 405 handler - method not allowed (wrong HTTP method)
+@app.errorhandler(405)
+def handle_405(e):
+    # Log method not allowed errors without full traceback
+    print(f"ℹ️ 405 Method Not Allowed: {request.method} {request.path}", flush=True)
+    print(f"   Allowed methods: {e.valid_methods}", flush=True)
+    return jsonify({
+        "error": "Method Not Allowed",
+        "message": f"The method {request.method} is not allowed for this endpoint",
+        "allowed_methods": list(e.valid_methods)
+    }), 405
+
 # Global error handler
 @app.errorhandler(Exception)
 def handle_error(e):
