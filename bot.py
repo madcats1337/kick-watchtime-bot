@@ -621,11 +621,16 @@ async def kick_chat_loop(channel_name: str):
                                     if watchtime_debug_enabled:
                                         print(f"[Watchtime Debug] Added {username_lower} to active viewers (total: {len(active_viewers)})")
                                     
-                                    # Handle slot call commands (!call)
-                                    if content_text.strip().startswith("!call") and slot_call_tracker:
-                                        # Extract the slot call (everything after "!call ")
+                                    # Handle slot call commands (!call or !sr)
+                                    content_stripped = content_text.strip()
+                                    if slot_call_tracker and (content_stripped.startswith("!call") or content_stripped.startswith("!sr")):
+                                        # Extract the slot call (everything after "!call " or "!sr ")
                                         # 🔒 SECURITY: Limit length to prevent abuse (200 chars max)
-                                        slot_call = content_text.strip()[5:].strip()[:200]
+                                        if content_stripped.startswith("!call"):
+                                            slot_call = content_stripped[5:].strip()[:200]  # Remove "!call"
+                                        else:  # !sr
+                                            slot_call = content_stripped[3:].strip()[:200]  # Remove "!sr"
+                                        
                                         if slot_call:  # Only process if there's actually a call
                                             await slot_call_tracker.handle_slot_call(username, slot_call)
                             

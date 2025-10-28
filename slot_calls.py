@@ -120,7 +120,7 @@ class SlotCallCommands(commands.Cog):
             )
             embed.add_field(
                 name="How it works",
-                value="When users type `!call <slot>` in Kick chat, it posts to the configured Discord channel.",
+                value="When users type `!call <slot>` or `!sr <slot>` in Kick chat, it posts to the configured Discord channel.",
                 inline=False
             )
             
@@ -129,10 +129,10 @@ class SlotCallCommands(commands.Cog):
         
         if action.lower() == "on":
             self.tracker.set_enabled(True)
-            await ctx.send("✅ Slot call tracking **enabled**! Users can now use `!call <slot>` in Kick chat.")
+            await ctx.send("✅ Slot call tracking **enabled**! Users can now use `!call <slot>` or `!sr <slot>` in Kick chat.")
         elif action.lower() == "off":
             self.tracker.set_enabled(False)
-            await ctx.send("❌ Slot call tracking **disabled**. `!call` commands will be ignored.")
+            await ctx.send("❌ Slot call tracking **disabled**. `!call` and `!sr` commands will be ignored.")
         else:
             await ctx.send("❌ Invalid action. Use `!slotcalls on`, `!slotcalls off`, or `!slotcalls status`")
     
