@@ -24,6 +24,14 @@ A comprehensive Discord bot that tracks viewer watchtime on Kick.com, rewards lo
 - **� Shuffle Integration**: Link your Shuffle.com account with verification
 - **📈 Detailed Statistics**: View raffle stats and ticket breakdown
 
+### 🎰 Slot Call Tracker (NEW!)
+- **📢 Real-time Tracking**: Monitors Kick chat for `!call` commands
+- **📝 Discord Notifications**: Auto-posts slot requests to Discord channel
+- **🎯 User Attribution**: Shows which Kick user requested each slot
+- **🔧 Admin Toggle**: Enable/disable tracking with `!slotcalls on/off`
+- **📊 Status Monitoring**: Check current state with `!slotcalls status`
+- **⚡ Instant Posting**: No delay between request and Discord notification
+
 ### Deployment
 - **🐳 Dockerized**: Easy deployment to Railway, Heroku, Render, or any container platform
 - **☁️ Cloud-Ready**: PostgreSQL support for production deployments
@@ -128,6 +136,9 @@ ROLE_UPDATE_INTERVAL_SECONDS=600
 # Optional: Raffle System
 RAFFLE_AUTO_DRAW=true                          # Auto-draw winner on 1st of month
 RAFFLE_ANNOUNCEMENT_CHANNEL_ID=123456789       # Channel for raffle announcements
+
+# Optional: Slot Call Tracker
+SLOT_CALLS_CHANNEL_ID=123456789                # Discord channel for slot call notifications
 ```
 
 **Note:** OAuth linking requires deploying the OAuth server (see [docs/OAUTH_SETUP.md](docs/OAUTH_SETUP.md)).
@@ -195,6 +206,19 @@ This starts both the Discord bot and OAuth Flask server. You should see:
 | `!rafflerestart` | **[Admin]** End current & start new period | `!rafflerestart` |
 | `!rafflesetdate <start> <end>` | **[Admin]** Set custom period dates (auto-transitions when ends) | `!rafflesetdate 2025-11-01 2025-11-30` |
 
+### 🎰 Slot Call Tracker
+**Kick Chat Commands** (tracked automatically):
+| Command | Description | Example |
+|---------|-------------|---------|
+| `!call <slot_name>` | Request a slot call (posts to Discord) | `!call Book of Dead` |
+
+**Discord Admin Commands**:
+| Command | Description | Example |
+|---------|-------------|---------|
+| `!slotcalls on` | **[Admin]** Enable slot call tracking | `!slotcalls on` |
+| `!slotcalls off` | **[Admin]** Disable slot call tracking | `!slotcalls off` |
+| `!slotcalls status` | **[Admin]** Check if tracking is enabled | `!slotcalls status` |
+
 ### Admin Commands
 | Command | Description | Example |
 |---------|-------------|---------|
@@ -208,6 +232,47 @@ This starts both the Discord bot and OAuth Flask server. You should see:
 | `!roles enable <role>` | Enable a disabled role | `!roles enable @Fan` |
 | `!roles disable <role>` | Disable a role without deleting | `!roles disable @Fan` |
 | `!roles members <role>` | List members with specific role | `!roles members @Fan` |
+
+## 📋 Usage Examples
+
+### 🎰 Slot Call Tracker Workflow
+```
+Admin: !slotcalls on
+
+Bot: ✅ Slot call tracking enabled!
+
+[Kick viewer types in chat: !call Book of Dead]
+
+Bot (in configured Discord channel):
+┌────────────────────────────────┐
+│  🎰 Slot Call                  │
+│                                │
+│  kickuser123 requested         │
+│  **Book of Dead**              │
+│                                │
+│  📅 2025-01-22 14:35:21       │
+└────────────────────────────────┘
+
+[Another viewer types: !call Gates of Olympus]
+
+Bot (in Discord):
+┌────────────────────────────────┐
+│  🎰 Slot Call                  │
+│                                │
+│  slotfan456 requested          │
+│  **Gates of Olympus**          │
+│                                │
+│  📅 2025-01-22 14:37:08       │
+└────────────────────────────────┘
+
+Admin: !slotcalls status
+
+Bot: ✅ Slot call tracking is currently **enabled**
+
+Admin: !slotcalls off
+
+Bot: 🔇 Slot call tracking disabled!
+```
 
 ## 📋 Linking Workflow Examples
 
