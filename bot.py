@@ -513,16 +513,22 @@ async def get_kick_bot_token() -> Optional[str]:
         return None
     
     try:
-        token_url = "https://kick.com/oauth2/token"
+        # Official Kick OAuth token endpoint
+        token_url = "https://id.kick.com/oauth/token"
         
+        # Must be form-encoded, not JSON
         payload = {
             "grant_type": "client_credentials",
             "client_id": KICK_CLIENT_ID,
             "client_secret": KICK_CLIENT_SECRET
         }
         
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+        
         async with aiohttp.ClientSession() as session:
-            async with session.post(token_url, json=payload, timeout=10) as response:
+            async with session.post(token_url, data=payload, headers=headers, timeout=10) as response:
                 if response.status == 200:
                     data = await response.json()
                     KICK_BOT_TOKEN = data.get("access_token")
