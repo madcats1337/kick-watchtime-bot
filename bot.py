@@ -100,7 +100,11 @@ SLOT_CALLS_CHANNEL_ID = int(os.getenv("SLOT_CALLS_CHANNEL_ID")) if os.getenv("SL
 # OAuth configuration
 OAUTH_BASE_URL = os.getenv("OAUTH_BASE_URL", "")  # e.g., https://your-app.up.railway.app
 KICK_CLIENT_ID = os.getenv("KICK_CLIENT_ID", "")
+KICK_CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET", "")  # Used for both OAuth and Kick bot
 OAUTH_SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "")
+
+# Kick bot token (auto-generated from client credentials)
+KICK_BOT_TOKEN = None  # Will be generated from KICK_CLIENT_ID + KICK_CLIENT_SECRET
 
 # CRITICAL: If FLASK_SECRET_KEY is not set, OAuth will not work!
 if not OAUTH_SECRET_KEY:
@@ -384,6 +388,10 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # In-memory active viewer tracking
 active_viewers = {}
 
+# Kick chat WebSocket connection (for sending messages)
+kick_ws = None
+kick_chatroom_id_global = None
+
 # Stream status tracking
 stream_tracking_enabled = True  # Admin can toggle this
 # When true, admins can force watchtime updates to run even if the live-detection
@@ -488,6 +496,101 @@ async def log_link_attempt(discord_user, kick_username: str, success: bool, erro
         print(f"⚠️ Failed to log link attempt: {e}")
 
 # -------------------------
+# Kick chat message sending
+# -------------------------
+async def get_kick_bot_token() -> Optional[str]:
+    """
+    Get Kick access token using OAuth2 Client Credentials flow.
+    
+    Returns:
+        Access token string if successful, None otherwise
+    """
+    global KICK_BOT_TOKEN
+    
+    if not KICK_CLIENT_ID or not KICK_CLIENT_SECRET:
+        return None
+    
+    try:
+        token_url = "https://id.kick.com/oauth/token"
+        
+        payload = {
+            "grant_type": "client_credentials",
+            "client_id": KICK_CLIENT_ID,
+            "client_secret": KICK_CLIENT_SECRET,
+            "scope": "chat:write"  # Request chat writing permissions
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(token_url, data=payload, timeout=10) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    KICK_BOT_TOKEN = data.get("access_token")
+                    expires_in = data.get("expires_in", 3600)
+                    print(f"[Kick Bot] ✅ Got access token (expires in {expires_in}s)")
+                    return KICK_BOT_TOKEN
+                else:
+                    error_text = await response.text()
+                    print(f"[Kick Bot] ❌ Failed to get token (HTTP {response.status}): {error_text}")
+                    return None
+    
+    except Exception as e:
+        print(f"[Kick Bot] ❌ Error getting token: {e}")
+        return None
+
+async def send_kick_message(message: str) -> bool:
+    """
+    Send a message to Kick chat.
+    Automatically gets access token if needed.
+    
+    Args:
+        message: The message to send
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    global kick_chatroom_id_global, KICK_BOT_TOKEN
+    
+    # Get token if we don't have one
+    if not KICK_BOT_TOKEN:
+        if not await get_kick_bot_token():
+            print("[Kick] ⚠️ Cannot send message: Failed to get access token")
+            return False
+    
+    if not kick_chatroom_id_global:
+        print("[Kick] ⚠️ Cannot send message: Chatroom ID not available")
+        return False
+    
+    try:
+        # Kick's chat API endpoint
+        url = "https://kick.com/api/v2/messages/send/" + str(kick_chatroom_id_global)
+        
+        headers = {
+            "Authorization": f"Bearer {KICK_BOT_TOKEN}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        }
+        
+        payload = {
+            "content": message,
+            "type": "message"
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload, timeout=10) as response:
+                if response.status == 200:
+                    print(f"[Kick] ✅ Sent message: {message[:50]}...")
+                    return True
+                else:
+                    error_text = await response.text()
+                    print(f"[Kick] ❌ Failed to send message (HTTP {response.status}): {error_text}")
+                    return False
+    
+    except Exception as e:
+        print(f"[Kick] ❌ Error sending message: {e}")
+        return False
+
+# -------------------------
 # Kick listener functions
 # -------------------------
 # Browser-like headers for requests
@@ -505,16 +608,18 @@ BROWSER_HEADERS = {
 
 async def kick_chat_loop(channel_name: str):
     """Connect to Kick's Pusher WebSocket and listen for chat messages."""
-    global last_chat_activity, recent_chatters
+    global last_chat_activity, recent_chatters, kick_chatroom_id_global
     
     while True:
         try:
             # Check if chatroom ID is hardcoded in environment (bypass for Cloudflare issues)
             if KICK_CHATROOM_ID:
                 chatroom_id = KICK_CHATROOM_ID
+                kick_chatroom_id_global = chatroom_id
                 print(f"[Kick] Using hardcoded chatroom ID: {chatroom_id}")
             else:
                 chatroom_id = await fetch_chatroom_id(channel_name)
+                kick_chatroom_id_global = chatroom_id
                 if not chatroom_id:
                     print(f"[Kick] Could not obtain chatroom id for {channel_name}. Retrying in 30s.")
                     await asyncio.sleep(30)
@@ -2262,10 +2367,20 @@ async def on_ready():
             # Sync Shuffle code user role on startup
             await sync_shuffle_role_on_startup(bot, engine)
             
-            # Setup slot call tracker
-            slot_call_tracker = await setup_slot_call_tracker(bot, SLOT_CALLS_CHANNEL_ID)
+            # Setup slot call tracker with Kick chat callback
+            has_kick_credentials = KICK_CLIENT_ID and KICK_CLIENT_SECRET
+            slot_call_tracker = await setup_slot_call_tracker(
+                bot, 
+                SLOT_CALLS_CHANNEL_ID,
+                kick_send_callback=send_kick_message if has_kick_credentials else None
+            )
             if SLOT_CALLS_CHANNEL_ID:
                 print(f"✅ Slot call tracker initialized (channel: {SLOT_CALLS_CHANNEL_ID})")
+                if has_kick_credentials:
+                    print(f"✅ Kick chat responses enabled using OAuth Client Credentials")
+                    print(f"   Using existing KICK_CLIENT_ID and KICK_CLIENT_SECRET")
+                else:
+                    print("ℹ️  Kick chat responses disabled (set KICK_CLIENT_ID and KICK_CLIENT_SECRET to enable)")
             else:
                 print("⚠️ Slot call tracker initialized but no channel configured (set SLOT_CALLS_CHANNEL_ID)")
             
