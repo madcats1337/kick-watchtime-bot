@@ -103,7 +103,8 @@ KICK_CLIENT_ID = os.getenv("KICK_CLIENT_ID", "")
 KICK_CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET", "")  # Used for both OAuth and Kick bot
 OAUTH_SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "")
 
-# Kick bot token (auto-generated from client credentials)
+# Kick bot configuration (for sending chat messages)
+# Uses OAuth2 Client Credentials flow - token is auto-generated
 KICK_BOT_TOKEN = None  # Will be generated from KICK_CLIENT_ID + KICK_CLIENT_SECRET
 
 # CRITICAL: If FLASK_SECRET_KEY is not set, OAuth will not work!
@@ -500,18 +501,19 @@ async def log_link_attempt(discord_user, kick_username: str, success: bool, erro
 # -------------------------
 async def get_kick_bot_token() -> Optional[str]:
     """
-    Get Kick access token using OAuth2 Client Credentials flow.
+    Get an OAuth access token for the Kick bot using Client Credentials flow.
     
     Returns:
-        Access token string if successful, None otherwise
+        str: Access token if successful, None otherwise
     """
     global KICK_BOT_TOKEN
     
     if not KICK_CLIENT_ID or not KICK_CLIENT_SECRET:
+        print("[Kick Bot] ⚠️ Client credentials not configured")
         return None
     
     try:
-        token_url = "https://id.kick.com/oauth/token"
+        token_url = "https://kick.com/oauth2/token"
         
         payload = {
             "grant_type": "client_credentials",
@@ -520,7 +522,7 @@ async def get_kick_bot_token() -> Optional[str]:
         }
         
         async with aiohttp.ClientSession() as session:
-            async with session.post(token_url, data=payload, timeout=10) as response:
+            async with session.post(token_url, json=payload, timeout=10) as response:
                 if response.status == 200:
                     data = await response.json()
                     KICK_BOT_TOKEN = data.get("access_token")
@@ -538,8 +540,8 @@ async def get_kick_bot_token() -> Optional[str]:
 
 async def send_kick_message(message: str) -> bool:
     """
-    Send a message to Kick chat.
-    Automatically gets access token if needed.
+    Send a message to Kick chat using the official Kick API.
+    Uses OAuth2 Client Credentials token for bot authentication.
     
     Args:
         message: The message to send
@@ -547,7 +549,7 @@ async def send_kick_message(message: str) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    global kick_chatroom_id_global, KICK_BOT_TOKEN
+    global KICK_BOT_TOKEN
     
     # Get token if we don't have one
     if not KICK_BOT_TOKEN:
@@ -555,34 +557,36 @@ async def send_kick_message(message: str) -> bool:
             print("[Kick] ⚠️ Cannot send message: Failed to get access token")
             return False
     
-    if not kick_chatroom_id_global:
-        print("[Kick] ⚠️ Cannot send message: Chatroom ID not available")
-        return False
-    
     try:
-        # Kick's chat API endpoint
-        url = "https://kick.com/api/v2/messages/send/" + str(kick_chatroom_id_global)
+        # Official Kick API endpoint for posting chat messages
+        url = "https://api.kick.com/public/v1/chat"
         
         headers = {
             "Authorization": f"Bearer {KICK_BOT_TOKEN}",
             "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "*/*"
         }
         
         payload = {
             "content": message,
-            "type": "message"
+            "type": "bot"  # Send as bot - uses channel attached to token
         }
         
         async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, json=payload, timeout=10) as response:
                 if response.status == 200:
+                    data = await response.json()
                     print(f"[Kick] ✅ Sent message: {message[:50]}...")
                     return True
                 else:
                     error_text = await response.text()
                     print(f"[Kick] ❌ Failed to send message (HTTP {response.status}): {error_text}")
+                    
+                    # If token expired (401), clear it so we get a new one next time
+                    if response.status == 401:
+                        KICK_BOT_TOKEN = None
+                        print("[Kick] 🔄 Token expired, will refresh on next message")
+                    
                     return False
     
     except Exception as e:
@@ -2376,8 +2380,8 @@ async def on_ready():
             if SLOT_CALLS_CHANNEL_ID:
                 print(f"✅ Slot call tracker initialized (channel: {SLOT_CALLS_CHANNEL_ID})")
                 if has_kick_credentials:
-                    print(f"✅ Kick chat responses enabled using OAuth Client Credentials")
-                    print(f"   Using existing KICK_CLIENT_ID and KICK_CLIENT_SECRET")
+                    print(f"✅ Kick chat responses enabled (bot: Lelebot)")
+                    print(f"   Using OAuth2 Client Credentials with official Kick API")
                 else:
                     print("ℹ️  Kick chat responses disabled (set KICK_CLIENT_ID and KICK_CLIENT_SECRET to enable)")
             else:
