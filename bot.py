@@ -516,8 +516,7 @@ async def get_kick_bot_token() -> Optional[str]:
         payload = {
             "grant_type": "client_credentials",
             "client_id": KICK_CLIENT_ID,
-            "client_secret": KICK_CLIENT_SECRET,
-            "scope": "chat:write"  # Request chat writing permissions
+            "client_secret": KICK_CLIENT_SECRET
         }
         
         async with aiohttp.ClientSession() as session:
