@@ -32,6 +32,9 @@ from raffle_system.auto_leaderboard import setup_auto_leaderboard
 from raffle_system.commands import setup as setup_raffle_commands
 from raffle_system.scheduler import setup_raffle_scheduler
 
+# Slot call tracker import
+from slot_calls import setup_slot_call_tracker
+
 # -------------------------
 # Command checks and utils
 # -------------------------
@@ -71,6 +74,9 @@ DISCORD_GUILD_ID = int(os.getenv("DISCORD_GUILD_ID")) if os.getenv("DISCORD_GUIL
 if not DISCORD_GUILD_ID:
     print("⚠️ Warning: DISCORD_GUILD_ID not set. Some features may be limited.")
 
+# Slot calls channel (optional)
+SLOT_CALLS_CHANNEL_ID = int(os.getenv("SLOT_CALLS_CHANNEL_ID")) if os.getenv("SLOT_CALLS_CHANNEL_ID") else None
+
 # Database configuration with cloud PostgreSQL support
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
@@ -90,6 +96,9 @@ print(f"📊 Using database: {DATABASE_URL.split('@')[1] if '@' in DATABASE_URL 
 WATCH_INTERVAL_SECONDS = int(os.getenv("WATCH_INTERVAL_SECONDS", "60"))
 ROLE_UPDATE_INTERVAL_SECONDS = int(os.getenv("ROLE_UPDATE_INTERVAL_SECONDS", "600"))
 CODE_EXPIRY_MINUTES = int(os.getenv("CODE_EXPIRY_MINUTES", "10"))
+
+# Slot call tracker configuration
+SLOT_CALL_CHANNEL_ID = int(os.getenv("SLOT_CALL_CHANNEL_ID")) if os.getenv("SLOT_CALL_CHANNEL_ID") else None
 
 # OAuth configuration
 OAUTH_BASE_URL = os.getenv("OAUTH_BASE_URL", "")  # e.g., https://your-app.up.railway.app
@@ -406,6 +415,7 @@ recent_chatters = {}  # {username: timestamp} - rolling window of recent chat ac
 # Raffle system global tracker
 gifted_sub_tracker = None  # Will be initialized in on_ready()
 shuffle_tracker = None  # Will be initialized in on_ready()
+slot_call_tracker = None  # Will be initialized in on_ready()
 MIN_UNIQUE_CHATTERS = 2  # Require at least 2 different people chatting to consider stream "live"
 CHAT_ACTIVITY_WINDOW_MINUTES = 5  # Look back 5 minutes for unique chatters
 
@@ -613,6 +623,14 @@ async def kick_chat_loop(channel_name: str):
                                     print(f"[Kick] {username}: {content_text}")
                                     if watchtime_debug_enabled:
                                         print(f"[Watchtime Debug] Added {username_lower} to active viewers (total: {len(active_viewers)})")
+                                    
+                                    # Handle slot call commands (!call)
+                                    if content_text.strip().startswith("!call") and slot_call_tracker:
+                                        # Extract the slot call (everything after "!call ")
+                                        # 🔒 SECURITY: Limit length to prevent abuse (200 chars max)
+                                        slot_call = content_text.strip()[5:].strip()[:200]
+                                        if slot_call:  # Only process if there's actually a call
+                                            await slot_call_tracker.handle_slot_call(username, slot_call)
                             
                             # Handle gifted subscription events
                             # Kick may use different event types for gifts, so we check multiple possibilities
@@ -2185,7 +2203,7 @@ async def on_ready():
         
         # Initialize raffle system
         try:
-            global gifted_sub_tracker, shuffle_tracker
+            global gifted_sub_tracker, shuffle_tracker, slot_call_tracker
             
             # Setup raffle database (creates tables if needed)
             setup_raffle_database(engine)
@@ -2241,6 +2259,13 @@ async def on_ready():
             
             # Sync Shuffle code user role on startup
             await sync_shuffle_role_on_startup(bot, engine)
+            
+            # Setup slot call tracker
+            slot_call_tracker = await setup_slot_call_tracker(bot, SLOT_CALL_CHANNEL_ID)
+            if SLOT_CALL_CHANNEL_ID:
+                print(f"✅ Slot call tracker initialized (channel: {SLOT_CALL_CHANNEL_ID})")
+            else:
+                print("⚠️ Slot call tracker initialized but no channel configured (set SLOT_CALL_CHANNEL_ID)")
             
         except Exception as e:
             print(f"⚠️ Failed to initialize raffle system: {e}")
