@@ -211,6 +211,7 @@ This starts both the Discord bot and OAuth Flask server. You should see:
 | Command | Description | Example |
 |---------|-------------|---------|
 | `!call <slot_name>` | Request a slot call (posts to Discord) | `!call Book of Dead` |
+| `!sr <slot_name>` | Same as !call (slot request) | `!sr Gates of Olympus` |
 
 **Discord Admin Commands**:
 | Command | Description | Example |
@@ -253,7 +254,7 @@ Bot (in configured Discord channel):
 │  📅 2025-01-22 14:35:21       │
 └────────────────────────────────┘
 
-[Another viewer types: !call Gates of Olympus]
+[Another viewer types: !sr Gates of Olympus]
 
 Bot (in Discord):
 ┌────────────────────────────────┐
