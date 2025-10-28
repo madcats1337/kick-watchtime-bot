@@ -74,9 +74,6 @@ DISCORD_GUILD_ID = int(os.getenv("DISCORD_GUILD_ID")) if os.getenv("DISCORD_GUIL
 if not DISCORD_GUILD_ID:
     print("⚠️ Warning: DISCORD_GUILD_ID not set. Some features may be limited.")
 
-# Slot calls channel (optional)
-SLOT_CALLS_CHANNEL_ID = int(os.getenv("SLOT_CALLS_CHANNEL_ID")) if os.getenv("SLOT_CALLS_CHANNEL_ID") else None
-
 # Database configuration with cloud PostgreSQL support
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
@@ -98,7 +95,7 @@ ROLE_UPDATE_INTERVAL_SECONDS = int(os.getenv("ROLE_UPDATE_INTERVAL_SECONDS", "60
 CODE_EXPIRY_MINUTES = int(os.getenv("CODE_EXPIRY_MINUTES", "10"))
 
 # Slot call tracker configuration
-SLOT_CALL_CHANNEL_ID = int(os.getenv("SLOT_CALL_CHANNEL_ID")) if os.getenv("SLOT_CALL_CHANNEL_ID") else None
+SLOT_CALLS_CHANNEL_ID = int(os.getenv("SLOT_CALLS_CHANNEL_ID")) if os.getenv("SLOT_CALLS_CHANNEL_ID") else None
 
 # OAuth configuration
 OAUTH_BASE_URL = os.getenv("OAUTH_BASE_URL", "")  # e.g., https://your-app.up.railway.app
@@ -2261,11 +2258,11 @@ async def on_ready():
             await sync_shuffle_role_on_startup(bot, engine)
             
             # Setup slot call tracker
-            slot_call_tracker = await setup_slot_call_tracker(bot, SLOT_CALL_CHANNEL_ID)
-            if SLOT_CALL_CHANNEL_ID:
-                print(f"✅ Slot call tracker initialized (channel: {SLOT_CALL_CHANNEL_ID})")
+            slot_call_tracker = await setup_slot_call_tracker(bot, SLOT_CALLS_CHANNEL_ID)
+            if SLOT_CALLS_CHANNEL_ID:
+                print(f"✅ Slot call tracker initialized (channel: {SLOT_CALLS_CHANNEL_ID})")
             else:
-                print("⚠️ Slot call tracker initialized but no channel configured (set SLOT_CALL_CHANNEL_ID)")
+                print("⚠️ Slot call tracker initialized but no channel configured (set SLOT_CALLS_CHANNEL_ID)")
             
         except Exception as e:
             print(f"⚠️ Failed to initialize raffle system: {e}")
