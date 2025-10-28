@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class SlotCallTracker:
     """Track slot calls from Kick chat and post to Discord"""
     
-    def __init__(self, bot, discord_channel_id: Optional[int] = None):
+    def __init__(self, bot, discord_channel_id: Optional[int] = None, kick_send_callback=None):
         self.bot = bot
         self.discord_channel_id = discord_channel_id
         self.enabled = True  # Default to enabled
@@ -22,6 +22,7 @@ class SlotCallTracker:
         self.cooldown_seconds = 30  # 30 second cooldown per user
         self.max_username_length = 50  # Maximum username length
         self.max_slot_call_length = 200  # Maximum slot call text length
+        self.kick_send_callback = kick_send_callback  # Callback to send messages to Kick chat
         
     def is_enabled(self) -> bool:
         """Check if slot call tracking is enabled"""
@@ -82,6 +83,16 @@ class SlotCallTracker:
         try:
             await channel.send(embed=embed)
             logger.info(f"Posted slot call from {kick_username_safe}: {slot_call_safe}")
+            
+            # Send confirmation message to Kick chat if callback is available
+            if self.kick_send_callback:
+                kick_response = f"@{kick_username_safe} Your slot request for {slot_call_safe} has been received! ✅"
+                try:
+                    await self.kick_send_callback(kick_response)
+                    logger.info(f"Sent Kick chat response to {kick_username_safe}")
+                except Exception as kick_error:
+                    logger.error(f"Failed to send Kick chat response: {kick_error}")
+                    
         except Exception as e:
             logger.error(f"Failed to post slot call to Discord: {e}")
 
@@ -142,18 +153,19 @@ class SlotCallCommands(commands.Cog):
             await ctx.send("❌ You need administrator permission to use this command.")
 
 
-async def setup_slot_call_tracker(bot, discord_channel_id: Optional[int] = None):
+async def setup_slot_call_tracker(bot, discord_channel_id: Optional[int] = None, kick_send_callback=None):
     """
     Setup slot call tracker
     
     Args:
         bot: Discord bot instance
         discord_channel_id: Discord channel ID to post slot calls to
+        kick_send_callback: Optional callback function to send messages to Kick chat
     
     Returns:
         SlotCallTracker instance
     """
-    tracker = SlotCallTracker(bot, discord_channel_id)
+    tracker = SlotCallTracker(bot, discord_channel_id, kick_send_callback)
     
     # Add commands
     await bot.add_cog(SlotCallCommands(bot, tracker))
