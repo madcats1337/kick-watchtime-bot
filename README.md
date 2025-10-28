@@ -143,7 +143,18 @@ SLOT_CALLS_CHANNEL_ID=123456789                # Discord channel for slot call n
 
 **Note:** OAuth linking requires deploying the OAuth server (see [docs/OAUTH_SETUP.md](docs/OAUTH_SETUP.md)).
 
-**Kick Chat Responses:** To enable automatic responses in Kick chat when users use `!call` or `!sr`, set your existing `KICK_CLIENT_ID` and `KICK_CLIENT_SECRET` (from your registered Kick app). The bot will automatically obtain OAuth tokens and send responses. Without these credentials, the bot only posts to Discord (read-only mode).
+**Kick Chat Responses:** To enable automatic responses in Kick chat when users use `!call` or `!sr`:
+
+The bot uses the official Kick Chat API with OAuth2 Client Credentials flow. Simply ensure your Kick bot app credentials are set:
+- `KICK_CLIENT_ID` - Your Kick app client ID (already configured for OAuth)
+- `KICK_CLIENT_SECRET` - Your Kick app client secret (already configured for OAuth)
+
+The bot will automatically:
+1. Generate an OAuth token using Client Credentials flow
+2. Send messages to the channel attached to your bot token
+3. Auto-refresh tokens when they expire
+
+No manual cookie extraction needed! The same credentials used for Discord OAuth are reused for Kick chat responses.
 
 **Raffle System:** See [docs/implementation/RAFFLE_SYSTEM_IMPLEMENTATION_PLAN.md](docs/implementation/RAFFLE_SYSTEM_IMPLEMENTATION_PLAN.md) for complete documentation on ticket earning and raffle mechanics.
 
