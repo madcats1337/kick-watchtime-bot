@@ -692,13 +692,14 @@ def auth_kick_callback():
 def handle_bot_authorization_callback(code, code_verifier, state):
     """Handle bot authorization callback."""
     try:
-        # Ensure bot_tokens table exists
+        # Ensure bot_tokens table exists with expires_at column
         with engine.begin() as conn:
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS bot_tokens (
                     bot_username TEXT PRIMARY KEY,
                     access_token TEXT NOT NULL,
                     refresh_token TEXT,
+                    expires_at TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """))
@@ -707,12 +708,13 @@ def handle_bot_authorization_callback(code, code_verifier, state):
         print(f"🔄 Exchanging code for bot token...", flush=True)
         token_data = exchange_code_for_token(code, code_verifier=code_verifier)
         access_token = token_data.get('access_token')
+        expires_in = token_data.get('expires_in', 3600)  # Default to 1 hour if not provided
         
         if not access_token:
             print(f"❌ No access token in response: {list(token_data.keys())}", flush=True)
             return render_error("Failed to obtain access token from Kick")
         
-        print(f"✅ Got bot access token", flush=True)
+        print(f"✅ Got bot access token (expires in {expires_in} seconds)", flush=True)
         
         # Get bot user info
         try:
@@ -723,19 +725,21 @@ def handle_bot_authorization_callback(code, code_verifier, state):
             print(f"⚠️ Could not get bot user info: {e}", flush=True)
             kick_username = "Unknown"
         
-        # Store token in database
+        # Store token in database with expiration time
         with engine.begin() as conn:
             conn.execute(text("""
                 DELETE FROM bot_tokens WHERE bot_username = :username
             """), {"username": kick_username})
             
             conn.execute(text("""
-                INSERT INTO bot_tokens (bot_username, access_token, refresh_token, created_at)
-                VALUES (:username, :access_token, :refresh_token, CURRENT_TIMESTAMP)
+                INSERT INTO bot_tokens (bot_username, access_token, refresh_token, expires_at, created_at)
+                VALUES (:username, :access_token, :refresh_token, 
+                        CURRENT_TIMESTAMP + INTERVAL ':expires_in seconds', CURRENT_TIMESTAMP)
             """), {
                 "username": kick_username,
                 "access_token": access_token,
-                "refresh_token": token_data.get('refresh_token', '')
+                "refresh_token": token_data.get('refresh_token', ''),
+                "expires_in": expires_in
             })
             
             # Clean up state

@@ -29,22 +29,24 @@ try:
         # Drop old table if it has wrong schema
         conn.execute(text("DROP TABLE IF EXISTS bot_tokens"))
         
-        # Create bot_tokens table with OAuth authentication fields
+        # Create bot_tokens table with OAuth authentication fields and expiration tracking
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS bot_tokens (
                 bot_username TEXT PRIMARY KEY,
                 access_token TEXT NOT NULL,
                 refresh_token TEXT,
+                expires_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """))
-        print("\n✅ bot_tokens table created successfully (OAuth)!")
+        print("\n✅ bot_tokens table created successfully (OAuth with expiration tracking)!")
         
         # Check if table exists and show structure (works for both PostgreSQL and SQLite)
         print("\n📋 Table structure:")
         print("   - bot_username: TEXT (PRIMARY KEY)")
         print("   - access_token: TEXT (NOT NULL)")
         print("   - refresh_token: TEXT")
+        print("   - expires_at: TIMESTAMP (when access token expires)")
         print("   - created_at: TIMESTAMP")
         
         # Show any existing bot tokens (just count, not the actual tokens)
