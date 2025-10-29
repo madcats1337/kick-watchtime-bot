@@ -613,7 +613,10 @@ async def refresh_kick_oauth_token() -> bool:
                         print("[Kick] ❌ No access_token in refresh response")
                         return False
                     
-                    print(f"[Kick] ✅ New token expires in {expires_in} seconds")
+                    print(f"[Kick] ✅ New token expires in {expires_in} seconds ({expires_in/3600:.1f} hours)")
+                    
+                    # Calculate expiration time in Python (safer than SQL date math)
+                    expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
                     
                     # Update tokens in database with expiration time
                     with engine.begin() as conn:
@@ -621,13 +624,13 @@ async def refresh_kick_oauth_token() -> bool:
                             UPDATE bot_tokens 
                             SET access_token = :access_token, 
                                 refresh_token = :refresh_token,
-                                expires_at = CURRENT_TIMESTAMP + INTERVAL ':expires_in seconds',
+                                expires_at = :expires_at,
                                 created_at = CURRENT_TIMESTAMP
                             WHERE bot_username = 'maikelele'
                         """), {
                             "access_token": new_access_token,
                             "refresh_token": new_refresh_token,
-                            "expires_in": expires_in
+                            "expires_at": expires_at
                         })
                     
                     print(f"[Kick] ✅ OAuth token refreshed successfully!")
@@ -1281,14 +1284,14 @@ async def check_oauth_notifications_task():
                     
     except Exception as e:
         print(f"⚠️ Error in OAuth notifications task: {e}", flush=True)
-@tasks.loop(hours=1)  # Check every hour
+@tasks.loop(minutes=30)  # Check every 30 minutes for faster response
 async def proactive_token_refresh_task():
     """Proactively refresh OAuth token before it expires."""
     if not engine:
         return
     
     try:
-        # Check if token will expire in the next 2 hours
+        # Check if token will expire soon
         with engine.connect() as conn:
             result = conn.execute(text("""
                 SELECT expires_at, bot_username FROM bot_tokens 
@@ -1307,17 +1310,23 @@ async def proactive_token_refresh_task():
             
             now = datetime.now(timezone.utc)
             time_until_expiry = expires_at - now
-            hours_until_expiry = time_until_expiry.total_seconds() / 3600
+            minutes_until_expiry = time_until_expiry.total_seconds() / 60
             
-            # Refresh if token expires in less than 2 hours
-            if hours_until_expiry < 2:
-                print(f"[Kick] ⚠️  Token expires in {hours_until_expiry:.1f} hours - refreshing proactively...")
+            # Refresh if token expires in less than 30 minutes (very aggressive)
+            # This ensures we always have a valid token
+            if minutes_until_expiry < 30:
+                print(f"[Kick] ⚠️  Token expires in {minutes_until_expiry:.1f} minutes - refreshing proactively...")
                 if await refresh_kick_oauth_token():
                     print(f"[Kick] ✅ Proactive token refresh successful!")
                 else:
                     print(f"[Kick] ❌ Proactive token refresh failed - will retry on next cycle")
+            elif minutes_until_expiry < 120:
+                # Warn if getting close
+                print(f"[Kick] ⚠️  Token expires in {minutes_until_expiry:.1f} minutes")
             else:
-                print(f"[Kick] ✓ Token valid for {hours_until_expiry:.1f} more hours")
+                # Only log occasionally to avoid spam
+                hours = minutes_until_expiry / 60
+                print(f"[Kick] ✓ Token valid for {hours:.1f} more hours")
     
     except Exception as e:
         print(f"[Kick] ❌ Error in proactive token refresh: {e}")

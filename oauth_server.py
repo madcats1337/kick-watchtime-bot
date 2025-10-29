@@ -726,6 +726,10 @@ def handle_bot_authorization_callback(code, code_verifier, state):
             kick_username = "Unknown"
         
         # Store token in database with expiration time
+        # Calculate expiration time in Python (works with both SQLite and PostgreSQL)
+        from datetime import datetime, timedelta, timezone
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+        
         with engine.begin() as conn:
             conn.execute(text("""
                 DELETE FROM bot_tokens WHERE bot_username = :username
@@ -733,13 +737,12 @@ def handle_bot_authorization_callback(code, code_verifier, state):
             
             conn.execute(text("""
                 INSERT INTO bot_tokens (bot_username, access_token, refresh_token, expires_at, created_at)
-                VALUES (:username, :access_token, :refresh_token, 
-                        CURRENT_TIMESTAMP + INTERVAL ':expires_in seconds', CURRENT_TIMESTAMP)
+                VALUES (:username, :access_token, :refresh_token, :expires_at, CURRENT_TIMESTAMP)
             """), {
                 "username": kick_username,
                 "access_token": access_token,
                 "refresh_token": token_data.get('refresh_token', ''),
-                "expires_in": expires_in
+                "expires_at": expires_at
             })
             
             # Clean up state
