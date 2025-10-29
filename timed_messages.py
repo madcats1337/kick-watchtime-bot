@@ -445,24 +445,46 @@ class TimedMessagesCommands(commands.Cog):
         [ADMIN] Open interactive timer management panel
         Usage: !timerpanel
         
-        Shows all timed messages with their status and provides
-        a quick reference. Use the text commands to manage timers.
+        React to manage timers:
+        📋 - Refresh panel
+        ✅ - Enable timer (react to timer field)
+        ❌ - Disable timer (react to timer field)
+        🗑️ - Delete timer (react to timer field)
         """
         messages = self.manager.list_messages()
         
         embed = discord.Embed(
             title="⏰ Timed Messages Control Panel",
+            description="React to this message to manage timers:\n\n"
+                       "📋 - Refresh panel\n"
+                       "✅ - Show enabled timers\n"
+                       "❌ - Show disabled timers\n"
+                       "🔄 - Toggle all timers",
             color=discord.Color.blue(),
             timestamp=datetime.utcnow()
         )
         
         if not messages:
-            embed.description = "📭 No timed messages configured\n\nUse `!addtimer <minutes> <message>` to create one!"
+            embed.add_field(
+                name="📭 No Timers",
+                value="Use `!addtimer <minutes> <message>` to create one!",
+                inline=False
+            )
         else:
-            # Show all messages with details
-            for i, msg in enumerate(messages, 1):
+            # Show summary of all messages
+            enabled_count = sum(1 for m in messages if m.enabled)
+            disabled_count = len(messages) - enabled_count
+            
+            summary = f"**Total:** {len(messages)} timer(s)\n"
+            summary += f"✅ **Enabled:** {enabled_count}\n"
+            summary += f"❌ **Disabled:** {disabled_count}"
+            
+            embed.add_field(name="📊 Summary", value=summary, inline=False)
+            
+            # Show each timer with ID for commands
+            for i, msg in enumerate(messages[:10], 1):  # Show max 10
                 status_emoji = "✅" if msg.enabled else "❌"
-                last_sent = msg.last_sent.strftime('%H:%M UTC') if msg.last_sent else "Never"
+                last_sent = msg.last_sent.strftime('%H:%M') if msg.last_sent else "Never"
                 
                 # Calculate next send time
                 if msg.enabled and msg.last_sent:
@@ -470,42 +492,66 @@ class TimedMessagesCommands(commands.Cog):
                     time_until = next_send - datetime.utcnow()
                     if time_until.total_seconds() > 0:
                         minutes_left = int(time_until.total_seconds() / 60)
-                        next_info = f"Next: in {minutes_left}m"
+                        next_info = f"in {minutes_left}m"
                     else:
-                        next_info = "Next: due now"
+                        next_info = "due now"
                 else:
-                    next_info = "Next: waiting to start"
+                    next_info = "waiting"
                 
                 field_value = (
-                    f"{status_emoji} **Status:** {'Enabled' if msg.enabled else 'Disabled'}\n"
-                    f"⏱️ **Interval:** {msg.interval_minutes} minutes\n"
-                    f"📤 **Last sent:** {last_sent}\n"
-                    f"⏭️ {next_info}\n"
-                    f"💬 **Message:** {msg.message[:80]}{'...' if len(msg.message) > 80 else ''}"
+                    f"{status_emoji} **ID:** {msg.message_id} | **Every:** {msg.interval_minutes}m | **Next:** {next_info}\n"
+                    f"💬 {msg.message[:60]}{'...' if len(msg.message) > 60 else ''}"
                 )
                 
                 embed.add_field(
-                    name=f"Timer #{msg.message_id}",
+                    name=f"Timer #{i}",
                     value=field_value,
+                    inline=False
+                )
+            
+            if len(messages) > 10:
+                embed.add_field(
+                    name="ℹ️ More Timers",
+                    value=f"Showing 10 of {len(messages)}. Use `!listtimers` to see all.",
                     inline=False
                 )
         
         # Add command reference
         embed.add_field(
-            name="📝 Quick Commands",
+            name="📝 Commands",
             value=(
-                "• `!addtimer <min> <msg>` - Add timer\n"
-                "• `!removetimer <id>` - Delete timer\n"
-                "• `!toggletimer <id> <on/off>` - Enable/disable\n"
-                "• `!updatetimer <id> <min>` - Change interval\n"
-                "• `!listtimers` - Detailed list"
+                "`!addtimer <min> <msg>` • `!removetimer <id>`\n"
+                "`!toggletimer <id> on/off` • `!updatetimer <id> <min>`"
             ),
             inline=False
         )
         
-        embed.set_footer(text=f"Total: {len(messages)} timer(s) • Checks every 1 minute")
+        embed.set_footer(text=f"Checks every 1 minute • React to manage")
         
-        await ctx.send(embed=embed)
+        panel = await ctx.send(embed=embed)
+        
+        # Add reaction buttons
+        await panel.add_reaction("📋")  # Refresh
+        await panel.add_reaction("✅")  # Show enabled
+        await panel.add_reaction("❌")  # Show disabled
+        await panel.add_reaction("🔄")  # Toggle all
+        
+        # Store panel in database for reaction handling
+        if self.manager.engine:
+            try:
+                with self.manager.engine.begin() as conn:
+                    conn.execute(text("""
+                        INSERT INTO timer_panels (guild_id, channel_id, message_id)
+                        VALUES (:guild, :channel, :message)
+                        ON CONFLICT (guild_id, channel_id, message_id) DO NOTHING
+                    """), {
+                        'guild': ctx.guild.id,
+                        'channel': ctx.channel.id,
+                        'message': panel.id
+                    })
+                logger.info(f"Stored timer panel {panel.id}")
+            except Exception as e:
+                logger.error(f"Failed to store timer panel: {e}")
 
 
 async def setup_timed_messages(bot, engine, kick_send_callback=None):
