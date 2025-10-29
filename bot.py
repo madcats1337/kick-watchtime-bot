@@ -104,8 +104,9 @@ KICK_CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET", "")  # Used for both OAuth 
 OAUTH_SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "")
 
 # Kick bot configuration (for sending chat messages)
-# Uses OAuth2 Client Credentials flow - token is auto-generated
-KICK_BOT_TOKEN = None  # Will be generated from KICK_CLIENT_ID + KICK_CLIENT_SECRET
+# Requires User Access Token from OAuth flow, not App Access Token
+KICK_BOT_USER_TOKEN = os.getenv("KICK_BOT_USER_TOKEN", "")  # User access token for Lelebot
+KICK_BOT_TOKEN = None  # Deprecated - keeping for backwards compatibility
 
 # CRITICAL: If FLASK_SECRET_KEY is not set, OAuth will not work!
 if not OAUTH_SECRET_KEY:
@@ -547,7 +548,7 @@ async def get_kick_bot_token() -> Optional[str]:
 async def send_kick_message(message: str) -> bool:
     """
     Send a message to Kick chat using the official Kick API.
-    Uses OAuth2 Client Credentials token for bot authentication.
+    Requires a User Access Token (not App Access Token).
     
     Args:
         message: The message to send
@@ -555,20 +556,18 @@ async def send_kick_message(message: str) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    global KICK_BOT_TOKEN
     
-    # Get token if we don't have one
-    if not KICK_BOT_TOKEN:
-        if not await get_kick_bot_token():
-            print("[Kick] ⚠️ Cannot send message: Failed to get access token")
-            return False
+    if not KICK_BOT_USER_TOKEN:
+        print("[Kick] ⚠️ Cannot send message: KICK_BOT_USER_TOKEN not configured")
+        print("[Kick] ℹ️  Chat API requires User Access Token, not App Access Token")
+        return False
     
     try:
         # Official Kick API endpoint for posting chat messages
         url = "https://api.kick.com/public/v1/chat"
         
         headers = {
-            "Authorization": f"Bearer {KICK_BOT_TOKEN}",
+            "Authorization": f"Bearer {KICK_BOT_USER_TOKEN}",
             "Content-Type": "application/json",
             "Accept": "*/*"
         }
@@ -587,12 +586,6 @@ async def send_kick_message(message: str) -> bool:
                 else:
                     error_text = await response.text()
                     print(f"[Kick] ❌ Failed to send message (HTTP {response.status}): {error_text}")
-                    
-                    # If token expired (401), clear it so we get a new one next time
-                    if response.status == 401:
-                        KICK_BOT_TOKEN = None
-                        print("[Kick] 🔄 Token expired, will refresh on next message")
-                    
                     return False
     
     except Exception as e:
@@ -2377,19 +2370,19 @@ async def on_ready():
             await sync_shuffle_role_on_startup(bot, engine)
             
             # Setup slot call tracker with Kick chat callback
-            has_kick_credentials = KICK_CLIENT_ID and KICK_CLIENT_SECRET
             slot_call_tracker = await setup_slot_call_tracker(
                 bot, 
                 SLOT_CALLS_CHANNEL_ID,
-                kick_send_callback=send_kick_message if has_kick_credentials else None
+                kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
             )
             if SLOT_CALLS_CHANNEL_ID:
                 print(f"✅ Slot call tracker initialized (channel: {SLOT_CALLS_CHANNEL_ID})")
-                if has_kick_credentials:
+                if KICK_BOT_USER_TOKEN:
                     print(f"✅ Kick chat responses enabled (bot: Lelebot)")
-                    print(f"   Using OAuth2 Client Credentials with official Kick API")
+                    print(f"   Using User Access Token for chat API")
                 else:
-                    print("ℹ️  Kick chat responses disabled (set KICK_CLIENT_ID and KICK_CLIENT_SECRET to enable)")
+                    print("ℹ️  Kick chat responses disabled (set KICK_BOT_USER_TOKEN to enable)")
+                    print("ℹ️  Get token from: https://docs.kick.com/getting-started/generating-tokens-oauth2-flow")
             else:
                 print("⚠️ Slot call tracker initialized but no channel configured (set SLOT_CALLS_CHANNEL_ID)")
             

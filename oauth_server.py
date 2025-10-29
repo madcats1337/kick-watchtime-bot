@@ -163,6 +163,16 @@ with engine.begin() as conn:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """))
+    
+    # Create bot_tokens table for securely storing bot access tokens
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS bot_tokens (
+            bot_username TEXT PRIMARY KEY,
+            access_token TEXT NOT NULL,
+            refresh_token TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
 
 # Note: OAuth states are stored in database, not in-memory
 # This is necessary because Gunicorn workers don't share memory
@@ -751,11 +761,13 @@ def auth_kick_callback():
         return render_error(f"An error occurred: {str(e)}")
 
 
-def exchange_code_for_token(code, code_verifier=None):
+def exchange_code_for_token(code, code_verifier=None, redirect_uri=None):
     """Exchange authorization code for access token."""
     import requests
     
-    redirect_uri = f"{OAUTH_BASE_URL}/auth/kick/callback"
+    # Use provided redirect_uri or default to auth/kick/callback
+    if redirect_uri is None:
+        redirect_uri = f"{OAUTH_BASE_URL}/auth/kick/callback"
     
     token_data = {
         'grant_type': 'authorization_code',
@@ -997,6 +1009,228 @@ def render_error(message):
         </body>
     </html>
     """, 400
+
+
+@app.route('/bot/authorize')
+def bot_authorize():
+    """
+    Special route for getting bot access token without Discord account requirement.
+    This initiates OAuth flow specifically for the bot account.
+    """
+    print(f"🤖 Bot authorization initiated", flush=True)
+    
+    # Generate PKCE pair
+    code_verifier, code_challenge = generate_pkce_pair()
+    
+    # Generate state for CSRF protection
+    state = secrets.token_urlsafe(32)
+    print(f"🔑 Generated state for bot authorization", flush=True)
+    
+    # Store state in database with special discord_id = 0 for bot
+    with engine.begin() as conn:
+        # Clean up old states
+        deleted_count = conn.execute(text("""
+            DELETE FROM oauth_states 
+            WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes'
+        """)).rowcount
+        print(f"🧹 Cleaned up {deleted_count} expired state(s)", flush=True)
+        
+        # Store new state with discord_id = 0 to indicate bot authorization
+        conn.execute(text("""
+            INSERT INTO oauth_states (state, discord_id, code_verifier, created_at)
+            VALUES (:state, :discord_id, :code_verifier, CURRENT_TIMESTAMP)
+        """), {"state": state, "discord_id": 0, "code_verifier": code_verifier})
+        print(f"✅ Bot state saved to database", flush=True)
+    
+    # Build authorization URL with chat:send scope
+    redirect_uri = f"{OAUTH_BASE_URL}/bot/callback"
+    
+    auth_params = {
+        'client_id': KICK_CLIENT_ID,
+        'response_type': 'code',
+        'redirect_uri': redirect_uri,
+        'state': state,
+        'scope': 'chat:send',  # Bot needs chat:send permission
+        'code_challenge': code_challenge,
+        'code_challenge_method': 'S256'
+    }
+    
+    print(f"🔗 Bot authorization URL: {KICK_AUTHORIZE_URL}?{urlencode(auth_params)}", flush=True)
+    
+    auth_url = f"{KICK_AUTHORIZE_URL}?{urlencode(auth_params)}"
+    
+    return redirect(auth_url)
+
+
+@app.route('/bot/callback')
+def bot_callback():
+    """Handle OAuth callback for bot authorization."""
+    print(f"🤖 Bot callback received!", flush=True)
+    
+    code = request.args.get('code')
+    state = request.args.get('state')
+    error = request.args.get('error')
+    
+    print(f"📥 Code: {sanitize_for_logs(code, 'code')}, State: {sanitize_for_logs(state, 'state')}, Error: {error}", flush=True)
+    
+    if error:
+        print(f"❌ Kick returned error: {error}", flush=True)
+        return render_error(f"Kick authorization failed: {error}")
+    
+    if not code or not state:
+        print(f"❌ Missing code or state", flush=True)
+        return render_error("Missing authorization code or state")
+    
+    # Verify state from database
+    print(f"🔍 Checking state in database...", flush=True)
+    with engine.connect() as conn:
+        result = conn.execute(text("""
+            SELECT discord_id, code_verifier, created_at FROM oauth_states WHERE state = :state
+        """), {"state": state}).fetchone()
+    
+    if not result or result[0] != 0:  # discord_id must be 0 for bot authorization
+        print(f"❌ Invalid bot state", flush=True)
+        return render_error("Invalid or expired state. Please try again.")
+    
+    code_verifier = result[1]
+    print(f"✅ Bot state valid", flush=True)
+    
+    # Exchange code for access token
+    try:
+        token_data = exchange_code_for_token(code, code_verifier=code_verifier, redirect_uri=f"{OAUTH_BASE_URL}/bot/callback")
+        access_token = token_data.get('access_token')
+        
+        if not access_token:
+            return render_error("Failed to obtain access token from Kick")
+        
+        print(f"✅ Got bot access token", flush=True)
+        
+        # Get bot user info to verify
+        try:
+            kick_user = get_kick_user_info(access_token)
+            kick_username = kick_user.get('username', 'Unknown')
+            print(f"🤖 Bot username: {kick_username}", flush=True)
+        except Exception as e:
+            print(f"⚠️ Could not get bot user info: {e}", flush=True)
+            kick_username = "Unknown"
+        
+        # Store token in database securely (NOT displayed in browser)
+        with engine.begin() as conn:
+            # Delete any existing bot tokens
+            conn.execute(text("""
+                DELETE FROM bot_tokens WHERE bot_username = :username
+            """), {"username": kick_username})
+            
+            # Store new bot token
+            conn.execute(text("""
+                INSERT INTO bot_tokens (bot_username, access_token, refresh_token, created_at)
+                VALUES (:username, :access_token, :refresh_token, CURRENT_TIMESTAMP)
+            """), {
+                "username": kick_username,
+                "access_token": access_token,
+                "refresh_token": token_data.get('refresh_token', '')
+            })
+            print(f"✅ Bot token stored securely in database", flush=True)
+        
+        # Clean up the state
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM oauth_states WHERE state = :state"), {"state": state})
+        
+        # Display success message WITHOUT showing the token
+        return f"""
+        <html>
+            <head>
+                <title>Bot Authorized</title>
+                <style>
+                    body {{
+                        font-family: Arial, sans-serif;
+                        padding: 40px;
+                        max-width: 800px;
+                        margin: 0 auto;
+                        background: #f5f5f5;
+                    }}
+                    .container {{
+                        background: white;
+                        padding: 30px;
+                        border-radius: 10px;
+                        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                    }}
+                    h1 {{ color: #53fc18; }}
+                    .instructions {{
+                        background: #e3f2fd;
+                        padding: 15px;
+                        border-radius: 5px;
+                        margin-top: 20px;
+                    }}
+                    .command {{
+                        background: #2d2d2d;
+                        color: #f8f8f2;
+                        padding: 15px;
+                        border-radius: 5px;
+                        font-family: monospace;
+                        margin: 15px 0;
+                        overflow-x: auto;
+                    }}
+                    code {{
+                        background: #f0f0f0;
+                        padding: 2px 6px;
+                        border-radius: 3px;
+                        font-family: monospace;
+                    }}
+                    .success {{
+                        background: #d4edda;
+                        padding: 15px;
+                        border-radius: 5px;
+                        border-left: 4px solid #28a745;
+                        margin-bottom: 20px;
+                    }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h1>✅ Bot Successfully Authorized!</h1>
+                    
+                    <div class="success">
+                        <strong>Bot Account:</strong> {kick_username}<br>
+                        <strong>Status:</strong> Token stored securely in database
+                    </div>
+                    
+                    <div class="instructions">
+                        <h3>📋 Next Steps:</h3>
+                        <p><strong>Run this command locally to retrieve the token:</strong></p>
+                        <div class="command">python get_bot_token_from_db.py</div>
+                        
+                        <p>This script will:</p>
+                        <ol>
+                            <li>Connect to your database securely</li>
+                            <li>Retrieve the bot token for {kick_username}</li>
+                            <li>Display it in your local terminal only</li>
+                        </ol>
+                        
+                        <p><strong>Then add it to Railway:</strong></p>
+                        <ol>
+                            <li>Copy the token from your terminal</li>
+                            <li>Go to Railway project settings</li>
+                            <li>Add environment variable: <code>KICK_BOT_USER_TOKEN</code></li>
+                            <li>Paste the token as the value</li>
+                            <li>Redeploy your bot</li>
+                        </ol>
+                    </div>
+                    
+                    <p style="margin-top: 30px; color: #666; font-size: 14px;">
+                        🔒 For security, the token is not displayed in your browser.<br>
+                        It's stored in your database and can only be retrieved using the script above.
+                    </p>
+                </div>
+            </body>
+        </html>
+        """
+        
+    except Exception as e:
+        print(f"❌ Error during bot token exchange: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        return render_error(f"Failed to exchange code for token: {str(e)}")
 
 
 if __name__ == '__main__':
