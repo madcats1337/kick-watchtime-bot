@@ -640,8 +640,7 @@ async def refresh_kick_token() -> bool:
                         conn.execute(text("""
                             UPDATE bot_tokens 
                             SET access_token = :access,
-                                refresh_token = :refresh,
-                                updated_at = CURRENT_TIMESTAMP
+                                refresh_token = :refresh
                             WHERE bot_username = :username
                         """), {
                             "access": new_access_token,
