@@ -456,10 +456,10 @@ class TimedMessagesCommands(commands.Cog):
         embed = discord.Embed(
             title="⏰ Timed Messages Control Panel",
             description="React to this message to manage timers:\n\n"
-                       "📋 - Refresh panel\n"
-                       "✅ - Show enabled timers\n"
-                       "❌ - Show disabled timers\n"
-                       "🔄 - Toggle all timers",
+                       "� - Refresh panel\n"
+                       "📋 - Show list of timers\n"
+                       "❌ - Disable timer (will ask for ID)\n"
+                       "✅ - Enable timer (will ask for ID)",
             color=discord.Color.blue(),
             timestamp=datetime.utcnow()
         )
@@ -531,10 +531,10 @@ class TimedMessagesCommands(commands.Cog):
         panel = await ctx.send(embed=embed)
         
         # Add reaction buttons
-        await panel.add_reaction("📋")  # Refresh
-        await panel.add_reaction("✅")  # Show enabled
-        await panel.add_reaction("❌")  # Show disabled
-        await panel.add_reaction("🔄")  # Toggle all
+        await panel.add_reaction("�")  # Refresh
+        await panel.add_reaction("📋")  # Show list
+        await panel.add_reaction("❌")  # Disable (asks for ID)
+        await panel.add_reaction("✅")  # Enable (asks for ID)
         
         # Store panel in database for reaction handling
         if self.manager.engine:

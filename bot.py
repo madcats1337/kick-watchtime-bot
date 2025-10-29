@@ -2482,14 +2482,14 @@ async def handle_timer_panel_reaction(payload):
     messages = manager.list_messages()
     
     # Handle different reactions
-    if reaction_emoji == "📋":  # Refresh panel
+    if reaction_emoji == "�":  # Refresh panel
         embed = discord.Embed(
             title="⏰ Timed Messages Control Panel",
             description="React to this message to manage timers:\n\n"
-                       "📋 - Refresh panel\n"
-                       "✅ - Show enabled timers\n"
-                       "❌ - Show disabled timers\n"
-                       "🔄 - Toggle all timers",
+                       "� - Refresh panel\n"
+                       "📋 - Show list of timers\n"
+                       "❌ - Disable timer (will ask for ID)\n"
+                       "✅ - Enable timer (will ask for ID)",
             color=discord.Color.blue(),
             timestamp=datetime.utcnow()
         )
@@ -2551,64 +2551,171 @@ async def handle_timer_panel_reaction(payload):
         
         await message.edit(embed=embed)
         
-    elif reaction_emoji == "✅":  # Show enabled
-        enabled = [m for m in messages if m.enabled]
+    elif reaction_emoji == "📋":  # Show list of timers
         embed = discord.Embed(
-            title="✅ Enabled Timers",
-            color=discord.Color.green()
+            title="📋 All Timers",
+            color=discord.Color.blue(),
+            timestamp=datetime.utcnow()
         )
         
-        if not enabled:
-            embed.description = "No enabled timers"
+        if not messages:
+            embed.description = "No timers configured"
         else:
-            for msg in enabled[:15]:
+            for msg in messages[:20]:  # Show up to 20
+                status_emoji = "✅" if msg.enabled else "❌"
+                last_sent = msg.last_sent.strftime('%H:%M') if msg.last_sent else "Never"
+                
+                if msg.enabled and msg.last_sent:
+                    next_send = msg.last_sent + timedelta(minutes=msg.interval_minutes)
+                    time_until = next_send - datetime.utcnow()
+                    if time_until.total_seconds() > 0:
+                        minutes_left = int(time_until.total_seconds() / 60)
+                        next_info = f"in {minutes_left}m"
+                    else:
+                        next_info = "due now"
+                else:
+                    next_info = "waiting"
+                
                 embed.add_field(
-                    name=f"ID: {msg.message_id} | Every {msg.interval_minutes}m",
-                    value=f"{msg.message[:80]}{'...' if len(msg.message) > 80 else ''}",
+                    name=f"{status_emoji} Timer ID: {msg.message_id}",
+                    value=f"**Every:** {msg.interval_minutes}m | **Next:** {next_info}\n{msg.message[:80]}{'...' if len(msg.message) > 80 else ''}",
                     inline=False
                 )
+            
+            if len(messages) > 20:
+                embed.set_footer(text=f"Showing 20 of {len(messages)} • Use !listtimers to see all • React 🔄 to go back")
+            else:
+                embed.set_footer(text=f"{len(messages)} total • React � to go back")
         
-        embed.set_footer(text=f"{len(enabled)} enabled • React 📋 to go back")
         await message.edit(embed=embed)
         
-    elif reaction_emoji == "❌":  # Show disabled
-        disabled = [m for m in messages if not m.enabled]
+    elif reaction_emoji == "❌":  # Disable timer (ask for ID)
         embed = discord.Embed(
-            title="❌ Disabled Timers",
+            title="❌ Disable Timer",
+            description=f"{member.mention}, please reply with the **Timer ID** you want to disable.\n\nYou have 30 seconds to respond.",
             color=discord.Color.red()
         )
         
-        if not disabled:
-            embed.description = "No disabled timers"
-        else:
-            for msg in disabled[:15]:
-                embed.add_field(
-                    name=f"ID: {msg.message_id} | Every {msg.interval_minutes}m",
-                    value=f"{msg.message[:80]}{'...' if len(msg.message) > 80 else ''}",
-                    inline=False
-                )
+        if messages:
+            enabled = [m for m in messages if m.enabled]
+            if enabled:
+                timer_list = "\n".join([f"• **ID {m.message_id}**: {m.message[:50]}{'...' if len(m.message) > 50 else ''}" for m in enabled[:10]])
+                embed.add_field(name="Enabled Timers:", value=timer_list, inline=False)
+            else:
+                embed.description = "No enabled timers to disable!"
         
-        embed.set_footer(text=f"{len(disabled)} disabled • React 📋 to go back")
+        embed.set_footer(text="Type 'cancel' to cancel")
         await message.edit(embed=embed)
         
-    elif reaction_emoji == "🔄":  # Toggle all
-        # Determine majority state
-        enabled_count = sum(1 for m in messages if m.enabled)
-        new_state = enabled_count < len(messages) / 2  # Enable if less than half are enabled
+        # Wait for user response
+        def check(m):
+            return m.author.id == member.id and m.channel.id == channel.id
         
-        for msg in messages:
-            manager.toggle_message(msg.message_id, new_state)
+        try:
+            response = await bot.wait_for('message', timeout=30.0, check=check)
+            
+            if response.content.lower() == 'cancel':
+                await response.delete()
+                await channel.send(f"❌ {member.mention} Cancelled.", delete_after=3)
+                # Refresh panel
+                payload.emoji = "🔄"
+                await handle_timer_panel_reaction(payload)
+                return
+            
+            try:
+                timer_id = int(response.content)
+                await response.delete()
+                
+                # Find and disable the timer
+                timer = next((m for m in messages if m.message_id == timer_id), None)
+                if timer:
+                    if not timer.enabled:
+                        await channel.send(f"ℹ️ {member.mention} Timer {timer_id} is already disabled.", delete_after=5)
+                    else:
+                        manager.toggle_message(timer_id, False)
+                        await channel.send(f"✅ {member.mention} Timer {timer_id} has been **disabled**!", delete_after=5)
+                else:
+                    await channel.send(f"❌ {member.mention} Timer ID {timer_id} not found.", delete_after=5)
+                
+            except ValueError:
+                await response.delete()
+                await channel.send(f"❌ {member.mention} Invalid ID. Please use a number.", delete_after=5)
+            
+            # Refresh panel
+            payload.emoji = "🔄"
+            await handle_timer_panel_reaction(payload)
+            return
+            
+        except asyncio.TimeoutError:
+            await channel.send(f"⏰ {member.mention} Timed out. Please try again.", delete_after=5)
+            # Refresh panel
+            payload.emoji = "🔄"
+            await handle_timer_panel_reaction(payload)
+            return
         
-        action = "enabled" if new_state else "disabled"
-        await channel.send(
-            f"🔄 {member.mention} All timers have been **{action}**!",
-            delete_after=5
+    elif reaction_emoji == "✅":  # Enable timer (ask for ID)
+        embed = discord.Embed(
+            title="✅ Enable Timer",
+            description=f"{member.mention}, please reply with the **Timer ID** you want to enable.\n\nYou have 30 seconds to respond.",
+            color=discord.Color.green()
         )
         
-        # Refresh panel
-        payload.emoji = "📋"
-        await handle_timer_panel_reaction(payload)
-        return  # Don't remove reaction since we're recursing
+        if messages:
+            disabled = [m for m in messages if not m.enabled]
+            if disabled:
+                timer_list = "\n".join([f"• **ID {m.message_id}**: {m.message[:50]}{'...' if len(m.message) > 50 else ''}" for m in disabled[:10]])
+                embed.add_field(name="Disabled Timers:", value=timer_list, inline=False)
+            else:
+                embed.description = "No disabled timers to enable!"
+        
+        embed.set_footer(text="Type 'cancel' to cancel")
+        await message.edit(embed=embed)
+        
+        # Wait for user response
+        def check(m):
+            return m.author.id == member.id and m.channel.id == channel.id
+        
+        try:
+            response = await bot.wait_for('message', timeout=30.0, check=check)
+            
+            if response.content.lower() == 'cancel':
+                await response.delete()
+                await channel.send(f"❌ {member.mention} Cancelled.", delete_after=3)
+                # Refresh panel
+                payload.emoji = "🔄"
+                await handle_timer_panel_reaction(payload)
+                return
+            
+            try:
+                timer_id = int(response.content)
+                await response.delete()
+                
+                # Find and enable the timer
+                timer = next((m for m in messages if m.message_id == timer_id), None)
+                if timer:
+                    if timer.enabled:
+                        await channel.send(f"ℹ️ {member.mention} Timer {timer_id} is already enabled.", delete_after=5)
+                    else:
+                        manager.toggle_message(timer_id, True)
+                        await channel.send(f"✅ {member.mention} Timer {timer_id} has been **enabled**!", delete_after=5)
+                else:
+                    await channel.send(f"❌ {member.mention} Timer ID {timer_id} not found.", delete_after=5)
+                
+            except ValueError:
+                await response.delete()
+                await channel.send(f"❌ {member.mention} Invalid ID. Please use a number.", delete_after=5)
+            
+            # Refresh panel
+            payload.emoji = "�"
+            await handle_timer_panel_reaction(payload)
+            return
+            
+        except asyncio.TimeoutError:
+            await channel.send(f"⏰ {member.mention} Timed out. Please try again.", delete_after=5)
+            # Refresh panel
+            payload.emoji = "🔄"
+            await handle_timer_panel_reaction(payload)
+            return
     
     # Remove the reaction
     try:
