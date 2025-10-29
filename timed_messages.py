@@ -531,10 +531,14 @@ class TimedMessagesCommands(commands.Cog):
         panel = await ctx.send(embed=embed)
         
         # Add reaction buttons
-        await panel.add_reaction("�")  # Refresh
-        await panel.add_reaction("📋")  # Show list
-        await panel.add_reaction("❌")  # Disable (asks for ID)
-        await panel.add_reaction("✅")  # Enable (asks for ID)
+        try:
+            await panel.add_reaction("🔄")  # Refresh
+            await panel.add_reaction("📋")  # Show list
+            await panel.add_reaction("❌")  # Disable (asks for ID)
+            await panel.add_reaction("✅")  # Enable (asks for ID)
+        except discord.HTTPException as e:
+            logger.error(f"Failed to add reactions: {e}")
+            await ctx.send(f"⚠️ Warning: Could not add reaction buttons (Discord API error)")
         
         # Store panel in database for reaction handling
         if self.manager.engine:
