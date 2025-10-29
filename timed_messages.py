@@ -444,34 +444,68 @@ class TimedMessagesCommands(commands.Cog):
         """
         [ADMIN] Open interactive timer management panel
         Usage: !timerpanel
+        
+        Shows all timed messages with their status and provides
+        a quick reference. Use the text commands to manage timers.
         """
         messages = self.manager.list_messages()
         
         embed = discord.Embed(
             title="⏰ Timed Messages Control Panel",
-            description="React to manage timed messages:\n\n"
-                       "➕ Add new timer\n"
-                       "📋 List all timers\n"
-                       "🔄 Refresh this panel",
-            color=discord.Color.blue()
+            color=discord.Color.blue(),
+            timestamp=datetime.utcnow()
         )
         
-        if messages:
-            status_text = ""
-            for msg in messages[:5]:  # Show first 5
-                status = "✅" if msg.enabled else "❌"
-                status_text += f"{status} #{msg.message_id}: {msg.message[:40]}... ({msg.interval_minutes}m)\n"
-            
-            embed.add_field(name="Active Timers", value=status_text or "None", inline=False)
+        if not messages:
+            embed.description = "📭 No timed messages configured\n\nUse `!addtimer <minutes> <message>` to create one!"
+        else:
+            # Show all messages with details
+            for i, msg in enumerate(messages, 1):
+                status_emoji = "✅" if msg.enabled else "❌"
+                last_sent = msg.last_sent.strftime('%H:%M UTC') if msg.last_sent else "Never"
+                
+                # Calculate next send time
+                if msg.enabled and msg.last_sent:
+                    next_send = msg.last_sent + timedelta(minutes=msg.interval_minutes)
+                    time_until = next_send - datetime.utcnow()
+                    if time_until.total_seconds() > 0:
+                        minutes_left = int(time_until.total_seconds() / 60)
+                        next_info = f"Next: in {minutes_left}m"
+                    else:
+                        next_info = "Next: due now"
+                else:
+                    next_info = "Next: waiting to start"
+                
+                field_value = (
+                    f"{status_emoji} **Status:** {'Enabled' if msg.enabled else 'Disabled'}\n"
+                    f"⏱️ **Interval:** {msg.interval_minutes} minutes\n"
+                    f"📤 **Last sent:** {last_sent}\n"
+                    f"⏭️ {next_info}\n"
+                    f"💬 **Message:** {msg.message[:80]}{'...' if len(msg.message) > 80 else ''}"
+                )
+                
+                embed.add_field(
+                    name=f"Timer #{msg.message_id}",
+                    value=field_value,
+                    inline=False
+                )
         
-        embed.set_footer(text="Use !addtimer, !removetimer, !toggletimer, or !listtimers")
+        # Add command reference
+        embed.add_field(
+            name="📝 Quick Commands",
+            value=(
+                "• `!addtimer <min> <msg>` - Add timer\n"
+                "• `!removetimer <id>` - Delete timer\n"
+                "• `!toggletimer <id> <on/off>` - Enable/disable\n"
+                "• `!updatetimer <id> <min>` - Change interval\n"
+                "• `!listtimers` - Detailed list"
+            ),
+            inline=False
+        )
         
-        panel = await ctx.send(embed=embed)
+        embed.set_footer(text=f"Total: {len(messages)} timer(s) • Checks every 1 minute")
         
-        # Add reaction buttons
-        await panel.add_reaction("➕")
-        await panel.add_reaction("📋")
-        await panel.add_reaction("🔄")
+        await ctx.send(embed=embed)
 
 
 async def setup_timed_messages(bot, engine, kick_send_callback=None):
