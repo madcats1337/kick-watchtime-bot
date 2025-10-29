@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict
 import discord
 from discord.ext import commands
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
@@ -14,24 +15,90 @@ logger = logging.getLogger(__name__)
 class SlotCallTracker:
     """Track slot calls from Kick chat and post to Discord"""
     
-    def __init__(self, bot, discord_channel_id: Optional[int] = None, kick_send_callback=None):
+    def __init__(self, bot, discord_channel_id: Optional[int] = None, kick_send_callback=None, engine=None):
         self.bot = bot
         self.discord_channel_id = discord_channel_id
-        self.enabled = True  # Default to enabled
+        self.engine = engine
         self.last_call_time: Dict[str, datetime] = {}  # Track per-user cooldown
         self.cooldown_seconds = 30  # 30 second cooldown per user
         self.max_username_length = 50  # Maximum username length
         self.max_slot_call_length = 200  # Maximum slot call text length
         self.kick_send_callback = kick_send_callback  # Callback to send messages to Kick chat
         
+        # Initialize database and load enabled state
+        self._init_database()
+        self.enabled = self._load_enabled_state()
+        
+    def _init_database(self):
+        """Create feature_settings table if it doesn't exist"""
+        if not self.engine:
+            logger.warning("No database engine provided - slot call state won't persist")
+            return
+            
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS feature_settings (
+                        feature_name TEXT PRIMARY KEY,
+                        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+            logger.info("feature_settings table initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize feature_settings table: {e}")
+    
+    def _load_enabled_state(self) -> bool:
+        """Load enabled state from database, default to True if not found"""
+        if not self.engine:
+            return True  # Default to enabled if no database
+            
+        try:
+            with self.engine.connect() as conn:
+                result = conn.execute(text("""
+                    SELECT enabled FROM feature_settings 
+                    WHERE feature_name = 'slot_calls'
+                """)).fetchone()
+                
+                if result:
+                    enabled = result[0]
+                    logger.info(f"Loaded slot call state from database: {'enabled' if enabled else 'disabled'}")
+                    return enabled
+                else:
+                    # First time - set default to enabled
+                    with self.engine.begin() as conn:
+                        conn.execute(text("""
+                            INSERT INTO feature_settings (feature_name, enabled)
+                            VALUES ('slot_calls', TRUE)
+                        """))
+                    logger.info("Initialized slot call state in database: enabled")
+                    return True
+        except Exception as e:
+            logger.error(f"Failed to load slot call state from database: {e}")
+            return True  # Default to enabled on error
+        
     def is_enabled(self) -> bool:
         """Check if slot call tracking is enabled"""
         return self.enabled
     
     def set_enabled(self, enabled: bool):
-        """Enable or disable slot call tracking"""
+        """Enable or disable slot call tracking and persist to database"""
         self.enabled = enabled
         logger.info(f"Slot call tracking {'enabled' if enabled else 'disabled'}")
+        
+        # Persist to database
+        if self.engine:
+            try:
+                with self.engine.begin() as conn:
+                    conn.execute(text("""
+                        INSERT INTO feature_settings (feature_name, enabled, updated_at)
+                        VALUES ('slot_calls', :enabled, CURRENT_TIMESTAMP)
+                        ON CONFLICT (feature_name) 
+                        DO UPDATE SET enabled = :enabled, updated_at = CURRENT_TIMESTAMP
+                    """), {"enabled": enabled})
+                logger.info(f"Persisted slot call state to database")
+            except Exception as e:
+                logger.error(f"Failed to persist slot call state to database: {e}")
     
     async def handle_slot_call(self, kick_username: str, slot_call: str):
         """
@@ -153,7 +220,7 @@ class SlotCallCommands(commands.Cog):
             await ctx.send("❌ You need administrator permission to use this command.")
 
 
-async def setup_slot_call_tracker(bot, discord_channel_id: Optional[int] = None, kick_send_callback=None):
+async def setup_slot_call_tracker(bot, discord_channel_id: Optional[int] = None, kick_send_callback=None, engine=None):
     """
     Setup slot call tracker
     
@@ -161,11 +228,12 @@ async def setup_slot_call_tracker(bot, discord_channel_id: Optional[int] = None,
         bot: Discord bot instance
         discord_channel_id: Discord channel ID to post slot calls to
         kick_send_callback: Optional callback function to send messages to Kick chat
+        engine: SQLAlchemy engine for persisting state
     
     Returns:
         SlotCallTracker instance
     """
-    tracker = SlotCallTracker(bot, discord_channel_id, kick_send_callback)
+    tracker = SlotCallTracker(bot, discord_channel_id, kick_send_callback, engine)
     
     # Add commands
     await bot.add_cog(SlotCallCommands(bot, tracker))
@@ -173,3 +241,4 @@ async def setup_slot_call_tracker(bot, discord_channel_id: Optional[int] = None,
     logger.info(f"✅ Slot call tracker initialized (channel: {discord_channel_id or 'Not set'})")
     
     return tracker
+
