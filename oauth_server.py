@@ -1226,7 +1226,7 @@ def bot_authorize():
             'response_type': 'code',
             'redirect_uri': redirect_uri,
             'state': state,
-            'scope': 'chat:send',  # Bot needs chat:send permission
+            'scope': 'user:read',  # Use same scope as user linking (chat:send may not be available yet)
             'code_challenge': code_challenge,
             'code_challenge_method': 'S256'
         }
