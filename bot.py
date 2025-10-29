@@ -583,6 +583,14 @@ async def send_kick_message(message: str) -> bool:
                     data = await response.json()
                     print(f"[Kick] ✅ Sent message: {message[:50]}...")
                     return True
+                elif response.status == 401:
+                    error_text = await response.text()
+                    print(f"[Kick] ❌ Failed to send message (HTTP 401 Unauthorized): {error_text}")
+                    print(f"[Kick] 💡 Common causes:")
+                    print(f"[Kick]    - Bot account is not following the channel (required for follower-only chat)")
+                    print(f"[Kick]    - Token has expired or is invalid")
+                    print(f"[Kick]    - Chat is in subscriber-only mode and bot is not subscribed")
+                    return False
                 else:
                     error_text = await response.text()
                     print(f"[Kick] ❌ Failed to send message (HTTP {response.status}): {error_text}")
