@@ -1017,49 +1017,66 @@ def bot_authorize():
     Special route for getting bot access token without Discord account requirement.
     This initiates OAuth flow specifically for the bot account.
     """
-    print(f"🤖 Bot authorization initiated", flush=True)
-    
-    # Generate PKCE pair
-    code_verifier, code_challenge = generate_pkce_pair()
-    
-    # Generate state for CSRF protection
-    state = secrets.token_urlsafe(32)
-    print(f"🔑 Generated state for bot authorization", flush=True)
-    
-    # Store state in database with special discord_id = 0 for bot
-    with engine.begin() as conn:
-        # Clean up old states
-        deleted_count = conn.execute(text("""
-            DELETE FROM oauth_states 
-            WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes'
-        """)).rowcount
-        print(f"🧹 Cleaned up {deleted_count} expired state(s)", flush=True)
+    try:
+        print(f"🤖 Bot authorization initiated", flush=True)
         
-        # Store new state with discord_id = 0 to indicate bot authorization
-        conn.execute(text("""
-            INSERT INTO oauth_states (state, discord_id, code_verifier, created_at)
-            VALUES (:state, :discord_id, :code_verifier, CURRENT_TIMESTAMP)
-        """), {"state": state, "discord_id": 0, "code_verifier": code_verifier})
-        print(f"✅ Bot state saved to database", flush=True)
-    
-    # Build authorization URL with chat:send scope
-    redirect_uri = f"{OAUTH_BASE_URL}/bot/callback"
-    
-    auth_params = {
-        'client_id': KICK_CLIENT_ID,
-        'response_type': 'code',
-        'redirect_uri': redirect_uri,
-        'state': state,
-        'scope': 'chat:send',  # Bot needs chat:send permission
-        'code_challenge': code_challenge,
-        'code_challenge_method': 'S256'
-    }
-    
-    print(f"🔗 Bot authorization URL: {KICK_AUTHORIZE_URL}?{urlencode(auth_params)}", flush=True)
-    
-    auth_url = f"{KICK_AUTHORIZE_URL}?{urlencode(auth_params)}"
-    
-    return redirect(auth_url)
+        # Ensure bot_tokens table exists
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS bot_tokens (
+                    bot_username TEXT PRIMARY KEY,
+                    access_token TEXT NOT NULL,
+                    refresh_token TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+        
+        # Generate PKCE pair
+        code_verifier, code_challenge = generate_pkce_pair()
+        
+        # Generate state for CSRF protection
+        state = secrets.token_urlsafe(32)
+        print(f"🔑 Generated state for bot authorization", flush=True)
+        
+        # Store state in database with special discord_id = 0 for bot
+        with engine.begin() as conn:
+            # Clean up old states
+            deleted_count = conn.execute(text("""
+                DELETE FROM oauth_states 
+                WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes'
+            """)).rowcount
+            print(f"🧹 Cleaned up {deleted_count} expired state(s)", flush=True)
+            
+            # Store new state with discord_id = 0 to indicate bot authorization
+            conn.execute(text("""
+                INSERT INTO oauth_states (state, discord_id, code_verifier, created_at)
+                VALUES (:state, :discord_id, :code_verifier, CURRENT_TIMESTAMP)
+            """), {"state": state, "discord_id": 0, "code_verifier": code_verifier})
+            print(f"✅ Bot state saved to database", flush=True)
+        
+        # Build authorization URL with chat:send scope
+        redirect_uri = f"{OAUTH_BASE_URL}/bot/callback"
+        
+        auth_params = {
+            'client_id': KICK_CLIENT_ID,
+            'response_type': 'code',
+            'redirect_uri': redirect_uri,
+            'state': state,
+            'scope': 'chat:send',  # Bot needs chat:send permission
+            'code_challenge': code_challenge,
+            'code_challenge_method': 'S256'
+        }
+        
+        print(f"🔗 Bot authorization URL: {KICK_AUTHORIZE_URL}?{urlencode(auth_params)}", flush=True)
+        
+        auth_url = f"{KICK_AUTHORIZE_URL}?{urlencode(auth_params)}"
+        
+        return redirect(auth_url)
+    except Exception as e:
+        print(f"❌ Error in bot_authorize: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        return render_error(f"Failed to initiate bot authorization: {str(e)}")
 
 
 @app.route('/bot/callback')
