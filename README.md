@@ -140,24 +140,33 @@ RAFFLE_ANNOUNCEMENT_CHANNEL_ID=123456789       # Channel for raffle announcement
 # Optional: Slot Call Tracker
 SLOT_CALLS_CHANNEL_ID=123456789                # Discord channel for slot call notifications
 KICK_BOT_USER_TOKEN=your_user_access_token     # Optional: User access token for Kick chat responses (requires chat:write scope)
+BOT_AUTH_TOKEN=your_secret_token                # Required for /bot/authorize endpoint (generate with: python -c "import secrets; print(secrets.token_urlsafe(32))")
 ```
 
 **Note:** OAuth linking requires deploying the OAuth server (see [docs/OAUTH_SETUP.md](docs/OAUTH_SETUP.md)).
 
 **Kick Chat Responses:** To enable automatic responses in Kick chat when users use `!call` or `!sr`:
 
-1. **Get a User Access Token with `chat:write` scope:**
-   - Visit `https://your-oauth-server.com/bot/authorize` (replace with your OAuth server URL)
-   - Log in as your bot Kick account (e.g., Lelebot)
-   - Authorize the app with the following scopes: `chat:write`, `chat:read`, `user:read`
+1. **Generate and set BOT_AUTH_TOKEN:**
+   ```bash
+   python -c "import secrets; print(secrets.token_urlsafe(32))"
+   ```
+   - Set this as `BOT_AUTH_TOKEN` in Railway
+   - Keep this secret - it protects the bot authorization endpoint
+
+2. **Get a User Access Token with `chat:write` scope:**
+   - Visit `https://your-oauth-server.com/bot/authorize?token=YOUR_BOT_AUTH_TOKEN`
+   - Log in as your bot Kick account (e.g., @maikelelediscordbot)
+   - Authorize the app with the scopes: `chat:write`, `chat:read`, `user:read`
    - The token will be stored in the database
    - Retrieve it using: `python get_bot_token_from_db.py`
    - Set it as `KICK_BOT_USER_TOKEN` in Railway
 
-2. **Important Requirements:**
+3. **Important Requirements:**
    - Bot account must **follow the channel** (required for follower-only chat)
    - Token must have `chat:write` scope (not just `user:read`)
    - If chat is subscriber-only, bot must be subscribed
+   - The bot authorization URL (`/bot/authorize`) requires the `BOT_AUTH_TOKEN` for security
 
 **Raffle System:** See [docs/implementation/RAFFLE_SYSTEM_IMPLEMENTATION_PLAN.md](docs/implementation/RAFFLE_SYSTEM_IMPLEMENTATION_PLAN.md) for complete documentation on ticket earning and raffle mechanics.
 
