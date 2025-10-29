@@ -139,51 +139,9 @@ RAFFLE_ANNOUNCEMENT_CHANNEL_ID=123456789       # Channel for raffle announcement
 
 # Optional: Slot Call Tracker
 SLOT_CALLS_CHANNEL_ID=123456789                # Discord channel for slot call notifications
-KICK_BOT_USER_TOKEN=your_user_access_token     # Optional: User access token for Kick bot (Lelebot)
 ```
 
 **Note:** OAuth linking requires deploying the OAuth server (see [docs/OAUTH_SETUP.md](docs/OAUTH_SETUP.md)).
-
-**Kick Chat Responses:** To enable automatic responses in Kick chat when users use `!call` or `!sr`:
-
-The Kick Chat API requires a **User Access Token** (not an App Access Token from Client Credentials). To get one:
-
-1. **Option A - Use your existing authorization flow:**
-   - Go through your app's OAuth flow with the Lelebot account
-   - Authorize the app to send chat messages
-   - Copy the `access_token` from the response
-   - Set it as `KICK_BOT_USER_TOKEN` in Railway
-
-2. **Option B - Use the helper script (Easiest):**
-   ```bash
-   python get_kick_token.py
-   ```
-   - Enter your `KICK_CLIENT_ID` and `KICK_CLIENT_SECRET`
-   - Enter your redirect URI (use the one from your Kick app settings)
-   - Script will open your browser and handle the full OAuth flow
-   - Copy the displayed token and set it as `KICK_BOT_USER_TOKEN`
-
-3. **Option C - Manual OAuth flow:**
-   - Generate your OAuth URL with this format:
-   ```
-   https://id.kick.com/oauth/authorize?response_type=code&client_id=YOUR_CLIENT_ID&redirect_uri=YOUR_REDIRECT_URI&scope=chat:send&code_challenge=CHALLENGE&code_challenge_method=S256&state=RANDOM_STATE
-   ```
-   - Replace `YOUR_CLIENT_ID` with your actual client ID
-   - Replace `YOUR_REDIRECT_URI` with your redirect URI (URL-encoded)
-   - Generate PKCE challenge: `python -c "import secrets,hashlib,base64; v=base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip('='); print('Verifier:',v); print('Challenge:',base64.urlsafe_b64encode(hashlib.sha256(v.encode()).digest()).decode().rstrip('='))"`
-   - Save the verifier for the token exchange step
-   - Visit the OAuth URL logged in as Lelebot
-   - Authorize the app and capture the code from the redirect
-   - Exchange the code for a token:
-   ```bash
-   curl -X POST https://id.kick.com/oauth/token \
-     -H "Content-Type: application/x-www-form-urlencoded" \
-     -d "grant_type=authorization_code&client_id=YOUR_CLIENT_ID&client_secret=YOUR_CLIENT_SECRET&redirect_uri=YOUR_REDIRECT_URI&code=AUTHORIZATION_CODE&code_verifier=VERIFIER"
-   ```
-   - Extract the `access_token` from the JSON response
-   - Set it as `KICK_BOT_USER_TOKEN` in Railway
-
-Without this token, the bot only posts to Discord (read-only mode). User access tokens may expire and need refreshing.
 
 **Raffle System:** See [docs/implementation/RAFFLE_SYSTEM_IMPLEMENTATION_PLAN.md](docs/implementation/RAFFLE_SYSTEM_IMPLEMENTATION_PLAN.md) for complete documentation on ticket earning and raffle mechanics.
 
