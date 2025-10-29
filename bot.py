@@ -607,22 +607,27 @@ async def refresh_kick_oauth_token() -> bool:
                     token_response = await response.json()
                     new_access_token = token_response.get("access_token")
                     new_refresh_token = token_response.get("refresh_token", refresh_token)
+                    expires_in = token_response.get("expires_in", 3600)  # Default to 1 hour
                     
                     if not new_access_token:
                         print("[Kick] ❌ No access_token in refresh response")
                         return False
                     
-                    # Update tokens in database
+                    print(f"[Kick] ✅ New token expires in {expires_in} seconds")
+                    
+                    # Update tokens in database with expiration time
                     with engine.begin() as conn:
                         conn.execute(text("""
                             UPDATE bot_tokens 
                             SET access_token = :access_token, 
                                 refresh_token = :refresh_token,
+                                expires_at = CURRENT_TIMESTAMP + INTERVAL ':expires_in seconds',
                                 created_at = CURRENT_TIMESTAMP
                             WHERE bot_username = 'maikelele'
                         """), {
                             "access_token": new_access_token,
-                            "refresh_token": new_refresh_token
+                            "refresh_token": new_refresh_token,
+                            "expires_in": expires_in
                         })
                     
                     print(f"[Kick] ✅ OAuth token refreshed successfully!")
@@ -1276,15 +1281,48 @@ async def check_oauth_notifications_task():
                     
     except Exception as e:
         print(f"⚠️ Error in OAuth notifications task: {e}", flush=True)
-@tasks.loop(hours=6)
-async def proactive_session_check_task():
-    """Check if OAuth tokens need refreshing every 6 hours."""
+@tasks.loop(hours=1)  # Check every hour
+async def proactive_token_refresh_task():
+    """Proactively refresh OAuth token before it expires."""
     if not engine:
         return
     
-    print("[Kick] 🔄 Running proactive OAuth token check (every 6 hours)...")
-    # Just log that we're checking - actual refresh happens on-demand when sending messages
-    print("[Kick] ℹ️  OAuth tokens will be refreshed automatically when needed")
+    try:
+        # Check if token will expire in the next 2 hours
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT expires_at, bot_username FROM bot_tokens 
+                WHERE bot_username = 'maikelele'
+                ORDER BY created_at DESC LIMIT 1
+            """)).fetchone()
+            
+            if not result:
+                return
+            
+            expires_at, bot_username = result
+            
+            if not expires_at:
+                print("[Kick] ⚠️  No expiration time stored - token will refresh on-demand")
+                return
+            
+            now = datetime.now(timezone.utc)
+            time_until_expiry = expires_at - now
+            hours_until_expiry = time_until_expiry.total_seconds() / 3600
+            
+            # Refresh if token expires in less than 2 hours
+            if hours_until_expiry < 2:
+                print(f"[Kick] ⚠️  Token expires in {hours_until_expiry:.1f} hours - refreshing proactively...")
+                if await refresh_kick_oauth_token():
+                    print(f"[Kick] ✅ Proactive token refresh successful!")
+                else:
+                    print(f"[Kick] ❌ Proactive token refresh failed - will retry on next cycle")
+            else:
+                print(f"[Kick] ✓ Token valid for {hours_until_expiry:.1f} more hours")
+    
+    except Exception as e:
+        print(f"[Kick] ❌ Error in proactive token refresh: {e}")
+        import traceback
+        traceback.print_exc()
 
 @tasks.loop(minutes=5)
 async def cleanup_pending_links_task():
@@ -2463,7 +2501,7 @@ async def on_ready():
             print("✅ Cleanup task started")
         
         if not proactive_session_check_task.is_running() and engine:
-            proactive_session_check_task.start()
+            proactive_token_refresh_task.start()
             print("✅ Proactive session check task started (runs every 6 hours)")
         
         if not check_oauth_notifications_task.is_running():
