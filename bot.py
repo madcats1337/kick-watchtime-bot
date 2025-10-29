@@ -566,17 +566,10 @@ async def send_kick_message(message: str) -> bool:
         return False
     
     try:
-        # Get chatroom ID for the channel
-        chatroom_id = KICK_CHATROOM_ID
-        if not chatroom_id:
-            # Fetch it dynamically
-            chatroom_id = await fetch_chatroom_id(KICK_CHANNEL)
-            if not chatroom_id:
-                print(f"[Kick] ❌ Could not get chatroom ID for channel: {KICK_CHANNEL}")
-                return False
-        
         # Official Kick API endpoint for posting chat messages
-        url = f"https://api.kick.com/public/v1/chat/{chatroom_id}"
+        # Note: The API automatically sends to the channel where the bot is currently "active"
+        # This is typically the last channel where the bot account interacted
+        url = "https://api.kick.com/public/v1/chat"
         
         headers = {
             "Authorization": f"Bearer {KICK_BOT_USER_TOKEN}",
@@ -586,7 +579,7 @@ async def send_kick_message(message: str) -> bool:
         
         payload = {
             "content": message,
-            "type": "message"
+            "type": "bot"  # Must be "bot" - other types return 400 error
         }
         
         async with aiohttp.ClientSession() as session:
@@ -603,6 +596,7 @@ async def send_kick_message(message: str) -> bool:
                     print(f"[Kick]    - Bot account not following the channel (required for follower-only chat)")
                     print(f"[Kick]    - Token has expired or is invalid")
                     print(f"[Kick]    - Chat is in subscriber-only mode and bot is not subscribed")
+                    print(f"[Kick]    - Bot not 'active' in the channel (visit channel page while logged in as bot)")
                     return False
                 else:
                     error_text = await response.text()
