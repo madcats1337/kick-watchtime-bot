@@ -2389,7 +2389,8 @@ async def on_ready():
             slot_call_tracker = await setup_slot_call_tracker(
                 bot, 
                 SLOT_CALLS_CHANNEL_ID,
-                kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
+                kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None,
+                engine=engine
             )
             if SLOT_CALLS_CHANNEL_ID:
                 print(f"✅ Slot call tracker initialized (channel: {SLOT_CALLS_CHANNEL_ID})")
