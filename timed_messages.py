@@ -42,19 +42,39 @@ class TimedMessagesManager:
             return
         
         try:
+            # Detect database type
+            db_url = str(self.engine.url)
+            is_postgres = 'postgresql' in db_url.lower()
+            
             with self.engine.begin() as conn:
-                conn.execute(text("""
-                    CREATE TABLE IF NOT EXISTS timed_messages (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        message TEXT NOT NULL,
-                        interval_minutes INTEGER NOT NULL,
-                        enabled BOOLEAN DEFAULT TRUE,
-                        last_sent TIMESTAMP,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        created_by BIGINT,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """))
+                if is_postgres:
+                    # PostgreSQL uses SERIAL for auto-increment
+                    conn.execute(text("""
+                        CREATE TABLE IF NOT EXISTS timed_messages (
+                            id SERIAL PRIMARY KEY,
+                            message TEXT NOT NULL,
+                            interval_minutes INTEGER NOT NULL,
+                            enabled BOOLEAN DEFAULT TRUE,
+                            last_sent TIMESTAMP,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            created_by BIGINT,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """))
+                else:
+                    # SQLite uses AUTOINCREMENT
+                    conn.execute(text("""
+                        CREATE TABLE IF NOT EXISTS timed_messages (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            message TEXT NOT NULL,
+                            interval_minutes INTEGER NOT NULL,
+                            enabled BOOLEAN DEFAULT TRUE,
+                            last_sent TIMESTAMP,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            created_by BIGINT,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """))
             logger.info("timed_messages table initialized")
         except Exception as e:
             logger.error(f"Failed to initialize timed_messages table: {e}")
@@ -99,18 +119,34 @@ class TimedMessagesManager:
             return {'status': 'error', 'message': 'Message too long (max 500 chars)'}
         
         try:
+            # Detect database type
+            db_url = str(self.engine.url)
+            is_postgres = 'postgresql' in db_url.lower()
+            
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
-                    INSERT INTO timed_messages (message, interval_minutes, enabled, created_by)
-                    VALUES (:message, :interval, TRUE, :created_by)
-                """), {
-                    'message': message,
-                    'interval': interval_minutes,
-                    'created_by': created_by
-                })
-                
-                # Get the last inserted ID
-                message_id = result.lastrowid
+                if is_postgres:
+                    # PostgreSQL returns ID with RETURNING clause
+                    result = conn.execute(text("""
+                        INSERT INTO timed_messages (message, interval_minutes, enabled, created_by)
+                        VALUES (:message, :interval, TRUE, :created_by)
+                        RETURNING id
+                    """), {
+                        'message': message,
+                        'interval': interval_minutes,
+                        'created_by': created_by
+                    })
+                    message_id = result.scalar()
+                else:
+                    # SQLite uses lastrowid
+                    result = conn.execute(text("""
+                        INSERT INTO timed_messages (message, interval_minutes, enabled, created_by)
+                        VALUES (:message, :interval, TRUE, :created_by)
+                    """), {
+                        'message': message,
+                        'interval': interval_minutes,
+                        'created_by': created_by
+                    })
+                    message_id = result.lastrowid
             
             # Reload messages
             self._load_messages()
