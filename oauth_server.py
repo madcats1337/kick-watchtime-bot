@@ -1082,79 +1082,92 @@ def bot_authorize():
 @app.route('/bot/callback')
 def bot_callback():
     """Handle OAuth callback for bot authorization."""
-    print(f"🤖 Bot callback received!", flush=True)
-    
-    code = request.args.get('code')
-    state = request.args.get('state')
-    error = request.args.get('error')
-    
-    print(f"📥 Code: {sanitize_for_logs(code, 'code')}, State: {sanitize_for_logs(state, 'state')}, Error: {error}", flush=True)
-    
-    if error:
-        print(f"❌ Kick returned error: {error}", flush=True)
-        return render_error(f"Kick authorization failed: {error}")
-    
-    if not code or not state:
-        print(f"❌ Missing code or state", flush=True)
-        return render_error("Missing authorization code or state")
-    
-    # Verify state from database
-    print(f"🔍 Checking state in database...", flush=True)
-    with engine.connect() as conn:
-        result = conn.execute(text("""
-            SELECT discord_id, code_verifier, created_at FROM oauth_states WHERE state = :state
-        """), {"state": state}).fetchone()
-    
-    if not result or result[0] != 0:  # discord_id must be 0 for bot authorization
-        print(f"❌ Invalid bot state", flush=True)
-        return render_error("Invalid or expired state. Please try again.")
-    
-    code_verifier = result[1]
-    print(f"✅ Bot state valid", flush=True)
-    
-    # Exchange code for access token
     try:
-        token_data = exchange_code_for_token(code, code_verifier=code_verifier, redirect_uri=f"{OAUTH_BASE_URL}/bot/callback")
-        access_token = token_data.get('access_token')
+        print(f"🤖 Bot callback received!", flush=True)
         
-        if not access_token:
-            return render_error("Failed to obtain access token from Kick")
+        code = request.args.get('code')
+        state = request.args.get('state')
+        error = request.args.get('error')
         
-        print(f"✅ Got bot access token", flush=True)
+        print(f"📥 Code: {sanitize_for_logs(code, 'code')}, State: {sanitize_for_logs(state, 'state')}, Error: {error}", flush=True)
         
-        # Get bot user info to verify
+        if error:
+            print(f"❌ Kick returned error: {error}", flush=True)
+            return render_error(f"Kick authorization failed: {error}")
+        
+        if not code or not state:
+            print(f"❌ Missing code or state", flush=True)
+            return render_error("Missing authorization code or state")
+        
+        # Ensure bot_tokens table exists
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS bot_tokens (
+                    bot_username TEXT PRIMARY KEY,
+                    access_token TEXT NOT NULL,
+                    refresh_token TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+        
+        # Verify state from database
+        print(f"🔍 Checking state in database...", flush=True)
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT discord_id, code_verifier, created_at FROM oauth_states WHERE state = :state
+            """), {"state": state}).fetchone()
+        
+        if not result or result[0] != 0:  # discord_id must be 0 for bot authorization
+            print(f"❌ Invalid bot state (result: {result})", flush=True)
+            return render_error("Invalid or expired state. Please try again.")
+        
+        code_verifier = result[1]
+        print(f"✅ Bot state valid", flush=True)
+        
+        # Exchange code for access token
         try:
-            kick_user = get_kick_user_info(access_token)
-            kick_username = kick_user.get('username', 'Unknown')
-            print(f"🤖 Bot username: {kick_username}", flush=True)
-        except Exception as e:
-            print(f"⚠️ Could not get bot user info: {e}", flush=True)
-            kick_username = "Unknown"
-        
-        # Store token in database securely (NOT displayed in browser)
-        with engine.begin() as conn:
-            # Delete any existing bot tokens
-            conn.execute(text("""
-                DELETE FROM bot_tokens WHERE bot_username = :username
-            """), {"username": kick_username})
+            print(f"🔄 Exchanging code for token...", flush=True)
+            token_data = exchange_code_for_token(code, code_verifier=code_verifier, redirect_uri=f"{OAUTH_BASE_URL}/bot/callback")
+            access_token = token_data.get('access_token')
             
-            # Store new bot token
-            conn.execute(text("""
-                INSERT INTO bot_tokens (bot_username, access_token, refresh_token, created_at)
-                VALUES (:username, :access_token, :refresh_token, CURRENT_TIMESTAMP)
-            """), {
-                "username": kick_username,
-                "access_token": access_token,
-                "refresh_token": token_data.get('refresh_token', '')
-            })
-            print(f"✅ Bot token stored securely in database", flush=True)
+            if not access_token:
+                print(f"❌ No access token in response: {list(token_data.keys())}", flush=True)
+                return render_error("Failed to obtain access token from Kick")
+            
+            print(f"✅ Got bot access token", flush=True)
+            
+            # Get bot user info to verify
+            try:
+                kick_user = get_kick_user_info(access_token)
+                kick_username = kick_user.get('username', 'Unknown')
+                print(f"🤖 Bot username: {kick_username}", flush=True)
+            except Exception as e:
+                print(f"⚠️ Could not get bot user info: {e}", flush=True)
+                kick_username = "Unknown"
+            
+            # Store token in database securely (NOT displayed in browser)
+            with engine.begin() as conn:
+                # Delete any existing bot tokens
+                conn.execute(text("""
+                    DELETE FROM bot_tokens WHERE bot_username = :username
+                """), {"username": kick_username})
+                
+                # Store new bot token
+                conn.execute(text("""
+                    INSERT INTO bot_tokens (bot_username, access_token, refresh_token, created_at)
+                    VALUES (:username, :access_token, :refresh_token, CURRENT_TIMESTAMP)
+                """), {
+                    "username": kick_username,
+                    "access_token": access_token,
+                    "refresh_token": token_data.get('refresh_token', '')
+                })
+                print(f"✅ Bot token stored securely in database", flush=True)
         
-        # Clean up the state
-        with engine.begin() as conn:
+            # Clean up the state
             conn.execute(text("DELETE FROM oauth_states WHERE state = :state"), {"state": state})
         
-        # Display success message WITHOUT showing the token
-        return f"""
+            # Display success message WITHOUT showing the token
+            return f"""
         <html>
             <head>
                 <title>Bot Authorized</title>
@@ -1243,11 +1256,17 @@ def bot_callback():
         </html>
         """
         
+        except Exception as token_error:
+            print(f"❌ Error during token exchange: {token_error}", flush=True)
+            import traceback
+            traceback.print_exc()
+            return render_error(f"Failed to exchange code for token: {str(token_error)}")
+    
     except Exception as e:
-        print(f"❌ Error during bot token exchange: {e}", flush=True)
+        print(f"❌ Error in bot_callback: {e}", flush=True)
         import traceback
         traceback.print_exc()
-        return render_error(f"Failed to exchange code for token: {str(e)}")
+        return render_error(f"Bot callback failed: {str(e)}")
 
 
 if __name__ == '__main__':
