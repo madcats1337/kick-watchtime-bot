@@ -139,9 +139,25 @@ RAFFLE_ANNOUNCEMENT_CHANNEL_ID=123456789       # Channel for raffle announcement
 
 # Optional: Slot Call Tracker
 SLOT_CALLS_CHANNEL_ID=123456789                # Discord channel for slot call notifications
+KICK_BOT_USER_TOKEN=your_user_access_token     # Optional: User access token for Kick chat responses (requires chat:write scope)
 ```
 
 **Note:** OAuth linking requires deploying the OAuth server (see [docs/OAUTH_SETUP.md](docs/OAUTH_SETUP.md)).
+
+**Kick Chat Responses:** To enable automatic responses in Kick chat when users use `!call` or `!sr`:
+
+1. **Get a User Access Token with `chat:write` scope:**
+   - Visit `https://your-oauth-server.com/bot/authorize` (replace with your OAuth server URL)
+   - Log in as your bot Kick account (e.g., Lelebot)
+   - Authorize the app with the following scopes: `chat:write`, `chat:read`, `user:read`
+   - The token will be stored in the database
+   - Retrieve it using: `python get_bot_token_from_db.py`
+   - Set it as `KICK_BOT_USER_TOKEN` in Railway
+
+2. **Important Requirements:**
+   - Bot account must **follow the channel** (required for follower-only chat)
+   - Token must have `chat:write` scope (not just `user:read`)
+   - If chat is subscriber-only, bot must be subscribed
 
 **Raffle System:** See [docs/implementation/RAFFLE_SYSTEM_IMPLEMENTATION_PLAN.md](docs/implementation/RAFFLE_SYSTEM_IMPLEMENTATION_PLAN.md) for complete documentation on ticket earning and raffle mechanics.
 

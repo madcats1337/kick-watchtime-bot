@@ -103,6 +103,10 @@ KICK_CLIENT_ID = os.getenv("KICK_CLIENT_ID", "")
 KICK_CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET", "")  # Used for both OAuth and Kick bot
 OAUTH_SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "")
 
+# Kick bot configuration (for sending chat messages)
+# Requires User Access Token from OAuth flow with chat:write scope
+KICK_BOT_USER_TOKEN = os.getenv("KICK_BOT_USER_TOKEN", "")  # User access token for Kick bot
+
 # CRITICAL: If FLASK_SECRET_KEY is not set, OAuth will not work!
 if not OAUTH_SECRET_KEY:
     print("=" * 80, flush=True)
@@ -539,6 +543,66 @@ async def get_kick_bot_token() -> Optional[str]:
     except Exception as e:
         print(f"[Kick Bot] ❌ Error getting token: {e}")
         return None
+
+
+# -------------------------
+# Kick Chat Messaging
+# -------------------------
+async def send_kick_message(message: str) -> bool:
+    """
+    Send a message to Kick chat using the official Kick API.
+    Requires a User Access Token with 'chat:write' scope.
+    
+    Args:
+        message: The message to send
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    
+    if not KICK_BOT_USER_TOKEN:
+        print("[Kick] ⚠️ Cannot send message: KICK_BOT_USER_TOKEN not configured")
+        print("[Kick] ℹ️  Chat API requires User Access Token with 'chat:write' scope")
+        return False
+    
+    try:
+        # Official Kick API endpoint for posting chat messages
+        url = "https://api.kick.com/public/v1/chat"
+        
+        headers = {
+            "Authorization": f"Bearer {KICK_BOT_USER_TOKEN}",
+            "Content-Type": "application/json",
+            "Accept": "*/*"
+        }
+        
+        payload = {
+            "content": message,
+            "type": "bot"  # Send as bot - uses channel attached to token
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload, timeout=10) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    print(f"[Kick] ✅ Sent message: {message[:50]}...")
+                    return True
+                elif response.status == 401:
+                    error_text = await response.text()
+                    print(f"[Kick] ❌ Failed to send message (HTTP 401 Unauthorized): {error_text}")
+                    print(f"[Kick] 💡 Common causes:")
+                    print(f"[Kick]    - Token missing 'chat:write' scope (re-authorize with correct scope)")
+                    print(f"[Kick]    - Bot account not following the channel (required for follower-only chat)")
+                    print(f"[Kick]    - Token has expired or is invalid")
+                    print(f"[Kick]    - Chat is in subscriber-only mode and bot is not subscribed")
+                    return False
+                else:
+                    error_text = await response.text()
+                    print(f"[Kick] ❌ Failed to send message (HTTP {response.status}): {error_text}")
+                    return False
+    
+    except Exception as e:
+        print(f"[Kick] ❌ Error sending message: {e}")
+        return False
 
 
 # -------------------------
@@ -2318,13 +2382,20 @@ async def on_ready():
             # Sync Shuffle code user role on startup
             await sync_shuffle_role_on_startup(bot, engine)
             
-            # Setup slot call tracker
+            # Setup slot call tracker with Kick chat callback
             slot_call_tracker = await setup_slot_call_tracker(
                 bot, 
-                SLOT_CALLS_CHANNEL_ID
+                SLOT_CALLS_CHANNEL_ID,
+                kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
             )
             if SLOT_CALLS_CHANNEL_ID:
                 print(f"✅ Slot call tracker initialized (channel: {SLOT_CALLS_CHANNEL_ID})")
+                if KICK_BOT_USER_TOKEN:
+                    print(f"✅ Kick chat responses enabled")
+                    print(f"   • Using User Access Token with 'chat:write' scope")
+                    print(f"   • Make sure bot account follows the channel")
+                else:
+                    print("ℹ️  Kick chat responses disabled (set KICK_BOT_USER_TOKEN to enable)")
             else:
                 print("⚠️ Slot call tracker initialized but no channel configured (set SLOT_CALLS_CHANNEL_ID)")
             
