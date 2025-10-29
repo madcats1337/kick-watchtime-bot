@@ -2482,11 +2482,11 @@ async def handle_timer_panel_reaction(payload):
     messages = manager.list_messages()
     
     # Handle different reactions
-    if reaction_emoji == "�":  # Refresh panel
+    if reaction_emoji == "":  # Refresh panel
         embed = discord.Embed(
             title="⏰ Timed Messages Control Panel",
             description="React to this message to manage timers:\n\n"
-                       "� - Refresh panel\n"
+                       " - Refresh panel\n"
                        "📋 - Show list of timers\n"
                        "❌ - Disable timer (will ask for ID)\n"
                        "✅ - Enable timer (will ask for ID)",
@@ -2585,7 +2585,7 @@ async def handle_timer_panel_reaction(payload):
             if len(messages) > 20:
                 embed.set_footer(text=f"Showing 20 of {len(messages)} • Use !listtimers to see all • React 🔄 to go back")
             else:
-                embed.set_footer(text=f"{len(messages)} total • React � to go back")
+                embed.set_footer(text=f"{len(messages)} total • React  to go back")
         
         await message.edit(embed=embed)
         
@@ -2706,7 +2706,7 @@ async def handle_timer_panel_reaction(payload):
                 await channel.send(f"❌ {member.mention} Invalid ID. Please use a number.", delete_after=5)
             
             # Refresh panel
-            payload.emoji = "�"
+            payload.emoji = ""
             await handle_timer_panel_reaction(payload)
             return
             

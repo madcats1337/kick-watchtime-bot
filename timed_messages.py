@@ -456,7 +456,7 @@ class TimedMessagesCommands(commands.Cog):
         embed = discord.Embed(
             title="⏰ Timed Messages Control Panel",
             description="React to this message to manage timers:\n\n"
-                       "🔃 - Refresh panel\n"
+                       "♻️ - Refresh panel\n"
                        "📋 - Show list of timers\n"
                        "❌ - Disable timer (will ask for ID)\n"
                        "✅ - Enable timer (will ask for ID)",
@@ -532,7 +532,7 @@ class TimedMessagesCommands(commands.Cog):
         
         # Add reaction buttons
         try:
-            await panel.add_reaction("�")  # Refresh
+            await panel.add_reaction("♻️")  # Refresh
             await panel.add_reaction("📋")  # Show list
             await panel.add_reaction("❌")  # Disable (asks for ID)
             await panel.add_reaction("✅")  # Enable (asks for ID)
