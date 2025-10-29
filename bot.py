@@ -35,6 +35,9 @@ from raffle_system.scheduler import setup_raffle_scheduler
 # Slot call tracker import
 from slot_calls import setup_slot_call_tracker
 
+# Timed messages import
+from timed_messages import setup_timed_messages
+
 # -------------------------
 # Command checks and utils
 # -------------------------
@@ -2402,6 +2405,17 @@ async def on_ready():
                     print("ℹ️  Kick chat responses disabled (set KICK_BOT_USER_TOKEN to enable)")
             else:
                 print("⚠️ Slot call tracker initialized but no channel configured (set SLOT_CALLS_CHANNEL_ID)")
+            
+            # Setup timed messages system
+            timed_messages_manager = await setup_timed_messages(
+                bot,
+                engine,
+                kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
+            )
+            if KICK_BOT_USER_TOKEN:
+                print(f"✅ Timed messages system initialized ({len(timed_messages_manager.messages)} messages)")
+            else:
+                print("ℹ️  Timed messages disabled (set KICK_BOT_USER_TOKEN to enable)")
             
         except Exception as e:
             print(f"⚠️ Failed to initialize raffle system: {e}")
