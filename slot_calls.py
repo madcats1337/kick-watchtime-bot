@@ -109,6 +109,13 @@ class SlotCallTracker:
             slot_call: The slot call text (everything after !call)
         """
         if not self.enabled:
+            # Send "slot requests not open" message to Kick chat
+            if self.kick_send_callback:
+                try:
+                    await self.kick_send_callback(f"@{kick_username} Slot requests are not open at the moment.")
+                    logger.info(f"Sent 'slot requests not open' message to {kick_username}")
+                except Exception as e:
+                    logger.error(f"Failed to send disabled message to Kick: {e}")
             return
         
         if not self.discord_channel_id:
