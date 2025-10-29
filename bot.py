@@ -2642,14 +2642,14 @@ async def handle_timer_panel_reaction(payload):
                 await channel.send(f"❌ {member.mention} Invalid ID. Please use a number.", delete_after=5)
             
             # Refresh panel
-            payload.emoji = "🔄"
+            payload.emoji = "♻️"
             await handle_timer_panel_reaction(payload)
             return
             
         except asyncio.TimeoutError:
             await channel.send(f"⏰ {member.mention} Timed out. Please try again.", delete_after=5)
             # Refresh panel
-            payload.emoji = "🔄"
+            payload.emoji = "♻️"
             await handle_timer_panel_reaction(payload)
             return
         
@@ -2706,7 +2706,7 @@ async def handle_timer_panel_reaction(payload):
                 await channel.send(f"❌ {member.mention} Invalid ID. Please use a number.", delete_after=5)
             
             # Refresh panel
-            payload.emoji = ""
+            payload.emoji = "♻️"
             await handle_timer_panel_reaction(payload)
             return
             
