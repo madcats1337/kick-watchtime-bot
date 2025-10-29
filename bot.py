@@ -567,14 +567,14 @@ async def send_kick_message(message: str) -> bool:
     
     try:
         # Official Kick API endpoint for posting chat messages
-        # Note: The API automatically sends to the channel where the bot is currently "active"
-        # This is typically the last channel where the bot account interacted
+        # IMPORTANT: Must include X-Channel header to specify which channel to send to
         url = "https://api.kick.com/public/v1/chat"
         
         headers = {
             "Authorization": f"Bearer {KICK_BOT_USER_TOKEN}",
             "Content-Type": "application/json",
-            "Accept": "*/*"
+            "Accept": "*/*",
+            "X-Channel": KICK_CHANNEL  # Specify which channel to send the message to
         }
         
         payload = {
