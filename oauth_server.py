@@ -1179,9 +1179,22 @@ def bot_authorize():
     """
     Special route for getting bot access token without Discord account requirement.
     This initiates OAuth flow specifically for the bot account.
+    Requires admin authentication via token.
     """
     try:
-        print(f"🤖 Bot authorization initiated", flush=True)
+        # Check for admin authorization token
+        auth_token = request.args.get('token')
+        expected_token = os.getenv('BOT_AUTH_TOKEN')
+        
+        if not expected_token:
+            print(f"⚠️ BOT_AUTH_TOKEN not configured - bot authorization disabled", flush=True)
+            return render_error("Bot authorization is not configured. Contact the administrator.")
+        
+        if not auth_token or auth_token != expected_token:
+            print(f"❌ Invalid or missing bot authorization token", flush=True)
+            return render_error("Unauthorized. Invalid or missing authentication token.")
+        
+        print(f"🤖 Bot authorization initiated with valid token", flush=True)
         
         # Ensure bot_tokens table exists
         with engine.begin() as conn:
