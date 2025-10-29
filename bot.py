@@ -566,8 +566,17 @@ async def send_kick_message(message: str) -> bool:
         return False
     
     try:
+        # Get chatroom ID for the channel
+        chatroom_id = KICK_CHATROOM_ID
+        if not chatroom_id:
+            # Fetch it dynamically
+            chatroom_id = await fetch_chatroom_id(KICK_CHANNEL)
+            if not chatroom_id:
+                print(f"[Kick] ❌ Could not get chatroom ID for channel: {KICK_CHANNEL}")
+                return False
+        
         # Official Kick API endpoint for posting chat messages
-        url = "https://api.kick.com/public/v1/chat"
+        url = f"https://api.kick.com/public/v1/chat/{chatroom_id}"
         
         headers = {
             "Authorization": f"Bearer {KICK_BOT_USER_TOKEN}",
@@ -577,7 +586,7 @@ async def send_kick_message(message: str) -> bool:
         
         payload = {
             "content": message,
-            "type": "bot"  # Send as bot - uses channel attached to token
+            "type": "message"
         }
         
         async with aiohttp.ClientSession() as session:
