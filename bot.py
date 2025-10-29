@@ -564,15 +564,92 @@ async def get_kick_bot_token() -> Optional[str]:
 # Kick Chat Messaging
 # -------------------------
 
-async def send_kick_message(message: str) -> bool:
+async def refresh_kick_oauth_token() -> bool:
+    """
+    Refresh the Kick OAuth token using the refresh_token.
+    
+    Returns:
+        True if token was refreshed successfully, False otherwise
+    """
+    if not engine:
+        print("[Kick] ❌ No database connection for token refresh")
+        return False
+    
+    try:
+        # Get refresh token from database
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT refresh_token FROM bot_tokens 
+                WHERE bot_username = 'maikelele'
+                ORDER BY created_at DESC LIMIT 1
+            """)).fetchone()
+            
+            if not result or not result[0]:
+                print("[Kick] ❌ No refresh token available in database")
+                return False
+            
+            refresh_token = result[0]
+        
+        print(f"[Kick] 🔄 Attempting to refresh OAuth token...")
+        
+        # Call Kick's token endpoint to refresh
+        token_url = "https://id.kick.com/oauth/token"
+        token_data = {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": KICK_CLIENT_ID,
+            "client_secret": KICK_CLIENT_SECRET
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(token_url, data=token_data, timeout=10) as response:
+                if response.status == 200:
+                    token_response = await response.json()
+                    new_access_token = token_response.get("access_token")
+                    new_refresh_token = token_response.get("refresh_token", refresh_token)
+                    
+                    if not new_access_token:
+                        print("[Kick] ❌ No access_token in refresh response")
+                        return False
+                    
+                    # Update tokens in database
+                    with engine.begin() as conn:
+                        conn.execute(text("""
+                            UPDATE bot_tokens 
+                            SET access_token = :access_token, 
+                                refresh_token = :refresh_token,
+                                created_at = CURRENT_TIMESTAMP
+                            WHERE bot_username = 'maikelele'
+                        """), {
+                            "access_token": new_access_token,
+                            "refresh_token": new_refresh_token
+                        })
+                    
+                    print(f"[Kick] ✅ OAuth token refreshed successfully!")
+                    return True
+                else:
+                    error_text = await response.text()
+                    print(f"[Kick] ❌ Token refresh failed (HTTP {response.status}): {error_text}")
+                    return False
+    
+    except Exception as e:
+        print(f"[Kick] ❌ Error refreshing token: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+async def send_kick_message(message: str, retry_count: int = 0) -> bool:
     """
     Send a message to Kick chat using official Chat API with OAuth access token.
+    Automatically refreshes token on 401 errors.
     
     Uses the official endpoint: POST https://api.kick.com/public/v1/chat
     Documentation: https://docs.kick.com/apis/chat
     
     Args:
         message: The message to send
+        retry_count: Internal counter to prevent infinite retry loops
         
     Returns:
         True if successful, False otherwise
@@ -636,7 +713,17 @@ async def send_kick_message(message: str) -> bool:
                 
                 elif response.status == 401:
                     print(f"[Kick] ❌ 401 Unauthorized: {response_text}")
-                    print(f"[Kick] 💡 OAuth token expired. Owner of maikelele account must re-authorize at:")
+                    
+                    # Try to refresh token automatically (only once)
+                    if retry_count == 0:
+                        print(f"[Kick] 🔄 Attempting automatic token refresh...")
+                        if await refresh_kick_oauth_token():
+                            print(f"[Kick] ✅ Token refreshed, retrying message send...")
+                            return await send_kick_message(message, retry_count=1)
+                        else:
+                            print(f"[Kick] ❌ Token refresh failed")
+                    
+                    print(f"[Kick] 💡 OAuth token expired and refresh failed. Owner of maikelele account must re-authorize at:")
                     print(f"[Kick]    https://kick-dicord-bot-test-production.up.railway.app/bot/authorize?token=YOUR_BOT_AUTH_TOKEN")
                     return False
                 
