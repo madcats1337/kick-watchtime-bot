@@ -611,7 +611,7 @@ async def refresh_kick_token() -> bool:
         print("[Kick] 🔄 Attempting to refresh access token...")
         
         # Call Kick OAuth token endpoint to refresh
-        token_url = "https://kick.com/oauth2/token"
+        token_url = "https://id.kick.com/oauth/token"
         
         payload = {
             "grant_type": "refresh_token",
@@ -620,8 +620,12 @@ async def refresh_kick_token() -> bool:
             "client_secret": KICK_CLIENT_SECRET
         }
         
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+        
         async with aiohttp.ClientSession() as session:
-            async with session.post(token_url, json=payload, timeout=10) as response:
+            async with session.post(token_url, data=payload, headers=headers, timeout=10) as response:
                 if response.status == 200:
                     data = await response.json()
                     new_access_token = data.get("access_token")
