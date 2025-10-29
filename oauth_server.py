@@ -1226,7 +1226,7 @@ def bot_authorize():
             'response_type': 'code',
             'redirect_uri': redirect_uri,
             'state': state,
-            'scope': 'chat:write chat:read user:read',  # Request chat:write for sending messages
+            'scope': 'chat:write chat:read channel:read user:read events:subscribe',  # Match Botrix scopes
             'code_challenge': code_challenge,
             'code_challenge_method': 'S256'
         }
