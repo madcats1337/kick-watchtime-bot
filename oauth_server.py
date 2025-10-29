@@ -1217,7 +1217,7 @@ def bot_authorize():
             """), {"state": state, "discord_id": 0, "code_verifier": code_verifier})
             print(f"✅ Bot state saved to database", flush=True)
         
-        # Build authorization URL with chat:send scope
+        # Build authorization URL with chat:write scope
         # Use same callback as regular OAuth to avoid needing multiple redirect URIs
         redirect_uri = f"{OAUTH_BASE_URL}/auth/kick/callback"
         
@@ -1226,7 +1226,7 @@ def bot_authorize():
             'response_type': 'code',
             'redirect_uri': redirect_uri,
             'state': state,
-            'scope': 'user:read',  # Use same scope as user linking (chat:send may not be available yet)
+            'scope': 'chat:write chat:read user:read',  # Request chat:write for sending messages
             'code_challenge': code_challenge,
             'code_challenge_method': 'S256'
         }
