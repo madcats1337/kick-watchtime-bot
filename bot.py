@@ -331,6 +331,18 @@ try:
         );
         """))
         
+        # Create timer_panels table for reaction-based timer management
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS timer_panels (
+            id SERIAL PRIMARY KEY,
+            guild_id BIGINT NOT NULL,
+            channel_id BIGINT NOT NULL,
+            message_id BIGINT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(guild_id, channel_id, message_id)
+        );
+        """))
+        
         # Create bot_settings table for persistent configuration
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS bot_settings (
@@ -2429,13 +2441,200 @@ async def on_ready():
     bot.loop.create_task(kick_chat_loop(KICK_CHANNEL))
     print("✅ Kick chat listener started")
 
+async def handle_timer_panel_reaction(payload):
+    """Handle reactions on timer panel messages."""
+    from timed_messages import TimedMessagesManager
+    
+    guild = bot.get_guild(payload.guild_id)
+    if not guild:
+        return
+    
+    member = guild.get_member(payload.user_id)
+    if not member:
+        return
+    
+    # Check admin permissions
+    if not member.guild_permissions.administrator:
+        channel = bot.get_channel(payload.channel_id)
+        if channel:
+            await channel.send(
+                f"❌ {member.mention} Only administrators can use the timer panel!",
+                delete_after=5
+            )
+        # Remove reaction
+        try:
+            message = await channel.fetch_message(payload.message_id)
+            await message.remove_reaction(payload.emoji, member)
+        except:
+            pass
+        return
+    
+    reaction_emoji = str(payload.emoji)
+    channel = bot.get_channel(payload.channel_id)
+    if not channel:
+        return
+    
+    # Refresh the panel
+    message = await channel.fetch_message(payload.message_id)
+    
+    # Get timer manager
+    manager = TimedMessagesManager(engine)
+    messages = manager.list_messages()
+    
+    # Handle different reactions
+    if reaction_emoji == "📋":  # Refresh panel
+        embed = discord.Embed(
+            title="⏰ Timed Messages Control Panel",
+            description="React to this message to manage timers:\n\n"
+                       "📋 - Refresh panel\n"
+                       "✅ - Show enabled timers\n"
+                       "❌ - Show disabled timers\n"
+                       "🔄 - Toggle all timers",
+            color=discord.Color.blue(),
+            timestamp=datetime.utcnow()
+        )
+        
+        if not messages:
+            embed.add_field(
+                name="📭 No Timers",
+                value="Use `!addtimer <minutes> <message>` to create one!",
+                inline=False
+            )
+        else:
+            enabled_count = sum(1 for m in messages if m.enabled)
+            disabled_count = len(messages) - enabled_count
+            
+            summary = f"**Total:** {len(messages)} timer(s)\n"
+            summary += f"✅ **Enabled:** {enabled_count}\n"
+            summary += f"❌ **Disabled:** {disabled_count}"
+            
+            embed.add_field(name="📊 Summary", value=summary, inline=False)
+            
+            for i, msg in enumerate(messages[:10], 1):
+                status_emoji = "✅" if msg.enabled else "❌"
+                last_sent = msg.last_sent.strftime('%H:%M') if msg.last_sent else "Never"
+                
+                if msg.enabled and msg.last_sent:
+                    next_send = msg.last_sent + timedelta(minutes=msg.interval_minutes)
+                    time_until = next_send - datetime.utcnow()
+                    if time_until.total_seconds() > 0:
+                        minutes_left = int(time_until.total_seconds() / 60)
+                        next_info = f"in {minutes_left}m"
+                    else:
+                        next_info = "due now"
+                else:
+                    next_info = "waiting"
+                
+                field_value = (
+                    f"{status_emoji} **ID:** {msg.message_id} | **Every:** {msg.interval_minutes}m | **Next:** {next_info}\n"
+                    f"💬 {msg.message[:60]}{'...' if len(msg.message) > 60 else ''}"
+                )
+                
+                embed.add_field(name=f"Timer #{i}", value=field_value, inline=False)
+            
+            if len(messages) > 10:
+                embed.add_field(
+                    name="ℹ️ More Timers",
+                    value=f"Showing 10 of {len(messages)}. Use `!listtimers` to see all.",
+                    inline=False
+                )
+        
+        embed.add_field(
+            name="📝 Commands",
+            value=(
+                "`!addtimer <min> <msg>` • `!removetimer <id>`\n"
+                "`!toggletimer <id> on/off` • `!updatetimer <id> <min>`"
+            ),
+            inline=False
+        )
+        embed.set_footer(text=f"Checks every 1 minute • React to manage")
+        
+        await message.edit(embed=embed)
+        
+    elif reaction_emoji == "✅":  # Show enabled
+        enabled = [m for m in messages if m.enabled]
+        embed = discord.Embed(
+            title="✅ Enabled Timers",
+            color=discord.Color.green()
+        )
+        
+        if not enabled:
+            embed.description = "No enabled timers"
+        else:
+            for msg in enabled[:15]:
+                embed.add_field(
+                    name=f"ID: {msg.message_id} | Every {msg.interval_minutes}m",
+                    value=f"{msg.message[:80]}{'...' if len(msg.message) > 80 else ''}",
+                    inline=False
+                )
+        
+        embed.set_footer(text=f"{len(enabled)} enabled • React 📋 to go back")
+        await message.edit(embed=embed)
+        
+    elif reaction_emoji == "❌":  # Show disabled
+        disabled = [m for m in messages if not m.enabled]
+        embed = discord.Embed(
+            title="❌ Disabled Timers",
+            color=discord.Color.red()
+        )
+        
+        if not disabled:
+            embed.description = "No disabled timers"
+        else:
+            for msg in disabled[:15]:
+                embed.add_field(
+                    name=f"ID: {msg.message_id} | Every {msg.interval_minutes}m",
+                    value=f"{msg.message[:80]}{'...' if len(msg.message) > 80 else ''}",
+                    inline=False
+                )
+        
+        embed.set_footer(text=f"{len(disabled)} disabled • React 📋 to go back")
+        await message.edit(embed=embed)
+        
+    elif reaction_emoji == "🔄":  # Toggle all
+        # Determine majority state
+        enabled_count = sum(1 for m in messages if m.enabled)
+        new_state = enabled_count < len(messages) / 2  # Enable if less than half are enabled
+        
+        for msg in messages:
+            manager.toggle_message(msg.message_id, new_state)
+        
+        action = "enabled" if new_state else "disabled"
+        await channel.send(
+            f"🔄 {member.mention} All timers have been **{action}**!",
+            delete_after=5
+        )
+        
+        # Refresh panel
+        payload.emoji = "📋"
+        await handle_timer_panel_reaction(payload)
+        return  # Don't remove reaction since we're recursing
+    
+    # Remove the reaction
+    try:
+        await message.remove_reaction(payload.emoji, member)
+    except:
+        pass
+
 @bot.event
 async def on_raw_reaction_add(payload):
-    """Handle reactions to link panel messages."""
+    """Handle reactions to link panel and timer panel messages."""
     
     # Ignore bot's own reactions
     if payload.user_id == bot.user.id:
         return
+    
+    # Check if this reaction is on a timer panel message
+    with engine.connect() as conn:
+        timer_panel = conn.execute(text("""
+            SELECT id FROM timer_panels 
+            WHERE guild_id = :g AND channel_id = :c AND message_id = :m
+        """), {"g": payload.guild_id, "c": payload.channel_id, "m": payload.message_id}).fetchone()
+        
+        if timer_panel:
+            # Handle timer panel reactions
+            await handle_timer_panel_reaction(payload)
+            return
     
     # Check if this reaction is on a link panel message
     with engine.connect() as conn:
@@ -2445,7 +2644,7 @@ async def on_raw_reaction_add(payload):
         """), {"g": payload.guild_id, "c": payload.channel_id, "m": payload.message_id}).fetchone()
         
         if not result:
-            return  # Not a link panel message
+            return  # Not a link panel or timer panel message
         
         panel_emoji = result[0]
         
