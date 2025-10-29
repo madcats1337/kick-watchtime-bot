@@ -564,174 +564,90 @@ async def get_kick_bot_token() -> Optional[str]:
 # Kick Chat Messaging
 # -------------------------
 
-# Global variable to store the current access token (can be updated when refreshed)
-_kick_access_token = None
-_last_token_refresh_attempt = None
-
-async def refresh_kick_token() -> bool:
+async def send_kick_message(message: str) -> bool:
     """
-    Refresh the Kick access token using the refresh token from database.
-    Updates the global _kick_access_token if successful.
+    Send a message to Kick chat using official Chat API with OAuth access token.
     
-    Returns:
-        True if token was refreshed successfully, False otherwise
-    """
-    global _kick_access_token, _last_token_refresh_attempt
-    
-    # Prevent spamming refresh attempts (max once per minute)
-    now = datetime.utcnow()
-    if _last_token_refresh_attempt:
-        time_since_last = (now - _last_token_refresh_attempt).total_seconds()
-        if time_since_last < 60:
-            print(f"[Kick] ⏳ Token refresh attempted too recently ({int(time_since_last)}s ago)")
-            return False
-    
-    _last_token_refresh_attempt = now
-    
-    if not engine:
-        print("[Kick] ❌ Cannot refresh token: No database connection")
-        return False
-    
-    try:
-        # Get the refresh token from database
-        with engine.connect() as conn:
-            result = conn.execute(text("""
-                SELECT refresh_token FROM bot_tokens 
-                WHERE bot_username = :username 
-                ORDER BY created_at DESC 
-                LIMIT 1
-            """), {"username": "maikelele"}).fetchone()
-            
-            if not result or not result[0]:
-                print("[Kick] ❌ No refresh token found in database")
-                return False
-            
-            refresh_token = result[0]
-        
-        print("[Kick] 🔄 Attempting to refresh access token...")
-        
-        # Call Kick OAuth token endpoint to refresh
-        token_url = "https://id.kick.com/oauth/token"
-        
-        payload = {
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-            "client_id": KICK_CLIENT_ID,
-            "client_secret": KICK_CLIENT_SECRET
-        }
-        
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.post(token_url, data=payload, headers=headers, timeout=10) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    new_access_token = data.get("access_token")
-                    new_refresh_token = data.get("refresh_token")
-                    
-                    if not new_access_token:
-                        print("[Kick] ❌ No access token in refresh response")
-                        return False
-                    
-                    # Update database with new tokens
-                    with engine.begin() as conn:
-                        conn.execute(text("""
-                            UPDATE bot_tokens 
-                            SET access_token = :access,
-                                refresh_token = :refresh
-                            WHERE bot_username = :username
-                        """), {
-                            "access": new_access_token,
-                            "refresh": new_refresh_token if new_refresh_token else refresh_token,
-                            "username": "maikelele"
-                        })
-                    
-                    # Update global variable
-                    _kick_access_token = new_access_token
-                    
-                    print(f"[Kick] ✅ Token refreshed successfully!")
-                    print(f"[Kick] 💡 New token: {new_access_token[:20]}...")
-                    return True
-                else:
-                    error_text = await response.text()
-                    print(f"[Kick] ❌ Failed to refresh token (HTTP {response.status}): {error_text}")
-                    return False
-                    
-    except Exception as e:
-        print(f"[Kick] ❌ Error refreshing token: {e}")
-        return False
-
-async def send_kick_message(message: str, retry_on_401: bool = True) -> bool:
-    """
-    Send a message to Kick chat using the official Kick API.
-    Requires a User Access Token with 'chat:write' scope.
-    Automatically attempts to refresh token on 401 errors.
+    Uses the official endpoint: POST https://api.kick.com/public/v1/chat
+    Documentation: https://docs.kick.com/apis/chat
     
     Args:
         message: The message to send
-        retry_on_401: Whether to attempt token refresh on 401 error
         
     Returns:
         True if successful, False otherwise
     """
-    global _kick_access_token
+    # Try to load access token from database first
+    access_token = None
+    if engine:
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(text("""
+                    SELECT access_token FROM bot_tokens 
+                    WHERE bot_username = 'maikelele'
+                    ORDER BY created_at DESC LIMIT 1
+                """)).fetchone()
+                if result and result[0]:
+                    access_token = result[0]
+                    print(f"[Kick] ✅ Loaded OAuth token from database: {access_token[:20]}...")
+        except Exception as e:
+            print(f"[Kick] ⚠️ Could not load token from database: {e}")
     
-    # Use refreshed token if available, otherwise use env var
-    access_token = _kick_access_token if _kick_access_token else KICK_BOT_USER_TOKEN
+    # Fall back to environment variable
+    if not access_token:
+        access_token = KICK_BOT_USER_TOKEN
+        if access_token:
+            print(f"[Kick] ℹ️  Using OAuth token from environment variable")
     
     if not access_token:
-        print("[Kick] ⚠️ Cannot send message: KICK_BOT_USER_TOKEN not configured")
-        print("[Kick] ℹ️  Chat API requires User Access Token with 'chat:write' scope")
+        print("[Kick] ❌ No OAuth access token available")
+        print("[Kick] 💡 Owner of maikelele account must authorize at:")
+        print(f"[Kick]    https://kick-dicord-bot-test-production.up.railway.app/bot/authorize?token=YOUR_BOT_AUTH_TOKEN")
         return False
     
+    # Send message using official Chat API
     try:
-        # Official Kick API endpoint for posting chat messages
-        # IMPORTANT: Must include X-Channel header to specify which channel to send to
         url = "https://api.kick.com/public/v1/chat"
-        
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
-            "Accept": "*/*",
-            "X-Channel": KICK_CHANNEL  # Specify which channel to send the message to
+            "Accept": "application/json"
         }
-        
         payload = {
             "content": message,
-            "type": "bot"  # Must be "bot" - other types return 400 error
+            "type": "bot"  # When type=bot, message goes to channel attached to token
         }
+        
+        print(f"[Kick] 📤 Sending message via official Chat API...")
         
         async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, json=payload, timeout=10) as response:
+                response_text = await response.text()
+                
                 if response.status == 200:
-                    data = await response.json()
-                    print(f"[Kick] ✅ Sent message: {message[:50]}...")
-                    return True
+                    try:
+                        response_data = json.loads(response_text)
+                        message_id = response_data.get("data", {}).get("message_id")
+                        print(f"[Kick] ✅ Message sent successfully! ID: {message_id}")
+                        return True
+                    except json.JSONDecodeError:
+                        print(f"[Kick] ✅ Message sent (response: {response_text[:100]})")
+                        return True
+                
                 elif response.status == 401:
-                    error_text = await response.text()
-                    print(f"[Kick] ❌ Failed to send message (HTTP 401 Unauthorized): {error_text}")
-                    
-                    # Try to refresh token and retry once
-                    if retry_on_401:
-                        print(f"[Kick] 🔄 Attempting automatic token refresh...")
-                        if await refresh_kick_token():
-                            print(f"[Kick] ♻️ Retrying message send with refreshed token...")
-                            return await send_kick_message(message, retry_on_401=False)
-                    
-                    print(f"[Kick] 💡 Common causes:")
-                    print(f"[Kick]    - Token missing 'chat:write' scope (re-authorize with correct scope)")
-                    print(f"[Kick]    - Bot account not following the channel (required for follower-only chat)")
-                    print(f"[Kick]    - Refresh token also expired (re-authorize required)")
+                    print(f"[Kick] ❌ 401 Unauthorized: {response_text}")
+                    print(f"[Kick] 💡 OAuth token expired. Owner of maikelele account must re-authorize at:")
+                    print(f"[Kick]    https://kick-dicord-bot-test-production.up.railway.app/bot/authorize?token=YOUR_BOT_AUTH_TOKEN")
                     return False
+                
                 else:
-                    error_text = await response.text()
-                    print(f"[Kick] ❌ Failed to send message (HTTP {response.status}): {error_text}")
+                    print(f"[Kick] ❌ Failed to send message (HTTP {response.status}): {response_text}")
                     return False
     
     except Exception as e:
         print(f"[Kick] ❌ Error sending message: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -1273,6 +1189,16 @@ async def check_oauth_notifications_task():
                     
     except Exception as e:
         print(f"⚠️ Error in OAuth notifications task: {e}", flush=True)
+@tasks.loop(hours=6)
+async def proactive_session_check_task():
+    """Check if OAuth tokens need refreshing every 6 hours."""
+    if not engine:
+        return
+    
+    print("[Kick] 🔄 Running proactive OAuth token check (every 6 hours)...")
+    # Just log that we're checking - actual refresh happens on-demand when sending messages
+    print("[Kick] ℹ️  OAuth tokens will be refreshed automatically when needed")
+
 @tasks.loop(minutes=5)
 async def cleanup_pending_links_task():
     """Remove expired verification codes and old chat activity data."""
@@ -2448,6 +2374,10 @@ async def on_ready():
         if not cleanup_pending_links_task.is_running():
             cleanup_pending_links_task.start()
             print("✅ Cleanup task started")
+        
+        if not proactive_session_check_task.is_running() and engine:
+            proactive_session_check_task.start()
+            print("✅ Proactive session check task started (runs every 6 hours)")
         
         if not check_oauth_notifications_task.is_running():
             check_oauth_notifications_task.start()
