@@ -2509,9 +2509,9 @@ async def on_ready():
             cleanup_pending_links_task.start()
             print("✅ Cleanup task started")
         
-        if not proactive_session_check_task.is_running() and engine:
+        if not proactive_token_refresh_task.is_running() and engine:
             proactive_token_refresh_task.start()
-            print("✅ Proactive session check task started (runs every 6 hours)")
+            print("✅ Proactive token refresh task started (runs every 30 minutes)")
         
         if not check_oauth_notifications_task.is_running():
             check_oauth_notifications_task.start()
