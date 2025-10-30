@@ -2475,6 +2475,24 @@ async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
     print(f"📺 Monitoring Kick channel: {KICK_CHANNEL}")
     
+    # Auto-migrate database: add expires_at column if missing
+    if engine:
+        try:
+            with engine.begin() as conn:
+                # Check if expires_at column exists
+                result = conn.execute(text("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'bot_tokens' AND column_name = 'expires_at'
+                """)).fetchone()
+                
+                if not result:
+                    print("🔄 Adding expires_at column to bot_tokens table...")
+                    conn.execute(text("ALTER TABLE bot_tokens ADD COLUMN expires_at TIMESTAMP"))
+                    print("✅ Database migrated: expires_at column added")
+        except Exception as e:
+            print(f"⚠️ Database migration check failed: {e}")
+    
     try:
         # Ensure we're connected to the right guild
         if DISCORD_GUILD_ID:
