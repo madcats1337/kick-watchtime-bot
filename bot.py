@@ -1308,6 +1308,10 @@ async def proactive_token_refresh_task():
                 print("[Kick] ⚠️  No expiration time stored - token will refresh on-demand")
                 return
             
+            # Make expires_at timezone-aware if it isn't already
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            
             now = datetime.now(timezone.utc)
             time_until_expiry = expires_at - now
             minutes_until_expiry = time_until_expiry.total_seconds() / 60
