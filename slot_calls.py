@@ -250,6 +250,8 @@ class SlotCallCommands(commands.Cog):
         elif action.lower() == "off":
             self.tracker.set_enabled(False)
             await ctx.send("❌ Slot call tracking **disabled**. `!call` and `!sr` commands will be ignored.")
+        else:
+            await ctx.send("❌ Invalid action. Use `!slotcalls on`, `!slotcalls off`, or `!slotcalls status`")
     
     @commands.command(name='pickslot', aliases=['randomslot', 'slotpick'])
     @commands.has_permissions(administrator=True)
@@ -349,8 +351,6 @@ class SlotCallCommands(commands.Cog):
         except Exception as e:
             logger.error(f"Failed to get slot request stats: {e}")
             await ctx.send(f"❌ Error getting slot list: {e}")
-        else:
-            await ctx.send("❌ Invalid action. Use `!slotcalls on`, `!slotcalls off`, or `!slotcalls status`")
     
     @toggle_slot_calls.error
     async def toggle_slot_calls_error(self, ctx, error):
