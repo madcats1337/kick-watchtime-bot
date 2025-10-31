@@ -891,13 +891,15 @@ async def kick_chat_loop(channel_name: str):
                                 
                                 if username:
                                     username_lower = username.lower()
+                                    # Only log if this is a new viewer (first time in active_viewers)
+                                    is_new_viewer = username_lower not in active_viewers
                                     active_viewers[username_lower] = now
                                     # 🔒 SECURITY: Track unique chatters for stream-live detection
                                     recent_chatters[username_lower] = now
                                     content_text = event_data.get("content", "")
                                     print(f"[Kick] {username}: {content_text}")
-                                    if watchtime_debug_enabled:
-                                        print(f"[Watchtime Debug] Added {username_lower} to active viewers (total: {len(active_viewers)})")
+                                    if watchtime_debug_enabled and is_new_viewer:
+                                        print(f"[Watchtime Debug] New viewer: {username_lower} (total: {len(active_viewers)})")
                                     
                                     # Handle slot call commands (!call or !sr)
                                     content_stripped = content_text.strip()
