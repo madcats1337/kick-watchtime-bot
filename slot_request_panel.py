@@ -135,8 +135,8 @@ class SlotRequestPanel:
             username, slot_call, picked_at = stats['last_picked']
             time_str = picked_at.strftime("%H:%M:%S") if picked_at else "Unknown"
             desc_lines.append(f"\n**Last Picked:**")
-            desc_lines.append(f"└ {slot_call}")
-            desc_lines.append(f"└ by {username} at {time_str}")
+            desc_lines.append(f"• {slot_call}")
+            desc_lines.append(f"• by {username} at {time_str}")
         else:
             desc_lines.append(f"\n**Last Picked:** None yet")
         
