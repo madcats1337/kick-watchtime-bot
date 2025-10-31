@@ -258,10 +258,16 @@ class TimedMessagesManager:
         if not self.kick_send_callback:
             return
         
+        # Log active chatters count for debugging
+        enabled_count = sum(1 for msg in self.messages.values() if msg.enabled)
+        if enabled_count > 0:
+            print(f"[Timed Messages] Check: {active_chatters_count} active chatters, {enabled_count} enabled messages")
+        
         # Don't send timed messages if there are less than 2 active chatters
         # This prevents spam when stream is offline
         if active_chatters_count < 2:
-            logger.debug(f"Skipping timed messages - only {active_chatters_count} active chatter(s)")
+            if enabled_count > 0:
+                print(f"[Timed Messages] Skipping - need 2+ active chatters, currently have {active_chatters_count}")
             return
         
         now = datetime.utcnow()
@@ -318,6 +324,9 @@ class TimedMessagesCommands(commands.Cog):
         active_chatters_count = 0
         if hasattr(self.bot, 'get_active_chatters_count'):
             active_chatters_count = self.bot.get_active_chatters_count()
+            print(f"[Timed Messages] Active chatters from bot: {active_chatters_count}")
+        else:
+            print(f"[Timed Messages] WARNING: Bot doesn't have get_active_chatters_count method!")
         
         await self.manager.check_and_send_messages(active_chatters_count)
     
