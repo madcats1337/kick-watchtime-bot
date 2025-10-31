@@ -249,9 +249,19 @@ class TimedMessagesManager:
         """Get a specific message"""
         return self.messages.get(message_id)
     
-    async def check_and_send_messages(self):
-        """Check if any messages need to be sent and send them"""
+    async def check_and_send_messages(self, active_chatters_count: int = 0):
+        """Check if any messages need to be sent and send them
+        
+        Args:
+            active_chatters_count: Number of active chatters in the last window (default: 0)
+        """
         if not self.kick_send_callback:
+            return
+        
+        # Don't send timed messages if there are less than 2 active chatters
+        # This prevents spam when stream is offline
+        if active_chatters_count < 2:
+            logger.debug(f"Skipping timed messages - only {active_chatters_count} active chatter(s)")
             return
         
         now = datetime.utcnow()
@@ -271,7 +281,7 @@ class TimedMessagesManager:
                 try:
                     # Send the message
                     await self.kick_send_callback(msg.message)
-                    logger.info(f"Sent timed message #{msg.message_id}: {msg.message[:50]}...")
+                    logger.info(f"Sent timed message #{msg.message_id}: {msg.message[:50]}... ({active_chatters_count} active chatters)")
                     
                     # Update last_sent timestamp
                     if self.engine:
@@ -304,7 +314,12 @@ class TimedMessagesCommands(commands.Cog):
     @tasks.loop(minutes=1)
     async def check_messages_task(self):
         """Background task to check and send timed messages"""
-        await self.manager.check_and_send_messages()
+        # Get active chatters count from bot if available
+        active_chatters_count = 0
+        if hasattr(self.bot, 'get_active_chatters_count'):
+            active_chatters_count = self.bot.get_active_chatters_count()
+        
+        await self.manager.check_and_send_messages(active_chatters_count)
     
     @check_messages_task.before_loop
     async def before_check_messages(self):

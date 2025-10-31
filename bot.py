@@ -441,6 +441,23 @@ MIN_UNIQUE_CHATTERS = 2  # Require at least 2 different people chatting to consi
 CHAT_ACTIVITY_WINDOW_MINUTES = 5  # Look back 5 minutes for unique chatters
 
 # -------------------------
+# Helper functions
+# -------------------------
+def get_active_chatters_count():
+    """Get the number of active chatters in the recent window"""
+    from datetime import datetime, timedelta
+    now = datetime.utcnow()
+    chat_cutoff = now - timedelta(minutes=CHAT_ACTIVITY_WINDOW_MINUTES)
+    
+    active_chatters = {
+        username: timestamp 
+        for username, timestamp in recent_chatters.items() 
+        if timestamp >= chat_cutoff
+    }
+    
+    return len(active_chatters)
+
+# -------------------------
 # Role configuration helper
 # -------------------------
 def load_watchtime_roles():
@@ -2478,6 +2495,9 @@ async def on_ready():
     
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
     print(f"📺 Monitoring Kick channel: {KICK_CHANNEL}")
+    
+    # Attach helper function to bot so other cogs can access it
+    bot.get_active_chatters_count = get_active_chatters_count
     
     # Auto-migrate database: add expires_at column if missing
     if engine:
