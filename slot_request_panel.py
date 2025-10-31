@@ -34,7 +34,16 @@ class SlotRequestPanel:
             return
         
         try:
-            with self.engine.connect() as conn:
+            with self.engine.begin() as conn:
+                # Create table if not exists
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS bot_settings (
+                        setting_key TEXT PRIMARY KEY,
+                        setting_value TEXT NOT NULL,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+                
                 result = conn.execute(text("""
                     SELECT setting_value FROM bot_settings 
                     WHERE setting_key = 'slot_panel_message_id'
@@ -61,15 +70,6 @@ class SlotRequestPanel:
         
         try:
             with self.engine.begin() as conn:
-                # Create table if not exists
-                conn.execute(text("""
-                    CREATE TABLE IF NOT EXISTS bot_settings (
-                        setting_key TEXT PRIMARY KEY,
-                        setting_value TEXT NOT NULL,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """))
-                
                 # Save message ID
                 if self.panel_message_id:
                     conn.execute(text("""
