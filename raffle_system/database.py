@@ -318,7 +318,7 @@ def get_current_period(engine):
 
 def create_new_period(engine, start_date, end_date):
     """
-    Create a new raffle period
+    Create a new raffle period and reset all tickets
     
     Args:
         engine: SQLAlchemy engine instance
@@ -330,6 +330,24 @@ def create_new_period(engine, start_date, end_date):
     """
     try:
         with engine.begin() as conn:
+            # Get the old active period if it exists
+            old_period = conn.execute(text("""
+                SELECT id FROM raffle_periods
+                WHERE status = 'active'
+                ORDER BY id DESC
+                LIMIT 1
+            """)).fetchone()
+            
+            # Close any active periods
+            if old_period:
+                conn.execute(text("""
+                    UPDATE raffle_periods
+                    SET status = 'ended'
+                    WHERE id = :period_id
+                """), {'period_id': old_period[0]})
+                logger.info(f"Closed old raffle period #{old_period[0]}")
+            
+            # Create new period
             result = conn.execute(text("""
                 INSERT INTO raffle_periods (start_date, end_date, status)
                 VALUES (:start, :end, 'active')
@@ -340,7 +358,31 @@ def create_new_period(engine, start_date, end_date):
             })
             period_id = result.scalar()
             
-        logger.info(f"✅ Created new raffle period #{period_id}")
+            # Reset all existing tickets for the new period
+            # Delete old tickets from previous periods
+            conn.execute(text("""
+                DELETE FROM raffle_tickets
+                WHERE period_id != :period_id
+            """), {'period_id': period_id})
+            
+            # Clear all conversion tracking
+            conn.execute(text("""
+                DELETE FROM raffle_watchtime_converted
+                WHERE period_id != :period_id
+            """), {'period_id': period_id})
+            
+            conn.execute(text("""
+                DELETE FROM raffle_gifted_subs
+                WHERE period_id != :period_id
+            """), {'period_id': period_id})
+            
+            # Reset shuffle wager tracking for new period
+            conn.execute(text("""
+                DELETE FROM raffle_shuffle_wagers
+                WHERE period_id != :period_id
+            """), {'period_id': period_id})
+            
+        logger.info(f"✅ Created new raffle period #{period_id} and reset all tickets")
         return period_id
         
     except Exception as e:

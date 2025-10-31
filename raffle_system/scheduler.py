@@ -247,33 +247,38 @@ async def setup_raffle_scheduler(bot, engine, auto_draw=False, announcement_chan
         announcement_channel_id=announcement_channel_id
     )
     
-    @tasks.loop(hours=24)  # Check daily at midnight
+    @tasks.loop(minutes=1)  # Check every minute
     async def check_raffle_period():
-        """Daily task to check if raffle period needs to transition"""
+        """Check if it's time to start a new raffle period at midnight (00:00:00)"""
         try:
-            logger.debug("🔍 Checking raffle period status...")
+            now = datetime.now()
             
-            transition = scheduler.check_period_transition()
-            
-            if transition:
-                logger.info(f"📊 Period transition completed:")
-                logger.info(f"   Old period: #{transition['old_period_id']}")
-                logger.info(f"   New period: #{transition['new_period_id']}")
+            # Check if it's midnight (00:00:00) - time for new raffle period
+            if now.hour == 0 and now.minute == 0:
+                logger.info("🕛 It's midnight (00:00:00) - checking for raffle period transition...")
                 
-                # Announce winner if drawn
-                if transition['winner_drawn'] and transition['winner_info']:
-                    await scheduler.announce_winner(transition['winner_info'])
+                # Check if we need to transition periods
+                transition = scheduler.check_period_transition()
                 
-                # Announce new period
-                if transition['new_period_id']:
-                    # Get new period details
-                    new_period = get_current_period(engine)
-                    if new_period:
-                        await scheduler.announce_new_period(
-                            new_period['id'],
-                            new_period['start_date'],
-                            new_period['end_date']
-                        )
+                if transition:
+                    logger.info(f"📊 Period transition completed (tickets automatically reset):")
+                    logger.info(f"   Old period: #{transition['old_period_id']}")
+                    logger.info(f"   New period: #{transition['new_period_id']}")
+                    
+                    # Announce winner if drawn
+                    if transition['winner_drawn'] and transition['winner_info']:
+                        await scheduler.announce_winner(transition['winner_info'])
+                    
+                    # Announce new period (tickets already reset by create_new_period)
+                    if transition['new_period_id']:
+                        # Get new period details
+                        new_period = get_current_period(engine)
+                        if new_period:
+                            await scheduler.announce_new_period(
+                                new_period['id'],
+                                new_period['start_date'],
+                                new_period['end_date']
+                            )
                 
         except Exception as e:
             logger.error(f"Error in raffle period check task: {e}")
@@ -282,6 +287,6 @@ async def setup_raffle_scheduler(bot, engine, auto_draw=False, announcement_chan
     
     # Start the task
     check_raffle_period.start()
-    logger.info("✅ Raffle scheduler task started (checks every 24 hours)")
+    logger.info("✅ Raffle scheduler task started (checks every minute for midnight period transition)")
     
     return scheduler
