@@ -34,27 +34,18 @@ class SlotRequestPanel:
             return
         
         try:
-            with self.engine.begin() as conn:
-                # Create table if not exists
-                conn.execute(text("""
-                    CREATE TABLE IF NOT EXISTS bot_settings (
-                        setting_key TEXT PRIMARY KEY,
-                        setting_value TEXT NOT NULL,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """))
-                
+            with self.engine.connect() as conn:
                 result = conn.execute(text("""
-                    SELECT setting_value FROM bot_settings 
-                    WHERE setting_key = 'slot_panel_message_id'
+                    SELECT value FROM bot_settings 
+                    WHERE key = 'slot_panel_message_id'
                 """)).fetchone()
                 
                 if result:
                     self.panel_message_id = int(result[0])
                 
                 result = conn.execute(text("""
-                    SELECT setting_value FROM bot_settings 
-                    WHERE setting_key = 'slot_panel_channel_id'
+                    SELECT value FROM bot_settings 
+                    WHERE key = 'slot_panel_channel_id'
                 """)).fetchone()
                 
                 if result:
@@ -73,19 +64,19 @@ class SlotRequestPanel:
                 # Save message ID
                 if self.panel_message_id:
                     conn.execute(text("""
-                        INSERT INTO bot_settings (setting_key, setting_value, updated_at)
+                        INSERT INTO bot_settings (key, value, updated_at)
                         VALUES ('slot_panel_message_id', :value, CURRENT_TIMESTAMP)
-                        ON CONFLICT (setting_key) 
-                        DO UPDATE SET setting_value = :value, updated_at = CURRENT_TIMESTAMP
+                        ON CONFLICT (key) 
+                        DO UPDATE SET value = :value, updated_at = CURRENT_TIMESTAMP
                     """), {"value": str(self.panel_message_id)})
                 
                 # Save channel ID
                 if self.panel_channel_id:
                     conn.execute(text("""
-                        INSERT INTO bot_settings (setting_key, setting_value, updated_at)
+                        INSERT INTO bot_settings (key, value, updated_at)
                         VALUES ('slot_panel_channel_id', :value, CURRENT_TIMESTAMP)
-                        ON CONFLICT (setting_key) 
-                        DO UPDATE SET setting_value = :value, updated_at = CURRENT_TIMESTAMP
+                        ON CONFLICT (key) 
+                        DO UPDATE SET value = :value, updated_at = CURRENT_TIMESTAMP
                     """), {"value": str(self.panel_channel_id)})
                     
         except Exception as e:
