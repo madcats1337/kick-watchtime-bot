@@ -30,7 +30,7 @@ class SlotCallTracker:
         self.enabled = self._load_enabled_state()
         
     def _init_database(self):
-        """Create feature_settings table if it doesn't exist"""
+        """Create feature_settings and slot_requests tables if they don't exist"""
         if not self.engine:
             logger.warning("No database engine provided - slot call state won't persist")
             return
@@ -44,9 +44,21 @@ class SlotCallTracker:
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """))
-            logger.info("feature_settings table initialized")
+                
+                # Create slot_requests table to store all slot requests
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS slot_requests (
+                        id SERIAL PRIMARY KEY,
+                        kick_username TEXT NOT NULL,
+                        slot_call TEXT NOT NULL,
+                        requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        picked BOOLEAN DEFAULT FALSE,
+                        picked_at TIMESTAMP
+                    )
+                """))
+            logger.info("Slot call tables initialized")
         except Exception as e:
-            logger.error(f"Failed to initialize feature_settings table: {e}")
+            logger.error(f"Failed to initialize slot call tables: {e}")
     
     def _load_enabled_state(self) -> bool:
         """Load enabled state from database, default to True if not found"""
@@ -83,6 +95,7 @@ class SlotCallTracker:
     
     def set_enabled(self, enabled: bool):
         """Enable or disable slot call tracking and persist to database"""
+        was_disabled = not self.enabled
         self.enabled = enabled
         logger.info(f"Slot call tracking {'enabled' if enabled else 'disabled'}")
         
@@ -96,6 +109,13 @@ class SlotCallTracker:
                         ON CONFLICT (feature_name) 
                         DO UPDATE SET enabled = :enabled, updated_at = CURRENT_TIMESTAMP
                     """), {"enabled": enabled})
+                    
+                    # Clear slot requests table when enabled after being disabled
+                    if enabled and was_disabled:
+                        result = conn.execute(text("DELETE FROM slot_requests"))
+                        deleted_count = result.rowcount
+                        logger.info(f"Cleared {deleted_count} old slot requests (slot requests re-enabled)")
+                        
                 logger.info(f"Persisted slot call state to database")
             except Exception as e:
                 logger.error(f"Failed to persist slot call state to database: {e}")
@@ -158,6 +178,18 @@ class SlotCallTracker:
             await channel.send(embed=embed)
             logger.info(f"Posted slot call from {kick_username_safe}: {slot_call_safe}")
             
+            # Save slot request to database
+            if self.engine:
+                try:
+                    with self.engine.begin() as conn:
+                        conn.execute(text("""
+                            INSERT INTO slot_requests (kick_username, slot_call, requested_at)
+                            VALUES (:username, :slot_call, CURRENT_TIMESTAMP)
+                        """), {"username": kick_username_safe, "slot_call": slot_call_safe})
+                    logger.debug(f"Saved slot request to database")
+                except Exception as e:
+                    logger.error(f"Failed to save slot request to database: {e}")
+            
             # Send confirmation message to Kick chat if callback is available
             if self.kick_send_callback:
                 kick_response = f"@{kick_username_safe} Your slot request for {slot_call_safe} has been received! ✅"
@@ -218,6 +250,105 @@ class SlotCallCommands(commands.Cog):
         elif action.lower() == "off":
             self.tracker.set_enabled(False)
             await ctx.send("❌ Slot call tracking **disabled**. `!call` and `!sr` commands will be ignored.")
+    
+    @commands.command(name='pickslot', aliases=['randomslot', 'slotpick'])
+    @commands.has_permissions(administrator=True)
+    async def pick_random_slot(self, ctx):
+        """
+        [ADMIN] Pick a random slot request from the list
+        Usage: !pickslot
+        """
+        if not self.tracker.engine:
+            await ctx.send("❌ Database not available")
+            return
+        
+        try:
+            with self.tracker.engine.connect() as conn:
+                # Get a random unpicked slot request
+                result = conn.execute(text("""
+                    SELECT id, kick_username, slot_call, requested_at
+                    FROM slot_requests
+                    WHERE picked = FALSE
+                    ORDER BY RANDOM()
+                    LIMIT 1
+                """)).fetchone()
+                
+                if not result:
+                    await ctx.send("❌ No slot requests available. The list may be empty or all requests have been picked.")
+                    return
+                
+                request_id, username, slot_call, requested_at = result
+                
+                # Mark as picked
+                with self.tracker.engine.begin() as update_conn:
+                    update_conn.execute(text("""
+                        UPDATE slot_requests
+                        SET picked = TRUE, picked_at = CURRENT_TIMESTAMP
+                        WHERE id = :id
+                    """), {"id": request_id})
+                
+                # Create embed
+                embed = discord.Embed(
+                    title="🎰 Random Slot Picked!",
+                    description=f"**{slot_call}**",
+                    color=discord.Color.gold()
+                )
+                embed.add_field(name="Requested by", value=username, inline=True)
+                embed.add_field(name="Requested at", value=requested_at.strftime("%Y-%m-%d %H:%M:%S UTC") if requested_at else "Unknown", inline=True)
+                embed.set_footer(text=f"Request ID: {request_id}")
+                
+                await ctx.send(embed=embed)
+                logger.info(f"Picked random slot: {slot_call} by {username}")
+                
+                # Send message to Kick chat
+                if self.tracker.kick_send_callback:
+                    try:
+                        kick_message = f"🎰 Random slot picked: {slot_call} (requested by @{username})"
+                        await self.tracker.kick_send_callback(kick_message)
+                        logger.info(f"Sent pick notification to Kick chat")
+                    except Exception as kick_error:
+                        logger.error(f"Failed to send pick notification to Kick: {kick_error}")
+                
+        except Exception as e:
+            logger.error(f"Failed to pick random slot: {e}")
+            await ctx.send(f"❌ Error picking random slot: {e}")
+    
+    @commands.command(name='slotlist', aliases=['listslots', 'slots'])
+    @commands.has_permissions(administrator=True)
+    async def list_slot_requests(self, ctx):
+        """
+        [ADMIN] Show statistics about slot requests
+        Usage: !slotlist
+        """
+        if not self.tracker.engine:
+            await ctx.send("❌ Database not available")
+            return
+        
+        try:
+            with self.tracker.engine.connect() as conn:
+                # Get counts
+                total = conn.execute(text("SELECT COUNT(*) FROM slot_requests")).fetchone()[0]
+                unpicked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = FALSE")).fetchone()[0]
+                picked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = TRUE")).fetchone()[0]
+                
+                embed = discord.Embed(
+                    title="🎰 Slot Request Statistics",
+                    color=discord.Color.blue()
+                )
+                embed.add_field(name="Total Requests", value=str(total), inline=True)
+                embed.add_field(name="Available", value=str(unpicked), inline=True)
+                embed.add_field(name="Already Picked", value=str(picked), inline=True)
+                
+                if unpicked > 0:
+                    embed.set_footer(text=f"Use !pickslot to pick a random slot from {unpicked} available requests")
+                else:
+                    embed.set_footer(text="No unpicked requests available")
+                
+                await ctx.send(embed=embed)
+                
+        except Exception as e:
+            logger.error(f"Failed to get slot request stats: {e}")
+            await ctx.send(f"❌ Error getting slot list: {e}")
         else:
             await ctx.send("❌ Invalid action. Use `!slotcalls on`, `!slotcalls off`, or `!slotcalls status`")
     
