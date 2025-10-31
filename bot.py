@@ -445,8 +445,8 @@ CHAT_ACTIVITY_WINDOW_MINUTES = 5  # Look back 5 minutes for unique chatters
 # -------------------------
 def get_active_chatters_count():
     """Get the number of active chatters in the recent window"""
-    from datetime import datetime, timedelta
-    now = datetime.utcnow()
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)  # Use timezone-aware datetime
     chat_cutoff = now - timedelta(minutes=CHAT_ACTIVITY_WINDOW_MINUTES)
     
     active_chatters = {
