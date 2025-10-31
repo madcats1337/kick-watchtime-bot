@@ -1,11 +1,12 @@
 """
 Slot Request Panel - Interactive Discord panel for managing slot requests
-Shows statistics and allows picking random slots via reactions
+Shows statistics and allows picking random slots via buttons
 """
 
 import logging
 import discord
 from discord.ext import commands, tasks
+from discord.ui import View, Button
 from sqlalchemy import text
 from datetime import datetime
 
@@ -14,6 +15,64 @@ logger = logging.getLogger(__name__)
 # Emojis
 EMOJI_RANDOM = "🎲"  # Pick random slot
 EMOJI_REFRESH = "♻️"  # Refresh panel
+
+
+class SlotPanelView(View):
+    """Button view for slot request panel"""
+    
+    def __init__(self, panel):
+        super().__init__(timeout=None)  # Persistent view
+        self.panel = panel
+        
+        # Add buttons
+        self.add_item(Button(
+            style=discord.ButtonStyle.primary,
+            label="Pick Random",
+            emoji="🎲",
+            custom_id="slot_pick_random"
+        ))
+        self.add_item(Button(
+            style=discord.ButtonStyle.secondary,
+            label="Refresh",
+            emoji="♻️",
+            custom_id="slot_refresh"
+        ))
+        self.add_item(Button(
+            style=discord.ButtonStyle.success,
+            label="Enable Requests",
+            emoji="✅",
+            custom_id="slot_enable"
+        ))
+        self.add_item(Button(
+            style=discord.ButtonStyle.danger,
+            label="Disable Requests",
+            emoji="❌",
+            custom_id="slot_disable"
+        ))
+    
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Check if user has permission to use buttons"""
+        # Check if user is admin
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Only administrators can use this panel.", ephemeral=True)
+            return False
+        return True
+    
+    async def callback(self, interaction: discord.Interaction, button: Button):
+        """Handle button clicks"""
+        try:
+            if button.custom_id == "slot_pick_random":
+                await self.panel.pick_random_slot_interaction(interaction)
+            elif button.custom_id == "slot_refresh":
+                await self.panel.refresh_interaction(interaction)
+            elif button.custom_id == "slot_enable":
+                await self.panel.enable_requests_interaction(interaction)
+            elif button.custom_id == "slot_disable":
+                await self.panel.disable_requests_interaction(interaction)
+        except Exception as e:
+            logger.error(f"Error handling button interaction: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message("❌ An error occurred.", ephemeral=True)
 
 
 class SlotRequestPanel:
@@ -153,7 +212,7 @@ class SlotRequestPanel:
         # Instructions
         embed.add_field(
             name="How to use",
-            value=f"{EMOJI_RANDOM} Pick random slot\n{EMOJI_REFRESH} Refresh stats",
+            value="Use the buttons below to manage slot requests",
             inline=False
         )
         
@@ -165,11 +224,14 @@ class SlotRequestPanel:
         """Create a new panel in the specified channel"""
         try:
             embed = self._create_panel_embed()
-            message = await channel.send(embed=embed)
+            view = SlotPanelView(self)
             
-            # Add reactions
-            await message.add_reaction(EMOJI_RANDOM)
-            await message.add_reaction(EMOJI_REFRESH)
+            # Setup button callbacks
+            for item in view.children:
+                if isinstance(item, Button):
+                    item.callback = lambda interaction, b=item: view.callback(interaction, b)
+            
+            message = await channel.send(embed=embed, view=view)
             
             # Save panel info
             self.panel_message_id = message.id
@@ -200,7 +262,14 @@ class SlotRequestPanel:
                 return False
             
             embed = self._create_panel_embed()
-            await message.edit(embed=embed)
+            view = SlotPanelView(self)
+            
+            # Setup button callbacks
+            for item in view.children:
+                if isinstance(item, Button):
+                    item.callback = lambda interaction, b=item: view.callback(interaction, b)
+            
+            await message.edit(embed=embed, view=view)
             
             return True
             
@@ -212,6 +281,46 @@ class SlotRequestPanel:
         except Exception as e:
             logger.error(f"Failed to update panel: {e}")
             return False
+    
+    async def pick_random_slot_interaction(self, interaction: discord.Interaction):
+        """Handle pick random button click"""
+        await interaction.response.defer(ephemeral=True)
+        
+        result = await self._pick_random_slot(interaction.channel)
+        if result:
+            await interaction.followup.send("✅ Random slot picked!", ephemeral=True)
+        else:
+            await interaction.followup.send("❌ No slot requests available.", ephemeral=True)
+    
+    async def refresh_interaction(self, interaction: discord.Interaction):
+        """Handle refresh button click"""
+        await interaction.response.defer(ephemeral=True)
+        
+        success = await self.update_panel()
+        if success:
+            await interaction.followup.send("✅ Panel refreshed!", ephemeral=True)
+        else:
+            await interaction.followup.send("❌ Failed to refresh panel.", ephemeral=True)
+    
+    async def enable_requests_interaction(self, interaction: discord.Interaction):
+        """Handle enable requests button click"""
+        await interaction.response.defer(ephemeral=True)
+        
+        if self.tracker.is_enabled():
+            await interaction.followup.send("ℹ️ Slot requests are already enabled.", ephemeral=True)
+        else:
+            await self.tracker.set_enabled(True)
+            await interaction.followup.send("✅ Slot requests **enabled**!", ephemeral=True)
+    
+    async def disable_requests_interaction(self, interaction: discord.Interaction):
+        """Handle disable requests button click"""
+        await interaction.response.defer(ephemeral=True)
+        
+        if not self.tracker.is_enabled():
+            await interaction.followup.send("ℹ️ Slot requests are already disabled.", ephemeral=True)
+        else:
+            await self.tracker.set_enabled(False)
+            await interaction.followup.send("✅ Slot requests **disabled**!", ephemeral=True)
     
     async def handle_reaction(self, payload):
         """Handle reaction on the panel"""
@@ -255,9 +364,9 @@ class SlotRequestPanel:
             logger.error(f"Error handling panel reaction: {e}")
     
     async def _pick_random_slot(self, channel):
-        """Pick a random slot request"""
+        """Pick a random slot request - returns True if successful, False if no slots available"""
         if not self.engine:
-            return
+            return False
         
         try:
             with self.engine.connect() as conn:
@@ -273,7 +382,7 @@ class SlotRequestPanel:
                 if not result:
                     # No slots available - just update panel
                     await self.update_panel()
-                    return
+                    return False
                 
                 request_id, username, slot_call, requested_at = result
                 
@@ -297,9 +406,11 @@ class SlotRequestPanel:
                 
                 # Update panel
                 await self.update_panel()
+                return True
                 
         except Exception as e:
             logger.error(f"Failed to pick random slot from panel: {e}")
+            return False
 
 
 class SlotRequestPanelCommands(commands.Cog):
