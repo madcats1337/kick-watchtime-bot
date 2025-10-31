@@ -24,6 +24,7 @@ class SlotCallTracker:
         self.max_username_length = 50  # Maximum username length
         self.max_slot_call_length = 200  # Maximum slot call text length
         self.kick_send_callback = kick_send_callback  # Callback to send messages to Kick chat
+        self.panel = None  # Reference to SlotRequestPanel (set externally)
         
         # Initialize database and load enabled state
         self._init_database()
@@ -93,7 +94,7 @@ class SlotCallTracker:
         """Check if slot call tracking is enabled"""
         return self.enabled
     
-    def set_enabled(self, enabled: bool):
+    async def set_enabled(self, enabled: bool):
         """Enable or disable slot call tracking and persist to database"""
         was_disabled = not self.enabled
         self.enabled = enabled
@@ -119,6 +120,14 @@ class SlotCallTracker:
                 logger.info(f"Persisted slot call state to database")
             except Exception as e:
                 logger.error(f"Failed to persist slot call state to database: {e}")
+        
+        # Update panel if available
+        if self.panel:
+            try:
+                await self.panel.update_panel()
+                logger.info("Updated slot request panel after status change")
+            except Exception as e:
+                logger.error(f"Failed to update panel: {e}")
     
     async def handle_slot_call(self, kick_username: str, slot_call: str):
         """
@@ -198,6 +207,14 @@ class SlotCallTracker:
                     logger.info(f"Sent Kick chat response to {kick_username_safe}")
                 except Exception as kick_error:
                     logger.error(f"Failed to send Kick chat response: {kick_error}")
+            
+            # Update panel if available
+            if self.panel:
+                try:
+                    await self.panel.update_panel()
+                    logger.debug("Updated slot request panel after new request")
+                except Exception as panel_error:
+                    logger.error(f"Failed to update panel: {panel_error}")
                     
         except Exception as e:
             logger.error(f"Failed to post slot call to Discord: {e}")
@@ -245,10 +262,10 @@ class SlotCallCommands(commands.Cog):
             return
         
         if action.lower() == "on":
-            self.tracker.set_enabled(True)
+            await self.tracker.set_enabled(True)
             await ctx.send("✅ Slot call tracking **enabled**! Users can now use `!call <slot>` or `!sr <slot>` in Kick chat.")
         elif action.lower() == "off":
-            self.tracker.set_enabled(False)
+            await self.tracker.set_enabled(False)
             await ctx.send("❌ Slot call tracking **disabled**. `!call` and `!sr` commands will be ignored.")
         else:
             await ctx.send("❌ Invalid action. Use `!slotcalls on`, `!slotcalls off`, or `!slotcalls status`")
@@ -310,6 +327,14 @@ class SlotCallCommands(commands.Cog):
                         logger.info(f"Sent pick notification to Kick chat")
                     except Exception as kick_error:
                         logger.error(f"Failed to send pick notification to Kick: {kick_error}")
+                
+                # Update panel if available
+                if self.tracker.panel:
+                    try:
+                        await self.tracker.panel.update_panel()
+                        logger.info("Updated slot request panel after pick")
+                    except Exception as panel_error:
+                        logger.error(f"Failed to update panel: {panel_error}")
                 
         except Exception as e:
             logger.error(f"Failed to pick random slot: {e}")
