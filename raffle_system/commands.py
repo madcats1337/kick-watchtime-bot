@@ -1118,6 +1118,136 @@ Use `!rafflestats @user` to see individual stats
         except Exception as e:
             logger.error(f"Error manually updating leaderboard: {e}")
             await ctx.send(f"❌ Error updating leaderboard: {str(e)}")
+    
+    @commands.command(name='rafflecleartickets', aliases=['cleartickets', 'resettickets'])
+    @commands.has_permissions(administrator=True)
+    async def clear_all_tickets(self, ctx):
+        """
+        [ADMIN] Manually clear ALL tickets from the database
+        Usage: !rafflecleartickets
+        
+        WARNING: This will delete all tickets, watchtime conversions, gifted subs, and shuffle wagers!
+        """
+        await ctx.send("⚠️ **WARNING:** This will DELETE ALL raffle tickets and history!\nType `CONFIRM DELETE` to proceed.")
+        
+        def check(m):
+            return m.author == ctx.author and m.channel == ctx.channel
+        
+        try:
+            msg = await self.bot.wait_for('message', timeout=30.0, check=check)
+            
+            if msg.content != "CONFIRM DELETE":
+                await ctx.send("❌ Cancelled. Tickets were NOT deleted.")
+                return
+            
+            # Delete everything
+            with self.engine.begin() as conn:
+                deleted_tickets = conn.execute(text("DELETE FROM raffle_tickets")).rowcount
+                deleted_watchtime = conn.execute(text("DELETE FROM raffle_watchtime_converted")).rowcount
+                deleted_subs = conn.execute(text("DELETE FROM raffle_gifted_subs")).rowcount
+                deleted_wagers = conn.execute(text("DELETE FROM raffle_shuffle_wagers")).rowcount
+            
+            await ctx.send(
+                f"✅ **All tickets cleared!**\n"
+                f"• Deleted {deleted_tickets} ticket records\n"
+                f"• Deleted {deleted_watchtime} watchtime conversions\n"
+                f"• Deleted {deleted_subs} gifted sub records\n"
+                f"• Deleted {deleted_wagers} shuffle wager records\n\n"
+                f"Everyone starts fresh at 0 tickets!"
+            )
+            
+            # Update leaderboard
+            if hasattr(self.bot, 'auto_leaderboard') and self.bot.auto_leaderboard:
+                await self.bot.auto_leaderboard.update_leaderboard()
+            
+        except Exception as e:
+            logger.error(f"Error clearing tickets: {e}")
+            await ctx.send(f"❌ Error: {str(e)}")
+    
+    @commands.command(name='rafflecleanup', aliases=['cleanupwatchtime'])
+    @commands.has_permissions(administrator=True)
+    async def cleanup_watchtime_tickets(self, ctx):
+        """
+        Manually reset watchtime tickets only (keeps wager and gifted sub tickets)
+        This marks all existing watchtime as "already converted" to prevent re-awarding
+        """
+        try:
+            from sqlalchemy import text
+            from .database import get_current_period
+            
+            # Get active period
+            current_period = get_current_period(self.engine)
+            if not current_period:
+                await ctx.send("❌ No active raffle period found!")
+                return
+            
+            period_id = current_period['id']
+            
+            with self.engine.begin() as conn:
+                # Step 1: Get all users' current watchtime BEFORE resetting
+                watchtime_snapshot = conn.execute(text("""
+                    SELECT w.username, w.minutes
+                    FROM watchtime w
+                    JOIN links l ON l.kick_name = w.username
+                    WHERE w.minutes > 0
+                """)).fetchall()
+                
+                # Step 2: Reset ONLY watchtime_tickets to 0 (keep wager and gifted sub tickets!)
+                reset_count = conn.execute(text("""
+                    UPDATE raffle_tickets 
+                    SET watchtime_tickets = 0,
+                        total_tickets = gifted_sub_tickets + shuffle_wager_tickets + bonus_tickets
+                    WHERE period_id = :period_id
+                """), {'period_id': period_id}).rowcount
+                
+                # Step 3: Delete users who now have 0 total tickets
+                deleted_empty = conn.execute(text("""
+                    DELETE FROM raffle_tickets
+                    WHERE period_id = :period_id AND total_tickets = 0
+                """), {'period_id': period_id}).rowcount
+                
+                # Step 4: Delete old watchtime conversion tracking
+                deleted_watchtime = conn.execute(text("""
+                    DELETE FROM raffle_watchtime_converted WHERE period_id = :period_id
+                """), {'period_id': period_id}).rowcount
+                
+                # Step 5: Mark ALL current watchtime as "already converted" (with 0 tickets awarded)
+                # This prevents re-awarding tickets for historical watchtime
+                conversion_count = 0
+                for kick_name, minutes in watchtime_snapshot:
+                    if minutes >= 60:  # Only track if they have at least 1 hour
+                        hours = minutes // 60
+                        tracked_minutes = hours * 60  # Only track full hours
+                        conn.execute(text("""
+                            INSERT INTO raffle_watchtime_converted
+                                (period_id, kick_name, minutes_converted, tickets_awarded)
+                            VALUES
+                                (:period_id, :kick_name, :minutes, 0)
+                        """), {
+                            'period_id': period_id,
+                            'kick_name': kick_name,
+                            'minutes': tracked_minutes
+                        })
+                        conversion_count += 1
+            
+            await ctx.send(
+                f"✅ **Watchtime Cleanup Complete!**\n"
+                f"• Reset watchtime tickets for {reset_count} users\n"
+                f"• Deleted {deleted_empty} users with 0 tickets\n"
+                f"• Marked {conversion_count} users' watchtime as converted\n"
+                f"• Deleted {deleted_watchtime} old conversion records\n\n"
+                f"**Wager and gifted sub tickets were preserved!**"
+            )
+            
+            # Update leaderboard
+            if hasattr(self.bot, 'auto_leaderboard') and self.bot.auto_leaderboard:
+                await self.bot.auto_leaderboard.update_leaderboard()
+            
+        except Exception as e:
+            logger.error(f"Error in watchtime cleanup: {e}")
+            await ctx.send(f"❌ Error: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
 
 async def setup(bot, engine):
