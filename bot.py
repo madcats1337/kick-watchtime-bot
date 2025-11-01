@@ -2653,6 +2653,18 @@ async def on_ready():
                     print("🔄 Adding expires_at column to bot_tokens table...")
                     conn.execute(text("ALTER TABLE bot_tokens ADD COLUMN expires_at TIMESTAMP"))
                     print("✅ Database migrated: expires_at column added")
+                
+                # Create slot_call_blacklist table if missing
+                print("🔄 Checking slot_call_blacklist table...")
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS slot_call_blacklist (
+                        kick_username TEXT PRIMARY KEY,
+                        reason TEXT,
+                        blacklisted_by BIGINT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+                print("✅ slot_call_blacklist table ready")
         except Exception as e:
             print(f"⚠️ Database migration check failed: {e}")
     
