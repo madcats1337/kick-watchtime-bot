@@ -1491,8 +1491,8 @@ Use `!rafflestats @user` to see individual stats
             # Check if bot has the trackers
             checks = []
             
-            # 1. Watchtime Converter (runs every hour)
-            checks.append("✅ **Watchtime → Tickets** (every 1 hour)")
+            # 1. Watchtime Converter (runs every 10 minutes)
+            checks.append("✅ **Watchtime → Tickets** (every 10 minutes)")
             checks.append("   • Converts watchtime to tickets automatically")
             checks.append("   • 1 hour = 10 tickets")
             checks.append("   • Only converts for linked Discord↔Kick accounts\n")
