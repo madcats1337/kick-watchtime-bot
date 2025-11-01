@@ -939,32 +939,35 @@ async def kick_chat_loop(channel_name: str):
                                         # Send message to Kick chat using the API
                                         await send_kick_message(raffle_message)
                             
-                            # Handle gifted subscription events
-                            # Kick may use different event types for gifts, so we check multiple possibilities
+                            # Handle subscription events (both regular and gifted)
+                            # Kick may use different event types for subs
                             if event_type in [
                                 "App\\Events\\GiftedSubscriptionsEvent",
                                 "App\\Events\\SubscriptionEvent",
-                                "App\\Events\\ChatMessageEvent"  # Sometimes gifts come as special chat messages
+                                "App\\Events\\ChatMessageEvent"  # Sometimes subs come as special chat messages
                             ]:
                                 event_data = json.loads(data.get("data", "{}"))
                                 
-                                # Check if this is a gifted sub (might be in message type or metadata)
+                                # Check if this is any type of subscription
                                 message_type = event_data.get("type")
-                                is_gift = (
+                                is_subscription = (
                                     "gift" in str(message_type).lower() or
                                     "subscription" in str(message_type).lower() or
+                                    "sub" in str(message_type).lower() or
                                     event_data.get("gifted_usernames") is not None or
-                                    event_data.get("gift_count") is not None
+                                    event_data.get("gift_count") is not None or
+                                    event_data.get("months") is not None  # Regular subs often have months field
                                 )
                                 
-                                if is_gift and gifted_sub_tracker:
-                                    # Handle the gifted sub event
+                                if is_subscription and gifted_sub_tracker:
+                                    # Handle any subscription event (gifted or regular)
                                     result = await gifted_sub_tracker.handle_gifted_sub_event(event_data)
                                     
                                     if result['status'] == 'success':
-                                        print(f"[Raffle] 🎁 {result['gifter']} gifted {result['gift_count']} sub(s) → +{result['tickets_awarded']} tickets")
+                                        sub_type = "gifted" if result.get('gift_count', 1) > 1 else "subscribed"
+                                        print(f"[Raffle] 🎁 {result['gifter']} {sub_type} → +{result['tickets_awarded']} tickets")
                                     elif result['status'] == 'not_linked':
-                                        print(f"[Raffle] 🎁 {result['kick_name']} gifted sub(s) but account not linked")
+                                        print(f"[Raffle] 🎁 {result['kick_name']} subscribed but account not linked")
                                     elif result['status'] == 'duplicate':
                                         # Already processed, silent skip
                                         pass
