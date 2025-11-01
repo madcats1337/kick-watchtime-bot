@@ -1099,6 +1099,25 @@ Use `!rafflestats @user` to see individual stats
         except Exception as e:
             logger.error(f"Error showing unlinked Shuffle users: {e}")
             await ctx.send(f"❌ Error: {str(e)}")
+    
+    @commands.command(name='raffleupdateboard', aliases=['updateraffleboard', 'refreshraffle'])
+    @commands.has_permissions(administrator=True)
+    async def update_raffle_board(self, ctx):
+        """
+        [ADMIN] Manually update the auto-leaderboard
+        Usage: !raffleupdateboard
+        """
+        try:
+            # Get the auto_leaderboard instance from bot
+            if hasattr(self.bot, 'auto_leaderboard') and self.bot.auto_leaderboard:
+                await ctx.send("🔄 Updating raffle leaderboard...")
+                await self.bot.auto_leaderboard.update_leaderboard()
+                await ctx.send("✅ Raffle leaderboard updated!")
+            else:
+                await ctx.send("❌ Auto-leaderboard is not configured. Set RAFFLE_LEADERBOARD_CHANNEL_ID environment variable.")
+        except Exception as e:
+            logger.error(f"Error manually updating leaderboard: {e}")
+            await ctx.send(f"❌ Error updating leaderboard: {str(e)}")
 
 
 async def setup(bot, engine):

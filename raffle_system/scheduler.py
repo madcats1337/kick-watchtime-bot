@@ -279,6 +279,11 @@ async def setup_raffle_scheduler(bot, engine, auto_draw=False, announcement_chan
                                 new_period['start_date'],
                                 new_period['end_date']
                             )
+                    
+                    # Update the leaderboard immediately after period transition
+                    if hasattr(bot, 'auto_leaderboard') and bot.auto_leaderboard:
+                        logger.info("🔄 Updating leaderboard after period transition...")
+                        await bot.auto_leaderboard.update_leaderboard()
                 
         except Exception as e:
             logger.error(f"Error in raffle period check task: {e}")
