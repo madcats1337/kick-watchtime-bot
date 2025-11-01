@@ -2596,8 +2596,9 @@ async def on_ready():
             # Setup Shuffle wager tracker (runs every 15 minutes)
             shuffle_tracker = await setup_shuffle_tracker(bot, engine)
             
-            # Setup auto-updating leaderboard (runs every hour)
+            # Setup auto-updating leaderboard (runs every 5 minutes)
             auto_leaderboard = await setup_auto_leaderboard(bot, engine)
+            bot.auto_leaderboard = auto_leaderboard  # Store for manual updates
             
             # Setup raffle commands
             await setup_raffle_commands(bot, engine)
