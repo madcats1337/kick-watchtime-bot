@@ -52,10 +52,39 @@ class RaffleScheduler:
             
             now = datetime.now()
             end_date = current_period['end_date']
+            start_date = current_period['start_date']
             
-            # Ensure end_date is a datetime object
+            # Ensure dates are datetime objects
             if isinstance(end_date, str):
                 end_date = datetime.fromisoformat(end_date)
+            if isinstance(start_date, str):
+                start_date = datetime.fromisoformat(start_date)
+            
+            # ONE-TIME CLEANUP: Delete tickets that shouldn't exist yet
+            # This handles tickets created before the period officially started
+            if now < start_date + timedelta(hours=1):  # Within first hour of period
+                from sqlalchemy import text
+                with self.engine.begin() as conn:
+                    # Check if there are any tickets
+                    result = conn.execute(text("SELECT COUNT(*) FROM raffle_tickets WHERE period_id = :period_id"), 
+                                         {'period_id': current_period['id']})
+                    ticket_count = result.scalar()
+                    
+                    if ticket_count > 0:
+                        logger.warning(f"⚠️ Found {ticket_count} tickets at period start - clearing...")
+                        # Delete all tickets for this period
+                        deleted_tickets = conn.execute(text("DELETE FROM raffle_tickets WHERE period_id = :period_id"), 
+                                                      {'period_id': current_period['id']}).rowcount
+                        deleted_watchtime = conn.execute(text("DELETE FROM raffle_watchtime_converted")).rowcount
+                        deleted_subs = conn.execute(text("DELETE FROM raffle_gifted_subs")).rowcount
+                        deleted_wagers = conn.execute(text("DELETE FROM raffle_shuffle_wagers")).rowcount
+                        
+                        logger.info(f"✅ Period start cleanup: Deleted {deleted_tickets} tickets, {deleted_watchtime} watchtime, {deleted_subs} subs, {deleted_wagers} wagers")
+                        
+                        # Update leaderboard immediately
+                        if hasattr(self.bot, 'auto_leaderboard') and self.bot.auto_leaderboard:
+                            await self.bot.auto_leaderboard.update_leaderboard()
+                            logger.info("📊 Updated leaderboard after cleanup")
             
             # Check if it's 10 minutes before period ends and winner not drawn yet
             time_until_end = (end_date - now).total_seconds()
