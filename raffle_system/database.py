@@ -358,29 +358,20 @@ def create_new_period(engine, start_date, end_date):
             })
             period_id = result.scalar()
             
-            # Reset all existing tickets for the new period
-            # Delete old tickets from previous periods
-            conn.execute(text("""
-                DELETE FROM raffle_tickets
-                WHERE period_id != :period_id
-            """), {'period_id': period_id})
+            # Delete ALL tickets from all periods (fresh start)
+            deleted_tickets = conn.execute(text("DELETE FROM raffle_tickets")).rowcount
+            logger.info(f"Deleted {deleted_tickets} ticket records from all periods")
             
-            # Clear all conversion tracking
-            conn.execute(text("""
-                DELETE FROM raffle_watchtime_converted
-                WHERE period_id != :period_id
-            """), {'period_id': period_id})
+            # Clear ALL conversion tracking (fresh start)
+            deleted_watchtime = conn.execute(text("DELETE FROM raffle_watchtime_converted")).rowcount
+            logger.info(f"Deleted {deleted_watchtime} watchtime conversion records")
             
-            conn.execute(text("""
-                DELETE FROM raffle_gifted_subs
-                WHERE period_id != :period_id
-            """), {'period_id': period_id})
+            deleted_subs = conn.execute(text("DELETE FROM raffle_gifted_subs")).rowcount
+            logger.info(f"Deleted {deleted_subs} gifted sub records")
             
-            # Reset shuffle wager tracking for new period
-            conn.execute(text("""
-                DELETE FROM raffle_shuffle_wagers
-                WHERE period_id != :period_id
-            """), {'period_id': period_id})
+            # Clear ALL shuffle wager tracking (fresh start)
+            deleted_wagers = conn.execute(text("DELETE FROM raffle_shuffle_wagers")).rowcount
+            logger.info(f"Deleted {deleted_wagers} shuffle wager records")
             
         logger.info(f"✅ Created new raffle period #{period_id} and reset all tickets")
         return period_id
