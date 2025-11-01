@@ -273,7 +273,12 @@ async def setup_auto_leaderboard(bot, engine):
         success = await leaderboard.initialize()
         
         if success:
-            logger.info(f"✅ Auto-leaderboard started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/3600:.1f} hours)")
+            if AUTO_LEADERBOARD_UPDATE_INTERVAL >= 3600:
+                logger.info(f"✅ Auto-leaderboard started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/3600:.1f} hours)")
+            elif AUTO_LEADERBOARD_UPDATE_INTERVAL >= 60:
+                logger.info(f"✅ Auto-leaderboard started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/60:.0f} minutes)")
+            else:
+                logger.info(f"✅ Auto-leaderboard started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL} seconds)")
         else:
             logger.error("❌ Failed to initialize auto-leaderboard")
             update_leaderboard_task.cancel()
