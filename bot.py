@@ -914,6 +914,16 @@ async def kick_chat_loop(channel_name: str):
                                         
                                         if slot_call:  # Only process if there's actually a call
                                             await slot_call_tracker.handle_slot_call(username, slot_call)
+                                    
+                                    # Handle !raffle command
+                                    if content_stripped.lower() == "!raffle":
+                                        raffle_message = (
+                                            "Do you want to win a $100 super buy on Sweet Bonanza 1000? "
+                                            "All you gotta do is join my discord, verify with lelebot and follow the instructions -> "
+                                            "https://discord.gg/k7CXJtfrPY"
+                                        )
+                                        # Send message to Kick chat using the API
+                                        await send_kick_message(raffle_message)
                             
                             # Handle gifted subscription events
                             # Kick may use different event types for gifts, so we check multiple possibilities
