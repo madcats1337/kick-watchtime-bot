@@ -60,68 +60,8 @@ class RaffleScheduler:
             if isinstance(start_date, str):
                 start_date = datetime.fromisoformat(start_date)
             
-            # ONE-TIME CLEANUP: Delete tickets that shouldn't exist yet
-            # This handles tickets created before the period officially started
-            if now < start_date + timedelta(days=2):  # Within first 2 days of period
-                from sqlalchemy import text
-                with self.engine.begin() as conn:
-                    # Check if there are any tickets
-                    result = conn.execute(text("SELECT COUNT(*) FROM raffle_tickets WHERE period_id = :period_id"), 
-                                         {'period_id': current_period['id']})
-                    ticket_count = result.scalar()
-                    
-                    if ticket_count > 0:
-                        logger.warning(f"⚠️ Found {ticket_count} tickets at period start - resetting watchtime tickets only...")
-                        
-                        # Step 1: Get all users' current watchtime BEFORE resetting
-                        watchtime_snapshot = conn.execute(text("""
-                            SELECT w.username, w.minutes
-                            FROM watchtime w
-                            JOIN links l ON l.kick_name = w.username
-                            WHERE w.minutes > 0
-                        """)).fetchall()
-                        
-                        # Step 2: Reset ONLY watchtime_tickets to 0 (keep wager and gifted sub tickets!)
-                        reset_count = conn.execute(text("""
-                            UPDATE raffle_tickets 
-                            SET watchtime_tickets = 0,
-                                total_tickets = gifted_sub_tickets + shuffle_wager_tickets + bonus_tickets
-                            WHERE period_id = :period_id
-                        """), {'period_id': current_period['id']}).rowcount
-                        
-                        # Step 2b: Delete users who now have 0 total tickets
-                        deleted_empty = conn.execute(text("""
-                            DELETE FROM raffle_tickets
-                            WHERE period_id = :period_id AND total_tickets = 0
-                        """), {'period_id': current_period['id']}).rowcount
-                        
-                        # Step 3: Delete old watchtime conversion tracking
-                        deleted_watchtime = conn.execute(text("DELETE FROM raffle_watchtime_converted WHERE period_id = :period_id"), 
-                                                        {'period_id': current_period['id']}).rowcount
-                        
-                        # Step 4: Mark ALL current watchtime as "already converted" (with 0 tickets awarded)
-                        # This prevents re-awarding tickets for historical watchtime
-                        conversion_count = 0
-                        for kick_name, minutes in watchtime_snapshot:
-                            if minutes >= 60:  # Only track if they have at least 1 hour
-                                hours = minutes // 60
-                                tracked_minutes = hours * 60  # Only track full hours
-                                conn.execute(text("""
-                                    INSERT INTO raffle_watchtime_converted
-                                        (period_id, kick_name, minutes_converted, tickets_awarded)
-                                    VALUES
-                                        (:period_id, :kick_name, :minutes, 0)
-                                """), {
-                                    'period_id': current_period['id'],
-                                    'kick_name': kick_name,
-                                    'minutes': tracked_minutes
-                                })
-                                conversion_count += 1
-                        
-                        logger.info(f"✅ Period start cleanup: Reset watchtime tickets for {reset_count} users, deleted {deleted_empty} users with 0 tickets, marked {conversion_count} users' watchtime as converted")
-                        
-                        # Return flag to update leaderboard
-                        return {'cleanup_performed': True}
+            # Automatic cleanup disabled - use !rafflecleanup command instead
+            # This prevents unwanted cleanup after manual operations
             
             # Check if it's 10 minutes before period ends and winner not drawn yet
             time_until_end = (end_date - now).total_seconds()
