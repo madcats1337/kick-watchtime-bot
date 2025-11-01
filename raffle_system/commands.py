@@ -1465,6 +1465,145 @@ Use `!rafflestats @user` to see individual stats
         except Exception as e:
             logger.error(f"Error checking systems: {e}")
             await ctx.send(f"❌ Error: {str(e)}")
+    
+    @commands.command(name='raffledebugwatchtime', aliases=['debugwatchtime'])
+    @commands.has_permissions(administrator=True)
+    async def debug_watchtime_conversion(self, ctx, kick_name: str = None):
+        """
+        Debug watchtime conversion issues
+        Shows watchtime vs converted amounts for users
+        """
+        try:
+            from sqlalchemy import text
+            from .database import get_current_period
+            
+            current_period = get_current_period(self.engine)
+            if not current_period:
+                await ctx.send("❌ No active raffle period!")
+                return
+            
+            period_id = current_period['id']
+            
+            with self.engine.begin() as conn:
+                if kick_name:
+                    # Check specific user
+                    query = """
+                        SELECT 
+                            w.username,
+                            w.minutes as total_watchtime,
+                            COALESCE(SUM(c.minutes_converted), 0) as converted_minutes,
+                            l.discord_id
+                        FROM watchtime w
+                        LEFT JOIN raffle_watchtime_converted c 
+                            ON c.kick_name = w.username AND c.period_id = :period_id
+                        LEFT JOIN links l ON l.kick_name = w.username
+                        WHERE w.username = :kick_name
+                        GROUP BY w.username, w.minutes, l.discord_id
+                    """
+                    result = conn.execute(text(query), {
+                        'period_id': period_id,
+                        'kick_name': kick_name
+                    }).fetchone()
+                    
+                    if not result:
+                        await ctx.send(f"❌ User `{kick_name}` not found in watchtime table")
+                        return
+                    
+                    username, total, converted, discord_id = result
+                    unconverted = total - converted
+                    convertible_hours = unconverted // 60
+                    potential_tickets = convertible_hours * 10
+                    
+                    linked = "✅ Linked" if discord_id else "❌ Not linked"
+                    
+                    output = [
+                        f"**🔍 Watchtime Debug: {username}**\n",
+                        f"**Link Status:** {linked}",
+                        f"**Total Watchtime:** {total} minutes ({total/60:.1f} hours)",
+                        f"**Already Converted:** {converted} minutes ({converted/60:.1f} hours)",
+                        f"**Unconverted:** {unconverted} minutes ({unconverted/60:.1f} hours)",
+                        f"**Convertible Now:** {convertible_hours} hours → {potential_tickets} tickets",
+                    ]
+                    
+                    if not discord_id:
+                        output.append("\n⚠️ **User must link Discord account to earn tickets!**")
+                    elif unconverted < 60:
+                        output.append(f"\n⚠️ **Need at least 60 minutes to convert** (currently {unconverted} minutes)")
+                    
+                    await ctx.send("\n".join(output))
+                else:
+                    # Show top 10 users
+                    query = """
+                        SELECT 
+                            w.username,
+                            w.minutes as total_watchtime,
+                            COALESCE(SUM(c.minutes_converted), 0) as converted_minutes,
+                            l.discord_id
+                        FROM watchtime w
+                        LEFT JOIN raffle_watchtime_converted c 
+                            ON c.kick_name = w.username AND c.period_id = :period_id
+                        LEFT JOIN links l ON l.kick_name = w.username
+                        WHERE w.minutes > 0
+                        GROUP BY w.username, w.minutes, l.discord_id
+                        ORDER BY w.minutes DESC
+                        LIMIT 10
+                    """
+                    results = conn.execute(text(query), {'period_id': period_id}).fetchall()
+                    
+                    if not results:
+                        await ctx.send("📭 No users with watchtime found")
+                        return
+                    
+                    output = ["**🔍 Watchtime Conversion Debug (Top 10)**\n"]
+                    
+                    for username, total, converted, discord_id in results:
+                        unconverted = total - converted
+                        convertible = unconverted // 60
+                        link_icon = "✅" if discord_id else "❌"
+                        output.append(f"{link_icon} **{username}**: {total}m total, {converted}m converted, {unconverted}m remaining ({convertible}h convertible)")
+                    
+                    await ctx.send("\n".join(output))
+            
+        except Exception as e:
+            logger.error(f"Error debugging watchtime: {e}")
+            await ctx.send(f"❌ Error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    
+    @commands.command(name='rafflefixwatchtime', aliases=['fixwatchtime'])
+    @commands.has_permissions(administrator=True)
+    async def fix_watchtime_conversion(self, ctx):
+        """
+        EMERGENCY FIX: Clear watchtime conversion tracking to allow fresh conversions
+        Use this if watchtime tickets aren't being awarded
+        """
+        try:
+            from sqlalchemy import text
+            from .database import get_current_period
+            
+            current_period = get_current_period(self.engine)
+            if not current_period:
+                await ctx.send("❌ No active raffle period!")
+                return
+            
+            period_id = current_period['id']
+            
+            with self.engine.begin() as conn:
+                # Delete ALL conversion tracking for this period
+                deleted = conn.execute(text("""
+                    DELETE FROM raffle_watchtime_converted WHERE period_id = :period_id
+                """), {'period_id': period_id}).rowcount
+            
+            await ctx.send(
+                f"✅ **Watchtime conversion tracking cleared!**\n"
+                f"• Deleted {deleted} conversion records\n"
+                f"• Watchtime will be converted on next hourly check\n"
+                f"• Users will get tickets for ALL their accumulated watchtime"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error fixing watchtime: {e}")
+            await ctx.send(f"❌ Error: {str(e)}")
 
 
 async def setup(bot, engine):
