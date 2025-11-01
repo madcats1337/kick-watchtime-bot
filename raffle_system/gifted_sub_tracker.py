@@ -23,7 +23,7 @@ class GiftedSubTracker:
     
     async def handle_gifted_sub_event(self, event_data):
         """
-        Handle a gifted subscription event from Kick websocket
+        Handle a subscription event from Kick websocket (gifted or regular)
         
         Expected event_data format from Kick:
         {
@@ -32,7 +32,8 @@ class GiftedSubTracker:
                 "username": "generous_viewer",
                 "id": 12345
             },
-            "gift_count": 5  # or "quantity" or similar
+            "gift_count": 5,  # For gifted subs (optional)
+            "months": 1        # For regular subs (optional)
         }
         
         Args:
@@ -44,8 +45,10 @@ class GiftedSubTracker:
         try:
             # Extract event details
             event_id = event_data.get("id")
+            
+            # For regular subs, the subscriber might be in "sender" or directly in event
             sender = event_data.get("sender", {})
-            gifter_kick_name = sender.get("username")
+            gifter_kick_name = sender.get("username") or event_data.get("username")
             
             # Try different possible field names for gift count
             gift_count = (
@@ -59,7 +62,8 @@ class GiftedSubTracker:
             if isinstance(gift_count, list):
                 gift_count = len(gift_count)
             elif gift_count is None:
-                gift_count = 1  # Default to 1 if not specified
+                # For regular subs (not gifted), count as 1
+                gift_count = 1
             
             if not gifter_kick_name:
                 logger.warning("Gifted sub event missing gifter username")
@@ -116,12 +120,13 @@ class GiftedSubTracker:
                 tickets_to_award = gift_count * GIFTED_SUB_TICKETS
                 
                 # Award the tickets
+                sub_description = "Subscribed" if gift_count == 1 else f"Gifted {gift_count} subs"
                 success = self.ticket_manager.award_tickets(
                     discord_id=discord_id,
                     kick_name=gifter_kick_name,
                     tickets=tickets_to_award,
                     source='gifted_sub',
-                    description=f"Gifted {gift_count} sub{'s' if gift_count > 1 else ''} in chat",
+                    description=f"{sub_description} in chat",
                     period_id=period_id
                 )
                 
