@@ -1248,6 +1248,81 @@ Use `!rafflestats @user` to see individual stats
             await ctx.send(f"❌ Error: {str(e)}")
             import traceback
             traceback.print_exc()
+    
+    @commands.command(name='rafflerestoresubs', aliases=['restoresubs'])
+    @commands.has_permissions(administrator=True)
+    async def restore_gifted_sub_tickets(self, ctx):
+        """
+        Restore gifted sub tickets from the raffle_gifted_subs event log
+        Use this if gifted sub tickets were accidentally deleted
+        """
+        try:
+            from sqlalchemy import text
+            from .database import get_current_period
+            from .tickets import TicketManager
+            
+            # Get active period
+            current_period = get_current_period(self.engine)
+            if not current_period:
+                await ctx.send("❌ No active raffle period found!")
+                return
+            
+            period_id = current_period['id']
+            tm = TicketManager(self.engine)
+            
+            with self.engine.begin() as conn:
+                # Get all gifted subs for this period
+                result = conn.execute(text("""
+                    SELECT 
+                        gifter_kick_name,
+                        gifter_discord_id,
+                        sub_count,
+                        tickets_awarded
+                    FROM raffle_gifted_subs
+                    WHERE period_id = :period_id
+                    ORDER BY gifted_at
+                """), {'period_id': period_id})
+                
+                subs = list(result)
+                
+                if not subs:
+                    await ctx.send("ℹ️ No gifted subs found for this period.")
+                    return
+                
+                restored_count = 0
+                total_tickets = 0
+                
+                for kick_name, discord_id, sub_count, tickets in subs:
+                    if discord_id:
+                        # Re-award the tickets
+                        success = tm.award_tickets(
+                            discord_id=discord_id,
+                            kick_name=kick_name,
+                            tickets=tickets,
+                            source='gifted_sub',
+                            description=f"Restored: Gifted {sub_count} sub(s)",
+                            period_id=period_id
+                        )
+                        if success:
+                            restored_count += 1
+                            total_tickets += tickets
+            
+            await ctx.send(
+                f"✅ **Gifted Sub Tickets Restored!**\n"
+                f"• Restored tickets for {restored_count} gifted sub events\n"
+                f"• Total tickets restored: {total_tickets}\n\n"
+                f"Run `!raffleleaderboard` to see updated standings."
+            )
+            
+            # Update leaderboard
+            if hasattr(self.bot, 'auto_leaderboard') and self.bot.auto_leaderboard:
+                await self.bot.auto_leaderboard.update_leaderboard()
+            
+        except Exception as e:
+            logger.error(f"Error restoring gifted sub tickets: {e}")
+            await ctx.send(f"❌ Error: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
 
 async def setup(bot, engine):
