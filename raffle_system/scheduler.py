@@ -71,16 +71,48 @@ class RaffleScheduler:
                     ticket_count = result.scalar()
                     
                     if ticket_count > 0:
-                        logger.warning(f"⚠️ Found {ticket_count} tickets at period start - clearing...")
-                        # Delete all tickets for this period ONLY
-                        deleted_tickets = conn.execute(text("DELETE FROM raffle_tickets WHERE period_id = :period_id"), 
-                                                      {'period_id': current_period['id']}).rowcount
+                        logger.warning(f"⚠️ Found {ticket_count} tickets at period start - resetting watchtime tickets only...")
                         
-                        # KEEP raffle_watchtime_converted intact!
-                        # This tracks what watchtime has been converted and prevents double-counting
-                        # If we delete it, the bot will re-award tickets for all existing watchtime
+                        # Step 1: Get all users' current watchtime BEFORE resetting
+                        watchtime_snapshot = conn.execute(text("""
+                            SELECT w.username, w.minutes
+                            FROM watchtime w
+                            JOIN links l ON l.kick_name = w.username
+                            WHERE w.minutes > 0
+                        """)).fetchall()
                         
-                        logger.info(f"✅ Period start cleanup: Deleted {deleted_tickets} ticket records (kept conversion history)")
+                        # Step 2: Reset ONLY watchtime_tickets to 0 (keep wager and gifted sub tickets!)
+                        reset_count = conn.execute(text("""
+                            UPDATE raffle_tickets 
+                            SET watchtime_tickets = 0,
+                                total_tickets = gifted_sub_tickets + shuffle_wager_tickets + bonus_tickets
+                            WHERE period_id = :period_id
+                        """), {'period_id': current_period['id']}).rowcount
+                        
+                        # Step 3: Delete old watchtime conversion tracking
+                        deleted_watchtime = conn.execute(text("DELETE FROM raffle_watchtime_converted WHERE period_id = :period_id"), 
+                                                        {'period_id': current_period['id']}).rowcount
+                        
+                        # Step 4: Mark ALL current watchtime as "already converted" (with 0 tickets awarded)
+                        # This prevents re-awarding tickets for historical watchtime
+                        conversion_count = 0
+                        for kick_name, minutes in watchtime_snapshot:
+                            if minutes >= 60:  # Only track if they have at least 1 hour
+                                hours = minutes // 60
+                                tracked_minutes = hours * 60  # Only track full hours
+                                conn.execute(text("""
+                                    INSERT INTO raffle_watchtime_converted
+                                        (period_id, kick_name, minutes_converted, tickets_awarded)
+                                    VALUES
+                                        (:period_id, :kick_name, :minutes, 0)
+                                """), {
+                                    'period_id': current_period['id'],
+                                    'kick_name': kick_name,
+                                    'minutes': tracked_minutes
+                                })
+                                conversion_count += 1
+                        
+                        logger.info(f"✅ Period start cleanup: Reset watchtime tickets for {reset_count} users, marked {conversion_count} users' watchtime as converted")
                         
                         # Return flag to update leaderboard
                         return {'cleanup_performed': True}
