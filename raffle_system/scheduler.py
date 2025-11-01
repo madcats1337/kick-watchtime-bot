@@ -350,9 +350,11 @@ async def setup_raffle_scheduler(bot, engine, auto_draw=False, announcement_chan
             
             # If cleanup was performed, update leaderboard
             if transition and transition.get('cleanup_performed'):
-                if hasattr(bot, 'auto_leaderboard') and bot.auto_leaderboard:
+                if hasattr(bot, 'auto_leaderboard') and bot.auto_leaderboard and bot.auto_leaderboard.message_id:
                     logger.info("📊 Updating leaderboard after cleanup...")
                     await bot.auto_leaderboard.update_leaderboard()
+                else:
+                    logger.info("📊 Leaderboard not initialized yet, skipping update after cleanup")
                 return
             
             # If midnight on 1st of month, handle period transition
