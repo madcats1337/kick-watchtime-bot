@@ -1570,12 +1570,12 @@ Use `!rafflestats @user` to see individual stats
             import traceback
             traceback.print_exc()
     
-    @commands.command(name='rafflefixwatchtime', aliases=['fixwatchtime'])
+    @commands.command(name='raffleresetwatchtime', aliases=['resetwatchtimebase'])
     @commands.has_permissions(administrator=True)
-    async def fix_watchtime_conversion(self, ctx):
+    async def reset_watchtime_baseline(self, ctx):
         """
-        EMERGENCY FIX: Clear watchtime conversion tracking to allow fresh conversions
-        Use this if watchtime tickets aren't being awarded
+        Reset watchtime baseline - mark ALL current watchtime as "already converted"
+        Use this at the START of a raffle period to only award tickets for NEW watchtime
         """
         try:
             from sqlalchemy import text
@@ -1589,20 +1589,46 @@ Use `!rafflestats @user` to see individual stats
             period_id = current_period['id']
             
             with self.engine.begin() as conn:
-                # Delete ALL conversion tracking for this period
+                # Get all users' current watchtime
+                watchtime_snapshot = conn.execute(text("""
+                    SELECT w.username, w.minutes
+                    FROM watchtime w
+                    JOIN links l ON l.kick_name = w.username
+                    WHERE w.minutes > 0
+                """)).fetchall()
+                
+                # Delete old conversion tracking
                 deleted = conn.execute(text("""
                     DELETE FROM raffle_watchtime_converted WHERE period_id = :period_id
                 """), {'period_id': period_id}).rowcount
+                
+                # Mark ALL current watchtime as "already converted" with 0 tickets
+                conversion_count = 0
+                for kick_name, minutes in watchtime_snapshot:
+                    if minutes >= 60:  # Only track if they have at least 1 hour
+                        hours = minutes // 60
+                        tracked_minutes = hours * 60  # Only track full hours
+                        conn.execute(text("""
+                            INSERT INTO raffle_watchtime_converted
+                                (period_id, kick_name, minutes_converted, tickets_awarded)
+                            VALUES
+                                (:period_id, :kick_name, :minutes, 0)
+                        """), {
+                            'period_id': period_id,
+                            'kick_name': kick_name,
+                            'minutes': tracked_minutes
+                        })
+                        conversion_count += 1
             
             await ctx.send(
-                f"✅ **Watchtime conversion tracking cleared!**\n"
-                f"• Deleted {deleted} conversion records\n"
-                f"• Watchtime will be converted on next hourly check\n"
-                f"• Users will get tickets for ALL their accumulated watchtime"
+                f"✅ **Watchtime baseline reset!**\n"
+                f"• Deleted {deleted} old conversion records\n"
+                f"• Marked {conversion_count} users' current watchtime as baseline\n"
+                f"• Only NEW watchtime from now on will earn tickets"
             )
             
         except Exception as e:
-            logger.error(f"Error fixing watchtime: {e}")
+            logger.error(f"Error resetting watchtime baseline: {e}")
             await ctx.send(f"❌ Error: {str(e)}")
 
 
