@@ -1405,6 +1405,79 @@ Use `!rafflestats @user` to see individual stats
             import traceback
             traceback.print_exc()
     
+    @commands.command(name='raffleclearwatchtime', aliases=['clearwatchtimetickets'])
+    @commands.has_permissions(administrator=True)
+    async def clear_watchtime_tickets_only(self, ctx):
+        """
+        Clear ONLY watchtime tickets, keeping gifted sub and shuffle wager tickets
+        Use this when watchtime tickets were incorrectly awarded
+        Usage: !raffleclearwatchtime
+        """
+        try:
+            from sqlalchemy import text
+            from .database import get_current_period
+            
+            # Get active period
+            current_period = get_current_period(self.engine)
+            if not current_period:
+                await ctx.send("❌ No active raffle period found!")
+                return
+            
+            period_id = current_period['id']
+            
+            with self.engine.begin() as conn:
+                # Get current state
+                current_state = conn.execute(text("""
+                    SELECT 
+                        COUNT(*) as user_count,
+                        COALESCE(SUM(watchtime_tickets), 0) as watchtime_total,
+                        COALESCE(SUM(gifted_sub_tickets), 0) as sub_total,
+                        COALESCE(SUM(shuffle_wager_tickets), 0) as wager_total,
+                        COALESCE(SUM(bonus_tickets), 0) as bonus_total
+                    FROM raffle_tickets
+                    WHERE period_id = :period_id
+                """), {'period_id': period_id}).fetchone()
+                
+                # Reset watchtime tickets and recalculate totals
+                conn.execute(text("""
+                    UPDATE raffle_tickets
+                    SET 
+                        watchtime_tickets = 0,
+                        total_tickets = gifted_sub_tickets + shuffle_wager_tickets + bonus_tickets
+                    WHERE period_id = :period_id
+                """), {'period_id': period_id})
+                
+                # Delete watchtime conversion tracking
+                deleted_conversions = conn.execute(text("""
+                    DELETE FROM raffle_watchtime_converted
+                    WHERE period_id = :period_id
+                """), {'period_id': period_id}).rowcount
+            
+            embed = discord.Embed(
+                title="🧹 Cleared Watchtime Tickets",
+                description=(
+                    f"**Before:**\n"
+                    f"👥 {current_state[0]} users had tickets\n"
+                    f"⏱️ {current_state[1]:,} watchtime tickets\n"
+                    f"🎁 {current_state[2]:,} gifted sub tickets (KEPT)\n"
+                    f"🎰 {current_state[3]:,} shuffle wager tickets (KEPT)\n"
+                    f"⭐ {current_state[4]:,} bonus tickets (KEPT)\n\n"
+                    f"**After:**\n"
+                    f"⏱️ All watchtime tickets cleared\n"
+                    f"🗑️ Deleted {deleted_conversions} conversion records\n"
+                    f"✅ Gifted sub & wager tickets preserved\n\n"
+                    f"**Next Step:** Run `!raffleresetwatchtime` to set baseline"
+                ),
+                color=discord.Color.green()
+            )
+            await ctx.send(embed=embed)
+            
+        except Exception as e:
+            logger.error(f"Error clearing watchtime tickets: {e}")
+            await ctx.send(f"❌ Error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    
     @commands.command(name='rafflestatus', aliases=['rafflechecksystems'])
     @commands.has_permissions(administrator=True)
     async def check_raffle_systems(self, ctx):
