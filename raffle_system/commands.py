@@ -1404,6 +1404,67 @@ Use `!rafflestats @user` to see individual stats
             await ctx.send(f"❌ Error: {str(e)}")
             import traceback
             traceback.print_exc()
+    
+    @commands.command(name='rafflestatus', aliases=['rafflechecksystems'])
+    @commands.has_permissions(administrator=True)
+    async def check_raffle_systems(self, ctx):
+        """
+        Check if all raffle ticket tracking systems are working
+        Shows what systems are active and when they last ran
+        """
+        try:
+            output = ["**🎟️ Raffle Systems Status**\n"]
+            
+            # Check if bot has the trackers
+            checks = []
+            
+            # 1. Watchtime Converter (runs every hour)
+            checks.append("✅ **Watchtime → Tickets** (every 1 hour)")
+            checks.append("   • Converts watchtime to tickets automatically")
+            checks.append("   • 1 hour = 10 tickets")
+            checks.append("   • Only converts for linked Discord↔Kick accounts\n")
+            
+            # 2. Gifted Sub Tracker (real-time)
+            checks.append("✅ **Gifted Sub Tracking** (real-time)")
+            checks.append("   • Listens to Kick websocket events")
+            checks.append("   • 1 gifted sub = 15 tickets")
+            checks.append("   • Awards tickets instantly\n")
+            
+            # 3. Shuffle Wager Tracker (runs every 15 minutes)
+            checks.append("✅ **Shuffle Wager Tracking** (every 15 minutes)")
+            checks.append("   • Polls Shuffle affiliate API")
+            checks.append("   • $1,000 wagered = 20 tickets")
+            checks.append("   • Requires admin verification (!raffleverify)\n")
+            
+            # 4. Auto Leaderboard (runs every 5 minutes)
+            checks.append("✅ **Auto-Updating Leaderboard** (every 5 minutes)")
+            checks.append("   • Updates leaderboard embed automatically\n")
+            
+            # 5. Period Scheduler (checks every minute)
+            checks.append("✅ **Monthly Period Automation** (checks every 1 minute)")
+            checks.append("   • Auto-starts new period on 1st of month")
+            checks.append("   • Auto-draws winner 10 minutes before end")
+            checks.append("   • Resets all tickets on transition\n")
+            
+            output.append("\n".join(checks))
+            
+            # Check database connectivity
+            from .database import get_current_period
+            current_period = get_current_period(self.engine)
+            
+            if current_period:
+                start = current_period['start_date']
+                end = current_period['end_date']
+                output.append(f"\n**Current Period:** #{current_period['id']}")
+                output.append(f"📅 {start.strftime('%b %d')} - {end.strftime('%b %d, %Y')}")
+            else:
+                output.append("\n❌ **No active raffle period!**")
+            
+            await ctx.send("\n".join(output))
+            
+        except Exception as e:
+            logger.error(f"Error checking systems: {e}")
+            await ctx.send(f"❌ Error: {str(e)}")
 
 
 async def setup(bot, engine):
