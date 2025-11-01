@@ -905,15 +905,29 @@ async def kick_chat_loop(channel_name: str):
                                     # Handle slot call commands (!call or !sr)
                                     content_stripped = content_text.strip()
                                     if slot_call_tracker and (content_stripped.startswith("!call") or content_stripped.startswith("!sr")):
-                                        # Extract the slot call (everything after "!call " or "!sr ")
-                                        # 🔒 SECURITY: Limit length to prevent abuse (200 chars max)
-                                        if content_stripped.startswith("!call"):
-                                            slot_call = content_stripped[5:].strip()[:200]  # Remove "!call"
-                                        else:  # !sr
-                                            slot_call = content_stripped[3:].strip()[:200]  # Remove "!sr"
+                                        # 🔒 SECURITY: Check if user is blacklisted
+                                        is_blacklisted = False
+                                        try:
+                                            with engine.begin() as check_conn:
+                                                blacklist_check = check_conn.execute(text("""
+                                                    SELECT 1 FROM slot_call_blacklist WHERE kick_username = :username
+                                                """), {"username": username_lower}).fetchone()
+                                                is_blacklisted = blacklist_check is not None
+                                        except Exception as e:
+                                            print(f"Error checking slot call blacklist: {e}")
                                         
-                                        if slot_call:  # Only process if there's actually a call
-                                            await slot_call_tracker.handle_slot_call(username, slot_call)
+                                        if is_blacklisted:
+                                            print(f"[Slot Call] Blocked blacklisted user: {username}")
+                                        else:
+                                            # Extract the slot call (everything after "!call " or "!sr ")
+                                            # 🔒 SECURITY: Limit length to prevent abuse (200 chars max)
+                                            if content_stripped.startswith("!call"):
+                                                slot_call = content_stripped[5:].strip()[:200]  # Remove "!call"
+                                            else:  # !sr
+                                                slot_call = content_stripped[3:].strip()[:200]  # Remove "!sr"
+                                            
+                                            if slot_call:  # Only process if there's actually a call
+                                                await slot_call_tracker.handle_slot_call(username, slot_call)
                                     
                                     # Handle !raffle command
                                     if content_stripped.lower() == "!raffle":
@@ -1865,6 +1879,144 @@ async def link_logs_toggle(ctx, action: str = None):
 
 @link_logs_toggle.error
 async def link_logs_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You need administrator permissions to use this command.")
+
+@bot.command(name="callblacklist", aliases=["srblacklist", "blockslotcall"])
+@commands.has_permissions(administrator=True)
+@in_guild()
+async def slot_call_blacklist(ctx, action: str = None, kick_username: str = None, *, reason: str = None):
+    """
+    Admin command to blacklist Kick users from using !call/!sr commands.
+    Usage: 
+      !callblacklist add <kick_username> [reason]
+      !callblacklist remove <kick_username>
+      !callblacklist list
+      !callblacklist check <kick_username>
+    """
+    if action is None or action.lower() not in ["add", "remove", "list", "check"]:
+        await ctx.send(
+            "**Slot Call Blacklist Management**\n\n"
+            "**Usage:**\n"
+            "• `!callblacklist add <kick_username> [reason]` - Block a user from using !call/!sr\n"
+            "• `!callblacklist remove <kick_username>` - Unblock a user\n"
+            "• `!callblacklist list` - Show all blacklisted users\n"
+            "• `!callblacklist check <kick_username>` - Check if a user is blacklisted"
+        )
+        return
+    
+    if action.lower() == "add":
+        if not kick_username:
+            await ctx.send("❌ Please provide a Kick username: `!callblacklist add <kick_username> [reason]`")
+            return
+        
+        kick_username_lower = kick_username.lower()
+        
+        with engine.begin() as conn:
+            # Check if already blacklisted
+            existing = conn.execute(text("""
+                SELECT 1 FROM slot_call_blacklist WHERE kick_username = :username
+            """), {"username": kick_username_lower}).fetchone()
+            
+            if existing:
+                await ctx.send(f"⚠️ User `{kick_username}` is already blacklisted.")
+                return
+            
+            # Add to blacklist
+            conn.execute(text("""
+                INSERT INTO slot_call_blacklist (kick_username, reason, blacklisted_by)
+                VALUES (:username, :reason, :admin_id)
+            """), {
+                "username": kick_username_lower,
+                "reason": reason or "No reason provided",
+                "admin_id": ctx.author.id
+            })
+        
+        await ctx.send(
+            f"✅ **User blacklisted from !call/!sr**\n"
+            f"**Kick Username:** `{kick_username}`\n"
+            f"**Reason:** {reason or 'No reason provided'}\n"
+            f"**By:** {ctx.author.mention}"
+        )
+    
+    elif action.lower() == "remove":
+        if not kick_username:
+            await ctx.send("❌ Please provide a Kick username: `!callblacklist remove <kick_username>`")
+            return
+        
+        kick_username_lower = kick_username.lower()
+        
+        with engine.begin() as conn:
+            result = conn.execute(text("""
+                DELETE FROM slot_call_blacklist WHERE kick_username = :username
+            """), {"username": kick_username_lower})
+            
+            if result.rowcount == 0:
+                await ctx.send(f"⚠️ User `{kick_username}` is not blacklisted.")
+                return
+        
+        await ctx.send(f"✅ User `{kick_username}` removed from !call/!sr blacklist.")
+    
+    elif action.lower() == "list":
+        with engine.connect() as conn:
+            results = conn.execute(text("""
+                SELECT kick_username, reason, created_at 
+                FROM slot_call_blacklist 
+                ORDER BY created_at DESC
+            """)).fetchall()
+            
+            if not results:
+                await ctx.send("📋 No users are currently blacklisted from !call/!sr commands.")
+                return
+            
+            embed = discord.Embed(
+                title="🚫 Slot Call Blacklist",
+                description=f"**{len(results)}** blacklisted user(s)",
+                color=discord.Color.red()
+            )
+            
+            for username, reason, created_at in results[:25]:  # Limit to 25 for embed
+                embed.add_field(
+                    name=f"👤 {username}",
+                    value=f"**Reason:** {reason}\n**Added:** {created_at.strftime('%Y-%m-%d')}",
+                    inline=False
+                )
+            
+            if len(results) > 25:
+                embed.set_footer(text=f"Showing first 25 of {len(results)} blacklisted users")
+            
+            await ctx.send(embed=embed)
+    
+    elif action.lower() == "check":
+        if not kick_username:
+            await ctx.send("❌ Please provide a Kick username: `!callblacklist check <kick_username>`")
+            return
+        
+        kick_username_lower = kick_username.lower()
+        
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT reason, blacklisted_by, created_at 
+                FROM slot_call_blacklist 
+                WHERE kick_username = :username
+            """), {"username": kick_username_lower}).fetchone()
+            
+            if not result:
+                await ctx.send(f"✅ User `{kick_username}` is **NOT** blacklisted.")
+                return
+            
+            reason, admin_id, created_at = result
+            admin = await bot.fetch_user(admin_id) if admin_id else None
+            
+            await ctx.send(
+                f"🚫 User `{kick_username}` is **BLACKLISTED**\n"
+                f"**Reason:** {reason}\n"
+                f"**Added by:** {admin.mention if admin else 'Unknown'}\n"
+                f"**Date:** {created_at.strftime('%Y-%m-%d %H:%M UTC')}"
+            )
+
+@slot_call_blacklist.error
+async def slot_call_blacklist_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need administrator permissions to use this command.")
 
