@@ -62,7 +62,7 @@ class RaffleScheduler:
             
             # ONE-TIME CLEANUP: Delete tickets that shouldn't exist yet
             # This handles tickets created before the period officially started
-            if now < start_date + timedelta(hours=1):  # Within first hour of period
+            if now < start_date + timedelta(days=2):  # Within first 2 days of period
                 from sqlalchemy import text
                 with self.engine.begin() as conn:
                     # Check if there are any tickets
