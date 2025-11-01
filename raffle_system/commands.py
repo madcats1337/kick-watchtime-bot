@@ -1323,6 +1323,87 @@ Use `!rafflestats @user` to see individual stats
             await ctx.send(f"❌ Error: {str(e)}")
             import traceback
             traceback.print_exc()
+    
+    @commands.command(name='rafflechecktables', aliases=['checktables'])
+    @commands.has_permissions(administrator=True)
+    async def check_raffle_tables(self, ctx):
+        """
+        Check the current state of all raffle database tables
+        Shows row counts and sample data to verify table states
+        """
+        try:
+            from sqlalchemy import text
+            from .database import get_current_period
+            
+            # Get active period
+            current_period = get_current_period(self.engine)
+            if not current_period:
+                await ctx.send("❌ No active raffle period found!")
+                return
+            
+            period_id = current_period['id']
+            
+            output = [f"**📊 Raffle Database Check (Period #{period_id})**\n"]
+            
+            with self.engine.begin() as conn:
+                # Check raffle_tickets
+                tickets_count = conn.execute(text("""
+                    SELECT COUNT(*), SUM(total_tickets) 
+                    FROM raffle_tickets 
+                    WHERE period_id = :period_id
+                """), {'period_id': period_id}).fetchone()
+                
+                output.append(f"**raffle_tickets:**")
+                output.append(f"  • {tickets_count[0] or 0} users")
+                output.append(f"  • {tickets_count[1] or 0} total tickets\n")
+                
+                # Check raffle_watchtime_converted
+                watchtime_count = conn.execute(text("""
+                    SELECT COUNT(*) FROM raffle_watchtime_converted 
+                    WHERE period_id = :period_id
+                """), {'period_id': period_id}).scalar()
+                
+                output.append(f"**raffle_watchtime_converted:**")
+                output.append(f"  • {watchtime_count or 0} conversion records\n")
+                
+                # Check raffle_gifted_subs
+                subs_result = conn.execute(text("""
+                    SELECT COUNT(*), SUM(tickets_awarded) 
+                    FROM raffle_gifted_subs 
+                    WHERE period_id = :period_id
+                """), {'period_id': period_id}).fetchone()
+                
+                output.append(f"**raffle_gifted_subs:**")
+                output.append(f"  • {subs_result[0] or 0} gifted sub events")
+                output.append(f"  • {subs_result[1] or 0} tickets awarded\n")
+                
+                # Check raffle_shuffle_wagers
+                wagers_result = conn.execute(text("""
+                    SELECT COUNT(*), SUM(tickets_awarded), SUM(total_wager_usd)
+                    FROM raffle_shuffle_wagers 
+                    WHERE period_id = :period_id
+                """), {'period_id': period_id}).fetchone()
+                
+                output.append(f"**raffle_shuffle_wagers:**")
+                output.append(f"  • {wagers_result[0] or 0} wager records")
+                output.append(f"  • {wagers_result[1] or 0} tickets awarded")
+                output.append(f"  • ${wagers_result[2] or 0:.2f} total wagered\n")
+                
+                # Check raffle_shuffle_links
+                links_count = conn.execute(text("""
+                    SELECT COUNT(*) FROM raffle_shuffle_links WHERE verified = TRUE
+                """)).scalar()
+                
+                output.append(f"**raffle_shuffle_links:**")
+                output.append(f"  • {links_count or 0} verified links")
+            
+            await ctx.send("\n".join(output))
+            
+        except Exception as e:
+            logger.error(f"Error checking tables: {e}")
+            await ctx.send(f"❌ Error: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
 
 async def setup(bot, engine):
