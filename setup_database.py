@@ -58,6 +58,17 @@ try:
             )
         """))
         
+        # Slot call blacklist table
+        print("Creating 'slot_call_blacklist' table...")
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS slot_call_blacklist (
+                kick_username TEXT PRIMARY KEY,
+                reason TEXT,
+                blacklisted_by BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+        
         # Create indexes for better performance
         print("\nCreating indexes...")
         
