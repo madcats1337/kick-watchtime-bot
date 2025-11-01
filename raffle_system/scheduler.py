@@ -72,14 +72,15 @@ class RaffleScheduler:
                     
                     if ticket_count > 0:
                         logger.warning(f"⚠️ Found {ticket_count} tickets at period start - clearing...")
-                        # Delete all tickets for this period
+                        # Delete all tickets for this period ONLY
                         deleted_tickets = conn.execute(text("DELETE FROM raffle_tickets WHERE period_id = :period_id"), 
                                                       {'period_id': current_period['id']}).rowcount
-                        deleted_watchtime = conn.execute(text("DELETE FROM raffle_watchtime_converted")).rowcount
-                        deleted_subs = conn.execute(text("DELETE FROM raffle_gifted_subs")).rowcount
-                        deleted_wagers = conn.execute(text("DELETE FROM raffle_shuffle_wagers")).rowcount
                         
-                        logger.info(f"✅ Period start cleanup: Deleted {deleted_tickets} tickets, {deleted_watchtime} watchtime, {deleted_subs} subs, {deleted_wagers} wagers")
+                        # KEEP raffle_watchtime_converted intact!
+                        # This tracks what watchtime has been converted and prevents double-counting
+                        # If we delete it, the bot will re-award tickets for all existing watchtime
+                        
+                        logger.info(f"✅ Period start cleanup: Deleted {deleted_tickets} ticket records (kept conversion history)")
                         
                         # Return flag to update leaderboard
                         return {'cleanup_performed': True}
