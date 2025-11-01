@@ -1050,36 +1050,10 @@ async def update_watchtime_task():
         # Calculate minutes to add
         minutes_to_add = WATCH_INTERVAL_SECONDS / 60
         
-        # 🔒 SECURITY: Daily watchtime cap (max 18 hours per day to prevent abuse)
-        MAX_DAILY_HOURS = 18
-        MAX_DAILY_MINUTES = MAX_DAILY_HOURS * 60
-        now = datetime.now(timezone.utc)
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        
         # Update all active users in a single transaction
         with engine.begin() as conn:
             for user, last_seen in active_users.items():
                 try:
-                    # Check today's watchtime for this user
-                    daily_check = conn.execute(text("""
-                        SELECT minutes, last_active FROM watchtime WHERE username = :u
-                    """), {"u": user}).fetchone()
-                    
-                    if daily_check:
-                        existing_minutes, last_active = daily_check
-                        # PostgreSQL returns datetime objects directly
-                        if last_active is None:
-                            last_active = today_start
-                        else:
-                            # Ensure timezone-aware comparison
-                            if last_active.tzinfo is None:
-                                last_active = last_active.replace(tzinfo=timezone.utc)
-                        
-                        # If last active was today and they've hit the cap, skip
-                        if last_active >= today_start and existing_minutes >= MAX_DAILY_MINUTES:
-                            print(f"[Security] User {user} has reached daily watchtime cap ({MAX_DAILY_HOURS}h)")
-                            continue
-                    
                     conn.execute(text("""
                         INSERT INTO watchtime (username, minutes, last_active)
                         VALUES (:u, :m, :t)
