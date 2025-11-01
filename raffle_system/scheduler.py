@@ -81,10 +81,8 @@ class RaffleScheduler:
                         
                         logger.info(f"✅ Period start cleanup: Deleted {deleted_tickets} tickets, {deleted_watchtime} watchtime, {deleted_subs} subs, {deleted_wagers} wagers")
                         
-                        # Update leaderboard immediately
-                        if hasattr(self.bot, 'auto_leaderboard') and self.bot.auto_leaderboard:
-                            await self.bot.auto_leaderboard.update_leaderboard()
-                            logger.info("📊 Updated leaderboard after cleanup")
+                        # Return flag to update leaderboard
+                        return {'cleanup_performed': True}
             
             # Check if it's 10 minutes before period ends and winner not drawn yet
             time_until_end = (end_date - now).total_seconds()
@@ -349,6 +347,13 @@ async def setup_raffle_scheduler(bot, engine, auto_draw=False, announcement_chan
             
             # Always check for winner drawing and period transitions
             transition = scheduler.check_period_transition()
+            
+            # If cleanup was performed, update leaderboard
+            if transition and transition.get('cleanup_performed'):
+                if hasattr(bot, 'auto_leaderboard') and bot.auto_leaderboard:
+                    logger.info("📊 Updating leaderboard after cleanup...")
+                    await bot.auto_leaderboard.update_leaderboard()
+                return
             
             # If midnight on 1st of month, handle period transition
             if now.hour == 0 and now.minute == 0 and now.day == 1:
