@@ -89,6 +89,12 @@ class RaffleScheduler:
                             WHERE period_id = :period_id
                         """), {'period_id': current_period['id']}).rowcount
                         
+                        # Step 2b: Delete users who now have 0 total tickets
+                        deleted_empty = conn.execute(text("""
+                            DELETE FROM raffle_tickets
+                            WHERE period_id = :period_id AND total_tickets = 0
+                        """), {'period_id': current_period['id']}).rowcount
+                        
                         # Step 3: Delete old watchtime conversion tracking
                         deleted_watchtime = conn.execute(text("DELETE FROM raffle_watchtime_converted WHERE period_id = :period_id"), 
                                                         {'period_id': current_period['id']}).rowcount
@@ -112,7 +118,7 @@ class RaffleScheduler:
                                 })
                                 conversion_count += 1
                         
-                        logger.info(f"✅ Period start cleanup: Reset watchtime tickets for {reset_count} users, marked {conversion_count} users' watchtime as converted")
+                        logger.info(f"✅ Period start cleanup: Reset watchtime tickets for {reset_count} users, deleted {deleted_empty} users with 0 tickets, marked {conversion_count} users' watchtime as converted")
                         
                         # Return flag to update leaderboard
                         return {'cleanup_performed': True}
