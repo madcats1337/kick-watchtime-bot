@@ -222,7 +222,15 @@ class AutoLeaderboard:
                 inline=False
             )
             
-            embed.set_footer(text="Updates every hour")
+            # Dynamic footer based on update interval
+            if AUTO_LEADERBOARD_UPDATE_INTERVAL >= 3600:
+                update_text = f"Updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/3600:.1f} hours"
+            elif AUTO_LEADERBOARD_UPDATE_INTERVAL >= 60:
+                update_text = f"Updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/60:.0f} minutes"
+            else:
+                update_text = f"Updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL} seconds"
+            
+            embed.set_footer(text=update_text)
             
             return embed
             
