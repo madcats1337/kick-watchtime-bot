@@ -221,7 +221,7 @@ async def setup_watchtime_converter(bot, engine):
     
     converter = WatchtimeConverter(engine)
     
-    @tasks.loop(hours=1)  # Run every hour
+    @tasks.loop(minutes=10)  # Run every 10 minutes
     async def convert_watchtime_task():
         """Periodic task to convert watchtime to tickets"""
         logger.info("🔄 Running watchtime → tickets conversion...")
@@ -251,7 +251,7 @@ async def setup_watchtime_converter(bot, engine):
     async def before_convert_watchtime():
         """Wait for bot to be ready before starting the task"""
         await bot.wait_until_ready()
-        logger.info("✅ Watchtime converter task started (runs every hour)")
+        logger.info("✅ Watchtime converter task started (runs every 10 minutes)")
     
     # Start the task
     convert_watchtime_task.start()
