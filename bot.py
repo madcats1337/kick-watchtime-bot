@@ -2379,6 +2379,188 @@ async def test_subscription_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need administrator permissions to use this command.")
 
+@bot.command(name="convertwatchtime")
+@commands.has_permissions(administrator=True)
+@in_guild()
+async def convert_watchtime_manual(ctx):
+    """
+    [ADMIN/DEBUG] Manually trigger watchtime to tickets conversion
+    Usage: !convertwatchtime
+    """
+    if not engine:
+        await ctx.send("❌ Database not initialized!")
+        return
+    
+    await ctx.send("🔄 Converting watchtime to raffle tickets...")
+    
+    try:
+        from raffle_system.watchtime_converter import WatchtimeConverter
+        converter = WatchtimeConverter(engine)
+        result = await converter.convert_watchtime_to_tickets()
+        
+        embed = discord.Embed(
+            title="🎟️ Watchtime Conversion Result",
+            color=discord.Color.blue() if result['status'] == 'success' else discord.Color.red(),
+            timestamp=datetime.utcnow()
+        )
+        
+        embed.add_field(name="Status", value=result['status'], inline=True)
+        embed.add_field(name="Users Converted", value=str(result.get('conversions', 0)), inline=True)
+        
+        if result['status'] == 'success' and result.get('details'):
+            details_text = "\n".join([
+                f"• **{d['kick_name']}**: {d['hours_converted']}h → {d['tickets_awarded']} tickets"
+                for d in result['details'][:10]
+            ])
+            embed.add_field(name="Conversions", value=details_text or "None", inline=False)
+        elif result['status'] == 'no_active_period':
+            embed.description = "❌ No active raffle period found"
+        elif result['status'] == 'no_users':
+            embed.description = "ℹ️ No linked users with convertible watchtime (need 60+ minutes)"
+        elif result['status'] == 'error':
+            embed.description = f"❌ Error: {result.get('error', 'Unknown')}"
+        
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        await ctx.send(f"❌ Error: {str(e)}")
+
+@convert_watchtime_manual.error
+async def convert_watchtime_manual_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You need administrator permissions to use this command.")
+
+@bot.command(name="fixwatchtime")
+@commands.has_permissions(administrator=True)
+@in_guild()
+async def fix_watchtime_for_current_period(ctx):
+    """
+    [ADMIN] Fix watchtime tracking for current period by snapshotting existing totals
+    This prevents re-awarding tickets for old watchtime
+    Usage: !fixwatchtime
+    """
+    if not engine:
+        await ctx.send("❌ Database not initialized!")
+        return
+    
+    await ctx.send("🔄 Fixing watchtime tracking for current period...")
+    
+    try:
+        from raffle_system.database import get_current_period
+        
+        # Get current period
+        period = get_current_period(engine)
+        if not period:
+            await ctx.send("❌ No active raffle period found!")
+            return
+        
+        period_id = period['id']
+        
+        with engine.begin() as conn:
+            # First, get list of users who don't have a snapshot yet
+            users_to_snapshot = conn.execute(text("""
+                SELECT w.username, w.minutes
+                FROM watchtime w
+                WHERE w.minutes > 0
+                AND NOT EXISTS (
+                    SELECT 1 FROM raffle_watchtime_converted c
+                    WHERE c.period_id = :period_id 
+                    AND LOWER(c.kick_name) = LOWER(w.username)
+                )
+            """), {'period_id': period_id}).fetchall()
+            
+            # Insert snapshots for users without one
+            affected = 0
+            for username, minutes in users_to_snapshot:
+                conn.execute(text("""
+                    INSERT INTO raffle_watchtime_converted (period_id, kick_name, minutes_converted, tickets_awarded)
+                    VALUES (:period_id, :username, :minutes, 0)
+                """), {'period_id': period_id, 'username': username, 'minutes': minutes})
+                affected += 1
+        
+        embed = discord.Embed(
+            title="✅ Watchtime Tracking Fixed",
+            description=f"Snapshotted current watchtime for period #{period_id}",
+            color=discord.Color.green(),
+            timestamp=datetime.utcnow()
+        )
+        
+        embed.add_field(name="Users Updated", value=str(affected), inline=True)
+        embed.add_field(name="Effect", value="Only NEW watchtime will be converted from now on", inline=False)
+        
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        await ctx.send(f"❌ Error: {str(e)}")
+
+@fix_watchtime_for_current_period.error
+async def fix_watchtime_for_current_period_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You need administrator permissions to use this command.")
+
+@bot.command(name="checkwatchtime")
+@in_guild()
+async def check_watchtime_conversion(ctx, kick_username: str = None):
+    """
+    Check watchtime conversion status for a user
+    Usage: !checkwatchtime [kick_username]
+    """
+    if not engine:
+        await ctx.send("❌ Database not initialized!")
+        return
+    
+    # If no username provided, try to get from links table
+    if not kick_username:
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(text("""
+                    SELECT kick_name FROM links
+                    WHERE discord_id = :discord_id
+                """), {'discord_id': ctx.author.id})
+                row = result.fetchone()
+                if row:
+                    kick_username = row[0]
+                else:
+                    await ctx.send("❌ You need to link your account first using `!link <kick_username>`")
+                    return
+        except Exception as e:
+            await ctx.send(f"❌ Error looking up your linked account: {e}")
+            return
+    
+    try:
+        from raffle_system.watchtime_converter import WatchtimeConverter
+        converter = WatchtimeConverter(engine)
+        info = converter.get_unconverted_watchtime(kick_username)
+        
+        if not info:
+            await ctx.send(f"❌ No watchtime data found for **{kick_username}**")
+            return
+        
+        embed = discord.Embed(
+            title=f"⏱️ Watchtime Status: {kick_username}",
+            color=discord.Color.blue(),
+            timestamp=datetime.utcnow()
+        )
+        
+        total_hours = info['total_minutes'] / 60
+        converted_hours = info['converted_minutes'] / 60
+        unconverted_hours = info['unconverted_minutes'] / 60
+        
+        embed.add_field(name="Total Watchtime", value=f"{total_hours:.1f}h ({info['total_minutes']} min)", inline=False)
+        embed.add_field(name="Already Converted", value=f"{converted_hours:.1f}h ({info['converted_minutes']} min)", inline=True)
+        embed.add_field(name="Not Yet Converted", value=f"{unconverted_hours:.1f}h ({info['unconverted_minutes']} min)", inline=True)
+        embed.add_field(name="Convertible Now", value=f"{info['convertible_hours']}h → {info['potential_tickets']} tickets", inline=False)
+        
+        if info['unconverted_minutes'] < 60:
+            embed.set_footer(text=f"Need {60 - info['unconverted_minutes']} more minutes to convert next hour")
+        else:
+            embed.set_footer(text="Watchtime converts automatically every 10 minutes")
+        
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        await ctx.send(f"❌ Error: {str(e)}")
+
 @bot.command(name="systemstatus")
 @commands.has_permissions(administrator=True)
 @in_guild()
