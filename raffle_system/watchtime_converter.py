@@ -58,6 +58,8 @@ class WatchtimeConverter:
                 
                 users = list(result)
                 
+                print(f"🔍 [WATCHTIME] Found {len(users)} linked users with watchtime")
+                
                 if not users:
                     logger.info("No linked users with watchtime found")
                     return {'status': 'no_users', 'conversions': 0}
@@ -77,6 +79,8 @@ class WatchtimeConverter:
                     
                     # Calculate new minutes to convert
                     new_minutes = total_minutes - minutes_already_converted
+                    
+                    print(f"🔍 [WATCHTIME] {kick_name}: {total_minutes} total - {minutes_already_converted} converted = {new_minutes} new")
                     
                     if new_minutes < 60:
                         # Need at least 1 hour to convert
