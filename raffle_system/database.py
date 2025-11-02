@@ -366,6 +366,16 @@ def create_new_period(engine, start_date, end_date):
             deleted_watchtime = conn.execute(text("DELETE FROM raffle_watchtime_converted")).rowcount
             logger.info(f"Deleted {deleted_watchtime} watchtime conversion records")
             
+            # Snapshot current watchtime as "already converted" for new period
+            # This prevents awarding tickets for watchtime earned before this period
+            conn.execute(text("""
+                INSERT INTO raffle_watchtime_converted (period_id, kick_name, minutes_converted, tickets_awarded)
+                SELECT :period_id, username, minutes, 0
+                FROM watchtime
+                WHERE minutes > 0
+            """), {'period_id': period_id})
+            logger.info(f"Snapshotted existing watchtime for new period (prevents double-awarding)")
+            
             deleted_subs = conn.execute(text("DELETE FROM raffle_gifted_subs")).rowcount
             logger.info(f"Deleted {deleted_subs} gifted sub records")
             
