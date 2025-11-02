@@ -795,7 +795,28 @@ async def kick_chat_loop(channel_name: str):
                 chatroom_id = KICK_CHATROOM_ID
                 kick_chatroom_id_global = chatroom_id
                 print(f"[Kick] Using hardcoded chatroom ID: {chatroom_id}")
-                # Note: channel_id may not be available with hardcoded chatroom_id
+                
+                # Still try to fetch channel_id for subscription events
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        headers = {
+                            'User-Agent': random.choice(USER_AGENTS),
+                            'Accept': 'application/json',
+                            'Referer': 'https://kick.com/',
+                        }
+                        async with session.get(
+                            f'https://kick.com/api/v2/channels/{channel_name}',
+                            headers=headers,
+                            timeout=aiohttp.ClientTimeout(total=10)
+                        ) as response:
+                            if response.status == 200:
+                                data = await response.json()
+                                channel_id = str(data.get('id'))
+                                print(f"[Kick] ✅ Fetched channel ID: {channel_id}")
+                            else:
+                                print(f"[Kick] ⚠️ Could not fetch channel ID (HTTP {response.status})")
+                except Exception as e:
+                    print(f"[Kick] ⚠️ Error fetching channel ID: {e}")
             else:
                 # Fetch full channel data to get both chatroom_id and channel_id
                 try:
