@@ -225,11 +225,19 @@ async def setup_watchtime_converter(bot, engine):
     @tasks.loop(minutes=10)  # Run every 10 minutes
     async def convert_watchtime_task():
         """Periodic task to convert watchtime to tickets"""
+        print("🔄 [WATCHTIME] Running watchtime → tickets conversion...")
         logger.info("🔄 Running watchtime → tickets conversion...")
         result = await converter.convert_watchtime_to_tickets()
         
+        print(f"🔄 [WATCHTIME] Result: {result}")
+        
         if result['status'] == 'success' and result['conversions'] > 0:
+            print(f"✅ [WATCHTIME] Converted watchtime for {result['conversions']} users")
             logger.info(f"✅ Converted watchtime for {result['conversions']} users")
+        elif result['status'] == 'no_users':
+            print(f"ℹ️ [WATCHTIME] No users with 60+ minutes of unconverted watchtime")
+        elif result['status'] == 'no_active_period':
+            print(f"⚠️ [WATCHTIME] No active raffle period found!")
             
             # Optional: Send notification to raffle announcement channel
             # You can uncomment this if you want Discord notifications
