@@ -876,6 +876,11 @@ async def kick_chat_loop(channel_name: str):
                             data = json.loads(msg)
                             event_type = data.get("event")
                             
+                            # DEBUG: Log ALL event types (except ping/pong and chat) to catch subscription events
+                            if event_type and event_type not in ["pusher:ping", "pusher:pong", "App\\Events\\ChatMessageEvent"]:
+                                print(f"[KICK EVENT] Type: {event_type}")
+                                print(f"[KICK EVENT] Data keys: {list(json.loads(data.get('data', '{}')).keys()) if data.get('data') else 'No data'}")
+                            
                             # Respond to ping
                             if event_type == "pusher:ping":
                                 await ws.send(json.dumps({"event": "pusher:pong"}))
@@ -948,6 +953,13 @@ async def kick_chat_loop(channel_name: str):
                             ]:
                                 event_data = json.loads(data.get("data", "{}"))
                                 
+                                # DEBUG: Check what ChatMessageEvent contains
+                                if event_type == "App\\Events\\ChatMessageEvent":
+                                    msg_type = event_data.get("type")
+                                    if msg_type and msg_type != "message":
+                                        print(f"[SUB DEBUG] ChatMessageEvent type: {msg_type}")
+                                        print(f"[SUB DEBUG] Event data: {json.dumps(event_data, indent=2)[:500]}")
+                                
                                 # Check if this is any type of subscription
                                 message_type = event_data.get("type")
                                 is_subscription = (
@@ -958,6 +970,10 @@ async def kick_chat_loop(channel_name: str):
                                     event_data.get("gift_count") is not None or
                                     event_data.get("months") is not None  # Regular subs often have months field
                                 )
+                                
+                                if is_subscription:
+                                    print(f"[SUB DEBUG] Detected subscription! Type: {message_type}")
+                                    print(f"[SUB DEBUG] Event data: {json.dumps(event_data, indent=2)[:800]}")
                                 
                                 if is_subscription and gifted_sub_tracker:
                                     # Handle any subscription event (gifted or regular)
@@ -2259,7 +2275,12 @@ async def test_subscription(ctx, kick_username: str = None, sub_count: int = 1):
     global gifted_sub_tracker
     
     if not gifted_sub_tracker:
-        await ctx.send("❌ Gifted sub tracker not initialized!")
+        await ctx.send("❌ **Gifted sub tracker not initialized!**\n\n"
+                       "**Possible reasons:**\n"
+                       "• Bot is still starting up (wait a few seconds)\n"
+                       "• Database connection failed\n"
+                       "• Raffle system initialization error\n\n"
+                       "Check the bot console for error messages.")
         return
     
     if not kick_username:
@@ -2314,6 +2335,58 @@ async def test_subscription(ctx, kick_username: str = None, sub_count: int = 1):
 
 @test_subscription.error
 async def test_subscription_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You need administrator permissions to use this command.")
+
+@bot.command(name="raffleinfo")
+@commands.has_permissions(administrator=True)
+@in_guild()
+async def raffle_system_info(ctx):
+    """
+    [ADMIN/DEBUG] Check raffle system initialization status
+    Usage: !raffleinfo
+    """
+    global gifted_sub_tracker, shuffle_tracker, slot_call_tracker
+    
+    embed = discord.Embed(
+        title="🎰 Raffle System Status",
+        color=discord.Color.blue(),
+        timestamp=datetime.utcnow()
+    )
+    
+    # Check each component
+    sub_status = "✅ Initialized" if gifted_sub_tracker else "❌ Not initialized"
+    shuffle_status = "✅ Initialized" if shuffle_tracker else "❌ Not initialized"
+    slot_status = "✅ Initialized" if slot_call_tracker else "❌ Not initialized"
+    
+    embed.add_field(name="Gifted Sub Tracker", value=sub_status, inline=False)
+    embed.add_field(name="Shuffle Tracker", value=shuffle_status, inline=False)
+    embed.add_field(name="Slot Call Tracker", value=slot_status, inline=False)
+    
+    # Check database
+    db_status = "✅ Connected" if engine else "❌ Not connected"
+    embed.add_field(name="Database", value=db_status, inline=False)
+    
+    # Check active raffle period
+    if engine:
+        try:
+            period = get_current_period(engine)
+            if period:
+                period_info = f"✅ Active Period #{period['id']}\n"
+                period_info += f"Started: {period['start_date'].strftime('%Y-%m-%d')}\n"
+                period_info += f"Status: {period['status']}"
+            else:
+                period_info = "❌ No active period"
+            embed.add_field(name="Current Raffle Period", value=period_info, inline=False)
+        except Exception as e:
+            embed.add_field(name="Current Raffle Period", value=f"❌ Error: {str(e)[:100]}", inline=False)
+    
+    embed.set_footer(text=f"Bot uptime: {datetime.now() - bot.uptime_start if hasattr(bot, 'uptime_start') else 'Unknown'}")
+    
+    await ctx.send(embed=embed)
+
+@raffle_system_info.error
+async def raffle_system_info_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need administrator permissions to use this command.")
 
