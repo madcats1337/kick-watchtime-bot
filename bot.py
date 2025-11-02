@@ -2379,13 +2379,13 @@ async def test_subscription_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need administrator permissions to use this command.")
 
-@bot.command(name="raffleinfo")
+@bot.command(name="systemstatus")
 @commands.has_permissions(administrator=True)
 @in_guild()
 async def raffle_system_info(ctx):
     """
     [ADMIN/DEBUG] Check raffle system initialization status
-    Usage: !raffleinfo
+    Usage: !systemstatus
     """
     global gifted_sub_tracker, shuffle_tracker, slot_call_tracker
     
