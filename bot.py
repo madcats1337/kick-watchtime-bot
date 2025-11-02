@@ -786,14 +786,41 @@ async def kick_chat_loop(channel_name: str):
     
     while True:
         try:
+            # Fetch channel data (chatroom ID and channel ID for subscriptions)
+            chatroom_id = None
+            channel_id = None
+            
             # Check if chatroom ID is hardcoded in environment (bypass for Cloudflare issues)
             if KICK_CHATROOM_ID:
                 chatroom_id = KICK_CHATROOM_ID
                 kick_chatroom_id_global = chatroom_id
                 print(f"[Kick] Using hardcoded chatroom ID: {chatroom_id}")
+                # Note: channel_id may not be available with hardcoded chatroom_id
             else:
-                chatroom_id = await fetch_chatroom_id(channel_name)
-                kick_chatroom_id_global = chatroom_id
+                # Fetch full channel data to get both chatroom_id and channel_id
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        headers = {
+                            'User-Agent': random.choice(USER_AGENTS),
+                            'Accept': 'application/json',
+                            'Referer': 'https://kick.com/',
+                        }
+                        async with session.get(
+                            f'https://kick.com/api/v2/channels/{channel_name}',
+                            headers=headers,
+                            timeout=aiohttp.ClientTimeout(total=10)
+                        ) as response:
+                            if response.status == 200:
+                                data = await response.json()
+                                chatroom_id = str(data.get('chatroom', {}).get('id'))
+                                channel_id = str(data.get('id'))  # Channel ID for subscription events
+                                kick_chatroom_id_global = chatroom_id
+                                print(f"[Kick] ✅ Found chatroom ID: {chatroom_id}, channel ID: {channel_id}")
+                            else:
+                                print(f"[Kick] Failed to fetch channel data: HTTP {response.status}")
+                except Exception as e:
+                    print(f"[Kick] Error fetching channel data: {e}")
+                
                 if not chatroom_id:
                     print(f"[Kick] Could not obtain chatroom id for {channel_name}. Retrying in 30s.")
                     await asyncio.sleep(30)
@@ -848,7 +875,7 @@ async def kick_chat_loop(channel_name: str):
                     socket_id = socket_details["socket_id"]
                     print(f"[Kick] Got socket_id: {socket_id}")
                     
-                    # Subscribe to the chatroom channel
+                    # Subscribe to the chatroom channel (for chat messages)
                     subscribe_msg = json.dumps({
                     "event": "pusher:subscribe",
                     "data": {
@@ -857,7 +884,21 @@ async def kick_chat_loop(channel_name: str):
                     }
                 })
                 await ws.send(subscribe_msg)
-                print(f"[Kick] Subscribed to chatrooms.{chatroom_id}.v2")
+                print(f"[Kick] ✅ Subscribed to chatrooms.{chatroom_id}.v2")
+                
+                # Subscribe to channel events (for subscriptions, raids, follows, etc.)
+                if channel_id:
+                    channel_events_msg = json.dumps({
+                        "event": "pusher:subscribe",
+                        "data": {
+                            "auth": "",
+                            "channel": f"channel.{channel_id}"
+                        }
+                    })
+                    await ws.send(channel_events_msg)
+                    print(f"[Kick] ✅ Subscribed to channel.{channel_id} (for subscription events)")
+                else:
+                    print(f"[Kick] ⚠️ Channel ID not available - subscription events may not be received")
                 
                 # Initialize last_chat_activity to assume stream is live when we connect
                 last_chat_activity = datetime.now(timezone.utc)
