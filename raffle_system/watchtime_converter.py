@@ -45,13 +45,14 @@ class WatchtimeConverter:
             
             with self.engine.begin() as conn:
                 # Get all users with watchtime and their Discord IDs from links table
+                # Use LOWER() for case-insensitive comparison
                 result = conn.execute(text("""
                     SELECT 
                         w.username as kick_name,
                         w.minutes as total_minutes,
                         l.discord_id
                     FROM watchtime w
-                    JOIN links l ON l.kick_name = w.username
+                    JOIN links l ON LOWER(l.kick_name) = LOWER(w.username)
                     WHERE w.minutes > 0
                 """))
                 
