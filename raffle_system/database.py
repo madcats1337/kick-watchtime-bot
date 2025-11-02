@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS raffle_watchtime_converted (
     kick_name TEXT NOT NULL,
     minutes_converted INTEGER NOT NULL,
     tickets_awarded INTEGER NOT NULL,
-    converted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    converted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(period_id, kick_name)
 );
 
 -- Gifted sub event log
