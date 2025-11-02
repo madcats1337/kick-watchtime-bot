@@ -2247,6 +2247,76 @@ async def manage_roles_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need administrator permissions to use this command.")
 
+@bot.command(name="testsub")
+@commands.has_permissions(administrator=True)
+@in_guild()
+async def test_subscription(ctx, kick_username: str = None, sub_count: int = 1):
+    """
+    [ADMIN/DEBUG] Simulate a subscription event to test raffle ticket awarding
+    Usage: !testsub <kick_username> [sub_count]
+    Example: !testsub testuser123 5  (simulates 5 gifted subs)
+    """
+    global gifted_sub_tracker
+    
+    if not gifted_sub_tracker:
+        await ctx.send("❌ Gifted sub tracker not initialized!")
+        return
+    
+    if not kick_username:
+        await ctx.send("❌ Usage: `!testsub <kick_username> [sub_count]`\nExample: `!testsub testuser123 5`")
+        return
+    
+    # Create a fake subscription event that matches Kick's structure
+    fake_event = {
+        "id": f"test_{int(datetime.now().timestamp())}",
+        "sender": {
+            "username": kick_username,
+            "id": 99999
+        },
+        "gift_count": sub_count if sub_count > 1 else None,
+        "months": 1 if sub_count == 1 else None
+    }
+    
+    await ctx.send(f"🧪 **Testing subscription event...**\n"
+                   f"User: `{kick_username}`\n"
+                   f"Type: {'Gifted ' + str(sub_count) + ' subs' if sub_count > 1 else 'Regular subscription'}")
+    
+    # Process the fake event
+    result = await gifted_sub_tracker.handle_gifted_sub_event(fake_event)
+    
+    # Show results
+    embed = discord.Embed(
+        title="🧪 Test Subscription Result",
+        color=discord.Color.green() if result['status'] == 'success' else discord.Color.red(),
+        timestamp=datetime.utcnow()
+    )
+    
+    embed.add_field(name="Status", value=result['status'], inline=True)
+    embed.add_field(name="Kick Username", value=kick_username, inline=True)
+    embed.add_field(name="Sub Count", value=str(sub_count), inline=True)
+    
+    if result['status'] == 'success':
+        embed.add_field(name="✅ Tickets Awarded", value=str(result['tickets_awarded']), inline=True)
+        embed.add_field(name="Discord ID", value=str(result['discord_id']), inline=True)
+        embed.description = f"Successfully awarded **{result['tickets_awarded']} tickets** to {result['gifter']}"
+    elif result['status'] == 'not_linked':
+        embed.description = f"❌ User `{kick_username}` is not linked to a Discord account.\nThey need to use `!link` to connect their accounts."
+        embed.add_field(name="Note", value="Sub was logged but no tickets awarded", inline=False)
+    elif result['status'] == 'duplicate':
+        embed.description = f"⚠️ This event was already processed (duplicate)"
+    elif result['status'] == 'no_active_period':
+        embed.description = f"❌ No active raffle period found.\nUse raffle commands to create a new period."
+    else:
+        embed.description = f"❌ Error: {result.get('error', 'Unknown error')}"
+    
+    embed.set_footer(text=f"Test performed by {ctx.author.name}")
+    await ctx.send(embed=embed)
+
+@test_subscription.error
+async def test_subscription_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You need administrator permissions to use this command.")
+
 @bot.command(name="setup_link_panel")
 @commands.has_permissions(manage_guild=True)
 @in_guild()
