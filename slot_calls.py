@@ -29,6 +29,7 @@ class SlotCallTracker:
         # Initialize database and load enabled state
         self._init_database()
         self.enabled = self._load_enabled_state()
+        self.max_requests_per_user = self._load_max_requests()
         
     def _init_database(self):
         """Create feature_settings and slot_requests tables if they don't exist"""
@@ -89,6 +90,49 @@ class SlotCallTracker:
         except Exception as e:
             logger.error(f"Failed to load slot call state from database: {e}")
             return True  # Default to enabled on error
+    
+    def _load_max_requests(self) -> int:
+        """Load max requests per user from database, default to 0 (unlimited)"""
+        if not self.engine:
+            return 0  # 0 = unlimited
+            
+        try:
+            with self.engine.connect() as conn:
+                result = conn.execute(text("""
+                    SELECT value FROM bot_settings 
+                    WHERE key = 'slot_max_requests_per_user'
+                """)).fetchone()
+                
+                if result:
+                    max_requests = int(result[0])
+                    logger.info(f"Loaded max slot requests per user: {max_requests if max_requests > 0 else 'unlimited'}")
+                    return max_requests
+                else:
+                    return 0  # Default to unlimited
+        except Exception as e:
+            logger.error(f"Failed to load max requests setting: {e}")
+            return 0  # Default to unlimited on error
+    
+    def set_max_requests(self, max_requests: int) -> bool:
+        """Set maximum requests per user (0 = unlimited)"""
+        if not self.engine:
+            return False
+        
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(text("""
+                    INSERT INTO bot_settings (key, value)
+                    VALUES ('slot_max_requests_per_user', :max_requests)
+                    ON CONFLICT (key) 
+                    DO UPDATE SET value = :max_requests
+                """), {"max_requests": str(max_requests)})
+            
+            self.max_requests_per_user = max_requests
+            logger.info(f"Set max slot requests per user to: {max_requests if max_requests > 0 else 'unlimited'}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to set max requests: {e}")
+            return False
         
     def is_enabled(self) -> bool:
         """Check if slot call tracking is enabled"""
@@ -163,6 +207,34 @@ class SlotCallTracker:
         
         # Update last call time
         self.last_call_time[username_lower] = now
+        
+        # Check per-user request limit (if enabled)
+        if self.max_requests_per_user > 0 and self.engine:
+            try:
+                with self.engine.connect() as conn:
+                    result = conn.execute(text("""
+                        SELECT COUNT(*) FROM slot_requests 
+                        WHERE LOWER(kick_username) = LOWER(:username) 
+                        AND picked = FALSE
+                    """), {"username": kick_username}).fetchone()
+                    
+                    unpicked_count = result[0] if result else 0
+                    
+                    if unpicked_count >= self.max_requests_per_user:
+                        # User has reached their limit
+                        if self.kick_send_callback:
+                            try:
+                                await self.kick_send_callback(
+                                    f"@{kick_username} You have reached the maximum of {self.max_requests_per_user} active slot requests. "
+                                    f"Please wait for your current requests to be picked before submitting more."
+                                )
+                                logger.info(f"User {kick_username} blocked: {unpicked_count}/{self.max_requests_per_user} active requests")
+                            except Exception as e:
+                                logger.error(f"Failed to send limit message to Kick: {e}")
+                        return
+            except Exception as e:
+                logger.error(f"Failed to check user request limit: {e}")
+                # Continue anyway to not block legitimate requests on DB errors
         
         # 🔒 SECURITY: Input validation - prevent excessively long inputs
         kick_username_safe = kick_username[:self.max_username_length]
