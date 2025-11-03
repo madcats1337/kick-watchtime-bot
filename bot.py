@@ -2582,12 +2582,12 @@ async def check_watchtime_conversion(ctx, kick_username: str = None):
     except Exception as e:
         await ctx.send(f"❌ Error: {str(e)}")
 
-@bot.command(name="commandlist", aliases=["commands", "help"])
+@bot.command(name="commandlist", aliases=["commands"])
 @in_guild()
 async def command_list(ctx):
     """
     Show all available bot commands organized by category
-    Usage: !commandlist
+    Usage: !commandlist or !commands
     """
     embed = discord.Embed(
         title="📋 Bot Commands",
