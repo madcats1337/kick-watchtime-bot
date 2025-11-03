@@ -6,7 +6,7 @@ Shows statistics and allows picking random slots via buttons
 import logging
 import discord
 from discord.ext import commands, tasks
-from discord.ui import View, Button
+from discord.ui import View, Button, Modal, TextInput
 from sqlalchemy import text
 from datetime import datetime
 
@@ -15,6 +15,63 @@ logger = logging.getLogger(__name__)
 # Emojis
 EMOJI_RANDOM = "🎲"  # Pick random slot
 EMOJI_REFRESH = "♻️"  # Refresh panel
+
+
+class SetMaxRequestsModal(Modal, title="Set Max Requests Per User"):
+    """Modal for setting maximum requests per user"""
+    
+    max_requests = TextInput(
+        label="Maximum Requests (0 = unlimited)",
+        placeholder="Enter a number from 0 to 10",
+        required=True,
+        min_length=1,
+        max_length=2,
+        default="0"
+    )
+    
+    def __init__(self, panel):
+        super().__init__()
+        self.panel = panel
+        # Set current value as default
+        current = panel.tracker.max_requests_per_user
+        self.max_requests.default = str(current)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        """Handle modal submission"""
+        try:
+            # Validate input
+            value = int(self.max_requests.value)
+            
+            if value < 0 or value > 10:
+                await interaction.response.send_message(
+                    "❌ Please enter a number between 0 and 10.",
+                    ephemeral=True
+                )
+                return
+            
+            # Set the limit
+            success = self.panel.tracker.set_max_requests(value)
+            
+            if success:
+                limit_text = f"{value} request(s)" if value > 0 else "unlimited"
+                await interaction.response.send_message(
+                    f"✅ Max requests per user set to: **{limit_text}**",
+                    ephemeral=True
+                )
+                
+                # Update the panel
+                await self.panel.update_panel(force=True)
+            else:
+                await interaction.response.send_message(
+                    "❌ Failed to update the limit. Check logs for details.",
+                    ephemeral=True
+                )
+                
+        except ValueError:
+            await interaction.response.send_message(
+                "❌ Please enter a valid number.",
+                ephemeral=True
+            )
 
 
 class SlotPanelView(View):
@@ -49,6 +106,12 @@ class SlotPanelView(View):
             emoji="❌",
             custom_id="slot_disable"
         ))
+        self.add_item(Button(
+            style=discord.ButtonStyle.secondary,
+            label="Set Limit",
+            emoji="🔢",
+            custom_id="slot_set_limit"
+        ))
     
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """Check if user has permission to use buttons"""
@@ -69,6 +132,8 @@ class SlotPanelView(View):
                 await self.panel.enable_requests_interaction(interaction)
             elif button.custom_id == "slot_disable":
                 await self.panel.disable_requests_interaction(interaction)
+            elif button.custom_id == "slot_set_limit":
+                await self.panel.set_limit_interaction(interaction)
         except Exception as e:
             logger.error(f"Error handling button interaction: {e}")
             if not interaction.response.is_done():
@@ -85,6 +150,8 @@ class SlotRequestPanel:
         self.kick_send_callback = kick_send_callback
         self.panel_message_id = None
         self.panel_channel_id = None
+        self.last_update_time = None  # Track last update time for rate limiting
+        self.update_cooldown = 30  # Minimum 30 seconds between updates
         self._load_panel_info()
     
     def _load_panel_info(self):
@@ -209,6 +276,11 @@ class SlotRequestPanel:
         status = "✅ Open" if self.tracker.is_enabled() else "❌ Closed"
         embed.add_field(name="Status", value=status, inline=True)
         
+        # Max requests per user
+        max_req = self.tracker.max_requests_per_user
+        limit_text = f"{max_req} request(s)" if max_req > 0 else "Unlimited"
+        embed.add_field(name="Max Per User", value=limit_text, inline=True)
+        
         # Instructions
         embed.add_field(
             name="How to use",
@@ -245,10 +317,22 @@ class SlotRequestPanel:
             logger.error(f"Failed to create panel: {e}")
             return False
     
-    async def update_panel(self):
-        """Update the existing panel"""
+    async def update_panel(self, force=False):
+        """
+        Update the existing panel
+        
+        Args:
+            force: If True, bypass rate limiting (for user actions like button clicks)
+        """
         if not self.panel_message_id or not self.panel_channel_id:
             return False
+        
+        # Rate limiting - prevent Discord API spam
+        if not force and self.last_update_time:
+            time_since_last = (datetime.utcnow() - self.last_update_time).total_seconds()
+            if time_since_last < self.update_cooldown:
+                logger.debug(f"Skipping panel update (cooldown: {self.update_cooldown - time_since_last:.1f}s remaining)")
+                return False
         
         try:
             channel = self.bot.get_channel(self.panel_channel_id)
@@ -270,6 +354,7 @@ class SlotRequestPanel:
                     item.callback = lambda interaction, b=item: view.callback(interaction, b)
             
             await message.edit(embed=embed, view=view)
+            self.last_update_time = datetime.utcnow()  # Update timestamp
             
             return True
             
@@ -296,7 +381,7 @@ class SlotRequestPanel:
         """Handle refresh button click"""
         await interaction.response.defer(ephemeral=True)
         
-        success = await self.update_panel()
+        success = await self.update_panel(force=True)  # Force update for user action
         if success:
             await interaction.followup.send("✅ Panel refreshed!", ephemeral=True)
         else:
@@ -321,6 +406,11 @@ class SlotRequestPanel:
         else:
             await self.tracker.set_enabled(False)
             await interaction.followup.send("✅ Slot requests **disabled**!", ephemeral=True)
+    
+    async def set_limit_interaction(self, interaction: discord.Interaction):
+        """Handle set limit button click - show modal"""
+        modal = SetMaxRequestsModal(self)
+        await interaction.response.send_modal(modal)
     
     async def handle_reaction(self, payload):
         """Handle reaction on the panel"""
@@ -425,9 +515,9 @@ class SlotRequestPanelCommands(commands.Cog):
         """Clean up when cog is unloaded"""
         self.auto_update_task.cancel()
     
-    @tasks.loop(minutes=1)
+    @tasks.loop(minutes=3)
     async def auto_update_task(self):
-        """Auto-update panel every minute"""
+        """Auto-update panel every 3 minutes"""
         await self.panel.update_panel()
     
     @auto_update_task.before_loop
