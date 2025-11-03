@@ -39,6 +39,10 @@ from slot_request_panel import setup_slot_panel
 # Timed messages import
 from timed_messages import setup_timed_messages
 
+# Guess the Balance import
+from guess_the_balance import GuessTheBalanceManager, parse_amount
+from gtb_panel import setup_gtb_panel
+
 # -------------------------
 # Command checks and utils
 # -------------------------
@@ -387,6 +391,44 @@ try:
                     VALUES (:name, :minutes, :order, TRUE)
                 """), {"name": role["name"], "minutes": role["minutes"], "order": idx})
             print("✅ Default watchtime roles created")
+        
+        # Create Guess the Balance tables
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS gtb_sessions (
+            id SERIAL PRIMARY KEY,
+            opened_by TEXT NOT NULL,
+            opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            closed_at TIMESTAMP,
+            result_amount NUMERIC(12, 2),
+            status TEXT DEFAULT 'open' CHECK (status IN ('open', 'closed', 'completed')),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """))
+        
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS gtb_guesses (
+            id SERIAL PRIMARY KEY,
+            session_id INTEGER NOT NULL REFERENCES gtb_sessions(id) ON DELETE CASCADE,
+            kick_username TEXT NOT NULL,
+            guess_amount NUMERIC(12, 2) NOT NULL,
+            guessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(session_id, kick_username)
+        );
+        """))
+        
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS gtb_winners (
+            id SERIAL PRIMARY KEY,
+            session_id INTEGER NOT NULL REFERENCES gtb_sessions(id) ON DELETE CASCADE,
+            kick_username TEXT NOT NULL,
+            rank INTEGER NOT NULL CHECK (rank IN (1, 2, 3)),
+            guess_amount NUMERIC(12, 2) NOT NULL,
+            result_amount NUMERIC(12, 2) NOT NULL,
+            difference NUMERIC(12, 2) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """))
+        
     print("✅ Database tables initialized successfully")
 except Exception as e:
     print(f"⚠️ Database initialization error: {e}")
@@ -438,6 +480,7 @@ recent_chatters = {}  # {username: timestamp} - rolling window of recent chat ac
 gifted_sub_tracker = None  # Will be initialized in on_ready()
 shuffle_tracker = None  # Will be initialized in on_ready()
 slot_call_tracker = None  # Will be initialized in on_ready()
+gtb_manager = None  # Will be initialized in on_ready()
 MIN_UNIQUE_CHATTERS = 2  # Require at least 2 different people chatting to consider stream "live"
 CHAT_ACTIVITY_WINDOW_MINUTES = 5  # Look back 5 minutes for unique chatters
 
@@ -1005,6 +1048,29 @@ async def kick_chat_loop(channel_name: str):
                                         )
                                         # Send message to Kick chat using the API
                                         await send_kick_message(raffle_message)
+                                    
+                                    # Handle !gtb (Guess the Balance) command
+                                    if content_stripped.lower().startswith("!gtb"):
+                                        gtb_parts = content_stripped.split(maxsplit=1)
+                                        if len(gtb_parts) == 2:
+                                            amount_str = gtb_parts[1]
+                                            amount = parse_amount(amount_str)
+                                            
+                                            if amount is not None:
+                                                success, message = gtb_manager.add_guess(username, amount)
+                                                if success:
+                                                    # Send confirmation to Kick chat
+                                                    response = f"@{username} {message} Good luck! 🎰"
+                                                    await send_kick_message(response)
+                                                    print(f"[GTB] {username} guessed ${amount:,.2f}")
+                                                else:
+                                                    # Send error message to Kick chat
+                                                    await send_kick_message(f"@{username} {message}")
+                                                    print(f"[GTB] Failed guess from {username}: {message}")
+                                            else:
+                                                await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount> (e.g., !gtb 1234.56)")
+                                        else:
+                                            await send_kick_message(f"@{username} Usage: !gtb <amount> (e.g., !gtb 1234.56)")
                             
                             # Handle subscription events (both regular and gifted)
                             # Kick may use different event types for subs
@@ -3312,6 +3378,11 @@ async def on_ready():
             else:
                 print("⚠️ Slot call tracker initialized but no channel configured (set SLOT_CALLS_CHANNEL_ID)")
             
+            # Setup Guess the Balance manager
+            global gtb_manager
+            gtb_manager = GuessTheBalanceManager(engine)
+            print("✅ Guess the Balance system initialized")
+            
             # Setup slot request panel
             slot_panel = await setup_slot_panel(
                 bot,
@@ -3320,6 +3391,15 @@ async def on_ready():
                 kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
             )
             print(f"✅ Slot request panel system initialized")
+            
+            # Setup GTB panel
+            gtb_panel = await setup_gtb_panel(
+                bot,
+                engine,
+                gtb_manager,
+                kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
+            )
+            print(f"✅ Guess the Balance panel initialized")
             
             # Setup timed messages system
             timed_messages_manager = await setup_timed_messages(
