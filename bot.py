@@ -2582,6 +2582,140 @@ async def check_watchtime_conversion(ctx, kick_username: str = None):
     except Exception as e:
         await ctx.send(f"❌ Error: {str(e)}")
 
+@bot.command(name="commandlist", aliases=["commands", "help"])
+@in_guild()
+async def command_list(ctx):
+    """
+    Show all available bot commands organized by category
+    Usage: !commandlist
+    """
+    embed = discord.Embed(
+        title="📋 Bot Commands",
+        description="Complete list of available commands",
+        color=discord.Color.blue(),
+        timestamp=datetime.utcnow()
+    )
+    
+    # Account Linking
+    embed.add_field(
+        name="🔗 Account Linking",
+        value=(
+            "`!link <kick_username>` - Link your Kick account\n"
+            "`!unlink` - Unlink your Kick account\n"
+            "**Who can use:** Everyone"
+        ),
+        inline=False
+    )
+    
+    # Watchtime & Stats
+    embed.add_field(
+        name="⏱️ Watchtime & Stats",
+        value=(
+            "`!watchtime [user]` - Check your or someone's watchtime\n"
+            "`!leaderboard` - View watchtime leaderboard\n"
+            "`!checkwatchtime [kick_username]` - Check watchtime conversion status\n"
+            "**Who can use:** Everyone"
+        ),
+        inline=False
+    )
+    
+    # Raffle System
+    embed.add_field(
+        name="🎰 Monthly Raffle",
+        value=(
+            "`!mytickets` - View your raffle tickets\n"
+            "`!tickets [@user]` - View someone's tickets\n"
+            "`!rafflestats` - View raffle statistics\n"
+            "`!raffleleaderboard` - View ticket leaderboard\n"
+            "`!shufflelink <username>` - Link Shuffle account\n"
+            "**Who can use:** Everyone"
+        ),
+        inline=False
+    )
+    
+    # Admin - Tracking
+    embed.add_field(
+        name="🔧 Admin - Tracking Control",
+        value=(
+            "`!tracking [on|off|status]` - Control watchtime tracking\n"
+            "`!tracking force [on|off]` - Force tracking override\n"
+            "`!tracking debug [on|off]` - Toggle debug mode\n"
+            "`!linklogs` - View recent account links\n"
+            "**Who can use:** Administrators only"
+        ),
+        inline=False
+    )
+    
+    # Admin - Roles
+    embed.add_field(
+        name="👥 Admin - Role Management",
+        value=(
+            "`!roles list` - Show role configuration\n"
+            "`!roles add <name> <minutes>` - Add role threshold\n"
+            "`!roles update <name> <minutes>` - Update threshold\n"
+            "`!roles remove <name>` - Remove role\n"
+            "`!roles enable/disable <name>` - Toggle role\n"
+            "`!roles members <name>` - List members with role\n"
+            "**Who can use:** Administrators only"
+        ),
+        inline=False
+    )
+    
+    # Admin - Raffle
+    embed.add_field(
+        name="🎲 Admin - Raffle Management",
+        value=(
+            "`!rafflecreate` - Create new raffle period\n"
+            "`!raffledraw [count]` - Draw raffle winners\n"
+            "`!rafflereset` - Reset current period\n"
+            "`!awardtickets <@user> <amount> [reason]` - Award tickets\n"
+            "`!verifyshuffle <@user>` - Verify Shuffle link\n"
+            "`!convertwatchtime` - Manually convert watchtime\n"
+            "`!fixwatchtime` - Fix watchtime tracking\n"
+            "**Who can use:** Administrators only"
+        ),
+        inline=False
+    )
+    
+    # Admin - Slot Calls
+    embed.add_field(
+        name="🎰 Admin - Slot Requests",
+        value=(
+            "`!slotcalls [on|off|status]` - Toggle slot call tracking\n"
+            "`!slotpanel` - Create slot request panel\n"
+            "`!callblacklist add/remove <username>` - Manage blacklist\n"
+            "**Who can use:** Administrators only"
+        ),
+        inline=False
+    )
+    
+    # Admin - Testing
+    embed.add_field(
+        name="🧪 Admin - Testing & Debug",
+        value=(
+            "`!testsub <kick_username> [count]` - Test subscription event\n"
+            "`!systemstatus` - Check system initialization\n"
+            "`!health` - Bot health check\n"
+            "**Who can use:** Administrators only"
+        ),
+        inline=False
+    )
+    
+    # Setup Commands
+    embed.add_field(
+        name="⚙️ Admin - Setup",
+        value=(
+            "`!setup_link_panel [emoji]` - Create linking panel\n"
+            "`!post_link_info` - Post linking instructions\n"
+            "**Who can use:** Manage Server permission"
+        ),
+        inline=False
+    )
+    
+    embed.set_footer(text="Use !<command> for more details on a specific command")
+    
+    await ctx.send(embed=embed)
+
 @bot.command(name="systemstatus")
 @commands.has_permissions(administrator=True)
 @in_guild()
