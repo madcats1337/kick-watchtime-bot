@@ -41,6 +41,7 @@ old_api_versions/
 # Test/Development folders
 webpage_test/
 integrations/
+junk/
 
 # IDE
 .vscode/
