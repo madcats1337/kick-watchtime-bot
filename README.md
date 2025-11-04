@@ -90,53 +90,41 @@ kick-watchtime-bot/
 
 ## 🔐 Account Linking
 
-### 🌟 Method 1: OAuth Link Panel (Recommended)
-The easiest way for users to link accounts - **no typing required!**
+Users link their Kick and Discord accounts to earn watchtime and raffle tickets.
 
-**Admin Setup:**
+### For Users
+
+**Option 1: Link Panel (Easiest)**
+1. React with 🔗 on the pinned link panel message
+2. Click the button in the DM you receive
+3. Authorize with Kick → Done!
+
+**Option 2: Command**
+1. Type `!link` in Discord
+2. Click the button in the DM you receive  
+3. Authorize with Kick → Done!
+
+**Option 3: Unlink**
+- Type `!unlink` to remove your account link
+
+### For Admins
+
+**Setup Link Panel:**
 ```
 !setup_link_panel 🔗
 ```
+Creates a pinned message users can react to for linking.
 
-This creates a pinned message with a reaction. Users simply:
-1. React with 🔗 on the pinned message
-2. Get a DM with their personal OAuth link
-3. Click link → Authorize with Kick → Done!
+**Monitor Link Attempts:**
+```
+!linklogs on     # Enable link attempt logging
+!linklogs off    # Disable logging
+!linklogs status # Check logging status
+```
 
-**Benefits:**
-- ✅ No channel spam (no commands)
-- ✅ Always visible (pinned message)
-- ✅ One-click experience
-- ✅ Professional appearance
-- ✅ HMAC-SHA256 signed URLs (1-hour expiry)
+**Security:** All OAuth links are cryptographically signed (HMAC-SHA256) with 1-hour expiration.
 
-👉 **See [docs/LINK_PANEL_QUICKSTART.md](docs/LINK_PANEL_QUICKSTART.md) for setup guide**
-
-### Method 2: OAuth Command (Fallback)
-Users can type `!link` to get their personal OAuth link via DM.
-
-**How it works:**
-1. User runs `!link` in Discord
-2. Bot sends DM with cryptographically signed OAuth authorization link
-3. User clicks link and authorizes with Kick
-4. Bot automatically retrieves Kick username
-5. Accounts are instantly linked
-
-**Benefits:**
-- ✅ Instant linking (no bio editing)
-- ✅ Automatic username retrieval
-- ✅ Secure OAuth 2.0 with PKCE
-- ✅ HMAC-SHA256 signature validation
-- ✅ Works as fallback if reactions fail
-
-👉 **See [docs/OAUTH_SETUP.md](docs/OAUTH_SETUP.md) for OAuth configuration**
-
-### 🔒 Security Features
-- **HMAC-SHA256 Signatures**: All OAuth URLs are cryptographically signed to prevent tampering
-- **Time-Limited Links**: OAuth URLs expire after 1 hour
-- **PKCE Flow**: Protects against authorization code interception
-- **Unique State Tokens**: Each linking attempt uses a unique cryptographic state
-- **Link Attempt Logging**: Track all successful and failed linking attempts (admin feature)
+👉 **Full setup guide:** [docs/OAUTH_SETUP.md](docs/OAUTH_SETUP.md)
 
 ## 🚀 Quick Start (Local Testing)
 
@@ -261,67 +249,61 @@ This starts both the Discord bot and OAuth Flask server. You should see:
 
 ## 🎮 Commands
 
-### Account Linking
-| Command | Description | Example |
-|---------|-------------|---------|
-| `!setup_link_panel [emoji]` | **[Admin]** Create reaction-based link panel | `!setup_link_panel 🔗` |
-| `!link` | Get personal OAuth link (instant linking) | `!link` |
-| `!unlink` | Unlink your Kick account from Discord | `!unlink` |
+### 👤 User Commands
 
-### Watchtime & Stats
-| Command | Description | Example |
-|---------|-------------|---------|
-| `!watchtime` | Check your current watchtime | `!watchtime` |
-| `!leaderboard [top]` | Show top viewers (default: 10, max: 25) | `!leaderboard 15` |
+**Account Linking:**
+- `!link` - Get OAuth link to connect your Kick account
+- `!unlink` - Disconnect your Kick account
 
-### 🎟️ Raffle Commands
-| Command | Description | Example |
-|---------|-------------|---------|
-| `!tickets` | Check your raffle ticket balance | `!tickets` |
-| `!raffleboard [limit]` | View raffle ticket leaderboard | `!raffleboard 20` |
-| `!raffleinfo` | View current raffle period and ticket earning info | `!raffleinfo` |
-| `!linkshuffle <username>` | Link Shuffle account to earn 20 tickets/$1000 (code 'lele') | `!linkshuffle JohnDoe123` |
+**Watchtime & Stats:**
+- `!watchtime` - Check your watchtime
+- `!leaderboard [top]` - View top viewers (default: 10, max: 25)
 
-### 🎟️ Raffle Admin Commands
-| Command | Description | Example |
-|---------|-------------|---------|
-| `!verifyshuffle @user <username>` | **[Admin]** Verify and link user's Shuffle account (auto-assigns "Shuffle Code User" role) | `!verifyshuffle @user madcats` |
-| `!rafflegive @user <amount> [reason]` | **[Admin]** Award bonus tickets | `!rafflegive @user 100 Event winner` |
-| `!raffleremove @user <amount> [reason]` | **[Admin]** Remove tickets | `!raffleremove @user 50 Violation` |
-| `!raffledraw` | **[Admin]** Manually draw a winner | `!raffledraw` |
-| `!rafflestats [@user]` | **[Admin]** View detailed raffle statistics | `!rafflestats @user` |
-| `!rafflestart [start_day] [end_day]` | **[Admin]** Start a new raffle period | `!rafflestart 1 30` |
-| `!raffleend` | **[Admin]** End the current raffle period | `!raffleend` |
-| `!rafflerestart` | **[Admin]** End current & start new period | `!rafflerestart` |
-| `!rafflesetdate <start> <end>` | **[Admin]** Set custom period dates (auto-transitions when ends) | `!rafflesetdate 2025-11-01 2025-11-30` |
+**Raffle System:**
+- `!tickets` - Check your raffle ticket balance
+- `!raffleboard [limit]` - View raffle leaderboard
+- `!raffleinfo` - View current raffle period info
+- `!linkshuffle <username>` - Link your Shuffle.com account (code: lele)
 
-### 🎰 Slot Call Tracker
-**Kick Chat Commands** (tracked automatically):
-| Command | Description | Example |
-|---------|-------------|---------|
-| `!call <slot_name>` | Request a slot call (posts to Discord) | `!call Book of Dead` |
-| `!sr <slot_name>` | Same as !call (slot request) | `!sr Gates of Olympus` |
+**Kick Chat (tracked automatically):**
+- `!call <slot_name>` - Request slot call (posts to Discord)
+- `!sr <slot_name>` - Same as !call
 
-**Discord Admin Commands**:
-| Command | Description | Example |
-|---------|-------------|---------|
-| `!slotcalls on` | **[Admin]** Enable slot call tracking | `!slotcalls on` |
-| `!slotcalls off` | **[Admin]** Disable slot call tracking | `!slotcalls off` |
-| `!slotcalls status` | **[Admin]** Check if tracking is enabled | `!slotcalls status` |
+### 🛡️ Admin Commands
 
-### Admin Commands
-| Command | Description | Example |
-|---------|-------------|---------|
-| `!health` | **[Admin]** Check system status and diagnostics | `!health` |
-| `!tracking on/off/status` | Enable/disable watchtime tracking | `!tracking on` |
-| `!linklogs on/off/status` | Enable/disable link attempt logging | `!linklogs on` |
-| `!roles list` | Show all configured watchtime roles | `!roles list` |
-| `!roles add <role> <minutes>` | Add a new watchtime role | `!roles add @Veteran 720` |
-| `!roles update <role> <minutes>` | Update role threshold | `!roles update @Fan 90` |
-| `!roles remove <role>` | Remove a watchtime role | `!roles remove @Fan` |
-| `!roles enable <role>` | Enable a disabled role | `!roles enable @Fan` |
-| `!roles disable <role>` | Disable a role without deleting | `!roles disable @Fan` |
-| `!roles members <role>` | List members with specific role | `!roles members @Fan` |
+**Account Linking:**
+- `!setup_link_panel [emoji]` - Create reaction-based link panel
+- `!linklogs on/off/status` - Toggle link attempt logging
+
+**Watchtime Roles:**
+- `!roles list` - Show all configured roles
+- `!roles add <role> <minutes>` - Add watchtime role
+- `!roles update <role> <minutes>` - Update role threshold
+- `!roles remove <role>` - Remove role
+- `!roles enable/disable <role>` - Toggle role
+- `!roles members <role>` - List members with role
+
+**Raffle Management:**
+- `!rafflegive @user <amount> [reason]` - Award bonus tickets
+- `!raffleremove @user <amount> [reason]` - Remove tickets
+- `!raffledraw` - Draw winner manually
+- `!rafflestats [@user]` - View raffle statistics
+- `!rafflestart [start] [end]` - Start new period
+- `!raffleend` - End current period
+- `!rafflerestart` - End current & start new period
+- `!rafflesetdate <start> <end>` - Set custom dates
+- `!verifyshuffle @user <username>` - Verify Shuffle account
+
+**Slot Call Tracker:**
+- `!slotcalls on/off/status` - Toggle slot request tracking
+- `!callblacklist add <user> [reason]` - Block user from !call
+- `!callblacklist remove <user>` - Unblock user
+- `!callblacklist list` - Show blocked users
+
+**System:**
+- `!health` - Check bot status and diagnostics
+- `!tracking on/off/status` - Toggle watchtime tracking
+- `!gtb panel` - Create Guess the Balance panel
 
 ## 📋 Usage Examples
 
@@ -366,71 +348,34 @@ Bot: 🔇 Slot call tracking disabled!
 
 ## 📋 Linking Workflow Examples
 
-### 🌟 Recommended: Reaction Panel Method
+**Admin sets up link panel:**
 ```
 Admin: !setup_link_panel 🔗
+Bot: Creates and pins message with 🔗 reaction
+```
 
-Bot: Creates pinned message:
-┌────────────────────────────────┐
-│  🎮 Link Your Kick Account     │
-│  React with 🔗 below...        │
-│                                │
-│  📝 How it works:              │
-│  1. Click 🔗                   │
-│  2. Get DM with OAuth link     │
-│  3. Authorize with Kick        │
-│  4. Done!                      │
-└────────────────────────────────┘
+**User links account:**
+```
+[User reacts with 🔗 or types !link]
 
-[User reacts with 🔗]
-
-Bot (via DM): 
-🔗 Link with Kick OAuth
+Bot (DM): 
+🔗 Link Your Kick Account
 [Button: 🎮 Link with Kick]
 
-[User clicks button → authorizes → done!]
-
-Bot: ✅ Successfully linked to your Kick account!
+[User clicks → Authorizes → Success]
+Bot: ✅ Successfully linked!
 ```
 
-### Method 2: OAuth Command
-```
-User: !link
-
-Bot (via DM):
-🔗 Link with Kick OAuth
-[Button: 🎮 Link with Kick]
-
-[User clicks button → authorizes → done!]
-
-Bot: ✅ Successfully linked to your Kick account!
-```
-
-### Method 3: Bio Verification (Legacy)
-
-### Admin Monitoring
+**Admin monitoring:**
 ```
 Admin: !linklogs on
+Bot: Link attempt logging enabled
 
-Bot: � Link attempt logging enabled!
-     All successful and failed link attempts will be logged here.
+[Successful link]
+Bot: 🔗 Account Linked | @discorduser → kickuser123
 
-[User attempts to link]
-
-Bot (in logs channel):
-🔗 Account Linked
-User: @username
-Kick: madcats
-Time: 2025-10-22 14:35:21
-
-[Failed attempt]
-
-Bot (in logs channel):
-❌ Link Failed
-User: @username
-Kick: invalid_user
-Error: User not found
-Time: 2025-10-22 14:36:12
+[Failed link]
+Bot: ❌ Link Failed | @discorduser | Error: Invalid user
 ```
 
 ## 🐳 Deployment (Production)
