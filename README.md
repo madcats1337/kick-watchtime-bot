@@ -94,26 +94,24 @@ Users link their Kick and Discord accounts to earn watchtime and raffle tickets.
 
 ### For Users
 
-**Option 1: Link Panel (Easiest)**
-1. React with 🔗 on the pinned link panel message
-2. Click the button in the DM you receive
+**How to Link:**
+1. Click the **"Link Account"** button on the link panel
+2. Click **"Link with Kick"** in the message (only you can see it)
 3. Authorize with Kick → Done!
 
-**Option 2: Command**
-1. Type `!link` in Discord
-2. Click the button in the DM you receive  
-3. Authorize with Kick → Done!
+**Alternative - Command:**
+- Type `!link` in Discord to get your personal link button
 
-**Option 3: Unlink**
+**Unlink:**
 - Type `!unlink` to remove your account link
 
 ### For Admins
 
 **Setup Link Panel:**
 ```
-!setup_link_panel 🔗
+!setup_link_panel
 ```
-Creates a pinned message users can react to for linking.
+Creates a permanent panel with a button users can click to link accounts.
 
 **Monitor Link Attempts:**
 ```
@@ -122,7 +120,7 @@ Creates a pinned message users can react to for linking.
 !linklogs status # Check logging status
 ```
 
-**Security:** All OAuth links are cryptographically signed (HMAC-SHA256) with 1-hour expiration.
+**Security:** All OAuth links are cryptographically signed (HMAC-SHA256) with 10-minute expiration. Links appear as ephemeral messages (only visible to the clicking user).
 
 👉 **Full setup guide:** [docs/OAUTH_SETUP.md](docs/OAUTH_SETUP.md)
 
