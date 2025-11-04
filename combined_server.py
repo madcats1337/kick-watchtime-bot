@@ -54,7 +54,7 @@ if __name__ == '__main__':
             '--timeout', '120',
             '--access-logfile', '-',
             '--error-logfile', '-',
-            'oauth_server:app'
+            'core.oauth_server:app'
         ])
     except Exception as e:
         print(f"❌ Failed to start Gunicorn: {e}", flush=True)
