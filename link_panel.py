@@ -194,6 +194,7 @@ class LinkPanel:
                     "• Earn raffle tickets from watchtime\n"
                     "• Get bonus tickets from subscriptions\n"
                     "• Participate in raffles and giveaways\n"
+                    "• Earn roles based on Kick chat activity\n"
                     "• Track your stats and progress"
                 ),
                 color=0x53FC18
