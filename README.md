@@ -1,17 +1,17 @@
 # 🎮 Kick.com Discord Bot with Raffle System
 
-A comprehensive Discord bot that tracks viewer watchtime on Kick.com, rewards loyal fans with Discord roles, and runs monthly raffles with tickets earned from watchtime, gifted subs, and Shuffle wagers. Features **OAuth 2.0 linking** and **reaction-based link panels** for seamless account verification.
+A comprehensive Discord bot that tracks viewer watchtime on Kick.com, rewards loyal fans with Discord roles, and runs monthly raffles with tickets earned from watchtime, gifted subs, and Shuffle wagers. Features **OAuth 2.0 linking** and **button-based link panels** for seamless account verification.
 
 ## ✨ Features
 
 ### Core Features
 - **🔗 OAuth Account Linking**: Instant linking with Kick OAuth (no manual bio editing!)
-- **📌 Reaction Link Panels**: Users react to a pinned message to start linking (no command spam!)
+- **📌 Button Link Panels**: Users click a button to get their personal OAuth link (ephemeral messages!)
 - **⏱️ Watchtime Tracking**: Automatically tracks viewer activity in your Kick chat
 - **🏆 Role Rewards**: Assigns Discord roles based on watchtime milestones
 - **⚙️ Database-Configurable Roles**: Manage role thresholds without code changes
 - **📊 Leaderboards**: Shows top viewers with interactive embeds
-- **🔒 HMAC-SHA256 Security**: Cryptographically signed OAuth URLs with 1-hour expiry
+- **🔒 HMAC-SHA256 Security**: Cryptographically signed OAuth URLs with 10-minute expiry
 - **🔄 Real-time Sync**: Updates watchtime every minute
 
 ### 🎟️ Raffle System (NEW!)
@@ -270,7 +270,7 @@ This starts both the Discord bot and OAuth Flask server. You should see:
 ### 🛡️ Admin Commands
 
 **Account Linking:**
-- `!setup_link_panel [emoji]` - Create reaction-based link panel
+- `!setup_link_panel` - Create button-based link panel
 - `!linklogs on/off/status` - Toggle link attempt logging
 
 **Watchtime Roles:**
@@ -292,8 +292,8 @@ This starts both the Discord bot and OAuth Flask server. You should see:
 - `!rafflesetdate <start> <end>` - Set custom dates
 - `!verifyshuffle @user <username>` - Verify Shuffle account
 
-**Slot Call Tracker:**
-- `!slotcalls on/off/status` - Toggle slot request tracking
+**Slot Request Panel:**
+- `!slotpanel` - Create/update slot request panel (button-based UI)
 - `!callblacklist add <user> [reason]` - Block user from !call
 - `!callblacklist remove <user>` - Unblock user
 - `!callblacklist list` - Show blocked users
@@ -301,66 +301,61 @@ This starts both the Discord bot and OAuth Flask server. You should see:
 **System:**
 - `!health` - Check bot status and diagnostics
 - `!tracking on/off/status` - Toggle watchtime tracking
-- `!gtb panel` - Create Guess the Balance panel
 
 ## 📋 Usage Examples
 
-### 🎰 Slot Call Tracker Workflow
+### 🎰 Slot Request Tracker
 ```
-Admin: !slotcalls on
-
-Bot: ✅ Slot call tracking enabled!
+Admin: !slotpanel
+Bot: Creates interactive panel with buttons to enable/disable, set limits, etc.
 
 [Kick viewer types in chat: !call Book of Dead]
 
-Bot (in configured Discord channel):
-┌────────────────────────────────┐
-│  🎰 Slot Call                  │
-│                                │
-│  kickuser123 requested         │
-│  **Book of Dead**              │
-│                                │
-│  📅 2025-01-22 14:35:21       │
-└────────────────────────────────┘
+Bot (auto-posts to Discord):
+🎰 **Slot Request**
+kickuser123 requested: **Book of Dead**
+📅 2025-11-04 14:35:21
 
-[Another viewer types: !sr Gates of Olympus]
+[Another viewer: !sr Gates of Olympus]
 
-Bot (in Discord):
-┌────────────────────────────────┐
-│  🎰 Slot Call                  │
-│                                │
-│  slotfan456 requested          │
-│  **Gates of Olympus**          │
-│                                │
-│  📅 2025-01-22 14:37:08       │
-└────────────────────────────────┘
+Bot (auto-posts to Discord):
+🎰 **Slot Request**
+slotfan456 requested: **Gates of Olympus**
+📅 2025-11-04 14:37:08
+```
 
-Admin: !slotcalls status
+### 🎮 Guess the Balance Game
+```
+Admin: Creates GTB panel via Discord UI (button-based)
 
-Bot: ✅ Slot call tracking is currently **enabled**
+[Kick chat:]
+Viewer: !gtb 1500
+Bot: ✅ Your guess of $1,500.00 has been recorded!
 
-Admin: !slotcalls off
+Viewer2: !gtb 2000
+Bot: ✅ Your guess of $2,000.00 has been recorded!
 
-Bot: 🔇 Slot call tracking disabled!
+[Admin ends session with final balance]
+Bot: 🏆 Winner: Viewer ($1,500.00 was closest to $1,650.00)
 ```
 
 ## 📋 Linking Workflow Examples
 
 **Admin sets up link panel:**
 ```
-Admin: !setup_link_panel 🔗
-Bot: Creates and pins message with 🔗 reaction
+Admin: !setup_link_panel
+Bot: Creates panel with "Link Account" button
 ```
 
 **User links account:**
 ```
-[User reacts with 🔗 or types !link]
+[User clicks "Link Account" button or types !link]
 
-Bot (DM): 
+Bot (ephemeral message - only user sees it): 
 🔗 Link Your Kick Account
 [Button: 🎮 Link with Kick]
 
-[User clicks → Authorizes → Success]
+[User clicks → Authorizes on Kick → Redirected]
 Bot: ✅ Successfully linked!
 ```
 
