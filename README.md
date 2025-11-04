@@ -32,10 +32,61 @@ A comprehensive Discord bot that tracks viewer watchtime on Kick.com, rewards lo
 - **📊 Status Monitoring**: Check current state with `!slotcalls status`
 - **⚡ Instant Posting**: No delay between request and Discord notification
 
+### 🎮 Guess the Balance Game (NEW!)
+- **💰 Interactive Betting Game**: Players guess the final balance after slot spins
+- **📊 Discord Panel UI**: Buttons and modals for easy game management
+- **🏆 Automatic Winner Detection**: Closest guess wins automatically
+- **💵 Configurable Prize Pools**: Admins set prize amounts per session
+- **📈 Real-time Updates**: Live session status and guess tracking
+
 ### Deployment
 - **🐳 Dockerized**: Easy deployment to Railway, Heroku, Render, or any container platform
 - **☁️ Cloud-Ready**: PostgreSQL support for production deployments
 - **📄 Legal Compliance**: Built-in Terms of Service and Privacy Policy
+
+## 📁 Project Structure
+
+```
+kick-watchtime-bot/
+├── bot.py                      # Main Discord bot entry point
+├── start.py                    # Combined bot + OAuth server launcher
+├── combined_server.py          # Alternative unified server
+├── requirements.txt            # Python dependencies
+├── core/                       # Core functionality
+│   ├── kick_api.py            # Kick.com API integration
+│   └── oauth_server.py        # Flask OAuth authorization server
+├── features/                   # Bot features (modular)
+│   ├── slot_requests/         # Slot call tracker
+│   │   ├── slot_calls.py     # Kick chat !call command tracker
+│   │   └── slot_request_panel.py  # Discord panel UI
+│   ├── games/                 # Interactive games
+│   │   ├── guess_the_balance.py   # GTB game logic
+│   │   └── gtb_panel.py          # GTB Discord UI
+│   ├── linking/               # Account linking
+│   │   └── link_panel.py     # Button-based link panel
+│   └── messaging/             # Automated messaging
+│       └── timed_messages.py # Scheduled Kick chat messages
+├── raffle_system/             # Monthly raffle system
+│   ├── commands.py            # Raffle Discord commands
+│   ├── database.py            # Raffle database operations
+│   ├── scheduler.py           # Auto-draw scheduler
+│   ├── tickets.py             # Ticket management
+│   ├── gifted_sub_tracker.py # Gifted sub event tracker
+│   ├── shuffle_tracker.py    # Shuffle wager tracker
+│   └── watchtime_converter.py # Convert watchtime to tickets
+├── config/                    # Deployment configuration
+│   ├── Dockerfile            # Docker container config
+│   ├── docker-compose.yml    # Multi-container setup
+│   ├── railway.json          # Railway deployment config
+│   └── Procfile              # Heroku deployment config
+├── scripts/                   # Utility scripts
+│   ├── setup_database.py     # Initialize database schema
+│   ├── generate_oauth_url.py # Generate OAuth authorization URL
+│   ├── health_check.py       # Database health diagnostics
+│   └── create_bot_tokens_table.py  # Bot token table setup
+├── docs/                      # Documentation
+└── tests/                     # Unit tests
+```
 
 ## 🔐 Account Linking
 
@@ -165,12 +216,12 @@ The bot now uses **session-based authentication** (more reliable than OAuth). Fo
    - Send a chat message
    - Find the `/messages/send/` request
    - Copy the `Authorization`, `X-CSRF-Token`, and `Cookie` headers
-   - Run: `python update_session_tokens.py`
+   - Run: `python scripts/update_session_tokens.py`
    - Paste the tokens when prompted
 
 3. **Test the Connection:**
    ```bash
-   python test_kick_session.py
+   python scripts/test_kick_session.py
    ```
    - Verifies tokens are valid
    - Sends a test message to Kick chat
@@ -185,7 +236,7 @@ The bot now uses **session-based authentication** (more reliable than OAuth). Fo
 
 4. **Initialize the database**
 ```bash
-python setup_database.py
+python scripts/setup_database.py
 ```
 
 5. **Configure watchtime roles**
@@ -404,7 +455,7 @@ For detailed deployment guides, see **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
    KICK_CHANNEL=your_channel_name
    ```
 5. Deploy! Railway handles everything automatically
-6. Initialize database: `railway run python setup_database.py`
+6. Initialize database: `railway run python scripts/setup_database.py`
 
 ### Docker Compose (Local Testing with PostgreSQL)
 
@@ -413,7 +464,7 @@ For detailed deployment guides, see **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
 docker-compose up -d
 
 # Initialize database
-docker-compose exec bot python setup_database.py
+docker-compose exec bot python scripts/setup_database.py
 
 # View logs
 docker-compose logs -f bot
@@ -425,18 +476,18 @@ After first deployment, initialize the database:
 
 ```bash
 # For Railway
-railway run python setup_database.py
+railway run python scripts/setup_database.py
 
 # For Heroku
-heroku run python setup_database.py
+heroku run python scripts/setup_database.py
 
 # For Docker
-docker exec -it <container_id> python setup_database.py
+docker exec -it <container_id> python scripts/setup_database.py
 ```
 
 Verify database health:
 ```bash
-python health_check.py
+python scripts/health_check.py
 ```
 
 ## ⚙️ Configuration
@@ -492,7 +543,7 @@ Adjust in `.env`:
 ### Database errors
 - PostgreSQL is required (SQLite no longer supported)
 - Verify `DATABASE_URL` is correct and database exists
-- Run `python setup_database.py` to initialize tables
+- Run `python scripts/setup_database.py` to initialize tables
 
 ## 📊 Database Schema
 
