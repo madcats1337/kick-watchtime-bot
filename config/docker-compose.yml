@@ -2,7 +2,9 @@ version: '3.8'
 
 services:
   bot:
-    build: .
+    build:
+      context: ..
+      dockerfile: config/Dockerfile
     container_name: kick-watchtime-bot
     restart: unless-stopped
     env_file:

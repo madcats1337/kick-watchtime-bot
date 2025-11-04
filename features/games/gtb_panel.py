@@ -9,7 +9,7 @@ from discord.ext import commands, tasks
 from discord.ui import View, Button, Modal, TextInput
 from sqlalchemy import text
 from datetime import datetime
-from guess_the_balance import parse_amount
+from features.games.guess_the_balance import parse_amount
 
 logger = logging.getLogger(__name__)
 
