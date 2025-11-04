@@ -29,8 +29,8 @@ def main():
     print(f"Files in directory: {os.listdir('.')}", flush=True)
     
     # Check if critical files exist
-    if not os.path.exists('oauth_server.py'):
-        print("❌ ERROR: oauth_server.py not found!", flush=True)
+    if not os.path.exists('core/oauth_server.py'):
+        print("❌ ERROR: core/oauth_server.py not found!", flush=True)
         sys.exit(1)
     if not os.path.exists('bot.py'):
         print("❌ ERROR: bot.py not found!", flush=True)
@@ -46,7 +46,7 @@ def main():
         print("📡 Starting OAuth web server...", flush=True)
         try:
             flask_process = subprocess.Popen(
-                [sys.executable, "oauth_server.py"],
+                [sys.executable, "core/oauth_server.py"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 universal_newlines=True,

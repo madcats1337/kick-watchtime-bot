@@ -12,13 +12,13 @@ import hmac
 import hashlib
 import base64
 from typing import Optional
-from kick_api import USER_AGENTS
+from core.kick_api import USER_AGENTS
 from datetime import datetime, timedelta, timezone
 from functools import partial
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text # type: ignore
-from kick_api import fetch_chatroom_id, check_stream_live, KickAPI, USER_AGENTS  # Consolidated Kick API module
+from core.kick_api import fetch_chatroom_id, check_stream_live, KickAPI, USER_AGENTS  # Consolidated Kick API module
 
 import discord
 from discord.ext import commands, tasks
@@ -33,18 +33,18 @@ from raffle_system.commands import setup as setup_raffle_commands
 from raffle_system.scheduler import setup_raffle_scheduler
 
 # Slot call tracker import
-from slot_calls import setup_slot_call_tracker
-from slot_request_panel import setup_slot_panel
+from features.slot_requests.slot_calls import setup_slot_call_tracker
+from features.slot_requests.slot_request_panel import setup_slot_panel
 
 # Timed messages import
-from timed_messages import setup_timed_messages
+from features.messaging.timed_messages import setup_timed_messages
 
 # Guess the Balance import
-from guess_the_balance import GuessTheBalanceManager, parse_amount
-from gtb_panel import setup_gtb_panel
+from features.games.guess_the_balance import GuessTheBalanceManager, parse_amount
+from features.games.gtb_panel import setup_gtb_panel
 
 # Link panel import
-from link_panel import setup_link_panel_system
+from features.linking.link_panel import setup_link_panel_system
 
 # -------------------------
 # Command checks and utils
@@ -217,7 +217,7 @@ async def get_kick_api():
     """Get or create a KickAPI instance."""
     global _kick_api
     if _kick_api is None:
-        from kick_api import KickAPI
+        from core.kick_api import KickAPI
         _kick_api = KickAPI()
         await _kick_api.setup()
     return _kick_api
@@ -3437,7 +3437,7 @@ async def on_ready():
 
 async def handle_timer_panel_reaction(payload):
     """Handle reactions on timer panel messages."""
-    from timed_messages import TimedMessagesManager
+    from features.messaging.timed_messages import TimedMessagesManager
     
     guild = bot.get_guild(payload.guild_id)
     if not guild:
