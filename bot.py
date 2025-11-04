@@ -44,7 +44,7 @@ from guess_the_balance import GuessTheBalanceManager, parse_amount
 from gtb_panel import setup_gtb_panel
 
 # Link panel import
-from link_panel import setup_link_panel
+from link_panel import setup_link_panel_system
 
 # -------------------------
 # Command checks and utils
@@ -3405,7 +3405,7 @@ async def on_ready():
             print(f"✅ Guess the Balance panel initialized")
             
             # Setup link panel (button-based OAuth linking)
-            link_panel = await setup_link_panel(
+            link_panel = await setup_link_panel_system(
                 bot,
                 engine,
                 generate_signed_oauth_url

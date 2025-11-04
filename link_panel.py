@@ -239,7 +239,7 @@ class LinkPanel:
             return False
 
 
-async def setup_link_panel(bot, engine, oauth_url_generator):
+async def setup_link_panel_system(bot, engine, oauth_url_generator):
     """Setup the link panel system"""
     panel = LinkPanel(bot, engine, oauth_url_generator)
     
