@@ -43,6 +43,9 @@ from timed_messages import setup_timed_messages
 from guess_the_balance import GuessTheBalanceManager, parse_amount
 from gtb_panel import setup_gtb_panel
 
+# Link panel import
+from link_panel import setup_link_panel
+
 # -------------------------
 # Command checks and utils
 # -------------------------
@@ -3400,6 +3403,14 @@ async def on_ready():
                 kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
             )
             print(f"✅ Guess the Balance panel initialized")
+            
+            # Setup link panel (button-based OAuth linking)
+            link_panel = await setup_link_panel(
+                bot,
+                engine,
+                generate_signed_oauth_url
+            )
+            print(f"✅ Link panel system initialized (button + ephemeral messages)")
             
             # Setup timed messages system
             timed_messages_manager = await setup_timed_messages(
