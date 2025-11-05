@@ -23,7 +23,7 @@
 - **Multi-source ticket earning:**
   - Watchtime: 10 tickets per hour streamed
   - Gifted Subscriptions: 15 tickets per sub
-  - Shuffle.com Wagers: 20 tickets per $1,000 wagered (affiliate code tracking)
+  - Multi-Platform Wagers: Configurable tickets per $1,000 wagered (supports Shuffle, Stake, Stake.us, and more)
   - Admin bonus tickets for special events
 
 - **Provably Fair Winner Selection:**
@@ -44,12 +44,15 @@
 - Community contribution leaderboards
 - Complete gifted sub history and analytics
 
-### **Shuffle.com Integration**
-- Affiliate code wager tracking via API
+### **Multi-Platform Gambling Integration**
+- **Configurable platform support:** Shuffle, Stake, Stake.us, and extensible to any platform
+- **Multiple campaign code tracking:** Track multiple affiliate codes simultaneously (comma-separated)
+- Affiliate code wager tracking via platform APIs
 - Verification ticket system for account linking
 - Real-time wager monitoring and ticket conversion
 - Unlinked account detection and management
-- "Shuffle Code User" role auto-assignment
+- Automatic role assignment for verified users
+- **Environment-based configuration:** Each deployment customizable per streamer's platform
 
 ### **Slot Request Management**
 - Interactive slot request panel with real-time status
@@ -80,8 +83,11 @@
 
 ## 📊 Administrative Control
 
+### **Command Management**
+- `!admincommands` - View all administrator commands (organized by category)
+- `!commandlist` - View user-facing commands
+
 ### **User Management**
-- `!link` / `!unlink` - Account connection management
 - `!roles` - Custom Discord role assignment system
 - `!linklogs` - Complete linking activity audit trail
 
@@ -89,8 +95,10 @@
 - `!rafflegive` / `!raffleremove` - Manual ticket adjustments
 - `!raffledraw` - Provably fair winner selection
 - `!rafflestats` - Comprehensive user and period analytics
-- `!verifyshuffle` - Shuffle account verification and linking
+- `!verifyshuffle` - Gambling platform account verification and linking
 - `!rafflestart` / `!raffleend` - Period lifecycle management
+- `!convertwatchtime` - Manual watchtime to ticket conversion
+- `!fixwatchtime` - Fix watchtime tracking issues
 
 ### **Content Management**
 - `!slotpanel` - Deploy interactive slot request interface
@@ -107,12 +115,14 @@
 ## 💼 User Experience
 
 ### **Viewer Commands**
+- `!commandlist` - View all available user commands (clean interface)
 - `!tickets` - Check personal raffle ticket balance with breakdown
 - `!leaderboard` - View top watchtime contributors
 - `!raffleboard` - Current raffle standings with probabilities
 - `!raffleinfo` - Detailed period information and earning methods
-- `!linkshuffle` - Connect Shuffle.com account for wager tracking
+- `!linkshuffle` - Connect gambling platform account for wager tracking
 - `!watchtime` - Personal viewing statistics
+- `!link` / `!unlink` - Kick account connection management
 
 ### **Kick Chat Integration**
 - `!call <slot>` / `!sr <slot>` - Slot request submissions
@@ -142,7 +152,9 @@
 - Multi-platform integration strengthens community bonds
 
 ### **Monetization Support**
-- Shuffle.com affiliate tracking and incentivization
+- **Multi-platform affiliate tracking:** Shuffle, Stake, Stake.us, and more
+- **Multiple campaign code support:** Track partner codes alongside your own
+- **Flexible ticket rates:** Customize rewards per platform and streamer preference
 - Gifted sub recognition and rewards
 - Viewer loyalty programs via watchtime tracking
 - Automated contest and giveaway management
@@ -165,9 +177,11 @@
 
 ✅ **Fully Automated** - Set it and forget it  
 ✅ **Provably Fair** - Complete transparency in all drawings  
-✅ **Multi-Platform** - Seamless Discord + Kick integration  
+✅ **Multi-Platform** - Seamless Discord + Kick integration + configurable gambling platforms  
 ✅ **Production-Ready** - Battle-tested with enterprise security  
 ✅ **Custom Built** - Tailored specifically for Kick streamers  
+✅ **Highly Configurable** - Environment-based platform selection, multiple campaign codes, custom ticket rates  
+✅ **User-Friendly** - Separate command lists for users and admins  
 ✅ **Active Support** - Ongoing maintenance and feature updates  
 
 ---
