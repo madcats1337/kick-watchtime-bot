@@ -74,17 +74,18 @@ class ShuffleWagerTracker:
                 logger.error(f"Failed to fetch {self.platform_name} affiliate data")
                 return {'status': 'fetch_failed', 'updates': 0}
             
-            # Filter for campaign code
+            # Filter for campaign code(s) - supports multiple codes separated by comma
+            campaign_codes = [code.strip().lower() for code in self.campaign_code.split(',')]
             filtered_data = [
                 user for user in wager_data 
-                if user.get('campaignCode', '').lower() == self.campaign_code.lower()
+                if user.get('campaignCode', '').lower() in campaign_codes
             ]
             
             if not filtered_data:
-                logger.warning(f"No users found with campaign code '{self.campaign_code}' on {self.platform_name}")
+                logger.warning(f"No users found with campaign codes '{self.campaign_code}' on {self.platform_name}")
                 return {'status': 'no_users', 'updates': 0}
             
-            logger.info(f"Found {len(filtered_data)} users with campaign code '{self.campaign_code}' on {self.platform_name}")
+            logger.info(f"Found {len(filtered_data)} users with campaign codes '{self.campaign_code}' on {self.platform_name}")
             
             updates = []
             
