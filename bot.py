@@ -2655,12 +2655,12 @@ async def check_watchtime_conversion(ctx, kick_username: str = None):
 @in_guild()
 async def command_list(ctx):
     """
-    Show all available bot commands organized by category
+    Show available bot commands for regular users
     Usage: !commandlist or !commands
     """
     embed = discord.Embed(
-        title="📋 Bot Commands",
-        description="Complete list of available commands",
+        title="📋 User Commands",
+        description="Commands available to everyone",
         color=discord.Color.blue(),
         timestamp=datetime.utcnow()
     )
@@ -2670,8 +2670,7 @@ async def command_list(ctx):
         name="🔗 Account Linking",
         value=(
             "`!link <kick_username>` - Link your Kick account\n"
-            "`!unlink` - Unlink your Kick account\n"
-            "**Who can use:** Everyone"
+            "`!unlink` - Unlink your Kick account"
         ),
         inline=False
     )
@@ -2682,8 +2681,7 @@ async def command_list(ctx):
         value=(
             "`!watchtime [user]` - Check your or someone's watchtime\n"
             "`!leaderboard` - View watchtime leaderboard\n"
-            "`!checkwatchtime [kick_username]` - Check watchtime conversion status\n"
-            "**Who can use:** Everyone"
+            "`!checkwatchtime [kick_username]` - Check watchtime conversion status"
         ),
         inline=False
     )
@@ -2695,43 +2693,59 @@ async def command_list(ctx):
             "`!tickets` - View your raffle tickets\n"
             "`!raffleboard` - View ticket leaderboard\n"
             "`!raffleinfo` - View raffle period information\n"
-            "`!linkshuffle <username>` - Link Shuffle account\n"
-            "**Who can use:** Everyone"
+            "`!linkshuffle <username>` - Link gambling account for wager tracking"
         ),
         inline=False
     )
     
-    # Admin - Tracking
+    embed.set_footer(text="Admins: Use !admincommands to see administrator commands")
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name="admincommands", aliases=["adminhelp"])
+@commands.has_permissions(administrator=True)
+@in_guild()
+async def admin_command_list(ctx):
+    """
+    Show all available administrator commands
+    Usage: !admincommands or !adminhelp
+    """
+    embed = discord.Embed(
+        title="🔧 Administrator Commands",
+        description="Commands available to server administrators",
+        color=discord.Color.red(),
+        timestamp=datetime.utcnow()
+    )
+    
+    # Tracking Control
     embed.add_field(
-        name="🔧 Admin - Tracking Control",
+        name="� Tracking Control",
         value=(
             "`!tracking [on|off|status]` - Control watchtime tracking\n"
             "`!tracking force [on|off]` - Force tracking override\n"
             "`!tracking debug [on|off]` - Toggle debug mode\n"
-            "`!linklogs` - View recent account links\n"
-            "**Who can use:** Administrators only"
+            "`!linklogs` - View recent account links"
         ),
         inline=False
     )
     
-    # Admin - Roles
+    # Role Management
     embed.add_field(
-        name="👥 Admin - Role Management",
+        name="👥 Role Management",
         value=(
             "`!roles list` - Show role configuration\n"
             "`!roles add <name> <minutes>` - Add role threshold\n"
             "`!roles update <name> <minutes>` - Update threshold\n"
             "`!roles remove <name>` - Remove role\n"
             "`!roles enable/disable <name>` - Toggle role\n"
-            "`!roles members <name>` - List members with role\n"
-            "**Who can use:** Administrators only"
+            "`!roles members <name>` - List members with role"
         ),
         inline=False
     )
     
-    # Admin - Raffle
+    # Raffle Management
     embed.add_field(
-        name="🎲 Admin - Raffle Management",
+        name="🎲 Raffle Management",
         value=(
             "`!rafflestart [start_day] [end_day]` - Start new raffle period\n"
             "`!raffleend` - End current raffle period\n"
@@ -2739,51 +2753,47 @@ async def command_list(ctx):
             "`!rafflestats [@user]` - View raffle statistics\n"
             "`!rafflegive <@user> <amount> [reason]` - Award tickets\n"
             "`!raffleremove <@user> <amount> [reason]` - Remove tickets\n"
-            "`!verifyshuffle <@user> <shuffle_username>` - Verify Shuffle account\n"
+            "`!verifyshuffle <@user> <username>` - Verify gambling account\n"
             "`!convertwatchtime` - Manually convert watchtime\n"
-            "`!fixwatchtime` - Fix watchtime tracking\n"
-            "**Who can use:** Administrators only"
+            "`!fixwatchtime` - Fix watchtime tracking"
         ),
         inline=False
     )
     
-    # Admin - Slot Calls
+    # Slot Requests
     embed.add_field(
-        name="🎰 Admin - Slot Requests",
+        name="🎰 Slot Requests",
         value=(
             "`!slotpanel` - Create/update slot request panel\n"
             "`!callblacklist add <username> [reason]` - Block user from requests\n"
             "`!callblacklist remove <username>` - Unblock user\n"
-            "`!callblacklist list` - View blacklisted users\n"
-            "**Who can use:** Administrators only"
+            "`!callblacklist list` - View blacklisted users"
         ),
         inline=False
     )
     
-    # Admin - Testing
+    # Testing & Debug
     embed.add_field(
-        name="🧪 Admin - Testing & Debug",
+        name="🧪 Testing & Debug",
         value=(
             "`!testsub <kick_username> [count]` - Test subscription event\n"
             "`!systemstatus` - Check system initialization\n"
-            "`!health` - Bot health check\n"
-            "**Who can use:** Administrators only"
+            "`!health` - Bot health check"
         ),
         inline=False
     )
     
     # Setup Commands
     embed.add_field(
-        name="⚙️ Admin - Setup",
+        name="⚙️ Setup",
         value=(
             "`!createlinkpanel` - Create button-based linking panel\n"
-            "`!post_link_info` - Post linking instructions\n"
-            "**Who can use:** Administrator permission"
+            "`!post_link_info` - Post linking instructions"
         ),
         inline=False
     )
     
-    embed.set_footer(text="Use !<command> for more details on a specific command")
+    embed.set_footer(text="Regular users: Use !commandlist to see user commands")
     
     await ctx.send(embed=embed)
 

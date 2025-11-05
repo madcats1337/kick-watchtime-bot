@@ -2,63 +2,54 @@
 
 Hey everyone! 👋
 
-Just pushed a major update to improve the bot's organization and reliability. Here's what changed:
+Just pushed a major update with multi-platform wager tracking and improved command list! Here's what changed:
 
-## 🛠️ **Backend Improvements**
+## � **New Features**
 
-**Code Reorganization:**
-- Completely reorganized the bot's file structure for better maintainability
-- All features now live in logical folders (games, slot requests, linking, etc.)
-- This makes future updates faster and more reliable!
+**Multi-Platform Wager Tracking:**
+- Bot now supports multiple gambling platforms (Shuffle, Stake, Stake.us, and more!)
+- Each deployment can be configured for your preferred platform
+- Supports tracking multiple campaign/affiliate codes simultaneously
+- Ticket rewards fully configurable per platform
+- Automatic migration preserves all existing wager data
 
-**Bug Fixes:**
-- Fixed deployment issues that were causing the bot to crash on startup
-- Updated all import paths to work with the new structure
-- Resolved gunicorn configuration errors
+**Multiple Campaign Code Support:**
+- Track multiple affiliate codes in one variable (e.g., your code + partner codes)
+- Simply separate codes with commas: `lele,yourcode`
+- Perfect for streamers with multiple affiliations
 
-**Documentation Updates:**
-- Added comprehensive client presentation document
-- Updated README with new folder structure
-- Fixed all setup guide references to point to correct file locations
+**Command List Updates:**
+- Split command list into two separate commands:
+  - `!commandlist` - Shows commands for regular users (clean and simple)
+  - `!admincommands` - Shows all administrator commands
+- Fixed and updated with accurate current commands
+- Removed outdated/fake commands that no longer exist
+- Added missing commands like `!tickets`, `!raffleboard`, `!raffleinfo`
+
+## 🛠️ **Technical Improvements**
+
+**Database Migration:**
+- Automatic platform column added to wager tables
+- Full backwards compatibility with existing Shuffle data
+- No data loss or service interruption
+
+**Configuration:**
+- New environment variables for platform customization
+- Flexible ticket reward rates per platform
+- Configurable polling intervals
 
 ## ✅ **What This Means For You**
 
-**Nothing changes on your end!** All commands work exactly the same:
-- ✅ Watchtime tracking - still working
-- ✅ Account linking - still working  
-- ✅ Raffle system - still working
-- ✅ GTB game - still working
-- ✅ Slot request tracker - still working
+**For Regular Users:**
+All your existing commands work exactly the same! The bot is just more powerful and flexible now.
 
-This was purely a "behind the scenes" update to make the bot more stable and easier to maintain going forward.
+**For Admins/Streamers:**
+- You can now configure the bot to track ANY gambling platform (not just Shuffle!)
+- Set your own ticket reward rates
+- Track multiple affiliate codes at once
+- Full control via environment variables
 
-## 🚀 **Current Features**
-
-Just a reminder of what's available:
-
-**Account Linking:**
-- React to the 🔗 message to link your Kick account
-- Use `!link` command if reactions aren't working
-
-**Watchtime & Roles:**
-- Earn roles automatically by watching streams
-- Check your time with `!watchtime`
-- View leaderboard with `!leaderboard`
-
-**Monthly Raffle:**
-- Earn tickets: 10 per hour watched, 15 per gifted sub, 20 per $1000 wagered
-- Check tickets: `!tickets`
-- View raffle board: `!raffleboard`
-- Link Shuffle account: `!linkshuffle <username>`
-
-**Guess the Balance:**
-- Click the GTB panel buttons to participate
-- Submit guesses via the popup form
-- Winner gets automatic payout!
-
-**Slot Requests:**
-- Type `!call <slot name>` or `!sr <slot name>` in Kick chat
-- Auto-posts to Discord for tracking
+Everything is backwards compatible - existing Shuffle setups continue working with zero changes required!
 
 ---
 
