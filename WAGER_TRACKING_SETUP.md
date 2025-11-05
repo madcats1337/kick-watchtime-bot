@@ -14,7 +14,7 @@ Set these in your Railway/Heroku environment:
 # Platform Configuration
 WAGER_PLATFORM_NAME=shuffle          # Platform name (shuffle, stake, stakeus, etc.)
 WAGER_AFFILIATE_URL=https://affiliate.shuffle.com/stats/YOUR-UUID-HERE
-WAGER_CAMPAIGN_CODE=yourcode         # Your affiliate/referral code
+WAGER_CAMPAIGN_CODE=yourcode         # Your affiliate/referral code (supports multiple: code1,code2,code3)
 WAGER_TICKETS_PER_1000_USD=20        # Tickets awarded per $1000 wagered
 ```
 
@@ -32,6 +32,7 @@ WAGER_CHECK_INTERVAL=900             # How often to check for updates (seconds, 
 WAGER_PLATFORM_NAME=shuffle
 WAGER_AFFILIATE_URL=https://affiliate.shuffle.com/stats/1755f751-33a9-4532-804e-b14b5c90236b
 WAGER_CAMPAIGN_CODE=lele
+# To track multiple codes: WAGER_CAMPAIGN_CODE=lele,partnername,yourcode
 WAGER_TICKETS_PER_1000_USD=20
 ```
 
@@ -41,6 +42,7 @@ WAGER_TICKETS_PER_1000_USD=20
 WAGER_PLATFORM_NAME=stake
 WAGER_AFFILIATE_URL=https://affiliate.stake.com/stats/YOUR-AFFILIATE-ID
 WAGER_CAMPAIGN_CODE=trainwrecks
+# To track multiple codes: WAGER_CAMPAIGN_CODE=trainwrecks,xqc,yourcode
 WAGER_TICKETS_PER_1000_USD=20
 ```
 
