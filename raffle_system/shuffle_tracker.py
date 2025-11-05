@@ -1,6 +1,12 @@
 """
-Shuffle.com Wager Tracker
-Polls Shuffle affiliate API and awards raffle tickets based on wager amounts
+Multi-Platform Wager Tracker
+Polls gambling affiliate APIs (Shuffle, Stake, etc.) and awards raffle tickets based on wager amounts
+
+Supports any platform with an affiliate stats API via environment variables:
+- WAGER_PLATFORM_NAME: Platform name (shuffle, stake, stakeus, etc.)
+- WAGER_AFFILIATE_URL: Your affiliate stats API URL
+- WAGER_CAMPAIGN_CODE: Your affiliate/referral code to track
+- WAGER_TICKETS_PER_1000_USD: Tickets to award per $1000 wagered
 """
 
 from sqlalchemy import text
@@ -9,24 +15,46 @@ import logging
 import aiohttp
 import asyncio
 
-from .config import SHUFFLE_TICKETS_PER_1000_USD, SHUFFLE_AFFILIATE_URL, SHUFFLE_CAMPAIGN_CODE
+from .config import (
+    WAGER_PLATFORM_NAME,
+    WAGER_AFFILIATE_URL, 
+    WAGER_CAMPAIGN_CODE, 
+    WAGER_TICKETS_PER_1000_USD,
+    # Backwards compatibility
+    SHUFFLE_TICKETS_PER_1000_USD,
+    SHUFFLE_AFFILIATE_URL,
+    SHUFFLE_CAMPAIGN_CODE
+)
 from .tickets import TicketManager
 
 logger = logging.getLogger(__name__)
 
 
 class ShuffleWagerTracker:
-    """Tracks Shuffle.com wagers and awards raffle tickets"""
+    """
+    Tracks gambling platform wagers and awards raffle tickets
+    
+    Despite the class name, this now supports multiple platforms (Shuffle, Stake, Stake.us, etc.)
+    via environment variables. The name is kept for backwards compatibility.
+    """
     
     def __init__(self, engine):
         self.engine = engine
         self.ticket_manager = TicketManager(engine)
+        self.platform_name = WAGER_PLATFORM_NAME
+        self.affiliate_url = WAGER_AFFILIATE_URL
+        self.campaign_code = WAGER_CAMPAIGN_CODE
+        self.tickets_per_1000 = WAGER_TICKETS_PER_1000_USD
+        
+        logger.info(f"🎰 Wager tracker initialized for platform: {self.platform_name}")
+        logger.info(f"📊 Campaign code: {self.campaign_code}")
+        logger.info(f"🎫 Rate: {self.tickets_per_1000} tickets per $1000 wagered")
     
     async def update_shuffle_wagers(self):
         """
-        Poll Shuffle affiliate API and update wager tracking
+        Poll gambling platform affiliate API and update wager tracking
         
-        Fetches the latest wager data from Shuffle.com affiliate page,
+        Fetches the latest wager data from the configured affiliate page,
         compares with previous values, and awards tickets for new wagers.
         
         Returns:
@@ -36,27 +64,27 @@ class ShuffleWagerTracker:
             # Get active raffle period
             period_id = self._get_active_period_id()
             if not period_id:
-                logger.warning("No active raffle period - skipping Shuffle wager update")
+                logger.warning(f"No active raffle period - skipping {self.platform_name} wager update")
                 return {'status': 'no_active_period', 'updates': 0}
             
-            # Fetch current wager data from Shuffle
+            # Fetch current wager data from platform
             wager_data = await self._fetch_shuffle_data()
             
             if not wager_data:
-                logger.error("Failed to fetch Shuffle affiliate data")
+                logger.error(f"Failed to fetch {self.platform_name} affiliate data")
                 return {'status': 'fetch_failed', 'updates': 0}
             
-            # Filter for campaign code "lele"
+            # Filter for campaign code
             filtered_data = [
                 user for user in wager_data 
-                if user.get('campaignCode', '').lower() == SHUFFLE_CAMPAIGN_CODE.lower()
+                if user.get('campaignCode', '').lower() == self.campaign_code.lower()
             ]
             
             if not filtered_data:
-                logger.warning(f"No users found with campaign code '{SHUFFLE_CAMPAIGN_CODE}'")
+                logger.warning(f"No users found with campaign code '{self.campaign_code}' on {self.platform_name}")
                 return {'status': 'no_users', 'updates': 0}
             
-            logger.info(f"Found {len(filtered_data)} users with campaign code '{SHUFFLE_CAMPAIGN_CODE}'")
+            logger.info(f"Found {len(filtered_data)} users with campaign code '{self.campaign_code}' on {self.platform_name}")
             
             updates = []
             
@@ -99,8 +127,8 @@ class ShuffleWagerTracker:
                             continue
                         
                         # Calculate tickets for the new wager amount
-                        # $1000 = SHUFFLE_TICKETS_PER_1000_USD tickets
-                        new_tickets = int((wager_delta / 1000.0) * SHUFFLE_TICKETS_PER_1000_USD)
+                        # $1000 = configured tickets per 1000 USD
+                        new_tickets = int((wager_delta / 1000.0) * self.tickets_per_1000)
                         
                         if new_tickets == 0:
                             # Less than threshold, update wager but no tickets
@@ -123,8 +151,8 @@ class ShuffleWagerTracker:
                                 discord_id=discord_id,
                                 kick_name=kick_name,
                                 tickets=new_tickets,
-                                source='shuffle_wager',
-                                description=f"Shuffle wager: ${wager_delta:.2f} (${last_known_wager:.2f} → ${current_wager:.2f})",
+                                source='shuffle_wager',  # Keep source name for backwards compatibility
+                                description=f"{self.platform_name.capitalize()} wager: ${wager_delta:.2f} (${last_known_wager:.2f} → ${current_wager:.2f})",
                                 period_id=period_id
                             )
                             
@@ -185,16 +213,17 @@ class ShuffleWagerTracker:
                         conn.execute(text("""
                             INSERT INTO raffle_shuffle_wagers
                                 (period_id, shuffle_username, kick_name, discord_id,
-                                 total_wager_usd, last_known_wager, tickets_awarded)
+                                 total_wager_usd, last_known_wager, tickets_awarded, platform)
                             VALUES
                                 (:period_id, :username, :kick_name, :discord_id,
-                                 :wager, :wager, 0)
+                                 :wager, :wager, 0, :platform)
                         """), {
                             'period_id': period_id,
                             'username': shuffle_username,
                             'kick_name': kick_name,
                             'discord_id': discord_id,
-                            'wager': current_wager
+                            'wager': current_wager,
+                            'platform': self.platform_name
                         })
                         
                         # No tickets awarded for initial/existing wagers
@@ -215,32 +244,32 @@ class ShuffleWagerTracker:
     
     async def _fetch_shuffle_data(self):
         """
-        Fetch wager data from Shuffle affiliate page
+        Fetch wager data from gambling platform affiliate page
         
         Returns:
             list: Array of user wager objects or None on failure
         """
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(SHUFFLE_AFFILIATE_URL, timeout=30) as response:
+                async with session.get(self.affiliate_url, timeout=30) as response:
                     if response.status != 200:
-                        logger.error(f"Shuffle API returned status {response.status}")
+                        logger.error(f"{self.platform_name.capitalize()} API returned status {response.status}")
                         return None
                     
                     # The page returns JSON array directly
                     data = await response.json()
                     
                     if not isinstance(data, list):
-                        logger.error(f"Unexpected Shuffle API response format: {type(data)}")
+                        logger.error(f"Unexpected {self.platform_name} API response format: {type(data)}")
                         return None
                     
                     return data
                     
         except asyncio.TimeoutError:
-            logger.error("Timeout fetching Shuffle affiliate data")
+            logger.error(f"Timeout fetching {self.platform_name} affiliate data")
             return None
         except Exception as e:
-            logger.error(f"Error fetching Shuffle data: {e}")
+            logger.error(f"Error fetching {self.platform_name} data: {e}")
             return None
     
     def link_shuffle_account(self, shuffle_username, kick_name, discord_id, verified=False, verified_by=None):
