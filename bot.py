@@ -24,7 +24,7 @@ import discord
 from discord.ext import commands, tasks
 
 # Raffle system imports
-from raffle_system.database import setup_raffle_database, get_current_period, create_new_period, migrate_add_created_at_to_shuffle_wagers
+from raffle_system.database import setup_raffle_database, get_current_period, create_new_period, migrate_add_created_at_to_shuffle_wagers, migrate_add_platform_to_wager_tables
 from raffle_system.watchtime_converter import setup_watchtime_converter
 from raffle_system.gifted_sub_tracker import setup_gifted_sub_handler
 from raffle_system.shuffle_tracker import setup_shuffle_tracker
@@ -2692,11 +2692,10 @@ async def command_list(ctx):
     embed.add_field(
         name="🎰 Monthly Raffle",
         value=(
-            "`!mytickets` - View your raffle tickets\n"
-            "`!tickets [@user]` - View someone's tickets\n"
-            "`!rafflestats` - View raffle statistics\n"
-            "`!raffleleaderboard` - View ticket leaderboard\n"
-            "`!shufflelink <username>` - Link Shuffle account\n"
+            "`!tickets` - View your raffle tickets\n"
+            "`!raffleboard` - View ticket leaderboard\n"
+            "`!raffleinfo` - View raffle period information\n"
+            "`!linkshuffle <username>` - Link Shuffle account\n"
             "**Who can use:** Everyone"
         ),
         inline=False
@@ -2734,11 +2733,13 @@ async def command_list(ctx):
     embed.add_field(
         name="🎲 Admin - Raffle Management",
         value=(
-            "`!rafflecreate` - Create new raffle period\n"
-            "`!raffledraw [count]` - Draw raffle winners\n"
-            "`!rafflereset` - Reset current period\n"
-            "`!awardtickets <@user> <amount> [reason]` - Award tickets\n"
-            "`!verifyshuffle <@user>` - Verify Shuffle link\n"
+            "`!rafflestart [start_day] [end_day]` - Start new raffle period\n"
+            "`!raffleend` - End current raffle period\n"
+            "`!raffledraw [prize]` - Draw raffle winner\n"
+            "`!rafflestats [@user]` - View raffle statistics\n"
+            "`!rafflegive <@user> <amount> [reason]` - Award tickets\n"
+            "`!raffleremove <@user> <amount> [reason]` - Remove tickets\n"
+            "`!verifyshuffle <@user> <shuffle_username>` - Verify Shuffle account\n"
             "`!convertwatchtime` - Manually convert watchtime\n"
             "`!fixwatchtime` - Fix watchtime tracking\n"
             "**Who can use:** Administrators only"
@@ -2750,9 +2751,10 @@ async def command_list(ctx):
     embed.add_field(
         name="🎰 Admin - Slot Requests",
         value=(
-            "`!slotcalls [on|off|status]` - Toggle slot call tracking\n"
-            "`!slotpanel` - Create slot request panel\n"
-            "`!callblacklist add/remove <username>` - Manage blacklist\n"
+            "`!slotpanel` - Create/update slot request panel\n"
+            "`!callblacklist add <username> [reason]` - Block user from requests\n"
+            "`!callblacklist remove <username>` - Unblock user\n"
+            "`!callblacklist list` - View blacklisted users\n"
             "**Who can use:** Administrators only"
         ),
         inline=False
@@ -2774,9 +2776,9 @@ async def command_list(ctx):
     embed.add_field(
         name="⚙️ Admin - Setup",
         value=(
-            "`!setup_link_panel [emoji]` - Create linking panel\n"
+            "`!createlinkpanel` - Create button-based linking panel\n"
             "`!post_link_info` - Post linking instructions\n"
-            "**Who can use:** Manage Server permission"
+            "**Who can use:** Administrator permission"
         ),
         inline=False
     )
@@ -3312,6 +3314,7 @@ async def on_ready():
             
             # Run migrations
             migrate_add_created_at_to_shuffle_wagers(engine)
+            migrate_add_platform_to_wager_tables(engine)
             
             # Ensure there's an active raffle period
             current_period = get_current_period(engine)

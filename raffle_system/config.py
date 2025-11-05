@@ -3,18 +3,33 @@ Raffle System Configuration
 All configurable parameters for the raffle system
 """
 
+import os
+
 # Ticket conversion rates
 WATCHTIME_TICKETS_PER_HOUR = 10      # 1 hour of watchtime = 10 tickets
 GIFTED_SUB_TICKETS = 15              # 1 gifted sub = 15 tickets
-SHUFFLE_TICKETS_PER_1000_USD = 20    # $1000 wagered = 20 tickets
+
+# Wager tracking configuration (environment variable based)
+# Each streamer sets their own affiliate URL and campaign code
+WAGER_PLATFORM_NAME = os.getenv("WAGER_PLATFORM_NAME", "shuffle").lower()  # Platform name (shuffle, stake, stakeus, etc.)
+WAGER_AFFILIATE_URL = os.getenv("WAGER_AFFILIATE_URL", "")  # Affiliate stats URL
+WAGER_CAMPAIGN_CODE = os.getenv("WAGER_CAMPAIGN_CODE", "lele")  # Affiliate code to track
+WAGER_TICKETS_PER_1000_USD = int(os.getenv("WAGER_TICKETS_PER_1000_USD", "20"))  # Tickets per $1000 wagered
+
+# Legacy support - if WAGER_AFFILIATE_URL not set, use old SHUFFLE variables
+if not WAGER_AFFILIATE_URL:
+    WAGER_AFFILIATE_URL = "https://affiliate.shuffle.com/stats/1755f751-33a9-4532-804e-b14b5c90236b"
+    WAGER_PLATFORM_NAME = "shuffle"
+
+# Backwards compatibility aliases
+SHUFFLE_AFFILIATE_URL = WAGER_AFFILIATE_URL
+SHUFFLE_CAMPAIGN_CODE = WAGER_CAMPAIGN_CODE
+SHUFFLE_TICKETS_PER_1000_USD = WAGER_TICKETS_PER_1000_USD
 
 # Update intervals (in seconds)
 WATCHTIME_CONVERSION_INTERVAL = 3600  # 1 hour
-SHUFFLE_CHECK_INTERVAL = 900          # 15 minutes
-
-# Shuffle.com configuration
-SHUFFLE_AFFILIATE_URL = "https://affiliate.shuffle.com/stats/1755f751-33a9-4532-804e-b14b5c90236b"
-SHUFFLE_CAMPAIGN_CODE = "lele"
+WAGER_CHECK_INTERVAL = int(os.getenv("WAGER_CHECK_INTERVAL", "900"))  # 15 minutes default
+SHUFFLE_CHECK_INTERVAL = WAGER_CHECK_INTERVAL  # Backwards compatibility
 
 # Monthly reset configuration
 RESET_DAY_OF_MONTH = 1  # 1st day of the month

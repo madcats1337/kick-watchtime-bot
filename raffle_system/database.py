@@ -432,6 +432,74 @@ def migrate_add_created_at_to_shuffle_wagers(engine):
         return False
 
 
+def migrate_add_platform_to_wager_tables(engine):
+    """
+    Migration: Add platform column to wager tracking tables
+    This allows the bot to work with multiple gambling platforms (Shuffle, Stake, etc.)
+    """
+    try:
+        from .config import WAGER_PLATFORM_NAME
+        
+        with engine.begin() as conn:
+            # Add platform column to raffle_shuffle_wagers if it doesn't exist
+            result = conn.execute(text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'raffle_shuffle_wagers' 
+                AND column_name = 'platform'
+            """))
+            
+            if not result.fetchone():
+                # Add the column
+                conn.execute(text("""
+                    ALTER TABLE raffle_shuffle_wagers
+                    ADD COLUMN platform VARCHAR(50) DEFAULT 'shuffle'
+                """))
+                
+                # Set platform for existing rows
+                conn.execute(text("""
+                    UPDATE raffle_shuffle_wagers
+                    SET platform = 'shuffle'
+                    WHERE platform IS NULL
+                """))
+                
+                logger.info("✅ Added 'platform' column to raffle_shuffle_wagers table")
+            else:
+                logger.info("✓ Column 'platform' already exists in raffle_shuffle_wagers")
+            
+            # Add platform column to raffle_shuffle_links if it doesn't exist
+            result2 = conn.execute(text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'raffle_shuffle_links' 
+                AND column_name = 'platform'
+            """))
+            
+            if not result2.fetchone():
+                # Add the column
+                conn.execute(text("""
+                    ALTER TABLE raffle_shuffle_links
+                    ADD COLUMN platform VARCHAR(50) DEFAULT 'shuffle'
+                """))
+                
+                # Set platform for existing rows
+                conn.execute(text("""
+                    UPDATE raffle_shuffle_links
+                    SET platform = 'shuffle'
+                    WHERE platform IS NULL
+                """))
+                
+                logger.info("✅ Added 'platform' column to raffle_shuffle_links table")
+            else:
+                logger.info("✓ Column 'platform' already exists in raffle_shuffle_links")
+            
+            return True
+            
+    except Exception as e:
+        logger.error(f"Migration failed: {e}")
+        return False
+
+
 if __name__ == "__main__":
     """
     Run this script directly to setup the database schema
