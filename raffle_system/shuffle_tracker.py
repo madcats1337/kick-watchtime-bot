@@ -137,7 +137,9 @@ class ShuffleWagerTracker:
                                 UPDATE raffle_shuffle_wagers
                                 SET 
                                     last_known_wager = :current_wager,
-                                    last_checked = CURRENT_TIMESTAMP
+                                    total_wager_usd = :current_wager,
+                                    last_checked = CURRENT_TIMESTAMP,
+                                    last_updated = CURRENT_TIMESTAMP
                                 WHERE period_id = :period_id AND shuffle_username = :username
                             """), {
                                 'period_id': period_id,
@@ -191,7 +193,8 @@ class ShuffleWagerTracker:
                                 SET 
                                     last_known_wager = :current_wager,
                                     total_wager_usd = :current_wager,
-                                    last_checked = CURRENT_TIMESTAMP
+                                    last_checked = CURRENT_TIMESTAMP,
+                                    last_updated = CURRENT_TIMESTAMP
                                 WHERE period_id = :period_id AND shuffle_username = :username
                             """), {
                                 'period_id': period_id,
