@@ -44,51 +44,74 @@ class RedisSubscriber:
         
         if action == 'toggle':
             enabled = data.get('enabled')
-            # Update your bot's internal state
-            # self.bot.slot_requests_enabled = enabled
+            # Announce in Kick chat
             if enabled:
-                await self.announce_in_chat("✅ Slot requests are now ENABLED! Use !slotrequest <slot_name>")
+                await self.announce_in_chat("✅ Slot requests are now ENABLED! Use !call <slot_name> or !sr <slot_name>")
             else:
                 await self.announce_in_chat("❌ Slot requests have been DISABLED")
+            
+            # Post update to Discord slot calls channel if available
+            if hasattr(self.bot, 'slot_calls_channel_id') and self.bot.slot_calls_channel_id:
+                try:
+                    channel = self.bot.get_channel(self.bot.slot_calls_channel_id)
+                    if channel:
+                        emoji = "✅" if enabled else "❌"
+                        status = "ENABLED" if enabled else "DISABLED"
+                        await channel.send(f"{emoji} **Slot Requests {status}** (changed via dashboard)")
+                except Exception as e:
+                    print(f"Failed to send Discord notification: {e}")
         
         elif action == 'pick':
+            slot_id = data.get('id')
             slot_call = data.get('slot_call')
             username = data.get('username')
-            # Announce the picked slot in chat
-            await self.announce_in_chat(f"🎰 Picked slot: {slot_call} (requested by {username})")
+            # Announce the picked slot in Kick chat
+            await self.announce_in_chat(f"🎰 PICKED: {slot_call} (requested by {username})")
+            
+            # Post to Discord
+            if hasattr(self.bot, 'slot_calls_channel_id') and self.bot.slot_calls_channel_id:
+                try:
+                    channel = self.bot.get_channel(self.bot.slot_calls_channel_id)
+                    if channel:
+                        await channel.send(f"🎰 **PICKED**: {slot_call} (requested by {username})")
+                except Exception as e:
+                    print(f"Failed to send Discord notification: {e}")
         
         elif action == 'update_max':
             max_requests = data.get('max_requests')
-            # Update bot's max requests setting
-            # self.bot.max_slot_requests = max_requests
             print(f"Updated max slot requests to {max_requests}")
     
     async def handle_timed_messages_event(self, action, data):
         """Handle timed message events from dashboard"""
         print(f"📥 Timed Messages Event: {action}")
         
+        # Reload timed messages from database to pick up changes
+        if hasattr(self.bot, 'timed_messages_manager') and self.bot.timed_messages_manager:
+            try:
+                await self.bot.timed_messages_manager.reload_messages()
+                print(f"✅ Timed messages reloaded from database")
+            except Exception as e:
+                print(f"⚠️ Failed to reload timed messages: {e}")
+        
         if action == 'create':
             message_id = data.get('id')
             message = data.get('message')
             interval = data.get('interval_minutes')
-            # Add to bot's timed messages schedule
-            print(f"Created timed message {message_id}: {message} (every {interval}m)")
+            print(f"✅ Created timed message #{message_id}: {message} (every {interval}m)")
         
         elif action == 'update':
             message_id = data.get('id')
-            # Update existing timed message
-            print(f"Updated timed message {message_id}")
+            print(f"✅ Updated timed message #{message_id}")
         
         elif action == 'delete':
             message_id = data.get('id')
-            # Remove from bot's timed messages schedule
-            print(f"Deleted timed message {message_id}")
+            print(f"✅ Deleted timed message #{message_id}")
         
         elif action == 'toggle':
             message_id = data.get('id')
             enabled = data.get('enabled')
-            # Enable/disable timed message
-            print(f"Toggled timed message {message_id}: {enabled}")
+            status = "enabled" if enabled else "disabled"
+            print(f"✅ Timed message #{message_id} {status}")
     
     async def handle_gtb_event(self, action, data):
         """Handle Guess the Balance events from dashboard"""
@@ -97,20 +120,57 @@ class RedisSubscriber:
         if action == 'open':
             session_id = data.get('session_id')
             opened_by = data.get('opened_by')
-            # Open GTB session in bot
+            # Announce in Kick chat
             await self.announce_in_chat(f"💰 Guess the Balance session #{session_id} is now OPEN! Use !gtb <amount> to guess!")
+            
+            # Post to Discord GTB channel if available
+            if hasattr(self.bot, 'gtb_channel_id') and self.bot.gtb_channel_id:
+                try:
+                    channel = self.bot.get_channel(self.bot.gtb_channel_id)
+                    if channel:
+                        await channel.send(f"💰 **GTB Session #{session_id} OPENED** by {opened_by}")
+                except Exception as e:
+                    print(f"Failed to send Discord notification: {e}")
         
         elif action == 'close':
             session_id = data.get('session_id')
-            # Close GTB session
+            # Announce in Kick chat
             await self.announce_in_chat(f"🔒 Guess the Balance session #{session_id} is now CLOSED! No more guesses allowed.")
+            
+            # Post to Discord
+            if hasattr(self.bot, 'gtb_channel_id') and self.bot.gtb_channel_id:
+                try:
+                    channel = self.bot.get_channel(self.bot.gtb_channel_id)
+                    if channel:
+                        await channel.send(f"🔒 **GTB Session #{session_id} CLOSED** - Guessing is over!")
+                except Exception as e:
+                    print(f"Failed to send Discord notification: {e}")
         
         elif action == 'set_result':
             session_id = data.get('session_id')
             result_amount = data.get('result_amount')
-            # Process winners and announce
+            # Announce result in Kick chat
             await self.announce_in_chat(f"🎉 GTB Result: ${result_amount:,.2f}! Calculating winners...")
-            # Your bot should calculate winners from gtb_guesses table and update gtb_winners
+            
+            # Calculate winners using GTB manager if available
+            if hasattr(self.bot, 'gtb_manager') and self.bot.gtb_manager:
+                try:
+                    winners = self.bot.gtb_manager.calculate_winners(session_id, result_amount)
+                    if winners and len(winners) > 0:
+                        winner_text = f"🥇 {winners[0]['username']}: ${winners[0]['guess_amount']:,.2f} (${winners[0]['difference']:,.2f} off)"
+                        await self.announce_in_chat(f"🏆 Winner: {winner_text}")
+                    print(f"✅ Calculated {len(winners)} winners for GTB #{session_id}")
+                except Exception as e:
+                    print(f"⚠️ Failed to calculate GTB winners: {e}")
+            
+            # Post to Discord
+            if hasattr(self.bot, 'gtb_channel_id') and self.bot.gtb_channel_id:
+                try:
+                    channel = self.bot.get_channel(self.bot.gtb_channel_id)
+                    if channel:
+                        await channel.send(f"🎉 **GTB Result Set**: ${result_amount:,.2f}")
+                except Exception as e:
+                    print(f"Failed to send Discord notification: {e}")
     
     async def handle_management_event(self, action, data):
         """Handle management events from dashboard"""
