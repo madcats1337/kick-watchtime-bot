@@ -284,6 +284,21 @@ class RedisSubscriber:
             end_date = data.get('end_date')
             await self.announce_in_chat(f"🎟️ New raffle period started! {start_date} to {end_date}")
     
+    async def handle_commands_event(self, action, data):
+        """Handle custom commands events from dashboard"""
+        print(f"📥 Commands Event: {action}")
+        
+        if action == 'reload':
+            # Trigger custom commands reload
+            if hasattr(self.bot, 'custom_commands_manager'):
+                try:
+                    await self.bot.custom_commands_manager.reload_commands()
+                    print("✅ Custom commands reloaded")
+                except Exception as e:
+                    print(f"⚠️ Failed to reload custom commands: {e}")
+            else:
+                print("⚠️ Custom commands manager not initialized")
+    
     async def announce_in_chat(self, message):
         """Send a message to the Kick chat"""
         try:
@@ -310,7 +325,8 @@ class RedisSubscriber:
             'dashboard:slot_requests',
             'dashboard:timed_messages',
             'dashboard:gtb',
-            'dashboard:management'
+            'dashboard:management',
+            'dashboard:commands'
         )
         
         print("🎧 Redis subscriber listening for dashboard events...")
@@ -336,6 +352,8 @@ class RedisSubscriber:
                             await self.handle_gtb_event(action, data)
                         elif channel == 'dashboard:management':
                             await self.handle_management_event(action, data)
+                        elif channel == 'dashboard:commands':
+                            await self.handle_commands_event(action, data)
                     
                     except json.JSONDecodeError as e:
                         print(f"Failed to decode message: {e}")
@@ -356,7 +374,8 @@ class RedisSubscriber:
                         'dashboard:slot_requests',
                         'dashboard:timed_messages',
                         'dashboard:gtb',
-                        'dashboard:management'
+                        'dashboard:management',
+                        'dashboard:commands'
                     )
 
 async def start_redis_subscriber(bot, send_message_callback=None):

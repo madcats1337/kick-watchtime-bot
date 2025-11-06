@@ -53,6 +53,6 @@ Everything is backwards compatible - existing Shuffle setups continue working wi
 
 ---
 
-If you notice any issues or have questions, ping an admin! 
+If you notice any issues or have questions, open a ticket! 
 
 Thanks for being part of the community! 🎮✨
