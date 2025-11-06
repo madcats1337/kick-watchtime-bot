@@ -3393,6 +3393,10 @@ async def on_ready():
                 kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None,
                 engine=engine
             )
+            # Store as bot attribute for Redis subscriber
+            bot.slot_call_tracker = slot_call_tracker
+            bot.slot_calls_channel_id = SLOT_CALLS_CHANNEL_ID
+            
             if SLOT_CALLS_CHANNEL_ID:
                 print(f"✅ Slot call tracker initialized (channel: {SLOT_CALLS_CHANNEL_ID})")
                 if KICK_BOT_USER_TOKEN:
@@ -3407,6 +3411,8 @@ async def on_ready():
             # Setup Guess the Balance manager
             global gtb_manager
             gtb_manager = GuessTheBalanceManager(engine)
+            bot.gtb_manager = gtb_manager  # Store as bot attribute for Redis subscriber
+            bot.gtb_channel_id = SLOT_CALLS_CHANNEL_ID  # Use same channel for GTB notifications
             print("✅ Guess the Balance system initialized")
             
             # Setup slot request panel
@@ -3441,6 +3447,9 @@ async def on_ready():
                 engine,
                 kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
             )
+            # Store as bot attribute for Redis subscriber
+            bot.timed_messages_manager = timed_messages_manager
+            
             if KICK_BOT_USER_TOKEN:
                 print(f"✅ Timed messages system initialized ({len(timed_messages_manager.messages)} messages)")
             else:
