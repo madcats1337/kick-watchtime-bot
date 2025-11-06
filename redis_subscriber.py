@@ -60,6 +60,14 @@ class RedisSubscriber:
                         await channel.send(f"{emoji} **Slot Requests {status}** (changed via dashboard)")
                 except Exception as e:
                     print(f"Failed to send Discord notification: {e}")
+            
+            # Update Discord panel
+            if hasattr(self.bot, 'slot_request_panel') and self.bot.slot_request_panel:
+                try:
+                    await self.bot.slot_request_panel.update_panel(force=True)
+                    print("✅ Slot request panel updated")
+                except Exception as e:
+                    print(f"⚠️ Failed to update slot panel: {e}")
         
         elif action == 'pick':
             slot_id = data.get('id')
@@ -76,10 +84,26 @@ class RedisSubscriber:
                         await channel.send(f"🎰 **PICKED**: {slot_call} (requested by {username})")
                 except Exception as e:
                     print(f"Failed to send Discord notification: {e}")
+            
+            # Update Discord panel
+            if hasattr(self.bot, 'slot_request_panel') and self.bot.slot_request_panel:
+                try:
+                    await self.bot.slot_request_panel.update_panel(force=True)
+                    print("✅ Slot request panel updated")
+                except Exception as e:
+                    print(f"⚠️ Failed to update slot panel: {e}")
         
         elif action == 'update_max':
             max_requests = data.get('max_requests')
             print(f"Updated max slot requests to {max_requests}")
+            
+            # Update Discord panel
+            if hasattr(self.bot, 'slot_request_panel') and self.bot.slot_request_panel:
+                try:
+                    await self.bot.slot_request_panel.update_panel(force=True)
+                    print("✅ Slot request panel updated")
+                except Exception as e:
+                    print(f"⚠️ Failed to update slot panel: {e}")
     
     async def handle_timed_messages_event(self, action, data):
         """Handle timed message events from dashboard"""
@@ -131,6 +155,14 @@ class RedisSubscriber:
                         await channel.send(f"💰 **GTB Session #{session_id} OPENED** by {opened_by}")
                 except Exception as e:
                     print(f"Failed to send Discord notification: {e}")
+            
+            # Update Discord GTB panel
+            if hasattr(self.bot, 'gtb_panel') and self.bot.gtb_panel:
+                try:
+                    await self.bot.gtb_panel.update_panel(force=True)
+                    print("✅ GTB panel updated")
+                except Exception as e:
+                    print(f"⚠️ Failed to update GTB panel: {e}")
         
         elif action == 'close':
             session_id = data.get('session_id')
@@ -145,6 +177,14 @@ class RedisSubscriber:
                         await channel.send(f"🔒 **GTB Session #{session_id} CLOSED** - Guessing is over!")
                 except Exception as e:
                     print(f"Failed to send Discord notification: {e}")
+            
+            # Update Discord GTB panel
+            if hasattr(self.bot, 'gtb_panel') and self.bot.gtb_panel:
+                try:
+                    await self.bot.gtb_panel.update_panel(force=True)
+                    print("✅ GTB panel updated")
+                except Exception as e:
+                    print(f"⚠️ Failed to update GTB panel: {e}")
         
         elif action == 'set_result':
             session_id = data.get('session_id')
@@ -171,6 +211,14 @@ class RedisSubscriber:
                         await channel.send(f"🎉 **GTB Result Set**: ${result_amount:,.2f}")
                 except Exception as e:
                     print(f"Failed to send Discord notification: {e}")
+            
+            # Update Discord GTB panel
+            if hasattr(self.bot, 'gtb_panel') and self.bot.gtb_panel:
+                try:
+                    await self.bot.gtb_panel.update_panel(force=True)
+                    print("✅ GTB panel updated")
+                except Exception as e:
+                    print(f"⚠️ Failed to update GTB panel: {e}")
     
     async def handle_management_event(self, action, data):
         """Handle management events from dashboard"""

@@ -3422,6 +3422,8 @@ async def on_ready():
                 slot_call_tracker,
                 kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
             )
+            # Store as bot attribute for Redis subscriber
+            bot.slot_request_panel = slot_panel
             print(f"✅ Slot request panel system initialized")
             
             # Setup GTB panel
@@ -3431,6 +3433,8 @@ async def on_ready():
                 gtb_manager,
                 kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
             )
+            # Store as bot attribute for Redis subscriber
+            bot.gtb_panel = gtb_panel
             print(f"✅ Guess the Balance panel initialized")
             
             # Setup link panel (button-based OAuth linking)
