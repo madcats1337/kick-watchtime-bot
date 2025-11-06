@@ -64,13 +64,17 @@ class RedisSubscriber:
             # Update Discord panel
             if hasattr(self.bot, 'slot_request_panel') and self.bot.slot_request_panel:
                 try:
-                    success = await self.bot.slot_request_panel.update_panel(force=True)
+                    panel = self.bot.slot_request_panel
+                    print(f"🔍 Panel IDs: message_id={panel.panel_message_id}, channel_id={panel.panel_channel_id}")
+                    success = await panel.update_panel(force=True)
                     if success:
                         print("✅ Slot request panel updated in Discord")
                     else:
                         print("ℹ️  Slot panel not created yet (Discord admin: use !slotpanel to create)")
                 except Exception as e:
                     print(f"⚠️ Failed to update slot panel: {e}")
+                    import traceback
+                    traceback.print_exc()
         
         elif action == 'pick':
             slot_id = data.get('id')
