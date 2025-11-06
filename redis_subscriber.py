@@ -67,7 +67,8 @@ class RedisSubscriber:
                     panel = self.bot.slot_request_panel
                     # Refresh tracker state from database before updating panel
                     if hasattr(panel, 'tracker') and panel.tracker:
-                        panel.tracker._load_enabled_state()  # Reload enabled state from DB
+                        panel.tracker.enabled = panel.tracker._load_enabled_state()  # Reload enabled state from DB
+                        panel.tracker.max_requests_per_user = panel.tracker._load_max_requests()  # Reload max requests too
                     print(f"🔍 Panel IDs: message_id={panel.panel_message_id}, channel_id={panel.panel_channel_id}")
                     success = await panel.update_panel(force=True)
                     if success:
@@ -101,7 +102,8 @@ class RedisSubscriber:
                     panel = self.bot.slot_request_panel
                     # Refresh tracker state from database before updating panel
                     if hasattr(panel, 'tracker') and panel.tracker:
-                        panel.tracker._load_enabled_state()  # Reload enabled state from DB
+                        panel.tracker.enabled = panel.tracker._load_enabled_state()  # Reload enabled state from DB
+                        panel.tracker.max_requests_per_user = panel.tracker._load_max_requests()  # Reload max requests too
                     success = await panel.update_panel(force=True)
                     if success:
                         print("✅ Slot request panel updated in Discord")
@@ -120,7 +122,8 @@ class RedisSubscriber:
                     panel = self.bot.slot_request_panel
                     # Refresh tracker state from database before updating panel
                     if hasattr(panel, 'tracker') and panel.tracker:
-                        panel.tracker._load_enabled_state()  # Reload enabled state from DB
+                        panel.tracker.enabled = panel.tracker._load_enabled_state()  # Reload enabled state from DB
+                        panel.tracker.max_requests_per_user = panel.tracker._load_max_requests()  # Reload max requests too
                     success = await panel.update_panel(force=True)
                     if success:
                         print("✅ Slot request panel updated in Discord")
