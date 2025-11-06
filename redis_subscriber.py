@@ -146,7 +146,8 @@ class RedisSubscriber:
             return
         
         # Subscribe to all dashboard channels
-        self.pubsub.subscribe(
+        await asyncio.to_thread(
+            self.pubsub.subscribe,
             'dashboard:slot_requests',
             'dashboard:timed_messages',
             'dashboard:gtb',
@@ -155,9 +156,12 @@ class RedisSubscriber:
         
         print("🎧 Redis subscriber listening for dashboard events...")
         
-        try:
-            for message in self.pubsub.listen():
-                if message['type'] == 'message':
+        while True:
+            try:
+                # Run blocking listen() in a thread to avoid blocking event loop
+                message = await asyncio.to_thread(self.pubsub.get_message, timeout=1.0)
+                
+                if message and message['type'] == 'message':
                     channel = message['channel']
                     try:
                         payload = json.loads(message['data'])
@@ -178,13 +182,23 @@ class RedisSubscriber:
                         print(f"Failed to decode message: {e}")
                     except Exception as e:
                         print(f"Error handling message: {e}")
-        
-        except Exception as e:
-            print(f"Redis listener error: {e}")
-            # Reconnect after delay
-            await asyncio.sleep(5)
-            if self.enabled:
-                await self.listen()
+                
+                # Small delay to prevent busy loop
+                await asyncio.sleep(0.01)
+            
+            except Exception as e:
+                print(f"Redis listener error: {e}")
+                # Reconnect after delay
+                await asyncio.sleep(5)
+                if self.enabled:
+                    # Resubscribe after error
+                    await asyncio.to_thread(
+                        self.pubsub.subscribe,
+                        'dashboard:slot_requests',
+                        'dashboard:timed_messages',
+                        'dashboard:gtb',
+                        'dashboard:management'
+                    )
 
 async def start_redis_subscriber(bot):
     """Start the Redis subscriber in the background"""
