@@ -65,6 +65,9 @@ class RedisSubscriber:
             if hasattr(self.bot, 'slot_request_panel') and self.bot.slot_request_panel:
                 try:
                     panel = self.bot.slot_request_panel
+                    # Refresh tracker state from database before updating panel
+                    if hasattr(panel, 'tracker') and panel.tracker:
+                        panel.tracker._load_enabled_state()  # Reload enabled state from DB
                     print(f"🔍 Panel IDs: message_id={panel.panel_message_id}, channel_id={panel.panel_channel_id}")
                     success = await panel.update_panel(force=True)
                     if success:
@@ -95,7 +98,11 @@ class RedisSubscriber:
             # Update Discord panel
             if hasattr(self.bot, 'slot_request_panel') and self.bot.slot_request_panel:
                 try:
-                    success = await self.bot.slot_request_panel.update_panel(force=True)
+                    panel = self.bot.slot_request_panel
+                    # Refresh tracker state from database before updating panel
+                    if hasattr(panel, 'tracker') and panel.tracker:
+                        panel.tracker._load_enabled_state()  # Reload enabled state from DB
+                    success = await panel.update_panel(force=True)
                     if success:
                         print("✅ Slot request panel updated in Discord")
                     else:
@@ -110,7 +117,11 @@ class RedisSubscriber:
             # Update Discord panel
             if hasattr(self.bot, 'slot_request_panel') and self.bot.slot_request_panel:
                 try:
-                    success = await self.bot.slot_request_panel.update_panel(force=True)
+                    panel = self.bot.slot_request_panel
+                    # Refresh tracker state from database before updating panel
+                    if hasattr(panel, 'tracker') and panel.tracker:
+                        panel.tracker._load_enabled_state()  # Reload enabled state from DB
+                    success = await panel.update_panel(force=True)
                     if success:
                         print("✅ Slot request panel updated in Discord")
                     else:
