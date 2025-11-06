@@ -64,8 +64,11 @@ class RedisSubscriber:
             # Update Discord panel
             if hasattr(self.bot, 'slot_request_panel') and self.bot.slot_request_panel:
                 try:
-                    await self.bot.slot_request_panel.update_panel(force=True)
-                    print("✅ Slot request panel updated")
+                    success = await self.bot.slot_request_panel.update_panel(force=True)
+                    if success:
+                        print("✅ Slot request panel updated in Discord")
+                    else:
+                        print("ℹ️  Slot panel not created yet (Discord admin: use !slotpanel to create)")
                 except Exception as e:
                     print(f"⚠️ Failed to update slot panel: {e}")
         
@@ -88,8 +91,11 @@ class RedisSubscriber:
             # Update Discord panel
             if hasattr(self.bot, 'slot_request_panel') and self.bot.slot_request_panel:
                 try:
-                    await self.bot.slot_request_panel.update_panel(force=True)
-                    print("✅ Slot request panel updated")
+                    success = await self.bot.slot_request_panel.update_panel(force=True)
+                    if success:
+                        print("✅ Slot request panel updated in Discord")
+                    else:
+                        print("ℹ️  Slot panel not created yet (Discord admin: use !slotpanel to create)")
                 except Exception as e:
                     print(f"⚠️ Failed to update slot panel: {e}")
         
@@ -100,8 +106,11 @@ class RedisSubscriber:
             # Update Discord panel
             if hasattr(self.bot, 'slot_request_panel') and self.bot.slot_request_panel:
                 try:
-                    await self.bot.slot_request_panel.update_panel(force=True)
-                    print("✅ Slot request panel updated")
+                    success = await self.bot.slot_request_panel.update_panel(force=True)
+                    if success:
+                        print("✅ Slot request panel updated in Discord")
+                    else:
+                        print("ℹ️  Slot panel not created yet (Discord admin: use !slotpanel to create)")
                 except Exception as e:
                     print(f"⚠️ Failed to update slot panel: {e}")
     
@@ -159,8 +168,11 @@ class RedisSubscriber:
             # Update Discord GTB panel
             if hasattr(self.bot, 'gtb_panel') and self.bot.gtb_panel:
                 try:
-                    await self.bot.gtb_panel.update_panel(force=True)
-                    print("✅ GTB panel updated")
+                    success = await self.bot.gtb_panel.update_panel(force=True)
+                    if success:
+                        print("✅ GTB panel updated in Discord")
+                    else:
+                        print("ℹ️  GTB panel not created yet (Discord admin: use !creategtbpanel to create)")
                 except Exception as e:
                     print(f"⚠️ Failed to update GTB panel: {e}")
         
@@ -181,8 +193,11 @@ class RedisSubscriber:
             # Update Discord GTB panel
             if hasattr(self.bot, 'gtb_panel') and self.bot.gtb_panel:
                 try:
-                    await self.bot.gtb_panel.update_panel(force=True)
-                    print("✅ GTB panel updated")
+                    success = await self.bot.gtb_panel.update_panel(force=True)
+                    if success:
+                        print("✅ GTB panel updated in Discord")
+                    else:
+                        print("ℹ️  GTB panel not created yet (Discord admin: use !creategtbpanel to create)")
                 except Exception as e:
                     print(f"⚠️ Failed to update GTB panel: {e}")
         
@@ -215,8 +230,11 @@ class RedisSubscriber:
             # Update Discord GTB panel
             if hasattr(self.bot, 'gtb_panel') and self.bot.gtb_panel:
                 try:
-                    await self.bot.gtb_panel.update_panel(force=True)
-                    print("✅ GTB panel updated")
+                    success = await self.bot.gtb_panel.update_panel(force=True)
+                    if success:
+                        print("✅ GTB panel updated in Discord")
+                    else:
+                        print("ℹ️  GTB panel not created yet (Discord admin: use !creategtbpanel to create)")
                 except Exception as e:
                     print(f"⚠️ Failed to update GTB panel: {e}")
     
