@@ -228,13 +228,25 @@ class RedisSubscriber:
             # Calculate winners using GTB manager if available
             if hasattr(self.bot, 'gtb_manager') and self.bot.gtb_manager:
                 try:
-                    winners = self.bot.gtb_manager.calculate_winners(session_id, result_amount)
-                    if winners and len(winners) > 0:
-                        winner_text = f"🥇 {winners[0]['username']}: ${winners[0]['guess_amount']:,.2f} (${winners[0]['difference']:,.2f} off)"
-                        await self.announce_in_chat(f"🏆 Winner: {winner_text}")
-                    print(f"✅ Calculated {len(winners)} winners for GTB #{session_id}")
+                    success, message, winners = self.bot.gtb_manager.set_result(result_amount)
+                    if success and winners and len(winners) > 0:
+                        # Announce top 3 winners
+                        winner_messages = []
+                        for winner in winners[:3]:
+                            rank_emoji = "🥇" if winner['rank'] == 1 else "🥈" if winner['rank'] == 2 else "🥉"
+                            winner_messages.append(
+                                f"{rank_emoji} {winner['username']}: ${winner['guess']:,.2f} (${winner['difference']:,.2f} off)"
+                            )
+                        
+                        # Announce all winners in one message
+                        await self.announce_in_chat(f"🏆 Winners: " + " | ".join(winner_messages))
+                        print(f"✅ Announced {len(winners)} GTB winners in Kick chat")
+                    else:
+                        print(f"⚠️ GTB result set but no winners: {message}")
                 except Exception as e:
                     print(f"⚠️ Failed to calculate GTB winners: {e}")
+                    import traceback
+                    traceback.print_exc()
             
             # Post to Discord
             if hasattr(self.bot, 'gtb_channel_id') and self.bot.gtb_channel_id:
