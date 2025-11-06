@@ -1045,7 +1045,7 @@ async def kick_chat_loop(channel_name: str):
                                             else:
                                                 # Send usage message when no content is provided
                                                 try:
-                                                    await send_kick_message(f"@{username} Please specify a slot! Usage: !call <slot_name> or !sr <slot_name>")
+                                                    await send_kick_message(f"@{username} Please specify a slot!")
                                                     print(f"[Slot Call] Sent usage instructions to {username}")
                                                 except Exception as e:
                                                     print(f"Failed to send usage message to {username}: {e}")
