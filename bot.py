@@ -15,6 +15,7 @@ from typing import Optional
 from core.kick_api import USER_AGENTS
 from datetime import datetime, timedelta, timezone
 from functools import partial
+from redis_subscriber import start_redis_subscriber
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text # type: ignore
@@ -3242,7 +3243,16 @@ async def on_ready():
     
     # Attach helper function to bot so other cogs can access it
     bot.get_active_chatters_count = get_active_chatters_count
+
+    # Start Redis subscriber with Kick message callback
+    kick_callback = send_kick_message if KICK_BOT_USER_TOKEN else None
+    asyncio.create_task(start_redis_subscriber(bot, kick_callback))
     
+    if kick_callback:
+        print("✅ Redis subscriber will send messages to Kick chat")
+    else:
+        print("ℹ️  Redis subscriber started (messages logged only - set KICK_BOT_USER_TOKEN to enable Kick chat)")
+
     # Auto-migrate database: add expires_at column if missing
     if engine:
         try:

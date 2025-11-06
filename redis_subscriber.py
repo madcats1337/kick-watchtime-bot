@@ -20,8 +20,9 @@ import asyncio
 from datetime import datetime
 
 class RedisSubscriber:
-    def __init__(self, bot):
+    def __init__(self, bot, send_message_callback=None):
         self.bot = bot
+        self.send_message_callback = send_message_callback
         self.redis_url = os.getenv('REDIS_URL')
         self.enabled = False
         
@@ -130,14 +131,16 @@ class RedisSubscriber:
     async def announce_in_chat(self, message):
         """Send a message to the Kick chat"""
         try:
-            # Replace with your actual Kick API send message method
-            # Example: await self.bot.kick_api.send_message(message)
-            print(f"💬 Would announce in chat: {message}")
-            # If you have a kick_api instance in your bot:
-            # if hasattr(self.bot, 'kick_api') and hasattr(self.bot.kick_api, 'send_message'):
-            #     await self.bot.kick_api.send_message(message)
+            if self.send_message_callback:
+                success = await self.send_message_callback(message)
+                if success:
+                    print(f"💬 Sent to Kick chat: {message}")
+                else:
+                    print(f"⚠️ Failed to send to Kick chat: {message}")
+            else:
+                print(f"💬 [No Kick callback] Would announce: {message}")
         except Exception as e:
-            print(f"Failed to announce in chat: {e}")
+            print(f"❌ Error sending to Kick chat: {e}")
     
     async def listen(self):
         """Listen for events on all dashboard channels"""
@@ -200,9 +203,15 @@ class RedisSubscriber:
                         'dashboard:management'
                     )
 
-async def start_redis_subscriber(bot):
-    """Start the Redis subscriber in the background"""
-    subscriber = RedisSubscriber(bot)
+async def start_redis_subscriber(bot, send_message_callback=None):
+    """
+    Start the Redis subscriber in the background
+    
+    Args:
+        bot: Discord bot instance
+        send_message_callback: Async function to send messages to Kick chat (e.g., send_kick_message)
+    """
+    subscriber = RedisSubscriber(bot, send_message_callback)
     
     if subscriber.enabled:
         # Run the listener in the background
