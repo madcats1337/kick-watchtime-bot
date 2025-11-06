@@ -47,6 +47,9 @@ from features.games.gtb_panel import setup_gtb_panel
 # Link panel import
 from features.linking.link_panel import setup_link_panel_system
 
+# Custom commands import
+from features.custom_commands import CustomCommandsManager
+
 # -------------------------
 # Command checks and utils
 # -------------------------
@@ -1015,6 +1018,15 @@ async def kick_chat_loop(channel_name: str):
                                     print(f"[Kick] {username}: {content_text}")
                                     if watchtime_debug_enabled and is_new_viewer:
                                         print(f"[Watchtime Debug] New viewer: {username_lower} (total: {len(active_viewers)})")
+                                    
+                                    # Check for custom commands first (they get priority)
+                                    if hasattr(bot, 'custom_commands_manager') and bot.custom_commands_manager:
+                                        try:
+                                            handled = await bot.custom_commands_manager.handle_message(content_text, username)
+                                            if handled:
+                                                continue  # Command was handled, skip other processing
+                                        except Exception as e:
+                                            print(f"⚠️ Error handling custom command: {e}")
                                     
                                     # Handle slot call commands (!call or !sr)
                                     content_stripped = content_text.strip()
@@ -3465,6 +3477,19 @@ async def on_ready():
                 print(f"✅ Timed messages system initialized ({len(timed_messages_manager.messages)} messages)")
             else:
                 print("ℹ️  Timed messages disabled (set KICK_BOT_USER_TOKEN to enable)")
+            
+            # Setup custom commands manager
+            if KICK_BOT_USER_TOKEN:
+                custom_commands_manager = CustomCommandsManager(
+                    bot,
+                    send_message_callback=send_kick_message
+                )
+                await custom_commands_manager.start()
+                # Store as bot attribute for Redis subscriber
+                bot.custom_commands_manager = custom_commands_manager
+                print(f"✅ Custom commands system initialized")
+            else:
+                print("ℹ️  Custom commands disabled (set KICK_BOT_USER_TOKEN to enable)")
             
         except Exception as e:
             print(f"⚠️ Failed to initialize raffle system: {e}")
