@@ -222,41 +222,62 @@ class RedisSubscriber:
         elif action == 'set_result':
             session_id = data.get('session_id')
             result_amount = data.get('result_amount')
+            winners = data.get('winners', [])  # Get winners from dashboard
+            
             # Announce result in Kick chat
             await self.announce_in_chat(f"🎉 GTB Result: ${result_amount:,.2f}! Calculating winners...")
             
-            # Calculate winners using GTB manager if available
-            if hasattr(self.bot, 'gtb_manager') and self.bot.gtb_manager:
-                try:
-                    print(f"🔍 Calling set_result with amount: ${result_amount:,.2f}")
-                    success, message, winners = self.bot.gtb_manager.set_result(result_amount)
-                    print(f"🔍 set_result returned - success: {success}, message: {message}, winners: {winners}")
-                    
-                    if success and winners and len(winners) > 0:
-                        # Small delay to ensure messages don't get combined
-                        await asyncio.sleep(1)
-                        
-                        # Announce top 3 winners
-                        winner_messages = []
-                        for winner in winners[:3]:
-                            rank_emoji = "🥇" if winner['rank'] == 1 else "🥈" if winner['rank'] == 2 else "🥉"
-                            winner_messages.append(
-                                f"{rank_emoji} {winner['username']}: ${winner['guess']:,.2f} (${winner['difference']:,.2f} off)"
-                            )
-                        
-                        # Announce all winners in one message
-                        winner_text = f"🏆 Winners: " + " | ".join(winner_messages)
-                        print(f"📢 Announcing winners in Kick chat: {winner_text}")
-                        await self.announce_in_chat(winner_text)
-                        print(f"✅ Announced {len(winners)} GTB winners in Kick chat")
-                    else:
-                        print(f"⚠️ GTB result set but no winners - success: {success}, message: {message}, winner count: {len(winners) if winners else 0}")
-                except Exception as e:
-                    print(f"⚠️ Failed to calculate GTB winners: {e}")
-                    import traceback
-                    traceback.print_exc()
+            # If winners were provided by dashboard, use them
+            if winners and len(winners) > 0:
+                # Small delay to ensure messages don't get combined
+                await asyncio.sleep(1)
+                
+                # Announce top 3 winners
+                winner_messages = []
+                for winner in winners[:3]:
+                    rank_emoji = "🥇" if winner['rank'] == 1 else "🥈" if winner['rank'] == 2 else "🥉"
+                    winner_messages.append(
+                        f"{rank_emoji} {winner['username']}: ${winner['guess']:,.2f} (${winner['difference']:,.2f} off)"
+                    )
+                
+                # Announce all winners in one message
+                winner_text = f"🏆 Winners: " + " | ".join(winner_messages)
+                print(f"📢 Announcing winners in Kick chat: {winner_text}")
+                await self.announce_in_chat(winner_text)
+                print(f"✅ Announced {len(winners)} GTB winners in Kick chat")
             else:
-                print(f"⚠️ GTB manager not available - hasattr: {hasattr(self.bot, 'gtb_manager')}, manager: {getattr(self.bot, 'gtb_manager', None)}")
+                # Fallback: Calculate winners using GTB manager if available
+                if hasattr(self.bot, 'gtb_manager') and self.bot.gtb_manager:
+                    try:
+                        print(f"🔍 No winners provided, calling set_result with amount: ${result_amount:,.2f}")
+                        success, message, calculated_winners = self.bot.gtb_manager.set_result(result_amount)
+                        print(f"🔍 set_result returned - success: {success}, message: {message}, winners: {calculated_winners}")
+                        
+                        if success and calculated_winners and len(calculated_winners) > 0:
+                            # Small delay to ensure messages don't get combined
+                            await asyncio.sleep(1)
+                            
+                            # Announce top 3 winners
+                            winner_messages = []
+                            for winner in calculated_winners[:3]:
+                                rank_emoji = "🥇" if winner['rank'] == 1 else "🥈" if winner['rank'] == 2 else "🥉"
+                                winner_messages.append(
+                                    f"{rank_emoji} {winner['username']}: ${winner['guess']:,.2f} (${winner['difference']:,.2f} off)"
+                                )
+                            
+                            # Announce all winners in one message
+                            winner_text = f"🏆 Winners: " + " | ".join(winner_messages)
+                            print(f"📢 Announcing winners in Kick chat: {winner_text}")
+                            await self.announce_in_chat(winner_text)
+                            print(f"✅ Announced {len(calculated_winners)} GTB winners in Kick chat")
+                        else:
+                            print(f"⚠️ GTB result set but no winners - success: {success}, message: {message}, winner count: {len(calculated_winners) if calculated_winners else 0}")
+                    except Exception as e:
+                        print(f"⚠️ Failed to calculate GTB winners: {e}")
+                        import traceback
+                        traceback.print_exc()
+                else:
+                    print(f"⚠️ GTB manager not available and no winners provided in message")
             
             # Post to Discord
             if hasattr(self.bot, 'gtb_channel_id') and self.bot.gtb_channel_id:
