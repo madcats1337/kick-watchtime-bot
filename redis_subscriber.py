@@ -228,8 +228,14 @@ class RedisSubscriber:
             # Calculate winners using GTB manager if available
             if hasattr(self.bot, 'gtb_manager') and self.bot.gtb_manager:
                 try:
+                    print(f"🔍 Calling set_result with amount: ${result_amount:,.2f}")
                     success, message, winners = self.bot.gtb_manager.set_result(result_amount)
+                    print(f"🔍 set_result returned - success: {success}, message: {message}, winners: {winners}")
+                    
                     if success and winners and len(winners) > 0:
+                        # Small delay to ensure messages don't get combined
+                        await asyncio.sleep(1)
+                        
                         # Announce top 3 winners
                         winner_messages = []
                         for winner in winners[:3]:
@@ -239,14 +245,18 @@ class RedisSubscriber:
                             )
                         
                         # Announce all winners in one message
-                        await self.announce_in_chat(f"🏆 Winners: " + " | ".join(winner_messages))
+                        winner_text = f"🏆 Winners: " + " | ".join(winner_messages)
+                        print(f"📢 Announcing winners in Kick chat: {winner_text}")
+                        await self.announce_in_chat(winner_text)
                         print(f"✅ Announced {len(winners)} GTB winners in Kick chat")
                     else:
-                        print(f"⚠️ GTB result set but no winners: {message}")
+                        print(f"⚠️ GTB result set but no winners - success: {success}, message: {message}, winner count: {len(winners) if winners else 0}")
                 except Exception as e:
                     print(f"⚠️ Failed to calculate GTB winners: {e}")
                     import traceback
                     traceback.print_exc()
+            else:
+                print(f"⚠️ GTB manager not available - hasattr: {hasattr(self.bot, 'gtb_manager')}, manager: {getattr(self.bot, 'gtb_manager', None)}")
             
             # Post to Discord
             if hasattr(self.bot, 'gtb_channel_id') and self.bot.gtb_channel_id:
