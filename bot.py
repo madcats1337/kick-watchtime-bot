@@ -1097,12 +1097,34 @@ async def kick_chat_loop(channel_name: str):
                             
                             # Handle subscription events (both regular and gifted)
                             # Kick may use different event types for subs
-                            if event_type in [
+                            subscription_event_types = [
                                 "App\\Events\\GiftedSubscriptionsEvent",
+                                "App\\Events\\LuckyUsersWhoGotGiftSubscriptionsEvent",
                                 "App\\Events\\SubscriptionEvent",
                                 "App\\Events\\ChatMessageEvent"  # Sometimes subs come as special chat messages
-                            ]:
+                            ]
+                            
+                            # DEBUG: Check if event type should match
+                            if event_type and "Subscription" in event_type:
+                                print(f"[SUB CHECK] Event type: {event_type}")
+                                print(f"[SUB CHECK] Event type repr: {repr(event_type)}")
+                                print(f"[SUB CHECK] In list: {event_type in subscription_event_types}")
+                                print(f"[SUB CHECK] Expected: {subscription_event_types[1]}")
+                                print(f"[SUB CHECK] Expected repr: {repr(subscription_event_types[1])}")
+                                print(f"[SUB CHECK] Match: {event_type == subscription_event_types[1]}")
+                            
+                            if event_type in subscription_event_types:
+                                print(f"[SUB HANDLER] Entering subscription handler for event type: {event_type}")
+                                print(f"[SUB HANDLER] gifted_sub_tracker initialized: {gifted_sub_tracker is not None}")
+                                
                                 event_data = json.loads(data.get("data", "{}"))
+                                
+                                # DEBUG: Log subscription events
+                                if event_type == "App\\Events\\LuckyUsersWhoGotGiftSubscriptionsEvent":
+                                    print(f"[SUB DEBUG] LuckyUsersWhoGotGiftSubscriptionsEvent detected!")
+                                    print(f"[SUB DEBUG] Gifter: {event_data.get('gifter_username')}")
+                                    print(f"[SUB DEBUG] Recipients: {event_data.get('usernames')}")
+                                    print(f"[SUB DEBUG] Full event data: {json.dumps(event_data, indent=2)}")
                                 
                                 # DEBUG: Check what ChatMessageEvent contains
                                 if event_type == "App\\Events\\ChatMessageEvent":
@@ -1114,10 +1136,15 @@ async def kick_chat_loop(channel_name: str):
                                 # Check if this is any type of subscription
                                 message_type = event_data.get("type")
                                 is_subscription = (
+                                    event_type == "App\\Events\\LuckyUsersWhoGotGiftSubscriptionsEvent" or
+                                    event_type == "App\\Events\\GiftedSubscriptionsEvent" or
+                                    event_type == "App\\Events\\SubscriptionEvent" or
                                     "gift" in str(message_type).lower() or
                                     "subscription" in str(message_type).lower() or
                                     "sub" in str(message_type).lower() or
                                     event_data.get("gifted_usernames") is not None or
+                                    event_data.get("usernames") is not None or  # LuckyUsersWhoGotGiftSubscriptionsEvent
+                                    event_data.get("gifter_username") is not None or  # LuckyUsersWhoGotGiftSubscriptionsEvent
                                     event_data.get("gift_count") is not None or
                                     event_data.get("months") is not None  # Regular subs often have months field
                                 )
@@ -1125,10 +1152,14 @@ async def kick_chat_loop(channel_name: str):
                                 if is_subscription:
                                     print(f"[SUB DEBUG] Detected subscription! Type: {message_type}")
                                     print(f"[SUB DEBUG] Event data: {json.dumps(event_data, indent=2)[:800]}")
+                                else:
+                                    print(f"[SUB DEBUG] NOT detected as subscription. message_type: {message_type}")
                                 
                                 if is_subscription and gifted_sub_tracker:
+                                    print(f"[SUB HANDLER] Processing subscription with gifted_sub_tracker")
                                     # Handle any subscription event (gifted or regular)
                                     result = await gifted_sub_tracker.handle_gifted_sub_event(event_data)
+                                    print(f"[SUB HANDLER] Result: {result}")
                                     
                                     if result['status'] == 'success':
                                         sub_type = "gifted" if result.get('gift_count', 1) > 1 else "subscribed"
@@ -1140,6 +1171,8 @@ async def kick_chat_loop(channel_name: str):
                                         pass
                                     else:
                                         print(f"[Raffle] ⚠️ Failed to process gifted sub: {result}")
+                                elif is_subscription and not gifted_sub_tracker:
+                                    print(f"[SUB HANDLER] ⚠️ Subscription detected but gifted_sub_tracker is None!")
                                     
                         except json.JSONDecodeError:
                             pass

@@ -36,6 +36,13 @@ class GiftedSubTracker:
             "months": 1        # For regular subs (optional)
         }
         
+        OR for LuckyUsersWhoGotGiftSubscriptionsEvent:
+        {
+            "channel": {...},
+            "usernames": ["user1", "user2", "user3"],
+            "gifter_username": "generous_viewer"
+        }
+        
         Args:
             event_data: Parsed JSON data from the Kick websocket event
             
@@ -46,24 +53,35 @@ class GiftedSubTracker:
             # Extract event details
             event_id = event_data.get("id")
             
-            # For regular subs, the subscriber might be in "sender" or directly in event
-            sender = event_data.get("sender", {})
-            gifter_kick_name = sender.get("username") or event_data.get("username")
-            
-            # Try different possible field names for gift count
-            gift_count = (
-                event_data.get("gift_count") or
-                event_data.get("quantity") or
-                event_data.get("count") or
-                event_data.get("gifted_usernames", [])  # If it's an array of recipients
-            )
-            
-            # If gift_count is a list (recipients), count the length
-            if isinstance(gift_count, list):
-                gift_count = len(gift_count)
-            elif gift_count is None:
-                # For regular subs (not gifted), count as 1
-                gift_count = 1
+            # Handle different event formats
+            # LuckyUsersWhoGotGiftSubscriptionsEvent format
+            if "gifter_username" in event_data:
+                logger.info(f"[GiftedSubTracker] Processing LuckyUsersWhoGotGiftSubscriptionsEvent")
+                gifter_kick_name = event_data.get("gifter_username")
+                # usernames is an array of recipients
+                recipients = event_data.get("usernames", [])
+                # If recipients list is empty or None, default to 1 sub
+                gift_count = len(recipients) if (recipients and len(recipients) > 0) else 1
+                logger.info(f"[GiftedSubTracker] Gifter: {gifter_kick_name}, Recipients: {recipients}, Count: {gift_count}")
+            else:
+                # For regular subs, the subscriber might be in "sender" or directly in event
+                sender = event_data.get("sender", {})
+                gifter_kick_name = sender.get("username") or event_data.get("username")
+                
+                # Try different possible field names for gift count
+                gift_count = (
+                    event_data.get("gift_count") or
+                    event_data.get("quantity") or
+                    event_data.get("count") or
+                    event_data.get("gifted_usernames", [])  # If it's an array of recipients
+                )
+                
+                # If gift_count is a list (recipients), count the length
+                if isinstance(gift_count, list):
+                    gift_count = len(gift_count)
+                elif gift_count is None:
+                    # For regular subs (not gifted), count as 1
+                    gift_count = 1
             
             if not gifter_kick_name:
                 logger.warning("Gifted sub event missing gifter username")
@@ -72,6 +90,7 @@ class GiftedSubTracker:
             if not event_id:
                 # Generate a fallback ID if none provided
                 event_id = f"{gifter_kick_name}_{int(datetime.now().timestamp())}"
+                logger.info(f"[GiftedSubTracker] No event ID provided, generated: {event_id}")
             
             # Get active raffle period
             period_id = self._get_active_period_id()
