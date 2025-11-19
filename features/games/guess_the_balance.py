@@ -16,8 +16,9 @@ logger = logging.getLogger(__name__)
 class GuessTheBalanceManager:
     """Manages Guess the Balance game sessions and guesses"""
     
-    def __init__(self, engine: Engine):
+    def __init__(self, engine: Engine, server_id: int):
         self.engine = engine
+        self.server_id = server_id
         logger.info("GuessTheBalanceManager initialized")
     
     def get_active_session(self) -> Optional[Dict]:
@@ -30,10 +31,10 @@ class GuessTheBalanceManager:
                 result = conn.execute(text("""
                     SELECT id, opened_by, opened_at, status
                     FROM gtb_sessions
-                    WHERE status = 'open'
+                    WHERE status = 'open' AND discord_server_id = :server_id
                     ORDER BY opened_at DESC
                     LIMIT 1
-                """)).fetchone()
+                """), {"server_id": self.server_id}).fetchone()
                 
                 if result:
                     return {
@@ -65,10 +66,10 @@ class GuessTheBalanceManager:
         try:
             with self.engine.begin() as conn:
                 result = conn.execute(text("""
-                    INSERT INTO gtb_sessions (opened_by, status)
-                    VALUES (:opened_by, 'open')
+                    INSERT INTO gtb_sessions (opened_by, status, discord_server_id)
+                    VALUES (:opened_by, 'open', :server_id)
                     RETURNING id
-                """), {"opened_by": opened_by})
+                """), {"opened_by": opened_by, "server_id": self.server_id})
                 
                 session_id = result.fetchone()[0]
                 logger.info(f"GTB session #{session_id} opened by {opened_by}")
@@ -140,14 +141,15 @@ class GuessTheBalanceManager:
             with self.engine.begin() as conn:
                 # Try to insert (will fail if user already guessed)
                 conn.execute(text("""
-                    INSERT INTO gtb_guesses (session_id, kick_username, guess_amount)
-                    VALUES (:session_id, :username, :amount)
+                    INSERT INTO gtb_guesses (session_id, kick_username, guess_amount, discord_server_id)
+                    VALUES (:session_id, :username, :amount, :server_id)
                     ON CONFLICT (session_id, kick_username)
                     DO UPDATE SET guess_amount = :amount, guessed_at = CURRENT_TIMESTAMP
                 """), {
                     "session_id": session_id,
                     "username": kick_username,
-                    "amount": guess_amount
+                    "amount": guess_amount,
+                    "server_id": self.server_id
                 })
                 
                 logger.info(f"GTB: {kick_username} guessed ${guess_amount:,.2f} in session #{session_id}")
@@ -175,10 +177,10 @@ class GuessTheBalanceManager:
                 # Get the most recent closed session
                 session = conn.execute(text("""
                     SELECT id FROM gtb_sessions
-                    WHERE status = 'closed'
+                    WHERE status = 'closed' AND discord_server_id = :server_id
                     ORDER BY closed_at DESC
                     LIMIT 1
-                """)).fetchone()
+                """), {"server_id": self.server_id}).fetchone()
                 
                 if not session:
                     return False, "No closed session found. Close a session first with !gtbclose", None

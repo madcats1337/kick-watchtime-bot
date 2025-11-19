@@ -3462,7 +3462,7 @@ async def on_ready():
             
             # Setup Guess the Balance manager
             global gtb_manager
-            gtb_manager = GuessTheBalanceManager(engine)
+            gtb_manager = GuessTheBalanceManager(engine, DISCORD_GUILD_ID)
             bot.gtb_manager = gtb_manager  # Store as bot attribute for Redis subscriber
             bot.gtb_channel_id = SLOT_CALLS_CHANNEL_ID  # Use same channel for GTB notifications
             print("✅ Guess the Balance system initialized")
