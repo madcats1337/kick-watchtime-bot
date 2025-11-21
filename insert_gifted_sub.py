@@ -1,10 +1,13 @@
 """Manually insert a gifted sub event into the database"""
+import os
 from sqlalchemy import create_engine, text
 from datetime import datetime, timedelta
 from raffle_system.tickets import TicketManager
 
 # Database connection
-database_url = "postgresql://postgres:qlCUFZaNzxnkRdqKYKmkrwFloDArkYqS@shinkansen.proxy.rlwy.net:57221/railway"
+database_url = os.getenv('DATABASE_URL')
+if not database_url:
+    raise ValueError("DATABASE_URL environment variable not set")
 engine = create_engine(database_url)
 ticket_manager = TicketManager(engine)
 

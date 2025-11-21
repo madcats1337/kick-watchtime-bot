@@ -2,8 +2,10 @@
 import os
 from sqlalchemy import create_engine, text
 
-# Use public Railway database URL with correct password
-database_url = "postgresql://postgres:qlCUFZaNzxnkRdqKYKmkrwFloDArkYqS@shinkansen.proxy.rlwy.net:57221/railway"
+# Get database URL from environment
+database_url = os.getenv('DATABASE_URL')
+if not database_url:
+    raise ValueError("DATABASE_URL environment variable not set")
 
 print(f"Connecting to database...")
 engine = create_engine(database_url)

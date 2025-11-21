@@ -1,8 +1,11 @@
 """Fix the fishmeeting gifted sub - update from 5 to 15 tickets"""
+import os
 from sqlalchemy import create_engine, text
 from raffle_system.tickets import TicketManager
 
-database_url = "postgresql://postgres:qlCUFZaNzxnkRdqKYKmkrwFloDArkYqS@shinkansen.proxy.rlwy.net:57221/railway"
+database_url = os.getenv('DATABASE_URL')
+if not database_url:
+    raise ValueError("DATABASE_URL environment variable not set")
 engine = create_engine(database_url)
 ticket_manager = TicketManager(engine)
 
