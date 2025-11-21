@@ -286,13 +286,40 @@ try:
         );
         """))
         
-        # Create links table
+        # Create links table (multi-server aware)
+        # New columns:
+        # - discord_server_id: isolates links per guild
+        # - linked_at: timestamp for link creation
+        # Backwards compatibility: migrate existing schema if needed
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS links (
-            discord_id BIGINT PRIMARY KEY,
-            kick_name TEXT UNIQUE
+            discord_id BIGINT,
+            kick_name TEXT,
+            discord_server_id BIGINT,
+            linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (discord_id, discord_server_id),
+            UNIQUE (kick_name, discord_server_id)
         );
         """))
+
+        # --- Migration for older schema (without discord_server_id / linked_at) ---
+        try:
+            conn.execute(text("ALTER TABLE links ADD COLUMN IF NOT EXISTS discord_server_id BIGINT"))
+        except Exception as e:
+            print(f"ℹ️ links table migration (discord_server_id) note: {e}")
+        try:
+            conn.execute(text("ALTER TABLE links ADD COLUMN IF NOT EXISTS linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+        except Exception as e:
+            print(f"ℹ️ links table migration (linked_at) note: {e}")
+        # Backfill missing server ids (only if a guild id is configured)
+        if DISCORD_GUILD_ID:
+            try:
+                conn.execute(text("""
+                    UPDATE links SET discord_server_id = :sid
+                    WHERE discord_server_id IS NULL OR discord_server_id = 0
+                """), {"sid": DISCORD_GUILD_ID})
+            except Exception as e:
+                print(f"ℹ️ links table backfill note: {e}")
         
         # Create pending_links table
         conn.execute(text("""

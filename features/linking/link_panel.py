@@ -50,9 +50,10 @@ class LinkPanelView(View):
         # Check if already linked
         try:
             with self.engine.connect() as conn:
+                server_id = interaction.guild.id if interaction.guild else None
                 existing = conn.execute(text(
-                    "SELECT kick_name FROM links WHERE discord_id = :d"
-                ), {"d": discord_id}).fetchone()
+                    "SELECT kick_name FROM links WHERE discord_id = :d AND (:sid IS NULL OR discord_server_id = :sid)"
+                ), {"d": discord_id, "sid": server_id}).fetchone()
                 
                 if existing:
                     await interaction.response.send_message(
