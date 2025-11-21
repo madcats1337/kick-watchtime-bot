@@ -3,11 +3,14 @@ Research script to explore Stake.com affiliate API endpoints
 This is for research purposes only - NOT for production use
 """
 
+import os
 import requests
 import json
 
-# Test API token (for research only)
-API_TOKEN = "611c363ec6a762b917580cdc7ff8d0bc3585f552eee20cb31913ae4f11799424423423f2d2fb768a134d999b7ee26389"
+# Get API token from environment variable
+API_TOKEN = os.getenv('STAKE_API_TOKEN')
+if not API_TOKEN:
+    raise ValueError("STAKE_API_TOKEN environment variable not set")
 
 # Common API base URLs to try
 BASE_URLS = [
