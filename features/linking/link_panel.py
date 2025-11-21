@@ -46,11 +46,12 @@ class LinkPanelView(View):
     async def handle_link_account(self, interaction: discord.Interaction):
         """Handle link account button click"""
         discord_id = interaction.user.id
+        guild_id = interaction.guild.id if interaction.guild else None
         
         # Check if already linked
         try:
             with self.engine.connect() as conn:
-                server_id = interaction.guild.id if interaction.guild else None
+                server_id = guild_id
                 existing = conn.execute(text(
                     "SELECT kick_name FROM links WHERE discord_id = :d AND (:sid IS NULL OR discord_server_id = :sid)"
                 ), {"d": discord_id, "sid": server_id}).fetchone()
@@ -69,9 +70,9 @@ class LinkPanelView(View):
             )
             return
         
-        # Generate OAuth URL
+        # Generate OAuth URL with guild_id
         try:
-            oauth_url = self.oauth_url_generator(discord_id)
+            oauth_url = self.oauth_url_generator(discord_id, guild_id)
         except Exception as e:
             logger.error(f"Error generating OAuth URL: {e}")
             await interaction.response.send_message(
