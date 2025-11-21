@@ -4075,6 +4075,271 @@ async def on_command_error(ctx, error):
 
 
 # -------------------------
+# Admin Commands: Links Table Management
+# -------------------------
+
+@bot.group(name='fixlinks', invoke_without_command=True)
+@commands.has_permissions(administrator=True)
+async def fixlinks(ctx):
+    """[ADMIN] Fix and manage links table. Use subcommands for specific actions."""
+    await ctx.send(
+        "**Links Table Management**\n"
+        "Use `!fixlinks <subcommand>` with one of:\n"
+        "• `check` - Run diagnostics on links table\n"
+        "• `backfill` - Fix missing discord_server_id values\n"
+        "• `duplicates` - Show duplicate kick names across servers\n"
+        "• `resolve <kick_name> <keep_server_id>` - Resolve duplicate by keeping one server"
+    )
+
+@fixlinks.command(name='check')
+@commands.has_permissions(administrator=True)
+async def fixlinks_check(ctx):
+    """[ADMIN] Run diagnostics on links table."""
+    try:
+        with engine.connect() as conn:
+            # Check for missing discord_server_id
+            result = conn.execute(text("""
+                SELECT COUNT(*) as cnt 
+                FROM links 
+                WHERE discord_server_id IS NULL OR discord_server_id = 0
+            """)).fetchone()
+            missing_count = result[0] if result else 0
+            
+            # Get distribution by server
+            dist_result = conn.execute(text("""
+                SELECT COALESCE(discord_server_id, 0) as server_id, COUNT(*) as cnt
+                FROM links
+                GROUP BY COALESCE(discord_server_id, 0)
+                ORDER BY cnt DESC
+                LIMIT 10
+            """)).fetchall()
+            
+            # Check for duplicates
+            dup_result = conn.execute(text("""
+                SELECT kick_name, COUNT(DISTINCT discord_server_id) as server_count
+                FROM links
+                WHERE discord_server_id IS NOT NULL AND discord_server_id != 0
+                GROUP BY kick_name
+                HAVING COUNT(DISTINCT discord_server_id) > 1
+                ORDER BY server_count DESC
+                LIMIT 10
+            """)).fetchall()
+            
+            embed = discord.Embed(
+                title="🔍 Links Table Diagnostics",
+                color=0x3498db
+            )
+            
+            if missing_count > 0:
+                embed.add_field(
+                    name="⚠️ Missing Server IDs",
+                    value=f"{missing_count} rows need backfill\nRun `!fixlinks backfill` to fix",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="✅ Server IDs",
+                    value="All rows have valid discord_server_id",
+                    inline=False
+                )
+            
+            # Server distribution
+            dist_text = "\n".join([
+                f"{'MISSING/0' if r[0] in (0, None) else str(r[0])}: {r[1]} links"
+                for r in dist_result[:5]
+            ])
+            embed.add_field(
+                name="📊 Distribution",
+                value=dist_text or "No data",
+                inline=False
+            )
+            
+            # Duplicates
+            if dup_result:
+                dup_text = "\n".join([
+                    f"• `{r[0]}` on {r[1]} servers"
+                    for r in dup_result[:5]
+                ])
+                embed.add_field(
+                    name="⚠️ Duplicates Across Servers",
+                    value=f"{len(dup_result)} kick names on multiple servers:\n{dup_text}",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="✅ No Duplicates",
+                    value="Each kick name belongs to one server only",
+                    inline=False
+                )
+            
+            await ctx.send(embed=embed)
+            
+    except Exception as e:
+        await ctx.send(f"❌ Error running diagnostics: {e}")
+        print(f"[fixlinks check] Error: {e}")
+
+@fixlinks.command(name='backfill')
+@commands.has_permissions(administrator=True)
+async def fixlinks_backfill(ctx):
+    """[ADMIN] Fix rows with missing discord_server_id."""
+    if not DISCORD_GUILD_ID:
+        await ctx.send("❌ DISCORD_GUILD_ID not configured. Cannot determine target server.")
+        return
+    
+    try:
+        with engine.begin() as conn:
+            # Count rows needing fix
+            result = conn.execute(text("""
+                SELECT COUNT(*) as cnt 
+                FROM links 
+                WHERE discord_server_id IS NULL OR discord_server_id = 0
+            """)).fetchone()
+            missing_count = result[0] if result else 0
+            
+            if missing_count == 0:
+                await ctx.send("✅ No rows need backfilling. All rows have valid discord_server_id.")
+                return
+            
+            # Update missing values
+            conn.execute(text("""
+                UPDATE links 
+                SET discord_server_id = :sid
+                WHERE discord_server_id IS NULL OR discord_server_id = 0
+            """), {"sid": DISCORD_GUILD_ID})
+            
+            await ctx.send(
+                f"✅ **Backfill Complete**\n"
+                f"Updated {missing_count} rows with server ID `{DISCORD_GUILD_ID}`"
+            )
+            print(f"[fixlinks backfill] Updated {missing_count} rows")
+            
+    except Exception as e:
+        await ctx.send(f"❌ Error during backfill: {e}")
+        print(f"[fixlinks backfill] Error: {e}")
+
+@fixlinks.command(name='duplicates')
+@commands.has_permissions(administrator=True)
+async def fixlinks_duplicates(ctx):
+    """[ADMIN] Show kick names that exist on multiple servers."""
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT 
+                    l.kick_name,
+                    l.discord_server_id,
+                    l.discord_id,
+                    l.linked_at
+                FROM links l
+                WHERE l.kick_name IN (
+                    SELECT kick_name
+                    FROM links
+                    WHERE discord_server_id IS NOT NULL AND discord_server_id != 0
+                    GROUP BY kick_name
+                    HAVING COUNT(DISTINCT discord_server_id) > 1
+                )
+                ORDER BY l.kick_name, l.linked_at DESC
+            """)).fetchall()
+            
+            if not result:
+                await ctx.send("✅ No duplicate kick names found across servers.")
+                return
+            
+            # Group by kick_name
+            duplicates = {}
+            for row in result:
+                kick_name = row[0]
+                if kick_name not in duplicates:
+                    duplicates[kick_name] = []
+                duplicates[kick_name].append({
+                    'server_id': row[1],
+                    'discord_id': row[2],
+                    'linked_at': row[3]
+                })
+            
+            embed = discord.Embed(
+                title="⚠️ Duplicate Kick Names Across Servers",
+                description=f"Found {len(duplicates)} kick names on multiple servers",
+                color=0xe74c3c
+            )
+            
+            for kick_name, entries in list(duplicates.items())[:10]:  # Show max 10
+                servers_text = "\n".join([
+                    f"Server `{e['server_id']}`: <@{e['discord_id']}> (linked {e['linked_at'].strftime('%Y-%m-%d') if e['linked_at'] else 'unknown'})"
+                    for e in entries
+                ])
+                embed.add_field(
+                    name=f"🔗 {kick_name}",
+                    value=servers_text,
+                    inline=False
+                )
+            
+            if len(duplicates) > 10:
+                embed.set_footer(text=f"Showing 10 of {len(duplicates)} duplicates")
+            
+            embed.add_field(
+                name="How to Resolve",
+                value="Use `!fixlinks resolve <kick_name> <keep_server_id>` to keep one link and remove others",
+                inline=False
+            )
+            
+            await ctx.send(embed=embed)
+            
+    except Exception as e:
+        await ctx.send(f"❌ Error fetching duplicates: {e}")
+        print(f"[fixlinks duplicates] Error: {e}")
+
+@fixlinks.command(name='resolve')
+@commands.has_permissions(administrator=True)
+async def fixlinks_resolve(ctx, kick_name: str, keep_server_id: int):
+    """[ADMIN] Resolve duplicate by keeping one server's link and removing others."""
+    try:
+        with engine.begin() as conn:
+            # Check if duplicate exists
+            result = conn.execute(text("""
+                SELECT discord_server_id, discord_id
+                FROM links
+                WHERE kick_name = :name
+                ORDER BY discord_server_id
+            """), {"name": kick_name}).fetchall()
+            
+            if not result:
+                await ctx.send(f"❌ No links found for kick name `{kick_name}`")
+                return
+            
+            if len(result) == 1:
+                await ctx.send(f"✅ `{kick_name}` only exists on one server. No action needed.")
+                return
+            
+            # Check if keep_server_id is valid
+            server_ids = [r[0] for r in result]
+            if keep_server_id not in server_ids:
+                await ctx.send(
+                    f"❌ Server `{keep_server_id}` doesn't have a link for `{kick_name}`\n"
+                    f"Available servers: {', '.join(map(str, server_ids))}"
+                )
+                return
+            
+            # Delete other servers' links
+            deleted = conn.execute(text("""
+                DELETE FROM links
+                WHERE kick_name = :name AND discord_server_id != :keep_server
+                RETURNING discord_server_id, discord_id
+            """), {"name": kick_name, "keep_server": keep_server_id}).fetchall()
+            
+            deleted_info = ", ".join([f"Server {r[0]} (<@{r[1]}>)" for r in deleted])
+            
+            await ctx.send(
+                f"✅ **Duplicate Resolved**\n"
+                f"Kept: `{kick_name}` on server `{keep_server_id}`\n"
+                f"Removed from: {deleted_info}"
+            )
+            print(f"[fixlinks resolve] Kept {kick_name} on server {keep_server_id}, removed {len(deleted)} duplicates")
+            
+    except Exception as e:
+        await ctx.send(f"❌ Error resolving duplicate: {e}")
+        print(f"[fixlinks resolve] Error: {e}")
+
+# -------------------------
 # Run bot
 # -------------------------
 if not DISCORD_TOKEN:
