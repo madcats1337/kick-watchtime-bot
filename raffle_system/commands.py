@@ -411,7 +411,8 @@ Get ready to participate when the period starts!
                     # If wager tracking was created AFTER period started, award tickets for the wager
                     if wager_created >= period_start and total_wager > 0:
                         from .config import SHUFFLE_TICKETS_PER_1000_USD
-                        tickets_awarded = int((total_wager / 1000.0) * SHUFFLE_TICKETS_PER_1000_USD)
+                        # Convert Decimal to float for calculation
+                        tickets_awarded = int((float(total_wager) / 1000.0) * SHUFFLE_TICKETS_PER_1000_USD)
                         
                         if tickets_awarded > 0:
                             # Award the tickets
