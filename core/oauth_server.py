@@ -905,12 +905,12 @@ def handle_user_linking_callback(code, code_verifier, state, discord_id, created
         
         # Link accounts in database
         with engine.begin() as conn:
-            # Use UPSERT - conflict on discord_id only (will add discord_server_id constraint later)
+            # Use UPSERT with composite unique key (discord_id, discord_server_id)
             conn.execute(text("""
                 INSERT INTO links (discord_id, kick_name, discord_server_id)
                 VALUES (:d, :k, :gid)
-                ON CONFLICT(discord_id) DO UPDATE 
-                SET kick_name = excluded.kick_name, discord_server_id = excluded.discord_server_id, linked_at = CURRENT_TIMESTAMP
+                ON CONFLICT(discord_id, discord_server_id) DO UPDATE 
+                SET kick_name = excluded.kick_name, linked_at = CURRENT_TIMESTAMP
             """), {"d": discord_id, "k": kick_username.lower(), "gid": guild_id})
             
             # Clean up pending bio verifications if any

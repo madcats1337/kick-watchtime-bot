@@ -8,6 +8,55 @@ import threading
 import subprocess
 import time
 
+def run_database_migration():
+    """Run database migration before starting services"""
+    print("📋 Running database migration...", flush=True)
+    try:
+        from sqlalchemy import create_engine, text
+        engine = create_engine(os.getenv('DATABASE_URL'))
+        
+        with engine.begin() as conn:
+            # Check if composite unique constraint exists
+            result = conn.execute(text("""
+                SELECT constraint_name 
+                FROM information_schema.table_constraints 
+                WHERE table_name = 'links' 
+                AND constraint_type = 'UNIQUE'
+                AND constraint_name = 'links_discord_server_unique'
+            """))
+            
+            if not result.fetchone():
+                print("   Adding unique constraint on (discord_id, discord_server_id)...", flush=True)
+                
+                # Remove old single-column unique constraint if it exists
+                conn.execute(text("""
+                    ALTER TABLE links 
+                    DROP CONSTRAINT IF EXISTS links_discord_id_key
+                """))
+                
+                # Remove any duplicates, keeping most recent per discord_id
+                conn.execute(text("""
+                    DELETE FROM links a USING links b
+                    WHERE a.id < b.id 
+                    AND a.discord_id = b.discord_id 
+                    AND a.discord_server_id = b.discord_server_id
+                """))
+                
+                # Add composite unique constraint
+                conn.execute(text("""
+                    ALTER TABLE links 
+                    ADD CONSTRAINT links_discord_server_unique 
+                    UNIQUE (discord_id, discord_server_id)
+                """))
+                
+                print("   ✅ Migration complete!", flush=True)
+            else:
+                print("   ✅ Database schema is up to date", flush=True)
+                
+    except Exception as e:
+        print(f"   ⚠️ Migration warning: {e}", flush=True)
+        print("   Continuing startup anyway...", flush=True)
+
 def run_discord_bot():
     """Run Discord bot in background subprocess"""
     print("🤖 Starting Discord bot subprocess...", flush=True)
@@ -30,6 +79,9 @@ if __name__ == '__main__':
     print("🚀 Starting combined OAuth + Discord Bot server...", flush=True)
     print(f"Python: {sys.version}", flush=True)
     print(f"Working directory: {os.getcwd()}", flush=True)
+    
+    # Run database migration first
+    run_database_migration()
 
     # Start Discord bot in background thread
     bot_thread = threading.Thread(target=run_discord_bot, daemon=True)
