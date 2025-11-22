@@ -23,7 +23,7 @@ OAUTH_SECRET_KEY = os.getenv("FLASK_SECRET_KEY", secrets.token_hex(32))
 if os.getenv("FLASK_SECRET_KEY"):
     print(f"[OAuth] FLASK_SECRET_KEY loaded: {len(OAUTH_SECRET_KEY)} chars, hash={hash(OAUTH_SECRET_KEY) % 10000}", flush=True)
 else:
-    print(f"[OAuth] ⚠️ WARNING: FLASK_SECRET_KEY not set, using random key!", flush=True)
+    print(f"[OAuth] WARNING: FLASK_SECRET_KEY not set, using random key!", flush=True)
 
 def sign_discord_id(discord_id: str, timestamp: int, guild_id: str = "0") -> str:
     """
