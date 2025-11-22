@@ -34,12 +34,16 @@ def run_database_migration():
                     DROP CONSTRAINT IF EXISTS links_discord_id_key
                 """))
                 
-                # Remove any duplicates, keeping most recent per discord_id
+                # Remove any duplicates, keeping most recent per (discord_id, discord_server_id)
+                # Note: links table uses composite PRIMARY KEY (discord_id, discord_server_id), no id column
                 conn.execute(text("""
-                    DELETE FROM links a USING links b
-                    WHERE a.id < b.id 
-                    AND a.discord_id = b.discord_id 
-                    AND a.discord_server_id = b.discord_server_id
+                    DELETE FROM links a 
+                    WHERE a.linked_at < (
+                        SELECT MAX(b.linked_at) 
+                        FROM links b 
+                        WHERE b.discord_id = a.discord_id 
+                        AND b.discord_server_id = a.discord_server_id
+                    )
                 """))
                 
                 # Add composite unique constraint
