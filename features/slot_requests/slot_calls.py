@@ -241,35 +241,51 @@ class SlotCallTracker:
         kick_username_safe = kick_username[:self.max_username_length]
         slot_call_safe = slot_call[:self.max_slot_call_length]
         
-        # Check if slot is banned (supports name or slug match, basic slug normalization)
+        # Check if slot is banned or provider is disabled (supports name or slug match, basic slug normalization)
         if self.engine:
             try:
                 # Normalize to a slug candidate (lowercase, non-alphanumeric -> '-')
                 slot_slug_candidate = re.sub(r"[^a-z0-9]+", "-", slot_call_safe.lower()).strip('-')
                 with self.engine.connect() as conn:
-                    banned_row = conn.execute(text("""
-                        SELECT banned
+                    slot_check = conn.execute(text("""
+                        SELECT banned, is_active
                         FROM shuffle_slots
-                        WHERE is_active = TRUE
-                          AND (
+                        WHERE (
                                 LOWER(name) = LOWER(:slot_name)
                              OR LOWER(slug) = LOWER(:slot_slug)
                              OR LOWER(REPLACE(name,' ','-')) = LOWER(:slot_slug)
                           )
                         LIMIT 1
                     """), {"slot_name": slot_call_safe, "slot_slug": slot_slug_candidate}).fetchone()
-                if banned_row and banned_row[0]:
-                    if self.kick_send_callback:
-                        try:
-                            await self.kick_send_callback(
-                                f"@{kick_username_safe} Sorry, {slot_call_safe} is currently banned."
-                            )
-                            logger.info(f"Blocked banned slot request (matched by name/slug): {slot_call_safe} -> {slot_slug_candidate}")
-                        except Exception as e:
-                            logger.error(f"Failed to send banned slot message to Kick: {e}")
-                    return
+                
+                if slot_check:
+                    is_banned, is_active = slot_check
+                    
+                    # Block if slot is banned
+                    if is_banned:
+                        if self.kick_send_callback:
+                            try:
+                                await self.kick_send_callback(
+                                    f"@{kick_username_safe} Sorry, {slot_call_safe} is currently banned."
+                                )
+                                logger.info(f"Blocked banned slot request: {slot_call_safe}")
+                            except Exception as e:
+                                logger.error(f"Failed to send banned slot message to Kick: {e}")
+                        return
+                    
+                    # Block if provider is disabled (inactive)
+                    if not is_active:
+                        if self.kick_send_callback:
+                            try:
+                                await self.kick_send_callback(
+                                    f"@{kick_username_safe} Sorry, {slot_call_safe} is currently unavailable."
+                                )
+                                logger.info(f"Blocked slot request for disabled provider: {slot_call_safe}")
+                            except Exception as e:
+                                logger.error(f"Failed to send disabled provider message to Kick: {e}")
+                        return
             except Exception as e:
-                logger.error(f"Failed to check if slot is banned: {e}")
+                logger.error(f"Failed to check slot availability: {e}")
                 # Continue anyway to not block legitimate requests on DB errors
         
         # Check for duplicate slot requests (if enabled)
