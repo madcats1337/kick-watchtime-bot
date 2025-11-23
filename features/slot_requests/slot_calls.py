@@ -3,6 +3,7 @@ Slot Call Tracker - Monitor Kick chat for !call commands and post to Discord
 """
 
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Optional, Dict
 import discord
@@ -239,6 +240,72 @@ class SlotCallTracker:
         # 🔒 SECURITY: Input validation - prevent excessively long inputs
         kick_username_safe = kick_username[:self.max_username_length]
         slot_call_safe = slot_call[:self.max_slot_call_length]
+        
+        # Check if slot is banned (supports name or slug match, basic slug normalization)
+        if self.engine:
+            try:
+                # Normalize to a slug candidate (lowercase, non-alphanumeric -> '-')
+                slot_slug_candidate = re.sub(r"[^a-z0-9]+", "-", slot_call_safe.lower()).strip('-')
+                with self.engine.connect() as conn:
+                    banned_row = conn.execute(text("""
+                        SELECT banned
+                        FROM shuffle_slots
+                        WHERE is_active = TRUE
+                          AND (
+                                LOWER(name) = LOWER(:slot_name)
+                             OR LOWER(slug) = LOWER(:slot_slug)
+                             OR LOWER(REPLACE(name,' ','-')) = LOWER(:slot_slug)
+                          )
+                        LIMIT 1
+                    """), {"slot_name": slot_call_safe, "slot_slug": slot_slug_candidate}).fetchone()
+                if banned_row and banned_row[0]:
+                    if self.kick_send_callback:
+                        try:
+                            await self.kick_send_callback(
+                                f"@{kick_username_safe} Sorry, {slot_call_safe} is currently banned."
+                            )
+                            logger.info(f"Blocked banned slot request (matched by name/slug): {slot_call_safe} -> {slot_slug_candidate}")
+                        except Exception as e:
+                            logger.error(f"Failed to send banned slot message to Kick: {e}")
+                    return
+            except Exception as e:
+                logger.error(f"Failed to check if slot is banned: {e}")
+                # Continue anyway to not block legitimate requests on DB errors
+        
+        # Check for duplicate slot requests (if enabled)
+        if self.engine:
+            try:
+                with self.engine.connect() as conn:
+                    # Check if duplicate prevention is enabled
+                    prevent_result = conn.execute(text("""
+                        SELECT value FROM bot_settings
+                        WHERE key = 'slot_prevent_duplicates'
+                    """)).fetchone()
+                    
+                    prevent_duplicates = prevent_result and prevent_result[0] == 'true'
+                    
+                    if prevent_duplicates:
+                        # Check if this slot has already been requested (unpicked)
+                        dup_result = conn.execute(text("""
+                            SELECT COUNT(*) FROM slot_requests
+                            WHERE LOWER(slot_call) = LOWER(:slot_call)
+                            AND picked = FALSE
+                        """), {"slot_call": slot_call_safe}).fetchone()
+                        
+                        if dup_result and dup_result[0] > 0:
+                            # Slot already requested
+                            if self.kick_send_callback:
+                                try:
+                                    await self.kick_send_callback(
+                                        f"@{kick_username_safe} Sorry, {slot_call_safe} has already been requested."
+                                    )
+                                    logger.info(f"Blocked duplicate slot request: {slot_call_safe} by {kick_username_safe}")
+                                except Exception as e:
+                                    logger.error(f"Failed to send duplicate message to Kick: {e}")
+                            return
+            except Exception as e:
+                logger.error(f"Failed to check for duplicate slot requests: {e}")
+                # Continue anyway to not block legitimate requests on DB errors
         
         # Get the Discord channel
         channel = self.bot.get_channel(self.discord_channel_id)
