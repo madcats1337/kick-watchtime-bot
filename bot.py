@@ -3339,11 +3339,24 @@ async def on_ready():
     else:
         print("ℹ️  Redis subscriber started (messages logged only - set KICK_BOT_USER_TOKEN to enable Kick chat)")
 
-    # Auto-migrate database: add expires_at column if missing
+    # Auto-migrate database: create bot_tokens table and add expires_at column if missing
     if engine:
         try:
             with engine.begin() as conn:
-                # Check if expires_at column exists
+                # Create bot_tokens table if it doesn't exist
+                print("🔄 Checking bot_tokens table...")
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS bot_tokens (
+                        bot_username TEXT PRIMARY KEY,
+                        access_token TEXT NOT NULL,
+                        refresh_token TEXT NOT NULL,
+                        expires_at TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+                print("✅ bot_tokens table ready")
+                
+                # Check if expires_at column exists (for old tables)
                 result = conn.execute(text("""
                     SELECT column_name 
                     FROM information_schema.columns 

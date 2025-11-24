@@ -112,6 +112,45 @@ class RedisSubscriber:
                 except Exception as e:
                     print(f"⚠️ Failed to update slot panel: {e}")
         
+        elif action == 'pick_with_reward':
+            slot_id = data.get('slot_id')
+            slot_call = data.get('slot_call')
+            username = data.get('username')
+            reward_type = data.get('reward_type')
+            reward_amount = data.get('reward_amount')
+            
+            # Format reward type for display
+            reward_type_display = 'Bonus Buy' if reward_type == 'bonus_buy' else reward_type.capitalize()
+            
+            # Announce the picked slot WITH reward in Kick chat
+            amount = float(reward_amount)
+            await self.announce_in_chat(f"🎰 PICKED: {slot_call} (requested by {username}) 💰 WON ${amount:.2f} {reward_type_display}!")
+            
+            # Post to Discord
+            if hasattr(self.bot, 'slot_calls_channel_id') and self.bot.slot_calls_channel_id:
+                try:
+                    channel = self.bot.get_channel(self.bot.slot_calls_channel_id)
+                    if channel:
+                        await channel.send(f"🎰 **PICKED**: {slot_call} (requested by {username})\n💰 **WON**: ${amount:.2f} {reward_type_display}!")
+                except Exception as e:
+                    print(f"Failed to send Discord notification: {e}")
+            
+            # Update Discord panel
+            if hasattr(self.bot, 'slot_request_panel') and self.bot.slot_request_panel:
+                try:
+                    panel = self.bot.slot_request_panel
+                    # Refresh tracker state from database before updating panel
+                    if hasattr(panel, 'tracker') and panel.tracker:
+                        panel.tracker.enabled = panel.tracker._load_enabled_state()  # Reload enabled state from DB
+                        panel.tracker.max_requests_per_user = panel.tracker._load_max_requests()  # Reload max requests too
+                    success = await panel.update_panel(force=True)
+                    if success:
+                        print("✅ Slot request panel updated in Discord")
+                    else:
+                        print("ℹ️  Slot panel not created yet (Discord admin: use !slotpanel to create)")
+                except Exception as e:
+                    print(f"⚠️ Failed to update slot panel: {e}")
+        
         elif action == 'update_max':
             max_requests = data.get('max_requests')
             print(f"Updated max slot requests to {max_requests}")
