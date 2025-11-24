@@ -21,7 +21,7 @@ class SlotCallTracker:
         self.discord_channel_id = discord_channel_id
         self.engine = engine
         self.last_call_time: Dict[str, datetime] = {}  # Track per-user cooldown
-        self.cooldown_seconds = 30  # 30 second cooldown per user
+        self.cooldown_seconds = 30  # Default 30 second cooldown per user (loaded from DB)
         self.max_username_length = 50  # Maximum username length
         self.max_slot_call_length = 200  # Maximum slot call text length
         self.kick_send_callback = kick_send_callback  # Callback to send messages to Kick chat
@@ -31,6 +31,7 @@ class SlotCallTracker:
         self._init_database()
         self.enabled = self._load_enabled_state()
         self.max_requests_per_user = self._load_max_requests()
+        self.cooldown_seconds = self._load_cooldown()  # Load from database
         
     def _init_database(self):
         """Create feature_settings and slot_requests tables if they don't exist"""
@@ -113,6 +114,31 @@ class SlotCallTracker:
         except Exception as e:
             logger.error(f"Failed to load max requests setting: {e}")
             return 0  # Default to unlimited on error
+    
+    def _load_cooldown(self) -> int:
+        """Load cooldown seconds from database, default to 30"""
+        if not self.engine:
+            return 30  # Default 30 second cooldown
+            
+        try:
+            with self.engine.connect() as conn:
+                result = conn.execute(text("""
+                    SELECT value FROM bot_settings 
+                    WHERE key = 'slot_request_cooldown_seconds'
+                      AND (discord_server_id = :server_id OR discord_server_id IS NULL)
+                    ORDER BY discord_server_id NULLS LAST
+                    LIMIT 1
+                """), {"server_id": self.bot.server_id if hasattr(self.bot, 'server_id') else None}).fetchone()
+                
+                if result and result[0]:
+                    cooldown = int(result[0])
+                    logger.info(f"Loaded slot request cooldown: {cooldown} seconds")
+                    return cooldown if cooldown > 0 else 30  # Min 30 seconds
+                else:
+                    return 30  # Default to 30 seconds
+        except Exception as e:
+            logger.error(f"Failed to load cooldown setting: {e}")
+            return 30  # Default to 30 seconds on error
     
     def set_max_requests(self, max_requests: int) -> bool:
         """Set maximum requests per user (0 = unlimited)"""
