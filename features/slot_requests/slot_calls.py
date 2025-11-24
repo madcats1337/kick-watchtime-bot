@@ -301,15 +301,15 @@ class SlotCallTracker:
                     prevent_duplicates = prevent_result and prevent_result[0] == 'true'
                     
                     if prevent_duplicates:
-                        # Check if this slot has already been requested (unpicked)
+                        # Check if this slot has already been requested (unpicked OR added to hunt)
                         dup_result = conn.execute(text("""
                             SELECT COUNT(*) FROM slot_requests
                             WHERE LOWER(slot_call) = LOWER(:slot_call)
-                            AND picked = FALSE
+                            AND (picked = FALSE OR added_to_hunt = TRUE)
                         """), {"slot_call": slot_call_safe}).fetchone()
                         
                         if dup_result and dup_result[0] > 0:
-                            # Slot already requested
+                            # Slot already requested or in active hunt
                             if self.kick_send_callback:
                                 try:
                                     await self.kick_send_callback(
@@ -318,6 +318,37 @@ class SlotCallTracker:
                                     logger.info(f"Blocked duplicate slot request: {slot_call_safe} by {kick_username_safe}")
                                 except Exception as e:
                                     logger.error(f"Failed to send duplicate message to Kick: {e}")
+                            return
+                    
+                    # Check max added requests per user (if enabled)
+                    max_added_result = conn.execute(text("""
+                        SELECT value FROM bot_settings
+                        WHERE key = 'slot_max_added_requests'
+                    """)).fetchone()
+                    
+                    max_added = int(max_added_result[0]) if max_added_result else 0
+                    
+                    if max_added > 0:
+                        # Count how many added_to_hunt requests this user already has
+                        added_count_result = conn.execute(text("""
+                            SELECT COUNT(*) FROM slot_requests
+                            WHERE LOWER(kick_username) = LOWER(:username)
+                            AND added_to_hunt = TRUE
+                        """), {"username": kick_username}).fetchone()
+                        
+                        added_count = added_count_result[0] if added_count_result else 0
+                        
+                        if added_count >= max_added:
+                            # User has reached their added requests limit
+                            if self.kick_send_callback:
+                                try:
+                                    await self.kick_send_callback(
+                                        f"@{kick_username_safe} You have reached the maximum of {max_added} slots in the active bonus hunt. "
+                                        f"Please wait for the current hunt to complete before requesting more."
+                                    )
+                                    logger.info(f"User {kick_username_safe} blocked: {added_count}/{max_added} slots in active hunt")
+                                except Exception as e:
+                                    logger.error(f"Failed to send max added message to Kick: {e}")
                             return
             except Exception as e:
                 logger.error(f"Failed to check for duplicate slot requests: {e}")
