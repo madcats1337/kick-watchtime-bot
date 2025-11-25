@@ -1,6 +1,6 @@
-# 🎮 Kick.com Discord Bot with Raffle System
+# 🎮 Kick.com Discord Bot with Raffle System & Admin Dashboard
 
-A comprehensive Discord bot that tracks viewer watchtime on Kick.com, rewards loyal fans with Discord roles, and runs monthly raffles with tickets earned from watchtime, gifted subs, and Shuffle wagers. Features **OAuth 2.0 linking** and **button-based link panels** for seamless account verification.
+A comprehensive Discord bot ecosystem that tracks viewer watchtime on Kick.com, rewards loyal fans with Discord roles, and runs monthly raffles with tickets earned from watchtime, gifted subs, and Shuffle wagers. Features **OAuth 2.0 linking**, **button-based link panels**, and a **web-based admin dashboard** for seamless management.
 
 ## ✨ Features
 
@@ -13,36 +13,101 @@ A comprehensive Discord bot that tracks viewer watchtime on Kick.com, rewards lo
 - **📊 Leaderboards**: Shows top viewers with interactive embeds
 - **🔒 HMAC-SHA256 Security**: Cryptographically signed OAuth URLs with 10-minute expiry
 - **🔄 Real-time Sync**: Updates watchtime every minute
+- **🌐 Web Admin Dashboard**: Manage bot settings, view analytics, and control features via web interface (Private)
 
-### 🎟️ Raffle System (NEW!)
+### 🎟️ Raffle System
 - **🎁 Gifted Sub Tracking**: Earn 15 tickets per gifted sub (real-time)
 - **⏰ Watchtime Conversion**: Earn 10 tickets per hour watched
-- **� Shuffle Wager Tracking**: Earn 20 tickets per $1000 wagered
+- **💰 Shuffle Wager Tracking**: Earn 20 tickets per $1000 wagered
 - **🎲 Fair Drawing**: Cryptographically random winner selection
 - **📅 Monthly Resets**: Automatic period transitions on the 1st
 - **🏅 Ticket Leaderboard**: Track your progress and compete
-- **� Shuffle Integration**: Link your Shuffle.com account with verification
+- **🔗 Shuffle Integration**: Link your Shuffle.com account with verification
 - **📈 Detailed Statistics**: View raffle stats and ticket breakdown
+- **🌐 Dashboard Management**: Configure raffle settings via web interface
 
-### 🎰 Slot Call Tracker (NEW!)
-- **📢 Real-time Tracking**: Monitors Kick chat for `!call` commands
+### 🎰 Slot Request System
+- **📢 Real-time Tracking**: Monitors Kick chat for `!call` and `!sr` commands
 - **📝 Discord Notifications**: Auto-posts slot requests to Discord channel
 - **🎯 User Attribution**: Shows which Kick user requested each slot
-- **🔧 Admin Toggle**: Enable/disable tracking with `!slotcalls on/off`
-- **📊 Status Monitoring**: Check current state with `!slotcalls status`
+- **🔧 Admin Panel**: Web-based slot request management and configuration
+- **🚫 Blacklist System**: Block users from making slot requests
 - **⚡ Instant Posting**: No delay between request and Discord notification
+- **🎮 Slot Library**: Searchable database of 4,790+ slots synced from N9Assets
+- **📊 Request Analytics**: Track slot request patterns and popular slots
 
-### 🎮 Guess the Balance Game (NEW!)
+### 🎮 Guess the Balance Game
 - **💰 Interactive Betting Game**: Players guess the final balance after slot spins
 - **📊 Discord Panel UI**: Buttons and modals for easy game management
 - **🏆 Automatic Winner Detection**: Closest guess wins automatically
 - **💵 Configurable Prize Pools**: Admins set prize amounts per session
 - **📈 Real-time Updates**: Live session status and guess tracking
+- **🌐 Dashboard Control**: Manage GTB sessions from web interface
+
+### 🌐 Admin Dashboard (Private Repository)
+- **📊 Analytics Dashboard**: View watchtime stats, raffle analytics, and user activity
+- **🎫 Slot Request Controls**: Configure request limits, blacklist users, search slots
+- **🎲 Raffle Management**: Monitor ticket distribution, view leaderboards, manage periods
+- **⚙️ Bot Configuration**: Update settings, manage roles, control features
+- **👥 User Management**: View linked accounts, watchtime history, ticket balances
+- **📈 Real-time Monitoring**: Live bot status, active viewers, recent activities
+- **🔐 Secure Access**: Protected with authentication and role-based permissions
 
 ### Deployment
 - **🐳 Dockerized**: Easy deployment to Railway, Heroku, Render, or any container platform
 - **☁️ Cloud-Ready**: PostgreSQL support for production deployments
+- **🔒 Session-Based Auth**: Reliable Kick chat interaction with session tokens
 - **📄 Legal Compliance**: Built-in Terms of Service and Privacy Policy
+
+## 🌐 Admin Dashboard
+
+The bot includes a comprehensive web-based admin dashboard for managing all bot features through an intuitive interface.
+
+**Note:** The dashboard repository is private and available upon request for authorized users only.
+
+### Dashboard Features
+
+**📊 Analytics & Monitoring:**
+- Real-time bot status and health metrics
+- Watchtime analytics and viewer statistics
+- Raffle participation and ticket distribution graphs
+- Slot request trends and popular slots analysis
+
+**🎫 Slot Request Management:**
+- Configure request limits and cooldown periods
+- Search and browse 4,790+ slots synced from N9Assets
+- Manage blacklisted users and view request history
+- Control slot request panel settings
+
+**🎲 Raffle Administration:**
+- View ticket leaderboards and user balances
+- Monitor raffle period status and dates
+- Award or remove bonus tickets
+- View detailed raffle statistics and history
+
+**⚙️ Bot Configuration:**
+- Manage watchtime role thresholds
+- Configure OAuth settings and link panels
+- Update bot behavior and feature toggles
+- View and manage linked Discord/Kick accounts
+
+**🔐 Security & Access:**
+- Secure authentication system
+- Role-based permissions
+- Activity logging and audit trails
+- Protected with HMAC-SHA256 signatures
+
+**📱 Modern Interface:**
+- Responsive design (mobile-friendly)
+- Dark mode optimized
+- Real-time updates via WebSocket
+- Built with Flask, Tailwind CSS, and Alpine.js
+
+### Accessing the Dashboard
+
+The dashboard is deployed separately and accessible at your configured admin URL. Contact the bot administrator for access credentials.
+
+**Dashboard Repository:** Private - contact for access
 
 ## 📁 Project Structure
 
@@ -183,13 +248,13 @@ BOT_AUTH_TOKEN=your_secret_token                # Required for /bot/authorize en
 
 **Kick Chat Responses:** To enable automatic responses in Kick chat when users use `!call` or `!sr`:
 
-The bot now uses **session-based authentication** (more reliable than OAuth). Follow these steps:
+The bot uses **session-based authentication** (more reliable than OAuth). Follow these steps:
 
 1. **Generate and set BOT_AUTH_TOKEN:**
    ```bash
    python -c "import secrets; print(secrets.token_urlsafe(32))"
    ```
-   - Set this as `BOT_AUTH_TOKEN` in Railway
+   - Set this as `BOT_AUTH_TOKEN` in your environment variables
    - Keep this secret - it protects the bot authorization endpoint
 
 2. **Get Session Tokens (Bearer + XSRF + Cookies):**
@@ -216,7 +281,8 @@ The bot now uses **session-based authentication** (more reliable than OAuth). Fo
 4. **Important Requirements:**
    - Bot account must **follow the channel** (required for follower-only chat)
    - If chat is subscriber-only, bot must be subscribed
-   - Session tokens expire after inactivity (get fresh ones when needed)
+   - Session tokens expire after ~30 days of inactivity (refresh as needed)
+   - Tokens stored securely in database
 
 **Raffle System:** See [docs/implementation/RAFFLE_SYSTEM_IMPLEMENTATION_PLAN.md](docs/implementation/RAFFLE_SYSTEM_IMPLEMENTATION_PLAN.md) for complete documentation on ticket earning and raffle mechanics.
 
@@ -298,35 +364,46 @@ This starts both the Discord bot and OAuth Flask server. You should see:
 - `!callblacklist remove <user>` - Unblock user
 - `!callblacklist list` - Show blocked users
 
+**Guess the Balance:**
+- `!gtbpanel` - Create/update GTB game panel (button-based UI)
+- `!gtbstats` - View GTB game statistics
+
 **System:**
 - `!health` - Check bot status and diagnostics
 - `!tracking on/off/status` - Toggle watchtime tracking
+- `!dashboard` - Get link to admin dashboard (if enabled)
 
 ## 📋 Usage Examples
 
 ### 🎰 Slot Request Tracker
 ```
 Admin: !slotpanel
-Bot: Creates interactive panel with buttons to enable/disable, set limits, etc.
+Bot: Creates interactive panel with buttons to manage slot requests
 
 [Kick viewer types in chat: !call Book of Dead]
 
 Bot (auto-posts to Discord):
 🎰 **Slot Request**
 kickuser123 requested: **Book of Dead**
-📅 2025-11-04 14:35:21
+📅 2025-11-25 14:35:21
 
 [Another viewer: !sr Gates of Olympus]
 
 Bot (auto-posts to Discord):
 🎰 **Slot Request**
 slotfan456 requested: **Gates of Olympus**
-📅 2025-11-04 14:37:08
+📅 2025-11-25 14:37:08
+
+Admin: Uses web dashboard to view all requests and manage settings
 ```
 
 ### 🎮 Guess the Balance Game
 ```
-Admin: Creates GTB panel via Discord UI (button-based)
+Admin: !gtbpanel
+Bot: Creates GTB panel with buttons (Start Session, End Session, etc.)
+
+[Admin starts session via button]
+Bot: 🎮 GTB Session Started! Guess with !gtb <amount> in Kick chat
 
 [Kick chat:]
 Viewer: !gtb 1500
@@ -335,8 +412,27 @@ Bot: ✅ Your guess of $1,500.00 has been recorded!
 Viewer2: !gtb 2000
 Bot: ✅ Your guess of $2,000.00 has been recorded!
 
-[Admin ends session with final balance]
+[Admin ends session and enters final balance: $1,650]
 Bot: 🏆 Winner: Viewer ($1,500.00 was closest to $1,650.00)
+     💰 Prize: $50.00
+```
+
+### 🌐 Dashboard Usage
+```
+Admin: Opens dashboard at configured URL
+Dashboard: Shows analytics, recent activity, and management options
+
+Navigation:
+- 📊 Dashboard: Overview and statistics
+- 🎫 Slot Requests: Manage requests and search slots
+- 🎲 Raffle: View tickets and manage periods
+- ⚙️ Settings: Configure bot behavior
+
+Actions:
+- Search for "Zeus vs Typhon" in slot library
+- Blacklist user from making requests
+- Award bonus raffle tickets
+- Update watchtime role thresholds
 ```
 
 ## 📋 Linking Workflow Examples
@@ -432,8 +528,9 @@ python scripts/health_check.py
 
 ### Role Thresholds
 
-Roles are managed entirely through the `!roles` command - **no code changes needed!**
+Roles are managed entirely through the `!roles` command or via the web dashboard - **no code changes needed!**
 
+**Via Discord Commands:**
 ```
 # Add a new role
 !roles add @Fan 60
@@ -451,7 +548,12 @@ Roles are managed entirely through the `!roles` command - **no code changes need
 !roles list
 ```
 
-Roles are stored in the `watchtime_roles` table and checked dynamically. Changes take effect immediately.
+**Via Web Dashboard:**
+- Navigate to Settings → Watchtime Roles
+- Add, edit, or remove roles with a visual interface
+- Changes take effect immediately
+
+Roles are stored in the `watchtime_roles` table and checked dynamically.
 
 ### Intervals
 
@@ -476,7 +578,20 @@ Adjust in `.env`:
 - Verify `FLASK_SECRET_KEY` is set in environment variables
 - Check that `KICK_CLIENT_ID` and `KICK_CLIENT_SECRET` are correct
 - Ensure `OAUTH_BASE_URL` matches your deployed server URL
-- Check Railway logs for detailed error messages
+- Check deployment logs for detailed error messages
+
+### Kick chat responses not working
+- Verify session tokens are set correctly (see Kick Session Auth Guide)
+- Check that bot account follows the channel
+- Ensure tokens haven't expired (~30 days of inactivity)
+- Run `python scripts/test_kick_session.py` to verify connection
+- Check that `BOT_AUTH_TOKEN` is set
+
+### Dashboard not accessible
+- Verify dashboard is deployed and URL is correct
+- Check that authentication credentials are configured
+- Ensure database connection is working
+- Review dashboard deployment logs
 
 ### Database errors
 - PostgreSQL is required (SQLite no longer supported)
@@ -551,19 +666,25 @@ link_logs_config (
 
 This bot includes comprehensive documentation in the `docs/` folder:
 
+### Dashboard (Private Repository)
+- **Web-based Admin Interface** - Complete management dashboard with analytics, configuration, and monitoring
+- Contact for access to private dashboard repository
+
 ### Bonus Hunt (Kick chat → Discord buttons)
 - **[integrations/bonus_hunt_kick_chat/](integrations/bonus_hunt_kick_chat/)** - Packaged integration for Kick slot requests with Discord button workflow (ready for reuse)
 
 ### Setup Guides
-- **[docs/LINK_PANEL_QUICKSTART.md](docs/LINK_PANEL_QUICKSTART.md)** - Quick start guide for reaction-based link panels
+- **[docs/LINK_PANEL_QUICKSTART.md](docs/LINK_PANEL_QUICKSTART.md)** - Quick start guide for link panels
 - **[docs/LINK_PANEL_SETUP.md](docs/LINK_PANEL_SETUP.md)** - Complete setup guide for link panels
 - **[docs/OAUTH_SETUP.md](docs/OAUTH_SETUP.md)** - OAuth server setup and configuration guide
+- **[KICK_SESSION_AUTH_GUIDE.md](KICK_SESSION_AUTH_GUIDE.md)** - Session-based Kick chat authentication
 - **[docs/DEPLOYMENT_RAILWAY.md](docs/DEPLOYMENT_RAILWAY.md)** - Railway deployment guide
 
 ### Technical Documentation
 - **[docs/LINK_PANEL_ARCHITECTURE.md](docs/LINK_PANEL_ARCHITECTURE.md)** - Technical architecture and flow diagrams
 - **[docs/LINK_PANEL_IMPLEMENTATION.md](docs/LINK_PANEL_IMPLEMENTATION.md)** - Implementation details and code changes
 - **[docs/SECURITY_IMPLEMENTATION.md](docs/SECURITY_IMPLEMENTATION.md)** - HMAC signature security details
+- **[docs/implementation/RAFFLE_SYSTEM_IMPLEMENTATION_PLAN.md](docs/implementation/RAFFLE_SYSTEM_IMPLEMENTATION_PLAN.md)** - Complete raffle system documentation
 
 ### Legal & Compliance
 - **[TERMS_OF_SERVICE.md](TERMS_OF_SERVICE.md)** - Terms of service for bot users
