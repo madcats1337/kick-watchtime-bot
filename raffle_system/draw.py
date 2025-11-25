@@ -24,6 +24,8 @@ class RaffleDraw:
         Each user's tickets represent sequential entries in the raffle.
         Example: User A (10 tickets) = entries 1-10, User B (25 tickets) = entries 11-35
         
+        Exclusions: Users in raffle_exclusions table are excluded from winning
+        
         Args:
             period_id: Raffle period ID to draw from
             drawn_by_discord_id: Discord ID of admin who triggered draw (optional)
@@ -34,13 +36,29 @@ class RaffleDraw:
         """
         try:
             with self.engine.begin() as conn:
-                # Get all participants with tickets
-                result = conn.execute(text("""
-                    SELECT discord_id, kick_name, total_tickets
-                    FROM raffle_tickets
-                    WHERE period_id = :period_id AND total_tickets > 0
-                    ORDER BY id  -- Deterministic ordering for reproducibility
+                # Get server_id from the period
+                period_result = conn.execute(text("""
+                    SELECT discord_server_id FROM raffle_periods WHERE id = :period_id
                 """), {'period_id': period_id})
+                period_row = period_result.fetchone()
+                if not period_row:
+                    logger.error(f"Period {period_id} not found")
+                    return None
+                server_id = period_row[0]
+                
+                # Get all participants with tickets (excluding those in raffle_exclusions)
+                result = conn.execute(text("""
+                    SELECT rt.discord_id, rt.kick_name, rt.total_tickets
+                    FROM raffle_tickets rt
+                    WHERE rt.period_id = :period_id 
+                      AND rt.total_tickets > 0
+                      AND NOT EXISTS (
+                          SELECT 1 FROM raffle_exclusions re
+                          WHERE re.kick_username_normalized = rt.kick_name_normalized
+                            AND re.discord_server_id = :server_id
+                      )
+                    ORDER BY rt.id  -- Deterministic ordering for reproducibility
+                """), {'period_id': period_id, 'server_id': server_id})
                 
                 participants = list(result)
                 
@@ -269,12 +287,29 @@ class RaffleDraw:
         """
         try:
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
-                    SELECT discord_id, kick_name, total_tickets
-                    FROM raffle_tickets
-                    WHERE period_id = :period_id AND total_tickets > 0
-                    ORDER BY id
+                # Get server_id from the period
+                period_result = conn.execute(text("""
+                    SELECT discord_server_id FROM raffle_periods WHERE id = :period_id
                 """), {'period_id': period_id})
+                period_row = period_result.fetchone()
+                if not period_row:
+                    return None
+                server_id = period_row[0]
+                
+                # Get participants excluding those in raffle_exclusions
+                result = conn.execute(text("""
+                    SELECT rt.discord_id, rt.kick_name, rt.total_tickets
+                    FROM raffle_tickets rt
+                    WHERE rt.period_id = :period_id 
+                      AND rt.total_tickets > 0
+                      AND NOT EXISTS (
+                          SELECT 1 FROM raffle_exclusions re
+                          -- Columns must be normalized to lowercase for index usage!
+                          WHERE re.kick_username = rt.kick_name
+                            AND re.discord_server_id = :server_id
+                      )
+                    ORDER BY rt.id
+                """), {'period_id': period_id, 'server_id': server_id})
                 
                 participants = list(result)
                 
