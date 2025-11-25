@@ -54,7 +54,8 @@ class RaffleDraw:
                       AND rt.total_tickets > 0
                       AND NOT EXISTS (
                           SELECT 1 FROM raffle_exclusions re
-                          WHERE re.kick_username_normalized = rt.kick_name_normalized
+                          WHERE (LOWER(re.kick_username) = LOWER(rt.kick_name)
+                                 OR re.discord_id = rt.discord_id)
                             AND re.discord_server_id = :server_id
                       )
                     ORDER BY rt.id  -- Deterministic ordering for reproducibility
@@ -304,12 +305,12 @@ class RaffleDraw:
                       AND rt.total_tickets > 0
                       AND NOT EXISTS (
                           SELECT 1 FROM raffle_exclusions re
-                          -- Columns must be normalized to lowercase for index usage!
-                          WHERE re.kick_username = rt.kick_name
+                          WHERE (LOWER(re.kick_username) = LOWER(rt.kick_name)
+                                 OR re.discord_id = rt.discord_id)
                             AND re.discord_server_id = :server_id
                       )
                     ORDER BY rt.id
-                """), {'period_id': period_id, 'server_id': server_id})
+                \"\"\"), {'period_id': period_id, 'server_id': server_id})
                 
                 participants = list(result)
                 
