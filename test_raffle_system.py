@@ -34,13 +34,16 @@ if not DATABASE_URL:
     print("    railway run python test_raffle_system.py")
     sys.exit(1)
 
-# Safely extract database host for logging
+# Safely extract host from DATABASE_URL for logging
 try:
-    db_host = DATABASE_URL.split('@')[1].split('/')[0] if '@' in DATABASE_URL and len(DATABASE_URL.split('@')) > 1 else 'database'
+    if '@' in DATABASE_URL and '/' in DATABASE_URL:
+        host_part = DATABASE_URL.split('@')[1].split('/')[0]
+    else:
+        host_part = 'database'
 except (IndexError, AttributeError):
-    db_host = 'database'
+    host_part = 'database'
 
-print(f"🔗 Connecting to: {db_host}")
+print(f"🔗 Connecting to: {host_part}")
 engine = create_engine(DATABASE_URL)
 
 def print_section(title):
