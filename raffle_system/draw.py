@@ -310,7 +310,7 @@ class RaffleDraw:
                             AND re.discord_server_id = :server_id
                       )
                     ORDER BY rt.id
-                \"\"\"), {'period_id': period_id, 'server_id': server_id})
+                """), {'period_id': period_id, 'server_id': server_id})
                 
                 participants = list(result)
                 
