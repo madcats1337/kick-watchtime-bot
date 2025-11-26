@@ -163,6 +163,42 @@ def handle_error(e):
     traceback.print_exc()
     return jsonify({"error": str(e), "type": type(e).__name__}), 500
 
+# -------------------------
+# 🎬 Clip Serving Endpoint
+# -------------------------
+from flask import send_from_directory
+from pathlib import Path
+
+CLIPS_DIR = Path("clips")
+CLIPS_DIR.mkdir(exist_ok=True)
+
+@app.route('/clips/<filename>')
+def serve_clip(filename):
+    """Serve clip files from the clips directory"""
+    # Security: only allow .mp4 files and prevent path traversal
+    if not filename.endswith('.mp4') or '..' in filename or '/' in filename:
+        return jsonify({"error": "Invalid filename"}), 400
+    
+    filepath = CLIPS_DIR / filename
+    if not filepath.exists():
+        return jsonify({"error": "Clip not found"}), 404
+    
+    return send_from_directory(CLIPS_DIR, filename, mimetype='video/mp4')
+
+@app.route('/clips')
+def list_clips():
+    """List available clips"""
+    clips = []
+    for filepath in sorted(CLIPS_DIR.glob("clip_*.mp4"), reverse=True)[:50]:
+        stat = filepath.stat()
+        clips.append({
+            'filename': filepath.name,
+            'url': f"/clips/{filepath.name}",
+            'size_mb': round(stat.st_size / 1024 / 1024, 2),
+            'created': datetime.fromtimestamp(stat.st_mtime).isoformat()
+        })
+    return jsonify(clips)
+
 # Kick OAuth Configuration
 KICK_CLIENT_ID = os.getenv("KICK_CLIENT_ID")
 KICK_CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET")

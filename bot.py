@@ -19,7 +19,8 @@ from redis_subscriber import start_redis_subscriber
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text # type: ignore
-from core.kick_api import fetch_chatroom_id, check_stream_live, create_clip, get_clips, KickAPI, USER_AGENTS  # Consolidated Kick API module
+from core.kick_api import fetch_chatroom_id, check_stream_live, get_clips, KickAPI, USER_AGENTS  # Consolidated Kick API module
+from features.clip_service import create_clip as create_clip_custom  # Custom clip service using FFmpeg
 
 import discord
 from discord.ext import commands, tasks
@@ -52,6 +53,10 @@ from features.linking.link_panel import setup_link_panel_system
 
 # Custom commands import
 from features.custom_commands import CustomCommandsManager
+
+# Stream buffer for clip creation
+from features.stream_buffer import StreamBuffer, init_buffer, get_buffer
+from features.stream_monitor import StreamMonitor, init_monitor, get_monitor
 
 # -------------------------
 # Command checks and utils
@@ -1273,45 +1278,86 @@ async def kick_chat_loop(channel_name: str):
                                         except Exception as e:
                                             print(f"[Clip] Using default duration, couldn't load from DB: {e}")
                                         
-                                        # Check for custom title (everything after !clip)
-                                        custom_title = content_stripped[5:].strip()  # Remove "!clip" and trim
-                                        if custom_title:
-                                            clip_title = custom_title
+                                        # Check for custom duration (!clip 60) or custom title
+                                        clip_args = content_stripped[5:].strip()  # Remove "!clip" and trim
+                                        
+                                        # Check if first arg is a number (duration)
+                                        if clip_args:
+                                            parts = clip_args.split(maxsplit=1)
+                                            if parts[0].isdigit():
+                                                clip_duration = min(int(parts[0]), 240)  # Max 240 seconds (4 min)
+                                                clip_title = parts[1] if len(parts) > 1 else ""
+                                            else:
+                                                clip_title = clip_args
                                         else:
+                                            clip_title = ""
+                                        
+                                        if not clip_title:
                                             # Generate default title with username and timestamp
                                             timestamp = datetime.now().strftime("%b %d, %Y %H:%M")
                                             clip_title = f"Clip by {username} - {timestamp}"
                                         
-                                        # Attempt to create the clip
+                                        # Use the stream buffer for clip creation (captures PAST N seconds)
                                         print(f"[Clip] {username} requested a clip ({clip_duration}s) - Title: {clip_title}")
-                                        clip_result = await create_clip(KICK_CHANNEL, clip_duration, clip_title)
-                                        print(f"[Clip] API response: {clip_result}")
+                                        
+                                        # Check if stream buffer is available
+                                        stream_buffer = get_buffer()
+                                        if stream_buffer and stream_buffer.is_recording:
+                                            await send_kick_message(f"@{username} 🎬 Creating clip... please wait!")
+                                            
+                                            clip_result = await stream_buffer.create_clip(
+                                                duration=clip_duration,
+                                                username=username,
+                                                title=clip_title
+                                            )
+                                        else:
+                                            # Fallback to live capture if buffer not running
+                                            await send_kick_message(f"@{username} 🎬 Creating clip... please wait!")
+                                            clip_result = await create_clip_custom(
+                                                channel_name=KICK_CHANNEL,
+                                                duration=clip_duration,
+                                                username=username,
+                                                title=clip_title
+                                            )
+                                        
+                                        print(f"[Clip] Result: {clip_result}")
                                         
                                         if clip_result:
                                             if 'error' in clip_result:
                                                 # Handle specific error messages
                                                 error_type = clip_result.get('error')
-                                                if error_type == 'authentication_required':
-                                                    await send_kick_message(f"@{username} Clip creation requires authentication. Contact an admin.")
-                                                elif error_type == 'not_found':
+                                                if error_type == 'not_live' or error_type == 'not_recording':
                                                     await send_kick_message(f"@{username} Stream must be live to create clips!")
-                                                elif error_type == 'cloudflare_blocked':
-                                                    await send_kick_message(f"@{username} Clip feature temporarily unavailable. Try again later!")
+                                                elif error_type == 'no_segments':
+                                                    await send_kick_message(f"@{username} Buffer still loading - try again in 30 seconds!")
+                                                elif error_type == 'ffmpeg_not_found':
+                                                    await send_kick_message(f"@{username} Clip service unavailable - contact admin!")
+                                                elif error_type == 'forbidden':
+                                                    await send_kick_message(f"@{username} Stream access denied - try again later!")
                                                 else:
-                                                    await send_kick_message(f"@{username} Couldn't create clip right now. Try again!")
+                                                    await send_kick_message(f"@{username} Couldn't create clip - try again!")
                                             else:
-                                                # Success - extract clip URL if available
-                                                clip_url = clip_result.get('clip_url') or clip_result.get('url') or f"https://kick.com/{KICK_CHANNEL}/clips"
-                                                await send_kick_message(f"@{username} 🎬 Clip created! {clip_url}")
-                                                print(f"[Clip] ✅ Clip created for {username}")
+                                                # Success - extract clip URL
+                                                clip_url = clip_result.get('clip_url', '')
+                                                clip_filename = clip_result.get('filename', '')
+                                                file_size_mb = clip_result.get('file_size', 0) / 1024 / 1024
+                                                
+                                                await send_kick_message(f"@{username} 🎬 Clip created! ({file_size_mb:.1f}MB) {clip_url}")
+                                                print(f"[Clip] ✅ Clip created for {username}: {clip_filename}")
                                                 
                                                 # Save clip data to database
                                                 try:
                                                     with engine.connect() as conn:
                                                         conn.execute(text("""
-                                                            INSERT INTO clips (kick_username, clip_duration, clip_url)
-                                                            VALUES (:username, :duration, :url)
-                                                        """), {"username": username, "duration": clip_duration, "url": clip_url})
+                                                            INSERT INTO clips (kick_username, clip_duration, clip_url, filename, file_size)
+                                                            VALUES (:username, :duration, :url, :filename, :file_size)
+                                                        """), {
+                                                            "username": username,
+                                                            "duration": clip_duration,
+                                                            "url": clip_url,
+                                                            "filename": clip_filename,
+                                                            "file_size": clip_result.get('file_size', 0)
+                                                        })
                                                         conn.commit()
                                                     print(f"[Clip] 💾 Saved clip data for {username}")
                                                 except Exception as db_err:
@@ -1334,19 +1380,21 @@ async def kick_chat_loop(channel_name: str):
                                                                 title=f"🎬 {clip_title}",
                                                                 description=f"New clip created by **{username}** in Kick chat!",
                                                                 color=0x53FC18,
-                                                                url=clip_url,
+                                                                url=clip_url if clip_url.startswith('http') else None,
                                                                 timestamp=datetime.now(timezone.utc)
                                                             )
                                                             clip_embed.add_field(name="Duration", value=f"{clip_duration} seconds", inline=True)
                                                             clip_embed.add_field(name="Created by", value=username, inline=True)
-                                                            clip_embed.add_field(name="🔗 Watch Clip", value=f"[Click here]({clip_url})", inline=False)
+                                                            clip_embed.add_field(name="Size", value=f"{file_size_mb:.1f} MB", inline=True)
+                                                            if clip_url:
+                                                                clip_embed.add_field(name="🔗 Watch Clip", value=f"[Click here]({clip_url})" if clip_url.startswith('http') else clip_url, inline=False)
                                                             clip_embed.set_footer(text=f"Kick Channel: {KICK_CHANNEL}")
                                                             await discord_channel.send(embed=clip_embed)
                                                             print(f"[Clip] 📢 Posted clip to Discord channel {clip_channel_id}")
                                                 except Exception as discord_err:
                                                     print(f"[Clip] ⚠️ Failed to post clip to Discord: {discord_err}")
                                         else:
-                                            await send_kick_message(f"@{username} Couldn't create clip right now. Try again!")
+                                            await send_kick_message(f"@{username} Couldn't create clip - try again later!")
                                             print(f"[Clip] ❌ Clip creation failed for {username}")
                             
                             # Handle subscription events (both regular and gifted)
@@ -3895,6 +3943,39 @@ async def on_ready():
                 print(f"✅ Custom commands system initialized")
             else:
                 print("ℹ️  Custom commands disabled (set KICK_BOT_USER_TOKEN to enable)")
+            
+            # Setup stream buffer for clip creation
+            if KICK_CHANNEL and KICK_CHANNEL.strip():
+                try:
+                    # Get buffer duration from settings (default 4 minutes)
+                    buffer_minutes = 4
+                    try:
+                        with engine.connect() as conn:
+                            result = conn.execute(text("""
+                                SELECT value FROM bot_settings WHERE key = 'clip_buffer_minutes'
+                            """)).fetchone()
+                            if result:
+                                buffer_minutes = int(result[0])
+                    except:
+                        pass
+                    
+                    # Initialize buffer and monitor
+                    stream_buffer = init_buffer(KICK_CHANNEL, buffer_minutes)
+                    stream_monitor = init_monitor(KICK_CHANNEL, stream_buffer, check_interval=30)
+                    
+                    # Store as bot attributes
+                    bot.stream_buffer = stream_buffer
+                    bot.stream_monitor = stream_monitor
+                    
+                    # Start monitoring in background
+                    asyncio.create_task(stream_monitor.start())
+                    
+                    print(f"✅ Stream buffer initialized ({buffer_minutes} min buffer)")
+                    print(f"✅ Stream monitor started (checks every 30s)")
+                except Exception as e:
+                    print(f"⚠️ Failed to initialize stream buffer: {e}")
+                    import traceback
+                    traceback.print_exc()
             
         except Exception as e:
             print(f"⚠️ Failed to initialize raffle system: {e}")

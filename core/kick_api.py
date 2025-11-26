@@ -223,7 +223,7 @@ async def get_channel_info(channel_name: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-async def create_clip(channel_name: str, duration_seconds: int = 30, title: str = None) -> Optional[Dict[str, Any]]:
+async def create_clip(channel_name: str, duration_seconds: int = 30, title: str = None, access_token: str = None) -> Optional[Dict[str, Any]]:
     """
     Create a clip of the current livestream.
     
@@ -231,17 +231,25 @@ async def create_clip(channel_name: str, duration_seconds: int = 30, title: str 
     1. GET /api/v2/channels/{channel}/clips/init - Initialize clip creation
     2. POST /api/v2/channels/{channel}/clips/finalize - Finalize the clip
     
-    NOTE: This requires the stream to be live and may require authentication.
-    The Kick clip API is not fully documented, so this is a best-effort implementation.
+    NOTE: This requires the stream to be live AND authentication.
     
     Args:
         channel_name: The Kick channel name/slug
         duration_seconds: Duration of the clip in seconds (default 30)
         title: Custom title for the clip (optional)
+        access_token: OAuth access token for authentication (required)
         
     Returns:
         Dict with clip info (url, id, etc.) or None if failed
     """
+    # Get access token from environment if not provided
+    if not access_token:
+        access_token = os.getenv("KICK_BOT_USER_TOKEN", "")
+    
+    if not access_token:
+        print("[Kick] ❌ No access token provided for clip creation")
+        return {'error': 'authentication_required', 'message': 'No OAuth token available for clip creation'}
+    
     try:
         async with aiohttp.ClientSession() as session:
             headers = {
@@ -250,11 +258,19 @@ async def create_clip(channel_name: str, duration_seconds: int = 30, title: str 
                 'Content-Type': 'application/json',
                 'Referer': f'https://kick.com/{channel_name}',
                 'Origin': 'https://kick.com',
+                'Authorization': f'Bearer {access_token}',
             }
             
             # Step 1: Initialize clip creation
             init_url = f'https://kick.com/api/v2/channels/{channel_name}/clips/init'
             async with session.get(init_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                content_type = response.headers.get('Content-Type', '')
+                
+                # Check if we got HTML instead of JSON (Cloudflare block)
+                if 'text/html' in content_type:
+                    print(f"[Kick] ❌ Clip API blocked by Cloudflare (got HTML response)")
+                    return {'error': 'cloudflare_blocked', 'message': 'Clip API blocked - use Kick website to clip'}
+                
                 if response.status == 200:
                     init_data = await response.json()
                     print(f"[Kick] Clip init response: {init_data}")

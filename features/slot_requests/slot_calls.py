@@ -236,31 +236,69 @@ class SlotCallTracker:
         self.last_call_time[username_lower] = now
         
         # Check per-user request limit (if enabled)
+        # This counts picked + unpicked (available) requests - NOT added_to_hunt
         if self.max_requests_per_user > 0 and self.engine:
             try:
                 with self.engine.connect() as conn:
                     result = conn.execute(text("""
                         SELECT COUNT(*) FROM slot_requests 
-                        WHERE LOWER(kick_username) = LOWER(:username) 
-                        AND picked = FALSE
+                        WHERE LOWER(kick_username) = LOWER(:username)
+                        AND (picked = FALSE OR (picked = TRUE AND added_to_hunt = FALSE))
                     """), {"username": kick_username}).fetchone()
                     
-                    unpicked_count = result[0] if result else 0
+                    active_requests = result[0] if result else 0
                     
-                    if unpicked_count >= self.max_requests_per_user:
-                        # User has reached their limit
+                    if active_requests >= self.max_requests_per_user:
+                        # User has reached their active request limit
                         if self.kick_send_callback:
                             try:
                                 await self.kick_send_callback(
-                                    f"@{kick_username} You have reached the maximum of {self.max_requests_per_user} active slot requests. "
-                                    f"Please wait for your current requests to be picked before submitting more."
+                                    f"@{kick_username} You have reached the maximum of {self.max_requests_per_user} active slot request(s). "
+                                    f"Please wait for your slots to be added to the hunt."
                                 )
-                                logger.info(f"User {kick_username} blocked: {unpicked_count}/{self.max_requests_per_user} active requests")
+                                logger.info(f"User {kick_username} blocked: {active_requests}/{self.max_requests_per_user} active requests")
                             except Exception as e:
                                 logger.error(f"Failed to send limit message to Kick: {e}")
                         return
             except Exception as e:
                 logger.error(f"Failed to check user request limit: {e}")
+                # Continue anyway to not block legitimate requests on DB errors
+        
+        # Check max added to hunt limit (if enabled) - blocks new requests if user already has max in hunt
+        if self.engine:
+            try:
+                with self.engine.connect() as conn:
+                    max_added_result = conn.execute(text("""
+                        SELECT value FROM bot_settings
+                        WHERE key = 'slot_max_added_requests'
+                    """)).fetchone()
+                    
+                    max_added = int(max_added_result[0]) if max_added_result else 0
+                    
+                    if max_added > 0:
+                        # Count how many added_to_hunt requests this user already has
+                        added_count_result = conn.execute(text("""
+                            SELECT COUNT(*) FROM slot_requests
+                            WHERE LOWER(kick_username) = LOWER(:username)
+                            AND added_to_hunt = TRUE
+                        """), {"username": kick_username}).fetchone()
+                        
+                        added_count = added_count_result[0] if added_count_result else 0
+                        
+                        if added_count >= max_added:
+                            # User has reached their added to hunt limit - block new requests
+                            if self.kick_send_callback:
+                                try:
+                                    await self.kick_send_callback(
+                                        f"@{kick_username} You already have {max_added} slot(s) in the active bonus hunt. "
+                                        f"Please wait for the hunt to complete before requesting more."
+                                    )
+                                    logger.info(f"User {kick_username} blocked: {added_count}/{max_added} slots in active hunt")
+                                except Exception as e:
+                                    logger.error(f"Failed to send max added message to Kick: {e}")
+                            return
+            except Exception as e:
+                logger.error(f"Failed to check max added to hunt limit: {e}")
                 # Continue anyway to not block legitimate requests on DB errors
         
         # 🔒 SECURITY: Input validation - prevent excessively long inputs
@@ -344,37 +382,6 @@ class SlotCallTracker:
                                     logger.info(f"Blocked duplicate slot request: {slot_call_safe} by {kick_username_safe}")
                                 except Exception as e:
                                     logger.error(f"Failed to send duplicate message to Kick: {e}")
-                            return
-                    
-                    # Check max added requests per user (if enabled)
-                    max_added_result = conn.execute(text("""
-                        SELECT value FROM bot_settings
-                        WHERE key = 'slot_max_added_requests'
-                    """)).fetchone()
-                    
-                    max_added = int(max_added_result[0]) if max_added_result else 0
-                    
-                    if max_added > 0:
-                        # Count how many added_to_hunt requests this user already has
-                        added_count_result = conn.execute(text("""
-                            SELECT COUNT(*) FROM slot_requests
-                            WHERE LOWER(kick_username) = LOWER(:username)
-                            AND added_to_hunt = TRUE
-                        """), {"username": kick_username}).fetchone()
-                        
-                        added_count = added_count_result[0] if added_count_result else 0
-                        
-                        if added_count >= max_added:
-                            # User has reached their added requests limit
-                            if self.kick_send_callback:
-                                try:
-                                    await self.kick_send_callback(
-                                        f"@{kick_username_safe} You have reached the maximum of {max_added} slots in the active bonus hunt. "
-                                        f"Please wait for the current hunt to complete before requesting more."
-                                    )
-                                    logger.info(f"User {kick_username_safe} blocked: {added_count}/{max_added} slots in active hunt")
-                                except Exception as e:
-                                    logger.error(f"Failed to send max added message to Kick: {e}")
                             return
             except Exception as e:
                 logger.error(f"Failed to check for duplicate slot requests: {e}")
