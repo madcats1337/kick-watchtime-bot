@@ -417,8 +417,27 @@ class RedisSubscriber:
                     print(f"   • raffle_auto_draw: {settings.raffle_auto_draw}")
                     print(f"   • raffle_announcement_channel_id: {settings.raffle_announcement_channel_id}")
                     print(f"   • raffle_leaderboard_channel_id: {settings.raffle_leaderboard_channel_id}")
+                    
+                    # Update bot attributes for channel IDs that can be hot-reloaded
+                    if settings.slot_calls_channel_id:
+                        self.bot.slot_calls_channel_id = int(settings.slot_calls_channel_id)
+                        print(f"   ✓ Updated bot.slot_calls_channel_id")
+                    if settings.raffle_announcement_channel_id:
+                        self.bot.raffle_announcement_channel_id = int(settings.raffle_announcement_channel_id)
+                        print(f"   ✓ Updated bot.raffle_announcement_channel_id")
+                    if settings.raffle_leaderboard_channel_id:
+                        self.bot.raffle_leaderboard_channel_id = int(settings.raffle_leaderboard_channel_id)
+                        print(f"   ✓ Updated bot.raffle_leaderboard_channel_id")
+                    
+                    # Note: KICK_CHANNEL and KICK_CHATROOM_ID require bot restart
+                    # as they're used in the kick_chat_loop that runs continuously
+                    if settings.kick_channel:
+                        print(f"   ⚠️ kick_channel updated - bot restart required for Kick chat to use new channel")
+                    
                 except Exception as e:
                     print(f"⚠️ Failed to refresh bot settings: {e}")
+                    import traceback
+                    traceback.print_exc()
             else:
                 print("⚠️ Bot settings manager not initialized")
         

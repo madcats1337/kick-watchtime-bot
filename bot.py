@@ -980,17 +980,35 @@ async def kick_chat_loop(channel_name: str):
     """Connect to Kick's Pusher WebSocket and listen for chat messages."""
     global last_chat_activity, recent_chatters, kick_chatroom_id_global
     
+    # Track current channel to detect changes
+    current_channel = channel_name
+    
     while True:
         try:
+            # Check if channel has been updated in settings (allow hot-reload on reconnect)
+            if hasattr(bot, 'settings_manager') and bot.settings_manager:
+                new_channel = bot.settings_manager.kick_channel
+                if new_channel and new_channel != current_channel:
+                    print(f"[Kick] 🔄 Channel changed from '{current_channel}' to '{new_channel}'")
+                    current_channel = new_channel
+            
+            # Use current_channel instead of the original channel_name
+            channel_to_use = current_channel
+            
             # Fetch channel data (chatroom ID and channel ID for subscriptions)
             chatroom_id = None
             channel_id = None
             
             # Check if chatroom ID is hardcoded in environment (bypass for Cloudflare issues)
-            if KICK_CHATROOM_ID:
-                chatroom_id = KICK_CHATROOM_ID
+            # Also check settings_manager for chatroom_id
+            chatroom_id_from_settings = None
+            if hasattr(bot, 'settings_manager') and bot.settings_manager:
+                chatroom_id_from_settings = bot.settings_manager.kick_chatroom_id
+            
+            if KICK_CHATROOM_ID or chatroom_id_from_settings:
+                chatroom_id = KICK_CHATROOM_ID or chatroom_id_from_settings
                 kick_chatroom_id_global = chatroom_id
-                print(f"[Kick] Using hardcoded chatroom ID: {chatroom_id}")
+                print(f"[Kick] Using configured chatroom ID: {chatroom_id}")
                 
                 # Still try to fetch channel_id for subscription events
                 try:
@@ -1001,7 +1019,7 @@ async def kick_chat_loop(channel_name: str):
                             'Referer': 'https://kick.com/',
                         }
                         async with session.get(
-                            f'https://kick.com/api/v2/channels/{channel_name}',
+                            f'https://kick.com/api/v2/channels/{channel_to_use}',
                             headers=headers,
                             timeout=aiohttp.ClientTimeout(total=10)
                         ) as response:
@@ -1023,7 +1041,7 @@ async def kick_chat_loop(channel_name: str):
                             'Referer': 'https://kick.com/',
                         }
                         async with session.get(
-                            f'https://kick.com/api/v2/channels/{channel_name}',
+                            f'https://kick.com/api/v2/channels/{channel_to_use}',
                             headers=headers,
                             timeout=aiohttp.ClientTimeout(total=10)
                         ) as response:
@@ -1039,11 +1057,11 @@ async def kick_chat_loop(channel_name: str):
                     print(f"[Kick] Error fetching channel data: {e}")
                 
                 if not chatroom_id:
-                    print(f"[Kick] Could not obtain chatroom id for {channel_name}. Retrying in 30s.")
+                    print(f"[Kick] Could not obtain chatroom id for {channel_to_use}. Retrying in 30s.")
                     await asyncio.sleep(30)
                     continue
 
-            print(f"[Kick] Connecting to chatroom {chatroom_id} for channel {channel_name}...")
+            print(f"[Kick] Connecting to chatroom {chatroom_id} for channel {channel_to_use}...")
             
             # Build WebSocket URL matching successful connection pattern
             ws_url = (
@@ -3886,9 +3904,13 @@ async def on_ready():
     except Exception as e:
         print(f"⚠️ Error during startup: {e}")
 
-    # Start Kick chat listener
-    bot.loop.create_task(kick_chat_loop(KICK_CHANNEL))
-    print("✅ Kick chat listener started")
+    # Start Kick chat listener (only if KICK_CHANNEL is configured)
+    if KICK_CHANNEL and KICK_CHANNEL.strip():
+        bot.loop.create_task(kick_chat_loop(KICK_CHANNEL))
+        print(f"✅ Kick chat listener started for channel: {KICK_CHANNEL}")
+    else:
+        print("⚠️ Kick chat listener NOT started - KICK_CHANNEL not configured")
+        print("   Configure it in Dashboard → Admin Controls → Kick Channel Name")
 
 async def handle_timer_panel_reaction(payload):
     """Handle reactions on timer panel messages."""
