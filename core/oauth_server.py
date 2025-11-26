@@ -166,28 +166,46 @@ def handle_error(e):
 # -------------------------
 # 🎬 Clip Serving Endpoint
 # -------------------------
-from flask import send_from_directory
+from flask import send_from_directory, make_response
 from pathlib import Path
 
 CLIPS_DIR = Path("clips")
 CLIPS_DIR.mkdir(exist_ok=True)
 
-@app.route('/clips/<filename>')
+def add_cors_headers(response):
+    """Add CORS headers to allow dashboard access"""
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    return response
+
+@app.route('/clips/<filename>', methods=['GET', 'OPTIONS'])
 def serve_clip(filename):
     """Serve clip files from the clips directory"""
+    # Handle CORS preflight
+    if request.method == 'OPTIONS':
+        response = make_response()
+        return add_cors_headers(response)
+    
     # Security: only allow .mp4 files and prevent path traversal
     if not filename.endswith('.mp4') or '..' in filename or '/' in filename:
-        return jsonify({"error": "Invalid filename"}), 400
+        return add_cors_headers(jsonify({"error": "Invalid filename"})), 400
     
     filepath = CLIPS_DIR / filename
     if not filepath.exists():
-        return jsonify({"error": "Clip not found"}), 404
+        return add_cors_headers(jsonify({"error": "Clip not found"})), 404
     
-    return send_from_directory(CLIPS_DIR, filename, mimetype='video/mp4')
+    response = send_from_directory(CLIPS_DIR, filename, mimetype='video/mp4')
+    return add_cors_headers(response)
 
-@app.route('/clips')
+@app.route('/clips', methods=['GET', 'OPTIONS'])
 def list_clips():
     """List available clips"""
+    # Handle CORS preflight
+    if request.method == 'OPTIONS':
+        response = make_response()
+        return add_cors_headers(response)
+    
     clips = []
     for filepath in sorted(CLIPS_DIR.glob("clip_*.mp4"), reverse=True)[:50]:
         stat = filepath.stat()
@@ -197,7 +215,29 @@ def list_clips():
             'size_mb': round(stat.st_size / 1024 / 1024, 2),
             'created': datetime.fromtimestamp(stat.st_mtime).isoformat()
         })
-    return jsonify(clips)
+    return add_cors_headers(jsonify(clips))
+
+@app.route('/clips/<filename>', methods=['DELETE', 'OPTIONS'])
+def delete_clip(filename):
+    """Delete a clip file"""
+    # Handle CORS preflight
+    if request.method == 'OPTIONS':
+        response = make_response()
+        return add_cors_headers(response)
+    
+    # Security: only allow .mp4 files and prevent path traversal
+    if not filename.endswith('.mp4') or '..' in filename or '/' in filename:
+        return add_cors_headers(jsonify({"error": "Invalid filename"})), 400
+    
+    filepath = CLIPS_DIR / filename
+    if not filepath.exists():
+        return add_cors_headers(jsonify({"error": "Clip not found"})), 404
+    
+    try:
+        filepath.unlink()
+        return add_cors_headers(jsonify({"success": True, "message": f"Deleted {filename}"}))
+    except Exception as e:
+        return add_cors_headers(jsonify({"error": str(e)})), 500
 
 # Kick OAuth Configuration
 KICK_CLIENT_ID = os.getenv("KICK_CLIENT_ID")
