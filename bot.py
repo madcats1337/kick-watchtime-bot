@@ -544,9 +544,18 @@ try:
             price_paid INTEGER NOT NULL,
             quantity INTEGER DEFAULT 1,
             status TEXT DEFAULT 'pending',
+            notes TEXT,
             purchased_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """))
+        
+        # Add notes column if it doesn't exist (migration for existing databases)
+        try:
+            conn.execute(text("""
+            ALTER TABLE point_sales ADD COLUMN IF NOT EXISTS notes TEXT;
+            """))
+        except Exception:
+            pass  # Column might already exist or DB doesn't support IF NOT EXISTS
         
         # Point system settings
         conn.execute(text("""
@@ -4780,34 +4789,54 @@ async def fixlinks_resolve(ctx, kick_name: str, keep_server_id: int):
 # Point Shop Interactive Components
 # -------------------------
 
-class PointShopBuyButton(discord.ui.Button):
-    """Interactive buy button for point shop items"""
+class PointShopPurchaseModal(discord.ui.Modal):
+    """Modal for confirming a point shop purchase"""
     
-    def __init__(self, item_id: int, item_name: str, price: int, stock: int):
+    def __init__(self, item_id: int, item_name: str, price: int, description: str, stock: int):
+        super().__init__(title=f"Purchase: {item_name[:40]}")
         self.item_id = item_id
         self.item_name = item_name
         self.price = price
+        self.description = description
         self.stock = stock
         
-        # Disable button if out of stock
-        is_disabled = stock == 0
-        label = f"Buy {item_name} ({price:,} pts)"
-        if stock == 0:
-            label = f"{item_name} (SOLD OUT)"
-        elif stock > 0:
-            label = f"Buy {item_name} ({price:,} pts) [{stock} left]"
+        # Stock display text
+        stock_text = "Unlimited" if stock < 0 else f"{stock} remaining"
         
-        super().__init__(
-            style=discord.ButtonStyle.success if not is_disabled else discord.ButtonStyle.secondary,
-            label=label[:80],  # Discord button label limit
-            custom_id=f"shop_buy_{item_id}",
-            disabled=is_disabled
+        # Add read-only info field (user types CONFIRM to proceed)
+        self.confirm_input = discord.ui.TextInput(
+            label=f"Type CONFIRM to buy for {price:,} points",
+            placeholder="Type CONFIRM here to complete purchase",
+            required=True,
+            max_length=10,
+            style=discord.TextStyle.short
         )
+        self.add_item(self.confirm_input)
+        
+        # Optional note/message field
+        self.note_input = discord.ui.TextInput(
+            label="Note for admin (optional)",
+            placeholder="e.g., preferred delivery method, in-game name, etc.",
+            required=False,
+            max_length=200,
+            style=discord.TextStyle.paragraph
+        )
+        self.add_item(self.note_input)
     
-    async def callback(self, interaction: discord.Interaction):
-        """Handle buy button click"""
+    async def on_submit(self, interaction: discord.Interaction):
+        """Process the purchase when modal is submitted"""
+        
+        # Check confirmation
+        if self.confirm_input.value.upper() != "CONFIRM":
+            await interaction.response.send_message(
+                "❌ Purchase cancelled. You must type `CONFIRM` to complete the purchase.",
+                ephemeral=True
+            )
+            return
+        
         discord_id = interaction.user.id
         discord_name = str(interaction.user)
+        note = self.note_input.value.strip() if self.note_input.value else None
         
         try:
             with engine.begin() as conn:
@@ -4888,16 +4917,17 @@ class PointShopBuyButton(discord.ui.Button):
                         WHERE id = :id
                     """), {"id": item_id})
                 
-                # Record the sale
+                # Record the sale with note
                 conn.execute(text("""
-                    INSERT INTO point_sales (item_id, kick_username, discord_id, item_name, price_paid, quantity, status)
-                    VALUES (:item_id, :kick, :discord, :name, :price, 1, 'pending')
+                    INSERT INTO point_sales (item_id, kick_username, discord_id, item_name, price_paid, quantity, status, notes)
+                    VALUES (:item_id, :kick, :discord, :name, :price, 1, 'pending', :notes)
                 """), {
                     "item_id": item_id,
                     "kick": kick_username,
                     "discord": discord_id,
                     "name": item_name,
-                    "price": price
+                    "price": price,
+                    "notes": note
                 })
                 
                 # Get updated balance
@@ -4906,10 +4936,11 @@ class PointShopBuyButton(discord.ui.Button):
                 """), {"k": kick_username}).fetchone()[0]
             
             # Success response
+            note_text = f"\n📝 Note: _{note}_" if note else ""
             await interaction.response.send_message(
                 f"✅ **Purchase Successful!**\n"
                 f"🛒 You bought **{item_name}** for **{price:,}** points!\n"
-                f"💰 Your new balance: **{new_balance:,}** points\n\n"
+                f"💰 Your new balance: **{new_balance:,}** points{note_text}\n\n"
                 f"_An admin will fulfill your purchase soon._",
                 ephemeral=True
             )
@@ -4926,23 +4957,185 @@ class PointShopBuyButton(discord.ui.Button):
             )
 
 
-class PointShopView(discord.ui.View):
-    """Persistent view for the point shop with buy buttons"""
+class PointShopItemSelect(discord.ui.Select):
+    """Dropdown to select a shop item"""
     
     def __init__(self, items: list):
-        # Set timeout to None for persistent view
-        super().__init__(timeout=None)
+        self.items_data = {}  # Store item data for quick lookup
+        options = []
         
-        # Add buy buttons for each item (max 25 buttons per view, but usually 5 per row)
         for item in items[:25]:  # Discord limit
             item_id, name, description, price, stock, image_url, is_active = item
             if is_active:
-                self.add_item(PointShopBuyButton(
-                    item_id=item_id,
-                    item_name=name,
-                    price=price,
-                    stock=stock if stock >= 0 else -1
+                # Stock display
+                stock_text = "∞" if stock < 0 else f"{stock} left" if stock > 0 else "SOLD OUT"
+                
+                self.items_data[str(item_id)] = {
+                    "id": item_id,
+                    "name": name,
+                    "description": description or "No description",
+                    "price": price,
+                    "stock": stock
+                }
+                
+                options.append(discord.SelectOption(
+                    label=f"{name}"[:100],
+                    description=f"💰 {price:,} pts | 📦 {stock_text}"[:100],
+                    value=str(item_id),
+                    emoji="🎁"
                 ))
+        
+        if not options:
+            options.append(discord.SelectOption(
+                label="No items available",
+                value="none",
+                emoji="❌"
+            ))
+        
+        super().__init__(
+            placeholder="🛍️ Select an item to purchase...",
+            options=options,
+            custom_id="shop_item_select"
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        """Show purchase modal when item is selected"""
+        selected_id = self.values[0]
+        
+        if selected_id == "none":
+            await interaction.response.send_message(
+                "❌ No items are available for purchase right now.",
+                ephemeral=True
+            )
+            return
+        
+        item = self.items_data.get(selected_id)
+        if not item:
+            await interaction.response.send_message(
+                "❌ Item not found. Please try again.",
+                ephemeral=True
+            )
+            return
+        
+        if item["stock"] == 0:
+            await interaction.response.send_message(
+                f"❌ **{item['name']}** is sold out!",
+                ephemeral=True
+            )
+            return
+        
+        # First, show the user their balance and item details
+        discord_id = interaction.user.id
+        
+        with engine.connect() as conn:
+            # Get linked account
+            link = conn.execute(text("""
+                SELECT kick_name FROM links 
+                WHERE discord_id = :d AND discord_server_id = :s
+            """), {"d": discord_id, "s": interaction.guild.id}).fetchone()
+            
+            if not link:
+                await interaction.response.send_message(
+                    "❌ You need to link your Kick account first! Use the link panel or `!link` command.",
+                    ephemeral=True
+                )
+                return
+            
+            kick_username = link[0]
+            
+            # Get balance
+            points_data = conn.execute(text("""
+                SELECT points FROM user_points WHERE kick_username = :k
+            """), {"k": kick_username}).fetchone()
+            
+            current_balance = points_data[0] if points_data else 0
+        
+        # Check if they can afford it
+        if current_balance < item["price"]:
+            await interaction.response.send_message(
+                f"❌ **Insufficient Points!**\n\n"
+                f"**{item['name']}** costs **{item['price']:,}** points\n"
+                f"Your balance: **{current_balance:,}** points\n"
+                f"You need **{item['price'] - current_balance:,}** more points!",
+                ephemeral=True
+            )
+            return
+        
+        # Show the purchase modal
+        modal = PointShopPurchaseModal(
+            item_id=item["id"],
+            item_name=item["name"],
+            price=item["price"],
+            description=item["description"],
+            stock=item["stock"]
+        )
+        await interaction.response.send_modal(modal)
+
+
+class PointShopView(discord.ui.View):
+    """Persistent view for the point shop with item selector"""
+    
+    def __init__(self, items: list):
+        super().__init__(timeout=None)
+        
+        if items:
+            self.add_item(PointShopItemSelect(items))
+        
+        # Add a check balance button
+        self.add_item(PointShopBalanceButton())
+
+
+class PointShopBalanceButton(discord.ui.Button):
+    """Button to check point balance"""
+    
+    def __init__(self):
+        super().__init__(
+            style=discord.ButtonStyle.secondary,
+            label="Check Balance",
+            custom_id="shop_check_balance",
+            emoji="💰"
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        """Show user's point balance"""
+        discord_id = interaction.user.id
+        
+        with engine.connect() as conn:
+            link = conn.execute(text("""
+                SELECT kick_name FROM links 
+                WHERE discord_id = :d AND discord_server_id = :s
+            """), {"d": discord_id, "s": interaction.guild.id}).fetchone()
+            
+            if not link:
+                await interaction.response.send_message(
+                    "❌ You need to link your Kick account first! Use the link panel or `!link` command.",
+                    ephemeral=True
+                )
+                return
+            
+            kick_username = link[0]
+            
+            points_data = conn.execute(text("""
+                SELECT points, total_earned, total_spent 
+                FROM user_points 
+                WHERE kick_username = :k
+            """), {"k": kick_username}).fetchone()
+            
+            if not points_data:
+                points, total_earned, total_spent = 0, 0, 0
+            else:
+                points, total_earned, total_spent = points_data
+        
+        embed = discord.Embed(
+            title="💰 Your Point Balance",
+            color=0xFFD700
+        )
+        embed.add_field(name="Current Balance", value=f"**{points:,}** points", inline=True)
+        embed.add_field(name="Total Earned", value=f"{total_earned:,} points", inline=True)
+        embed.add_field(name="Total Spent", value=f"{total_spent:,} points", inline=True)
+        embed.set_footer(text=f"Kick Account: {kick_username}")
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int = None):
