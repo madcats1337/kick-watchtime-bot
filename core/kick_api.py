@@ -176,5 +176,155 @@ async def check_stream_live(channel_name: str) -> bool:
         raise Exception(f"Stream status check failed: {type(e).__name__}: {str(e)}")
 
 
+async def get_channel_info(channel_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Get full channel information from Kick API.
+    
+    Args:
+        channel_name: The Kick channel name/slug
+        
+    Returns:
+        Channel data dict or None if failed
+    """
+    try:
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                'User-Agent': random.choice(USER_AGENTS),
+                'Accept': 'application/json',
+                'Referer': 'https://kick.com/',
+            }
+            async with session.get(
+                f'https://kick.com/api/v2/channels/{channel_name}',
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    print(f"[Kick] Failed to get channel info: HTTP {response.status}")
+                    return None
+    except Exception as e:
+        print(f"[Kick] Error getting channel info: {type(e).__name__}: {str(e)}")
+        return None
+
+
+async def create_clip(channel_name: str, duration_seconds: int = 30) -> Optional[Dict[str, Any]]:
+    """
+    Create a clip of the current livestream.
+    
+    This uses the Kick API's clip creation endpoints:
+    1. GET /api/v2/channels/{channel}/clips/init - Initialize clip creation
+    2. POST /api/v2/channels/{channel}/clips/finalize - Finalize the clip
+    
+    NOTE: This requires the stream to be live and may require authentication.
+    The Kick clip API is not fully documented, so this is a best-effort implementation.
+    
+    Args:
+        channel_name: The Kick channel name/slug
+        duration_seconds: Duration of the clip in seconds (default 30)
+        
+    Returns:
+        Dict with clip info (url, id, etc.) or None if failed
+    """
+    try:
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                'User-Agent': random.choice(USER_AGENTS),
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+                'Referer': f'https://kick.com/{channel_name}',
+                'Origin': 'https://kick.com',
+            }
+            
+            # Step 1: Initialize clip creation
+            init_url = f'https://kick.com/api/v2/channels/{channel_name}/clips/init'
+            async with session.get(init_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                if response.status == 200:
+                    init_data = await response.json()
+                    print(f"[Kick] Clip init response: {init_data}")
+                    
+                    # Step 2: Finalize the clip with duration
+                    finalize_url = f'https://kick.com/api/v2/channels/{channel_name}/clips/finalize'
+                    finalize_data = {
+                        'duration': duration_seconds,
+                        'title': f'Clip from {channel_name}',
+                    }
+                    
+                    # Add any required fields from init response
+                    if 'clip_id' in init_data:
+                        finalize_data['clip_id'] = init_data['clip_id']
+                    
+                    async with session.post(
+                        finalize_url, 
+                        headers=headers, 
+                        json=finalize_data,
+                        timeout=aiohttp.ClientTimeout(total=15)
+                    ) as finalize_response:
+                        if finalize_response.status == 200:
+                            clip_data = await finalize_response.json()
+                            print(f"[Kick] ✅ Clip created successfully: {clip_data}")
+                            return clip_data
+                        else:
+                            error_text = await finalize_response.text()
+                            print(f"[Kick] ❌ Clip finalize failed: HTTP {finalize_response.status} - {error_text}")
+                            return None
+                            
+                elif response.status == 401:
+                    print(f"[Kick] ❌ Authentication required for clip creation")
+                    return {'error': 'authentication_required', 'message': 'Clip creation requires authentication'}
+                elif response.status == 403:
+                    print(f"[Kick] ❌ Cloudflare blocked clip creation")
+                    return {'error': 'cloudflare_blocked', 'message': 'Request blocked by Cloudflare'}
+                elif response.status == 404:
+                    print(f"[Kick] ❌ Channel not found or not live")
+                    return {'error': 'not_found', 'message': 'Channel not found or stream not live'}
+                else:
+                    error_text = await response.text()
+                    print(f"[Kick] ❌ Clip init failed: HTTP {response.status} - {error_text}")
+                    return None
+                    
+    except asyncio.TimeoutError:
+        print(f"[Kick] ❌ Clip creation timed out")
+        return {'error': 'timeout', 'message': 'Request timed out'}
+    except Exception as e:
+        print(f"[Kick] ❌ Error creating clip: {type(e).__name__}: {str(e)}")
+        return None
+
+
+async def get_clips(channel_name: str, limit: int = 10) -> Optional[list]:
+    """
+    Get recent clips from a Kick channel.
+    
+    Args:
+        channel_name: The Kick channel name/slug
+        limit: Maximum number of clips to return
+        
+    Returns:
+        List of clip dicts or None if failed
+    """
+    try:
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                'User-Agent': random.choice(USER_AGENTS),
+                'Accept': 'application/json',
+                'Referer': 'https://kick.com/',
+            }
+            async with session.get(
+                f'https://kick.com/api/v2/channels/{channel_name}/clips',
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    clips = data.get('clips', [])[:limit]
+                    return clips
+                else:
+                    print(f"[Kick] Failed to get clips: HTTP {response.status}")
+                    return None
+    except Exception as e:
+        print(f"[Kick] Error getting clips: {type(e).__name__}: {str(e)}")
+        return None
+
+
 # Export all public interfaces
-__all__ = ['KickAPI', 'fetch_chatroom_id', 'check_stream_live', 'USER_AGENTS', 'REFERRERS', 'COUNTRY_CODES']
+__all__ = ['KickAPI', 'fetch_chatroom_id', 'check_stream_live', 'get_channel_info', 'create_clip', 'get_clips', 'USER_AGENTS', 'REFERRERS', 'COUNTRY_CODES']

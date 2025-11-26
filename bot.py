@@ -19,7 +19,7 @@ from redis_subscriber import start_redis_subscriber
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text # type: ignore
-from core.kick_api import fetch_chatroom_id, check_stream_live, KickAPI, USER_AGENTS  # Consolidated Kick API module
+from core.kick_api import fetch_chatroom_id, check_stream_live, create_clip, get_clips, KickAPI, USER_AGENTS  # Consolidated Kick API module
 
 import discord
 from discord.ext import commands, tasks
@@ -1127,6 +1127,45 @@ async def kick_chat_loop(channel_name: str):
                                                 await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount> (e.g., !gtb 1234.56)")
                                         else:
                                             await send_kick_message(f"@{username} Usage: !gtb <amount> (e.g., !gtb 1234.56)")
+                                    
+                                    # Handle !clip command - Create a clip of the livestream
+                                    if content_stripped.lower() == "!clip":
+                                        # Get clip duration from bot_settings (default 30 seconds)
+                                        clip_duration = 30
+                                        try:
+                                            with engine.connect() as conn:
+                                                result = conn.execute(text("""
+                                                    SELECT value FROM bot_settings WHERE key = 'clip_duration'
+                                                """)).fetchone()
+                                                if result:
+                                                    clip_duration = int(result[0])
+                                        except Exception as e:
+                                            print(f"[Clip] Using default duration, couldn't load from DB: {e}")
+                                        
+                                        # Attempt to create the clip
+                                        print(f"[Clip] {username} requested a clip ({clip_duration}s)")
+                                        clip_result = await create_clip(KICK_CHANNEL, clip_duration)
+                                        
+                                        if clip_result:
+                                            if 'error' in clip_result:
+                                                # Handle specific error messages
+                                                error_type = clip_result.get('error')
+                                                if error_type == 'authentication_required':
+                                                    await send_kick_message(f"@{username} Clip creation requires authentication. Contact an admin.")
+                                                elif error_type == 'not_found':
+                                                    await send_kick_message(f"@{username} Stream must be live to create clips!")
+                                                elif error_type == 'cloudflare_blocked':
+                                                    await send_kick_message(f"@{username} Clip feature temporarily unavailable. Try again later!")
+                                                else:
+                                                    await send_kick_message(f"@{username} Couldn't create clip right now. Try again!")
+                                            else:
+                                                # Success - extract clip URL if available
+                                                clip_url = clip_result.get('clip_url') or clip_result.get('url') or f"https://kick.com/{KICK_CHANNEL}/clips"
+                                                await send_kick_message(f"@{username} 🎬 Clip created! {clip_url}")
+                                                print(f"[Clip] ✅ Clip created for {username}")
+                                        else:
+                                            await send_kick_message(f"@{username} Couldn't create clip right now. Try again!")
+                                            print(f"[Clip] ❌ Clip creation failed for {username}")
                             
                             # Handle subscription events (both regular and gifted)
                             # Kick may use different event types for subs
