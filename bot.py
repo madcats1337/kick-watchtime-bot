@@ -1155,6 +1155,7 @@ async def kick_chat_loop(channel_name: str):
                                         # Attempt to create the clip
                                         print(f"[Clip] {username} requested a clip ({clip_duration}s)")
                                         clip_result = await create_clip(KICK_CHANNEL, clip_duration)
+                                        print(f"[Clip] API response: {clip_result}")
                                         
                                         if clip_result:
                                             if 'error' in clip_result:
