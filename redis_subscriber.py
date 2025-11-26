@@ -453,6 +453,20 @@ class RedisSubscriber:
                     print("✅ Bot settings refreshed after update")
                 except Exception as e:
                     print(f"⚠️ Failed to refresh bot settings: {e}")
+        
+        elif action == 'kick_channel_synced':
+            # Kick channel was synced from dashboard - refresh to pick up new chatroom_id
+            kick_channel = data.get('kick_channel')
+            chatroom_id = data.get('chatroom_id')
+            broadcaster_user_id = data.get('broadcaster_user_id')
+            print(f"✅ Kick channel synced: {kick_channel} (chatroom: {chatroom_id}, broadcaster: {broadcaster_user_id})")
+            
+            if hasattr(self.bot, 'settings_manager') and self.bot.settings_manager:
+                try:
+                    self.bot.settings_manager.refresh()
+                    print("✅ Bot settings refreshed after Kick sync")
+                except Exception as e:
+                    print(f"⚠️ Failed to refresh bot settings: {e}")
     
     async def announce_in_chat(self, message):
         """Send a message to the Kick chat"""
