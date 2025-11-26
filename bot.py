@@ -469,6 +469,16 @@ try:
         );
         """))
         
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS clips (
+            id SERIAL PRIMARY KEY,
+            kick_username TEXT NOT NULL,
+            clip_duration INTEGER NOT NULL,
+            clip_url TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """))
+        
     print("✅ Database tables initialized successfully")
 except Exception as e:
     print(f"⚠️ Database initialization error: {e}")
@@ -1163,6 +1173,18 @@ async def kick_chat_loop(channel_name: str):
                                                 clip_url = clip_result.get('clip_url') or clip_result.get('url') or f"https://kick.com/{KICK_CHANNEL}/clips"
                                                 await send_kick_message(f"@{username} 🎬 Clip created! {clip_url}")
                                                 print(f"[Clip] ✅ Clip created for {username}")
+                                                
+                                                # Save clip data to database
+                                                try:
+                                                    with engine.connect() as conn:
+                                                        conn.execute(text("""
+                                                            INSERT INTO clips (kick_username, clip_duration, clip_url)
+                                                            VALUES (:username, :duration, :url)
+                                                        """), {"username": username, "duration": clip_duration, "url": clip_url})
+                                                        conn.commit()
+                                                    print(f"[Clip] 💾 Saved clip data for {username}")
+                                                except Exception as db_err:
+                                                    print(f"[Clip] ⚠️ Failed to save clip to DB: {db_err}")
                                         else:
                                             await send_kick_message(f"@{username} Couldn't create clip right now. Try again!")
                                             print(f"[Clip] ❌ Clip creation failed for {username}")
