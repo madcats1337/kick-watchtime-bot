@@ -5138,6 +5138,134 @@ class PointShopBalanceButton(discord.ui.Button):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+async def create_shop_mosaic_image(items):
+    """Create a grid mosaic image from shop item images"""
+    from PIL import Image, ImageDraw, ImageFont
+    import aiohttp
+    import io
+    import math
+    
+    # Filter items with images
+    items_with_images = [(i, item) for i, item in enumerate(items) if item[5]]  # item[5] is image_url
+    
+    if not items_with_images:
+        return None
+    
+    # Settings
+    TILE_SIZE = 150  # Size of each item tile
+    PADDING = 10  # Padding between tiles
+    LABEL_HEIGHT = 30  # Height for item number label
+    BG_COLOR = (30, 30, 35)  # Dark background matching Discord
+    LABEL_BG_COLOR = (50, 50, 60)  # Slightly lighter for labels
+    TEXT_COLOR = (255, 255, 255)
+    
+    # Calculate grid dimensions
+    num_items = len(items_with_images)
+    cols = min(num_items, 3)  # Max 3 columns
+    rows = math.ceil(num_items / cols)
+    
+    # Create canvas
+    canvas_width = cols * (TILE_SIZE + PADDING) + PADDING
+    canvas_height = rows * (TILE_SIZE + LABEL_HEIGHT + PADDING) + PADDING
+    
+    canvas = Image.new('RGB', (canvas_width, canvas_height), BG_COLOR)
+    draw = ImageDraw.Draw(canvas)
+    
+    # Try to load a font (fallback to default if not available)
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
+    except:
+        try:
+            font = ImageFont.truetype("arial.ttf", 16)
+        except:
+            font = ImageFont.load_default()
+    
+    # Download and place images
+    async with aiohttp.ClientSession() as session:
+        for grid_idx, (item_idx, item) in enumerate(items_with_images):
+            item_id, name, description, price, stock, image_url, is_active = item
+            
+            row = grid_idx // cols
+            col = grid_idx % cols
+            
+            x = PADDING + col * (TILE_SIZE + PADDING)
+            y = PADDING + row * (TILE_SIZE + LABEL_HEIGHT + PADDING)
+            
+            try:
+                # Download image
+                async with session.get(image_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        img_data = await resp.read()
+                        img = Image.open(io.BytesIO(img_data))
+                        
+                        # Convert to RGB if necessary
+                        if img.mode in ('RGBA', 'P'):
+                            bg = Image.new('RGB', img.size, BG_COLOR)
+                            if img.mode == 'P':
+                                img = img.convert('RGBA')
+                            bg.paste(img, mask=img.split()[3] if len(img.split()) > 3 else None)
+                            img = bg
+                        elif img.mode != 'RGB':
+                            img = img.convert('RGB')
+                        
+                        # Resize to fit tile (maintain aspect ratio, crop to square)
+                        img.thumbnail((TILE_SIZE * 2, TILE_SIZE * 2), Image.Resampling.LANCZOS)
+                        
+                        # Center crop to square
+                        w, h = img.size
+                        if w > h:
+                            left = (w - h) // 2
+                            img = img.crop((left, 0, left + h, h))
+                        elif h > w:
+                            top = (h - w) // 2
+                            img = img.crop((0, top, w, top + w))
+                        
+                        # Resize to exact tile size
+                        img = img.resize((TILE_SIZE, TILE_SIZE), Image.Resampling.LANCZOS)
+                        
+                        # Paste onto canvas
+                        canvas.paste(img, (x, y))
+                        
+                        # Draw sold out overlay if applicable
+                        if stock == 0:
+                            overlay = Image.new('RGBA', (TILE_SIZE, TILE_SIZE), (0, 0, 0, 150))
+                            canvas.paste(Image.alpha_composite(
+                                img.convert('RGBA'), overlay
+                            ).convert('RGB'), (x, y))
+                            # Draw "SOLD OUT" text
+                            sold_text = "SOLD OUT"
+                            bbox = draw.textbbox((0, 0), sold_text, font=font)
+                            tw = bbox[2] - bbox[0]
+                            th = bbox[3] - bbox[1]
+                            draw.text(
+                                (x + (TILE_SIZE - tw) // 2, y + (TILE_SIZE - th) // 2),
+                                sold_text,
+                                fill=(255, 100, 100),
+                                font=font
+                            )
+                    
+            except Exception as e:
+                print(f"[Point Shop Mosaic] Failed to load image for {name}: {e}")
+                # Draw placeholder
+                draw.rectangle([x, y, x + TILE_SIZE, y + TILE_SIZE], fill=(60, 60, 70))
+                draw.text((x + 10, y + TILE_SIZE // 2), "No Image", fill=TEXT_COLOR, font=font)
+            
+            # Draw label background
+            label_y = y + TILE_SIZE
+            draw.rectangle([x, label_y, x + TILE_SIZE, label_y + LABEL_HEIGHT], fill=LABEL_BG_COLOR)
+            
+            # Draw item number and truncated name
+            label_text = f"#{item_idx + 1} {name[:12]}{'...' if len(name) > 12 else ''}"
+            draw.text((x + 5, label_y + 5), label_text, fill=TEXT_COLOR, font=font)
+    
+    # Save to bytes
+    output = io.BytesIO()
+    canvas.save(output, format='PNG', optimize=True)
+    output.seek(0)
+    
+    return output
+
+
 async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int = None, update_existing: bool = True):
     """Post or update the point shop embed with interactive buttons to a Discord channel"""
     
@@ -5175,17 +5303,16 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
             """)).fetchone()
             existing_message_id = int(existing_msg_result[0]) if existing_msg_result else None
         
-        # Try to get existing message for update
-        existing_message = None
+        # Try to get existing message for update - need to delete and recreate for file attachments
         if update_existing and existing_message_id:
             try:
                 existing_message = await channel.fetch_message(existing_message_id)
+                await existing_message.delete()
+                print("[Point Shop] Deleted old shop message for refresh")
             except discord.NotFound:
-                existing_message = None
-                print("[Point Shop] Previous message not found, will create new one")
+                pass
             except Exception as e:
-                print(f"[Point Shop] Error fetching existing message: {e}")
-                existing_message = None
+                print(f"[Point Shop] Error deleting existing message: {e}")
         
         if not items:
             # No items - send info message
@@ -5195,95 +5322,75 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                 color=0xFFD700
             )
             embed.set_footer(text="💡 Tip: Earn points by watching streams!")
+            message = await channel.send(embed=embed)
             
-            if existing_message:
-                await existing_message.edit(embeds=[embed], view=None)
-            else:
-                await channel.send(embed=embed)
-            return True
-        
-        # Build embeds list - one per item (max 10 embeds per message)
-        embeds = []
-        
-        # Header embed
-        header_embed = discord.Embed(
-            title="🛍️ Point Shop",
-            description="Spend your hard-earned points on awesome rewards!\nSelect an item from the dropdown below to purchase.",
-            color=0xFFD700
-        )
-        embeds.append(header_embed)
-        
-        # Individual item embeds (limit to 9 to stay under Discord's 10 embed limit)
-        for item in items[:9]:
-            item_id, name, description, price, stock, image_url, is_active = item
-            
-            # Stock display
-            stock_text = "∞ in stock" if stock < 0 else f"{stock} left" if stock > 0 else "SOLD OUT"
-            stock_emoji = "🟢" if stock != 0 else "🔴"
-            
-            # Build item embed
-            item_embed = discord.Embed(
-                title=f"🎁 {name}",
-                color=0x9B59B6 if stock != 0 else 0x95A5A6  # Purple for available, gray for sold out
-            )
-            
-            # Price and stock info
-            item_embed.add_field(
-                name="💰 Price",
-                value=f"**{price:,}** points",
-                inline=True
-            )
-            item_embed.add_field(
-                name="📦 Stock",
-                value=f"{stock_emoji} {stock_text}",
-                inline=True
-            )
-            
-            # Description
-            if description:
-                item_embed.add_field(
-                    name="📝 Description",
-                    value=description,
-                    inline=False
-                )
-            
-            # Item image - each embed can have its own image!
-            if image_url:
-                item_embed.set_thumbnail(url=image_url)
-            
-            embeds.append(item_embed)
-        
-        # Footer on last embed
-        embeds[-1].set_footer(text="💡 Earn points by watching streams! | Check balance: !points")
-        
-        # Create view with dropdown selector
-        view = PointShopView(items)
-        
-        # Update or send the shop message
-        if existing_message:
-            await existing_message.edit(embeds=embeds, view=view)
-            print(f"[Point Shop] Updated shop message in channel {channel_id}")
-        else:
-            message = await channel.send(embeds=embeds, view=view)
-            
-            # Store the message ID for future updates
+            # Store message ID
             with engine.begin() as conn:
                 conn.execute(text("""
                     INSERT INTO point_settings (key, value, updated_at)
                     VALUES ('shop_message_id', :m, CURRENT_TIMESTAMP)
                     ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
                 """), {"m": str(message.id)})
+            return True
+        
+        # Create mosaic image
+        mosaic_file = None
+        mosaic_image = await create_shop_mosaic_image(items)
+        if mosaic_image:
+            mosaic_file = discord.File(mosaic_image, filename="shop_items.png")
+        
+        # Build main embed
+        embed = discord.Embed(
+            title="🛍️ Point Shop",
+            description="Spend your hard-earned points on awesome rewards!\nSelect an item from the dropdown below to purchase.",
+            color=0xFFD700
+        )
+        
+        # If we have a mosaic, attach it
+        if mosaic_file:
+            embed.set_image(url="attachment://shop_items.png")
+        
+        # Add items as compact fields
+        for idx, item in enumerate(items):
+            item_id, name, description, price, stock, image_url, is_active = item
             
-            print(f"[Point Shop] Posted new shop to channel {channel_id}")
+            # Stock display
+            stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "SOLD"
+            stock_emoji = "🟢" if stock != 0 else "🔴"
+            
+            # Compact field value
+            field_value = f"💰 **{price:,}** pts | {stock_emoji} {stock_text}"
+            if description:
+                # Truncate description
+                desc_short = description[:50] + "..." if len(description) > 50 else description
+                field_value += f"\n_{desc_short}_"
+            
+            embed.add_field(
+                name=f"#{idx + 1} {name}",
+                value=field_value,
+                inline=True
+            )
         
-        return True
+        embed.set_footer(text="💡 Earn points by watching streams! | Check balance: !points")
         
-    except Exception as e:
-        print(f"[Point Shop] Error posting shop: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        # Create view with dropdown selector
+        view = PointShopView(items)
         
+        # Send the shop message
+        if mosaic_file:
+            message = await channel.send(embed=embed, file=mosaic_file, view=view)
+        else:
+            message = await channel.send(embed=embed, view=view)
+        
+        # Store the message ID for future updates
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO point_settings (key, value, updated_at)
+                VALUES ('shop_message_id', :m, CURRENT_TIMESTAMP)
+                ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
+            """), {"m": str(message.id)})
+        
+        print(f"[Point Shop] Posted shop to channel {channel_id}")
         return True
         
     except Exception as e:
