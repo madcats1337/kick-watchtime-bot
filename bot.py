@@ -479,6 +479,74 @@ try:
         );
         """))
         
+        # -------------------------
+        # Point Reward System Tables
+        # -------------------------
+        
+        # Points balance for each user
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS user_points (
+            id SERIAL PRIMARY KEY,
+            kick_username TEXT NOT NULL,
+            discord_id BIGINT,
+            points INTEGER DEFAULT 0,
+            total_earned INTEGER DEFAULT 0,
+            total_spent INTEGER DEFAULT 0,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(kick_username)
+        );
+        """))
+        
+        # Track watchtime already converted to points (similar to raffle system)
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS points_watchtime_converted (
+            id SERIAL PRIMARY KEY,
+            kick_username TEXT NOT NULL,
+            minutes_converted INTEGER NOT NULL,
+            points_awarded INTEGER NOT NULL,
+            converted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """))
+        
+        # Point shop items
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS point_shop_items (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            price INTEGER NOT NULL,
+            stock INTEGER DEFAULT -1,
+            image_url TEXT,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """))
+        
+        # Point shop sales/purchases
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS point_sales (
+            id SERIAL PRIMARY KEY,
+            item_id INTEGER REFERENCES point_shop_items(id),
+            kick_username TEXT NOT NULL,
+            discord_id BIGINT,
+            item_name TEXT NOT NULL,
+            price_paid INTEGER NOT NULL,
+            quantity INTEGER DEFAULT 1,
+            status TEXT DEFAULT 'pending',
+            purchased_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """))
+        
+        # Point system settings
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS point_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """))
+        
     print("✅ Database tables initialized successfully")
 except Exception as e:
     print(f"⚠️ Database initialization error: {e}")
@@ -1327,6 +1395,106 @@ async def kick_chat_loop(channel_name: str):
             await asyncio.sleep(10)
 
 # -------------------------
+# Point Reward System
+# -------------------------
+async def award_points_for_watchtime(active_usernames: list):
+    """
+    Award points to users based on their new watchtime.
+    Similar to raffle ticket system but tracks points separately.
+    Only awards points for NEW watchtime since last conversion.
+    """
+    try:
+        # Get point settings from database
+        points_per_5min = 1  # Default: 1 point per 5 minutes
+        sub_points_per_5min = 2  # Default: 2 points per 5 minutes for subs
+        
+        with engine.connect() as conn:
+            # Load settings
+            result = conn.execute(text("""
+                SELECT key, value FROM point_settings 
+                WHERE key IN ('points_per_5min', 'sub_points_per_5min')
+            """)).fetchall()
+            
+            for key, value in result:
+                if key == 'points_per_5min':
+                    points_per_5min = int(value)
+                elif key == 'sub_points_per_5min':
+                    sub_points_per_5min = int(value)
+        
+        if points_per_5min == 0 and sub_points_per_5min == 0:
+            return  # Points system disabled
+        
+        with engine.begin() as conn:
+            for username in active_usernames:
+                try:
+                    # Get current total watchtime for user
+                    result = conn.execute(text("""
+                        SELECT minutes FROM watchtime WHERE username = :u
+                    """), {"u": username}).fetchone()
+                    
+                    if not result:
+                        continue
+                    
+                    total_minutes = result[0]
+                    
+                    # Get how many minutes have already been converted to points
+                    converted_result = conn.execute(text("""
+                        SELECT COALESCE(SUM(minutes_converted), 0) 
+                        FROM points_watchtime_converted 
+                        WHERE kick_username = :u
+                    """), {"u": username}).fetchone()
+                    
+                    minutes_already_converted = converted_result[0] if converted_result else 0
+                    
+                    # Calculate new minutes since last conversion
+                    new_minutes = total_minutes - minutes_already_converted
+                    
+                    # Only award if we have at least 5 new minutes
+                    if new_minutes >= 5:
+                        # Calculate points (5 minutes = 1 interval)
+                        intervals = int(new_minutes // 5)
+                        minutes_to_convert = intervals * 5
+                        
+                        # TODO: Check if user is subscriber for bonus points
+                        # For now, use regular points rate
+                        points_to_award = intervals * points_per_5min
+                        
+                        if points_to_award > 0:
+                            # Get discord_id from links table if available
+                            link_result = conn.execute(text("""
+                                SELECT discord_id FROM links WHERE LOWER(kick_name) = LOWER(:u)
+                            """), {"u": username}).fetchone()
+                            discord_id = link_result[0] if link_result else None
+                            
+                            # Update or insert user points
+                            conn.execute(text("""
+                                INSERT INTO user_points (kick_username, discord_id, points, total_earned, last_updated)
+                                VALUES (:u, :d, :p, :p, CURRENT_TIMESTAMP)
+                                ON CONFLICT(kick_username) DO UPDATE SET
+                                    points = user_points.points + :p,
+                                    total_earned = user_points.total_earned + :p,
+                                    discord_id = COALESCE(:d, user_points.discord_id),
+                                    last_updated = CURRENT_TIMESTAMP
+                            """), {"u": username, "d": discord_id, "p": points_to_award})
+                            
+                            # Log the conversion
+                            conn.execute(text("""
+                                INSERT INTO points_watchtime_converted 
+                                (kick_username, minutes_converted, points_awarded)
+                                VALUES (:u, :m, :p)
+                            """), {"u": username, "m": minutes_to_convert, "p": points_to_award})
+                            
+                            if watchtime_debug_enabled:
+                                print(f"[Points] ✅ {username}: +{points_to_award} points ({minutes_to_convert} min converted)")
+                
+                except Exception as e:
+                    print(f"[Points] ⚠️ Error awarding points to {username}: {e}")
+                    continue
+                    
+    except Exception as e:
+        print(f"[Points] ⚠️ Error in points award task: {e}")
+
+# -------------------------
 # Watchtime updater task
 # -------------------------
 @tasks.loop(seconds=WATCH_INTERVAL_SECONDS)
@@ -1420,6 +1588,9 @@ async def update_watchtime_task():
                 except Exception as e:
                     print(f"⚠️ Error updating watchtime for {user}: {e}")
                     continue  # Skip this user but continue with others
+        
+        # Award points for new watchtime (runs after watchtime update)
+        await award_points_for_watchtime(list(active_users.keys()))
                     
     except Exception as e:
         print(f"⚠️ Error in watchtime update task: {e}")
