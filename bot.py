@@ -5073,7 +5073,7 @@ class PointShopItemSelect(discord.ui.Select):
 
 
 class PointShopView(discord.ui.View):
-    """Persistent view for the point shop with item selector"""
+    """Persistent view for the point shop with item selector (legacy)"""
     
     def __init__(self, items: list):
         super().__init__(timeout=None)
@@ -5266,8 +5266,8 @@ async def create_shop_mosaic_image(items):
     return output
 
 
-async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int = None, update_existing: bool = True):
-    """Post or update the point shop embed with interactive buttons to a Discord channel"""
+async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int = None, update_existing: bool = True, use_components_v2: bool = True):
+    """Post or update the point shop using Components V2 with native grid layout"""
     
     try:
         # If channel_id not provided, get from settings
@@ -5303,7 +5303,7 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
             """)).fetchone()
             existing_message_id = int(existing_msg_result[0]) if existing_msg_result else None
         
-        # Try to get existing message for update - need to delete and recreate for file attachments
+        # Delete existing message if updating
         if update_existing and existing_message_id:
             try:
                 existing_message = await channel.fetch_message(existing_message_id)
@@ -5314,8 +5314,90 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
             except Exception as e:
                 print(f"[Point Shop] Error deleting existing message: {e}")
         
+        # Check if Components V2 is supported (discord.py 2.6+)
+        has_components_v2 = hasattr(discord.ui, 'LayoutView') and hasattr(discord.ui, 'MediaGallery')
+        
+        if use_components_v2 and has_components_v2 and items:
+            # ==================== Components V2 Mode ====================
+            try:
+                # Build the layout dynamically
+                class ShopLayout(discord.ui.LayoutView):
+                    def __init__(self, shop_items):
+                        super().__init__(timeout=None)
+                        self._build_layout(shop_items)
+                    
+                    def _build_layout(self, shop_items):
+                        # Header
+                        self.add_item(discord.ui.Container(
+                            discord.ui.TextDisplay("# 🛍️ Point Shop\nSpend your hard-earned points on awesome rewards!"),
+                            accent_colour=0xFFD700
+                        ))
+                        
+                        self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+                        
+                        # Media Gallery for items with images (max 10)
+                        items_with_images = [item for item in shop_items if item[5]][:10]
+                        if items_with_images:
+                            media_items = []
+                            for idx, item in enumerate(items_with_images):
+                                item_id, name, desc, price, stock, image_url, is_active = item
+                                stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "SOLD"
+                                alt_text = f"#{idx + 1} {name} - {price:,} pts ({stock_text})"
+                                media_items.append(discord.MediaGalleryItem(image_url, description=alt_text[:100]))
+                            
+                            self.add_item(discord.ui.MediaGallery(*media_items))
+                            self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+                        
+                        # Item list
+                        item_lines = ["## 📋 Available Items\n"]
+                        for idx, item in enumerate(shop_items):
+                            item_id, name, desc, price, stock, image_url, is_active = item
+                            stock_emoji = "🟢" if stock != 0 else "🔴"
+                            stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "SOLD"
+                            line = f"**#{idx + 1}** {name} — 💰 **{price:,}** pts | {stock_emoji} {stock_text}"
+                            if desc:
+                                short_desc = desc[:40] + "..." if len(desc) > 40 else desc
+                                line += f"\n> _{short_desc}_"
+                            item_lines.append(line)
+                        
+                        self.add_item(discord.ui.Container(
+                            discord.ui.TextDisplay("\n".join(item_lines)[:4000]),
+                            accent_colour=0x2F3136
+                        ))
+                        
+                        # Footer and interactive components
+                        self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small, divider=False))
+                        self.add_item(discord.ui.TextDisplay("💡 *Earn points by watching streams!* | Select an item below to purchase."))
+                        
+                        # Add action row with selector and balance button
+                        action_row = discord.ui.ActionRow(
+                            PointShopItemSelect(shop_items),
+                            PointShopBalanceButton()
+                        )
+                        self.add_item(action_row)
+                
+                layout = ShopLayout(items)
+                message = await channel.send(view=layout, flags=discord.MessageFlags.is_components_v2)
+                
+                # Store the message ID
+                with engine.begin() as conn:
+                    conn.execute(text("""
+                        INSERT INTO point_settings (key, value, updated_at)
+                        VALUES ('shop_message_id', :m, CURRENT_TIMESTAMP)
+                        ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
+                    """), {"m": str(message.id)})
+                
+                print(f"[Point Shop] Posted Components V2 shop to channel {channel_id}")
+                return True
+                
+            except Exception as v2_error:
+                print(f"[Point Shop] Components V2 failed, falling back to legacy: {v2_error}")
+                import traceback
+                traceback.print_exc()
+                # Fall through to legacy mode
+        
+        # ==================== Legacy Mode (Embed + Mosaic) ====================
         if not items:
-            # No items - send info message
             embed = discord.Embed(
                 title="🛍️ Point Shop",
                 description="No items available at the moment. Check back later!",
@@ -5324,7 +5406,6 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
             embed.set_footer(text="💡 Tip: Earn points by watching streams!")
             message = await channel.send(embed=embed)
             
-            # Store message ID
             with engine.begin() as conn:
                 conn.execute(text("""
                     INSERT INTO point_settings (key, value, updated_at)
@@ -5333,50 +5414,37 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                 """), {"m": str(message.id)})
             return True
         
-        # Create mosaic image
+        # Create mosaic image for legacy mode
         mosaic_file = None
         mosaic_image = await create_shop_mosaic_image(items)
         if mosaic_image:
             mosaic_file = discord.File(mosaic_image, filename="shop_items.png")
         
-        # Build main embed
         embed = discord.Embed(
             title="🛍️ Point Shop",
             description="Spend your hard-earned points on awesome rewards!\nSelect an item from the dropdown below to purchase.",
             color=0xFFD700
         )
         
-        # If we have a mosaic, attach it
         if mosaic_file:
             embed.set_image(url="attachment://shop_items.png")
         
-        # Add items as compact fields
         for idx, item in enumerate(items):
             item_id, name, description, price, stock, image_url, is_active = item
-            
-            # Stock display
             stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "SOLD"
             stock_emoji = "🟢" if stock != 0 else "🔴"
             
-            # Compact field value
             field_value = f"💰 **{price:,}** pts | {stock_emoji} {stock_text}"
             if description:
-                # Truncate description
                 desc_short = description[:50] + "..." if len(description) > 50 else description
                 field_value += f"\n_{desc_short}_"
             
-            embed.add_field(
-                name=f"#{idx + 1} {name}",
-                value=field_value,
-                inline=True
-            )
+            embed.add_field(name=f"#{idx + 1} {name}", value=field_value, inline=True)
         
         embed.set_footer(text="💡 Earn points by watching streams! | Check balance: !points")
         
-        # Create view with dropdown selector
         view = PointShopView(items)
         
-        # Send the shop message
         if mosaic_file:
             message = await channel.send(embed=embed, file=mosaic_file, view=view)
         else:
