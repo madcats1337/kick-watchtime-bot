@@ -1158,7 +1158,6 @@ async def kick_chat_loop(channel_name: str):
                                             clip_title = custom_title
                                         else:
                                             # Generate default title with username and timestamp
-                                            from datetime import datetime
                                             timestamp = datetime.now().strftime("%b %d, %Y %H:%M")
                                             clip_title = f"Clip by {username} - {timestamp}"
                                         
@@ -1210,7 +1209,6 @@ async def kick_chat_loop(channel_name: str):
                                                     if clip_channel_id:
                                                         discord_channel = bot.get_channel(clip_channel_id)
                                                         if discord_channel:
-                                                            from datetime import datetime, timezone
                                                             clip_embed = discord.Embed(
                                                                 title=f"🎬 {clip_title}",
                                                                 description=f"New clip created by **{username}** in Kick chat!",
