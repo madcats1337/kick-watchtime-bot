@@ -369,6 +369,35 @@ class RedisSubscriber:
             else:
                 print("⚠️ Custom commands manager not initialized")
     
+    async def handle_point_shop_event(self, action, data):
+        """Handle point shop events from dashboard"""
+        print(f"📥 Point Shop Event: {action}")
+        
+        if action == 'post_shop':
+            channel_id = data.get('channel_id')
+            
+            # Import the post function from bot module
+            try:
+                from bot import post_point_shop_to_discord
+                success = await post_point_shop_to_discord(self.bot, channel_id=channel_id)
+                if success:
+                    print("✅ Point shop posted to Discord")
+                else:
+                    print("⚠️ Failed to post point shop")
+            except Exception as e:
+                print(f"⚠️ Failed to post point shop: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        elif action == 'update_settings':
+            print(f"✅ Point settings updated: {data}")
+            # Settings are stored in DB, no action needed here
+        
+        elif action == 'item_update':
+            item_id = data.get('item_id')
+            item_name = data.get('item_name')
+            print(f"✅ Point shop item updated: {item_name} (ID: {item_id})")
+    
     async def announce_in_chat(self, message):
         """Send a message to the Kick chat"""
         try:
@@ -396,7 +425,8 @@ class RedisSubscriber:
             'dashboard:timed_messages',
             'dashboard:gtb',
             'dashboard:management',
-            'dashboard:commands'
+            'dashboard:commands',
+            'dashboard:point_shop'
         )
         
         print("🎧 Redis subscriber listening for dashboard events...")
@@ -424,6 +454,8 @@ class RedisSubscriber:
                             await self.handle_management_event(action, data)
                         elif channel == 'dashboard:commands':
                             await self.handle_commands_event(action, data)
+                        elif channel == 'dashboard:point_shop':
+                            await self.handle_point_shop_event(action, data)
                     
                     except json.JSONDecodeError as e:
                         print(f"Failed to decode message: {e}")
@@ -445,7 +477,8 @@ class RedisSubscriber:
                         'dashboard:timed_messages',
                         'dashboard:gtb',
                         'dashboard:management',
-                        'dashboard:commands'
+                        'dashboard:commands',
+                        'dashboard:point_shop'
                     )
 
 async def start_redis_subscriber(bot, send_message_callback=None):

@@ -4632,6 +4632,369 @@ async def fixlinks_resolve(ctx, kick_name: str, keep_server_id: int):
         print(f"[fixlinks resolve] Error: {e}")
 
 # -------------------------
+# Point Shop Interactive Components
+# -------------------------
+
+class PointShopBuyButton(discord.ui.Button):
+    """Interactive buy button for point shop items"""
+    
+    def __init__(self, item_id: int, item_name: str, price: int, stock: int):
+        self.item_id = item_id
+        self.item_name = item_name
+        self.price = price
+        self.stock = stock
+        
+        # Disable button if out of stock
+        is_disabled = stock == 0
+        label = f"Buy {item_name} ({price:,} pts)"
+        if stock == 0:
+            label = f"{item_name} (SOLD OUT)"
+        elif stock > 0:
+            label = f"Buy {item_name} ({price:,} pts) [{stock} left]"
+        
+        super().__init__(
+            style=discord.ButtonStyle.success if not is_disabled else discord.ButtonStyle.secondary,
+            label=label[:80],  # Discord button label limit
+            custom_id=f"shop_buy_{item_id}",
+            disabled=is_disabled
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        """Handle buy button click"""
+        discord_id = interaction.user.id
+        discord_name = str(interaction.user)
+        
+        try:
+            with engine.begin() as conn:
+                # Get item details (fresh from DB)
+                item = conn.execute(text("""
+                    SELECT id, name, price, stock, is_active
+                    FROM point_shop_items
+                    WHERE id = :id
+                """), {"id": self.item_id}).fetchone()
+                
+                if not item:
+                    await interaction.response.send_message(
+                        "❌ This item no longer exists.", 
+                        ephemeral=True
+                    )
+                    return
+                
+                item_id, item_name, price, stock, is_active = item
+                
+                if not is_active:
+                    await interaction.response.send_message(
+                        "❌ This item is no longer available.", 
+                        ephemeral=True
+                    )
+                    return
+                
+                if stock == 0:
+                    await interaction.response.send_message(
+                        "❌ This item is sold out!", 
+                        ephemeral=True
+                    )
+                    return
+                
+                # Get user's linked Kick account
+                link = conn.execute(text("""
+                    SELECT kick_name FROM links 
+                    WHERE discord_id = :d AND discord_server_id = :s
+                """), {"d": discord_id, "s": interaction.guild.id}).fetchone()
+                
+                if not link:
+                    await interaction.response.send_message(
+                        "❌ You need to link your Kick account first! Use the link panel or `!link` command.", 
+                        ephemeral=True
+                    )
+                    return
+                
+                kick_username = link[0]
+                
+                # Check user's points balance
+                user_points = conn.execute(text("""
+                    SELECT points FROM user_points 
+                    WHERE kick_username = :k
+                """), {"k": kick_username}).fetchone()
+                
+                if not user_points or user_points[0] < price:
+                    current_balance = user_points[0] if user_points else 0
+                    await interaction.response.send_message(
+                        f"❌ Insufficient points! You have **{current_balance:,}** points but need **{price:,}** points.", 
+                        ephemeral=True
+                    )
+                    return
+                
+                # Deduct points
+                conn.execute(text("""
+                    UPDATE user_points 
+                    SET points = points - :p, 
+                        total_spent = total_spent + :p,
+                        last_updated = CURRENT_TIMESTAMP
+                    WHERE kick_username = :k
+                """), {"p": price, "k": kick_username})
+                
+                # Reduce stock if not unlimited
+                if stock > 0:
+                    conn.execute(text("""
+                        UPDATE point_shop_items 
+                        SET stock = stock - 1, 
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = :id
+                    """), {"id": item_id})
+                
+                # Record the sale
+                conn.execute(text("""
+                    INSERT INTO point_sales (item_id, kick_username, discord_id, item_name, price_paid, quantity, status)
+                    VALUES (:item_id, :kick, :discord, :name, :price, 1, 'pending')
+                """), {
+                    "item_id": item_id,
+                    "kick": kick_username,
+                    "discord": discord_id,
+                    "name": item_name,
+                    "price": price
+                })
+                
+                # Get updated balance
+                new_balance = conn.execute(text("""
+                    SELECT points FROM user_points WHERE kick_username = :k
+                """), {"k": kick_username}).fetchone()[0]
+            
+            # Success response
+            await interaction.response.send_message(
+                f"✅ **Purchase Successful!**\n"
+                f"🛒 You bought **{item_name}** for **{price:,}** points!\n"
+                f"💰 Your new balance: **{new_balance:,}** points\n\n"
+                f"_An admin will fulfill your purchase soon._",
+                ephemeral=True
+            )
+            
+            print(f"[Point Shop] {kick_username} ({discord_name}) purchased {item_name} for {price} points")
+            
+        except Exception as e:
+            print(f"[Point Shop] Purchase error: {e}")
+            import traceback
+            traceback.print_exc()
+            await interaction.response.send_message(
+                f"❌ An error occurred during purchase. Please try again later.",
+                ephemeral=True
+            )
+
+
+class PointShopView(discord.ui.View):
+    """Persistent view for the point shop with buy buttons"""
+    
+    def __init__(self, items: list):
+        # Set timeout to None for persistent view
+        super().__init__(timeout=None)
+        
+        # Add buy buttons for each item (max 25 buttons per view, but usually 5 per row)
+        for item in items[:25]:  # Discord limit
+            item_id, name, description, price, stock, image_url, is_active = item
+            if is_active:
+                self.add_item(PointShopBuyButton(
+                    item_id=item_id,
+                    item_name=name,
+                    price=price,
+                    stock=stock if stock >= 0 else -1
+                ))
+
+
+async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int = None):
+    """Post or update the point shop embed with interactive buttons to a Discord channel"""
+    
+    try:
+        # If channel_id not provided, get from settings
+        if not channel_id:
+            with engine.connect() as conn:
+                result = conn.execute(text("""
+                    SELECT value FROM point_settings WHERE key = 'shop_channel_id'
+                """)).fetchone()
+                
+                if not result:
+                    print("[Point Shop] No shop channel configured")
+                    return False
+                
+                channel_id = int(result[0])
+        
+        channel = bot.get_channel(channel_id)
+        if not channel:
+            print(f"[Point Shop] Channel {channel_id} not found")
+            return False
+        
+        # Get active shop items
+        with engine.connect() as conn:
+            items = conn.execute(text("""
+                SELECT id, name, description, price, stock, image_url, is_active
+                FROM point_shop_items
+                WHERE is_active = TRUE
+                ORDER BY price ASC
+            """)).fetchall()
+        
+        if not items:
+            # No items - send info message
+            embed = discord.Embed(
+                title="🛍️ Point Shop",
+                description="No items available at the moment. Check back later!",
+                color=0xFFD700
+            )
+            await channel.send(embed=embed)
+            return True
+        
+        # Build shop embed
+        embed = discord.Embed(
+            title="🛍️ Point Shop",
+            description="Spend your hard-earned points on awesome rewards!\nClick a button below to purchase an item.",
+            color=0xFFD700
+        )
+        
+        for item in items:
+            item_id, name, description, price, stock, image_url, is_active = item
+            
+            # Stock display
+            stock_text = "∞ in stock" if stock < 0 else f"{stock} left" if stock > 0 else "SOLD OUT"
+            
+            # Item field
+            field_value = f"💰 **{price:,} points**\n"
+            if description:
+                field_value += f"{description}\n"
+            field_value += f"📦 {stock_text}"
+            
+            embed.add_field(
+                name=f"🎁 {name}",
+                value=field_value,
+                inline=True
+            )
+        
+        embed.set_footer(text="💡 Tip: Earn points by watching streams! | Check your balance with !points")
+        
+        # Create view with buy buttons
+        view = PointShopView(items)
+        
+        # Send the shop message
+        message = await channel.send(embed=embed, view=view)
+        
+        # Store the message ID for future updates
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO point_settings (key, value, updated_at)
+                VALUES ('shop_message_id', :m, CURRENT_TIMESTAMP)
+                ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
+            """), {"m": str(message.id)})
+        
+        print(f"[Point Shop] Posted shop to channel {channel_id}")
+        return True
+        
+    except Exception as e:
+        print(f"[Point Shop] Error posting shop: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+@bot.command(name="points", aliases=["balance", "pts"])
+async def cmd_points(ctx):
+    """Check your point balance"""
+    discord_id = ctx.author.id
+    
+    # Get linked Kick account
+    with engine.connect() as conn:
+        link = conn.execute(text("""
+            SELECT kick_name FROM links 
+            WHERE discord_id = :d AND discord_server_id = :s
+        """), {"d": discord_id, "s": ctx.guild.id}).fetchone()
+        
+        if not link:
+            await ctx.send("❌ You need to link your Kick account first! Use the link panel or `!link` command.")
+            return
+        
+        kick_username = link[0]
+        
+        # Get points balance
+        points_data = conn.execute(text("""
+            SELECT points, total_earned, total_spent 
+            FROM user_points 
+            WHERE kick_username = :k
+        """), {"k": kick_username}).fetchone()
+        
+        if not points_data:
+            points, total_earned, total_spent = 0, 0, 0
+        else:
+            points, total_earned, total_spent = points_data
+    
+    embed = discord.Embed(
+        title="💰 Your Point Balance",
+        color=0xFFD700
+    )
+    embed.add_field(name="Current Balance", value=f"**{points:,}** points", inline=True)
+    embed.add_field(name="Total Earned", value=f"{total_earned:,} points", inline=True)
+    embed.add_field(name="Total Spent", value=f"{total_spent:,} points", inline=True)
+    embed.set_footer(text=f"Kick Account: {kick_username}")
+    
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="pointslb", aliases=["pointsleaderboard", "ptslb"])
+async def cmd_points_leaderboard(ctx, limit: int = 10):
+    """Show the points leaderboard"""
+    if limit < 1:
+        limit = 10
+    if limit > 25:
+        limit = 25
+    
+    with engine.connect() as conn:
+        leaders = conn.execute(text("""
+            SELECT kick_username, points, total_earned
+            FROM user_points
+            WHERE points > 0
+            ORDER BY points DESC
+            LIMIT :limit
+        """), {"limit": limit}).fetchall()
+    
+    if not leaders:
+        await ctx.send("📊 No one has earned any points yet!")
+        return
+    
+    embed = discord.Embed(
+        title="🏆 Points Leaderboard",
+        color=0xFFD700
+    )
+    
+    leaderboard_text = ""
+    for i, (username, points, total_earned) in enumerate(leaders, 1):
+        rank_emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+        leaderboard_text += f"{rank_emoji} **{username}** - {points:,} pts\n"
+    
+    embed.description = leaderboard_text
+    embed.set_footer(text=f"Top {len(leaders)} point holders")
+    
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="postshop")
+@commands.has_permissions(administrator=True)
+async def cmd_post_shop(ctx, channel: discord.TextChannel = None):
+    """[ADMIN] Post the point shop to a channel"""
+    target_channel = channel or ctx.channel
+    
+    # Save channel setting
+    with engine.begin() as conn:
+        conn.execute(text("""
+            INSERT INTO point_settings (key, value, updated_at)
+            VALUES ('shop_channel_id', :c, CURRENT_TIMESTAMP)
+            ON CONFLICT (key) DO UPDATE SET value = :c, updated_at = CURRENT_TIMESTAMP
+        """), {"c": str(target_channel.id)})
+    
+    success = await post_point_shop_to_discord(bot, ctx.guild.id, target_channel.id)
+    
+    if success:
+        if channel:
+            await ctx.send(f"✅ Point shop posted to {target_channel.mention}!")
+    else:
+        await ctx.send("❌ Failed to post point shop. Check that there are active items.")
+
+
+# -------------------------
 # Run bot
 # -------------------------
 if not DISCORD_TOKEN:
