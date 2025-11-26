@@ -1,6 +1,12 @@
 """
 OAuth Web Server for Kick Authentication
 Handles OAuth 2.0 PKCE flow for linking Kick accounts to Discord
+
+Now includes official Kick API integration with:
+- User account linking (user:read scope)
+- Bot chat messaging (chat:write scope)  
+- Webhook subscriptions (events:subscribe scope)
+- Stream notifications
 """
 
 import os
@@ -13,6 +19,16 @@ from authlib.integrations.requests_client import OAuth2Session
 from sqlalchemy import create_engine, text
 from datetime import datetime, timezone
 from urllib.parse import urlencode
+
+# Import webhook handlers
+try:
+    from .kick_webhooks import register_webhook_routes, WebhookEventHandler
+    from .kick_official_api import KickOfficialAPI, OAUTH_SCOPES, WEBHOOK_EVENTS
+    HAS_KICK_OFFICIAL = True
+except ImportError:
+    HAS_KICK_OFFICIAL = False
+    register_webhook_routes = None
+    WebhookEventHandler = None
 
 # -------------------------
 # 🔒 Security: OAuth Token Signing
@@ -103,6 +119,22 @@ def sanitize_for_logs(value, field_name=None):
 # Initialize Flask app
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", secrets.token_hex(32))
+
+# Register Kick webhook routes if available
+if HAS_KICK_OFFICIAL and register_webhook_routes:
+    # Create event handler (can be customized later)
+    webhook_handler = WebhookEventHandler()
+    
+    @webhook_handler.set_default_handler
+    def default_webhook_handler(event_data):
+        """Default handler logs all events"""
+        import json
+        print(f"[Webhook] Received event data: {json.dumps(event_data, indent=2, default=str)}")
+    
+    register_webhook_routes(app, webhook_handler)
+    print("[OAuth] ✅ Kick webhook routes registered")
+else:
+    print("[OAuth] ℹ️ Kick webhook routes not available")
 
 # 404 handler - ignore not found errors (bots/scanners)
 @app.errorhandler(404)
@@ -241,6 +273,178 @@ def index():
 def health():
     """Health check endpoint for Railway."""
     return jsonify({"status": "healthy", "oauth_configured": bool(KICK_CLIENT_ID and KICK_CLIENT_SECRET)}), 200
+
+
+@app.route('/api/status')
+def api_status():
+    """
+    Get detailed API status including official Kick API availability.
+    """
+    status = {
+        "status": "healthy",
+        "oauth_configured": bool(KICK_CLIENT_ID and KICK_CLIENT_SECRET),
+        "official_api_available": HAS_KICK_OFFICIAL,
+        "webhook_secret_configured": bool(os.getenv("KICK_WEBHOOK_SECRET")),
+        "available_scopes": OAUTH_SCOPES if HAS_KICK_OFFICIAL else [],
+        "available_webhook_events": WEBHOOK_EVENTS if HAS_KICK_OFFICIAL else [],
+        "endpoints": {
+            "oauth_authorize": "/auth/kick",
+            "oauth_callback": "/auth/kick/callback",
+            "bot_authorize": "/bot/authorize",
+            "webhooks": "/webhooks/kick",
+            "webhook_subscriptions": "/api/webhooks",
+        }
+    }
+    return jsonify(status), 200
+
+
+@app.route('/api/webhooks', methods=['GET'])
+def list_webhook_subscriptions():
+    """
+    List all active webhook subscriptions.
+    Requires bot access token.
+    """
+    auth_header = request.headers.get('Authorization', '')
+    
+    if not auth_header.startswith('Bearer '):
+        return jsonify({"error": "Missing or invalid Authorization header"}), 401
+    
+    access_token = auth_header.replace('Bearer ', '')
+    
+    if not HAS_KICK_OFFICIAL:
+        return jsonify({"error": "Official Kick API not available"}), 503
+    
+    try:
+        import asyncio
+        
+        async def get_subscriptions():
+            api = KickOfficialAPI(
+                client_id=KICK_CLIENT_ID,
+                client_secret=KICK_CLIENT_SECRET,
+                access_token=access_token,
+            )
+            try:
+                subs = await api.get_webhook_subscriptions()
+                return [s.__dict__ if hasattr(s, '__dict__') else s for s in subs]
+            finally:
+                await api.close()
+        
+        loop = asyncio.new_event_loop()
+        try:
+            subscriptions = loop.run_until_complete(get_subscriptions())
+        finally:
+            loop.close()
+        
+        return jsonify({"subscriptions": subscriptions}), 200
+        
+    except Exception as e:
+        print(f"[API] Error listing webhooks: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/webhooks', methods=['POST'])
+def create_webhook_subscription():
+    """
+    Create a new webhook subscription.
+    
+    Requires:
+    - Authorization: Bearer <access_token>
+    - JSON body: { "event": "channel.subscription.gifts", "callback_url": "https://..." }
+    """
+    auth_header = request.headers.get('Authorization', '')
+    
+    if not auth_header.startswith('Bearer '):
+        return jsonify({"error": "Missing or invalid Authorization header"}), 401
+    
+    access_token = auth_header.replace('Bearer ', '')
+    
+    if not HAS_KICK_OFFICIAL:
+        return jsonify({"error": "Official Kick API not available"}), 503
+    
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "JSON body required"}), 400
+    
+    event = data.get('event')
+    callback_url = data.get('callback_url')
+    broadcaster_user_id = data.get('broadcaster_user_id')
+    
+    if not event or not callback_url:
+        return jsonify({"error": "event and callback_url are required"}), 400
+    
+    try:
+        import asyncio
+        
+        async def subscribe():
+            api = KickOfficialAPI(
+                client_id=KICK_CLIENT_ID,
+                client_secret=KICK_CLIENT_SECRET,
+                access_token=access_token,
+            )
+            try:
+                sub = await api.subscribe_webhook(
+                    event=event,
+                    callback_url=callback_url,
+                    broadcaster_user_id=broadcaster_user_id,
+                )
+                return sub.__dict__ if hasattr(sub, '__dict__') else sub
+            finally:
+                await api.close()
+        
+        loop = asyncio.new_event_loop()
+        try:
+            subscription = loop.run_until_complete(subscribe())
+        finally:
+            loop.close()
+        
+        return jsonify({"subscription": subscription}), 201
+        
+    except Exception as e:
+        print(f"[API] Error creating webhook: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/webhooks/<subscription_id>', methods=['DELETE'])
+def delete_webhook_subscription(subscription_id):
+    """
+    Delete a webhook subscription.
+    Requires Authorization: Bearer <access_token>
+    """
+    auth_header = request.headers.get('Authorization', '')
+    
+    if not auth_header.startswith('Bearer '):
+        return jsonify({"error": "Missing or invalid Authorization header"}), 401
+    
+    access_token = auth_header.replace('Bearer ', '')
+    
+    if not HAS_KICK_OFFICIAL:
+        return jsonify({"error": "Official Kick API not available"}), 503
+    
+    try:
+        import asyncio
+        
+        async def delete():
+            api = KickOfficialAPI(
+                client_id=KICK_CLIENT_ID,
+                client_secret=KICK_CLIENT_SECRET,
+                access_token=access_token,
+            )
+            try:
+                return await api.delete_webhook_subscription(subscription_id)
+            finally:
+                await api.close()
+        
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(delete())
+        finally:
+            loop.close()
+        
+        return jsonify({"status": "deleted", "id": subscription_id}), 200
+        
+    except Exception as e:
+        print(f"[API] Error deleting webhook: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/terms')

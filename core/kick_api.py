@@ -1,13 +1,28 @@
 """
 Kick.com API Integration Module
 Handles chatroom ID fetching and API interactions with Kick.com
+
+This module provides two modes of operation:
+1. Official API (when authenticated via OAuth) - uses api.kick.com endpoints
+2. Unofficial API (fallback) - uses kick.com/api/v2 endpoints
+
+For official API access, see core/kick_official_api.py
 """
 
 import asyncio
 import json
 import random
-from typing import Optional, Dict, Any
+import os
+from typing import Optional, Dict, Any, List
 import aiohttp
+
+# Import official API client for authenticated requests
+try:
+    from .kick_official_api import KickOfficialAPI, KICK_API_PUBLIC
+    HAS_OFFICIAL_API = True
+except ImportError:
+    HAS_OFFICIAL_API = False
+    KickOfficialAPI = None
 
 # User agents for rotation
 USER_AGENTS = [
@@ -327,5 +342,336 @@ async def get_clips(channel_name: str, limit: int = 10) -> Optional[list]:
         return None
 
 
+class KickHybridAPI:
+    """
+    Hybrid Kick API client that uses official API when authenticated,
+    with fallback to unofficial API for unauthenticated requests.
+    
+    This is the recommended class to use for maximum compatibility.
+    
+    Usage:
+        api = KickHybridAPI(access_token="your_oauth_token")
+        await api.setup()
+        
+        # Official API (with auth)
+        await api.send_message("Hello!", broadcaster_id=123)
+        
+        # Unofficial API (fallback)
+        channel_info = await api.get_channel_info("channelname")
+    """
+    
+    def __init__(
+        self,
+        access_token: str = None,
+        refresh_token: str = None,
+        client_id: str = None,
+        client_secret: str = None,
+    ):
+        self.access_token = access_token or os.getenv("KICK_BOT_USER_TOKEN")
+        self.refresh_token = refresh_token
+        self.client_id = client_id or os.getenv("KICK_CLIENT_ID")
+        self.client_secret = client_secret or os.getenv("KICK_CLIENT_SECRET")
+        
+        self._official_api: Optional[KickOfficialAPI] = None
+        self._session: Optional[aiohttp.ClientSession] = None
+    
+    @property
+    def is_authenticated(self) -> bool:
+        """Check if we have valid OAuth credentials"""
+        return bool(self.access_token) and HAS_OFFICIAL_API
+    
+    async def setup(self):
+        """Initialize API clients"""
+        if self.is_authenticated:
+            self._official_api = KickOfficialAPI(
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+                access_token=self.access_token,
+                refresh_token=self.refresh_token,
+            )
+            print("[KickHybrid] ✅ Official API client initialized with OAuth token")
+        else:
+            print("[KickHybrid] ℹ️  Running in unauthenticated mode (unofficial API only)")
+    
+    async def close(self):
+        """Cleanup resources"""
+        if self._official_api:
+            await self._official_api.close()
+        if self._session and not self._session.closed:
+            await self._session.close()
+    
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create aiohttp session for unofficial API"""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+    
+    # -------------------------
+    # Chat Methods
+    # -------------------------
+    
+    async def send_message(
+        self,
+        content: str,
+        broadcaster_user_id: int = None,
+        reply_to_message_id: str = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Send a chat message using Official API.
+        Requires OAuth token with chat:write scope.
+        
+        Args:
+            content: Message content (max 500 chars)
+            broadcaster_user_id: Target channel's broadcaster ID
+            reply_to_message_id: Message ID to reply to
+            
+        Returns:
+            API response or None if failed
+        """
+        if not self.is_authenticated:
+            print("[KickHybrid] ❌ Cannot send message: No OAuth token")
+            return None
+        
+        try:
+            return await self._official_api.send_chat_message(
+                content=content,
+                broadcaster_user_id=broadcaster_user_id,
+                reply_to_message_id=reply_to_message_id,
+            )
+        except Exception as e:
+            print(f"[KickHybrid] ❌ Failed to send message: {e}")
+            return None
+    
+    # -------------------------
+    # Channel Methods (Hybrid)
+    # -------------------------
+    
+    async def get_channel_info(self, channel_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Get channel information. Uses unofficial API for this.
+        
+        Args:
+            channel_name: The Kick channel name/slug
+            
+        Returns:
+            Channel data dict or None if failed
+        """
+        # Unofficial API works fine for channel info
+        return await get_channel_info(channel_name)
+    
+    async def check_stream_live(self, channel_name: str) -> bool:
+        """
+        Check if a channel is currently live.
+        
+        Args:
+            channel_name: The Kick channel name/slug
+            
+        Returns:
+            True if live, False otherwise
+        """
+        # Use official API if authenticated, otherwise unofficial
+        if self.is_authenticated:
+            try:
+                # Would need broadcaster_user_id for official API
+                # Fall back to unofficial for now
+                return await check_stream_live(channel_name)
+            except Exception:
+                pass
+        
+        return await check_stream_live(channel_name)
+    
+    async def fetch_chatroom_id(self, channel_name: str, max_retries: int = 5) -> Optional[str]:
+        """
+        Fetch chatroom ID for a channel.
+        
+        Args:
+            channel_name: The Kick channel name
+            max_retries: Maximum retry attempts
+            
+        Returns:
+            Chatroom ID string or None
+        """
+        return await fetch_chatroom_id(channel_name, max_retries)
+    
+    # -------------------------
+    # Webhook Methods (Official API only)
+    # -------------------------
+    
+    async def subscribe_to_webhooks(
+        self,
+        callback_url: str,
+        events: List[str] = None,
+        broadcaster_user_id: int = None,
+    ) -> List[Dict]:
+        """
+        Subscribe to webhook events. Requires OAuth with events:subscribe scope.
+        
+        Args:
+            callback_url: HTTPS URL to receive webhooks
+            events: List of event types to subscribe to
+            broadcaster_user_id: Filter to specific broadcaster
+            
+        Returns:
+            List of subscription results
+        """
+        if not self.is_authenticated:
+            print("[KickHybrid] ❌ Cannot subscribe to webhooks: No OAuth token")
+            return []
+        
+        if events is None:
+            # Default to useful events for a bot
+            events = [
+                "chat.message.sent",
+                "channel.subscription.new",
+                "channel.subscription.gifts",
+                "livestream.status.updated",
+                "kicks.gifted",
+            ]
+        
+        results = []
+        for event in events:
+            try:
+                sub = await self._official_api.subscribe_webhook(
+                    event=event,
+                    callback_url=callback_url,
+                    broadcaster_user_id=broadcaster_user_id,
+                )
+                results.append({"event": event, "success": True, "subscription": sub})
+                print(f"[KickHybrid] ✅ Subscribed to {event}")
+            except Exception as e:
+                results.append({"event": event, "success": False, "error": str(e)})
+                print(f"[KickHybrid] ❌ Failed to subscribe to {event}: {e}")
+        
+        return results
+    
+    async def get_webhook_subscriptions(self) -> List:
+        """
+        Get all active webhook subscriptions.
+        
+        Returns:
+            List of WebhookSubscription objects
+        """
+        if not self.is_authenticated:
+            return []
+        
+        try:
+            return await self._official_api.get_webhook_subscriptions()
+        except Exception as e:
+            print(f"[KickHybrid] ❌ Failed to get webhooks: {e}")
+            return []
+    
+    # -------------------------
+    # Moderation Methods (Official API only)
+    # -------------------------
+    
+    async def ban_user(
+        self,
+        broadcaster_user_id: int,
+        user_id: int,
+        duration_minutes: int = None,
+        reason: str = None,
+    ) -> bool:
+        """
+        Ban a user from chat. Requires OAuth with moderation:ban scope.
+        
+        Args:
+            broadcaster_user_id: The broadcaster's user ID
+            user_id: User ID to ban
+            duration_minutes: Ban duration (None = permanent)
+            reason: Ban reason
+            
+        Returns:
+            True if successful
+        """
+        if not self.is_authenticated:
+            print("[KickHybrid] ❌ Cannot ban user: No OAuth token")
+            return False
+        
+        try:
+            await self._official_api.ban_user(
+                broadcaster_user_id=broadcaster_user_id,
+                user_id=user_id,
+                duration_minutes=duration_minutes,
+                reason=reason,
+            )
+            return True
+        except Exception as e:
+            print(f"[KickHybrid] ❌ Failed to ban user: {e}")
+            return False
+    
+    async def unban_user(
+        self,
+        broadcaster_user_id: int,
+        user_id: int,
+    ) -> bool:
+        """
+        Unban a user from chat. Requires OAuth with moderation:ban scope.
+        
+        Args:
+            broadcaster_user_id: The broadcaster's user ID
+            user_id: User ID to unban
+            
+        Returns:
+            True if successful
+        """
+        if not self.is_authenticated:
+            print("[KickHybrid] ❌ Cannot unban user: No OAuth token")
+            return False
+        
+        try:
+            await self._official_api.unban_user(
+                broadcaster_user_id=broadcaster_user_id,
+                user_id=user_id,
+            )
+            return True
+        except Exception as e:
+            print(f"[KickHybrid] ❌ Failed to unban user: {e}")
+            return False
+    
+    # -------------------------
+    # Kicks (Tips) Methods
+    # -------------------------
+    
+    async def get_kicks_leaderboard(
+        self,
+        broadcaster_user_id: int,
+        range_type: str = "all_time",
+    ) -> Optional[Dict]:
+        """
+        Get the Kicks (tips) leaderboard. Requires OAuth with kicks:read scope.
+        
+        Args:
+            broadcaster_user_id: The broadcaster's user ID
+            range_type: "all_time", "month", or "week"
+            
+        Returns:
+            Leaderboard data or None
+        """
+        if not self.is_authenticated:
+            print("[KickHybrid] ❌ Cannot get kicks leaderboard: No OAuth token")
+            return None
+        
+        try:
+            return await self._official_api.get_kicks_leaderboard(
+                broadcaster_user_id=broadcaster_user_id,
+                range_type=range_type,
+            )
+        except Exception as e:
+            print(f"[KickHybrid] ❌ Failed to get kicks leaderboard: {e}")
+            return None
+
+
 # Export all public interfaces
-__all__ = ['KickAPI', 'fetch_chatroom_id', 'check_stream_live', 'get_channel_info', 'create_clip', 'get_clips', 'USER_AGENTS', 'REFERRERS', 'COUNTRY_CODES']
+__all__ = [
+    'KickAPI',
+    'KickHybridAPI',
+    'fetch_chatroom_id',
+    'check_stream_live',
+    'get_channel_info',
+    'create_clip',
+    'get_clips',
+    'USER_AGENTS',
+    'REFERRERS',
+    'COUNTRY_CODES',
+    'HAS_OFFICIAL_API',
+]
