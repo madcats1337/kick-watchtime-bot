@@ -33,6 +33,9 @@ from raffle_system.auto_leaderboard import setup_auto_leaderboard
 from raffle_system.commands import setup as setup_raffle_commands
 from raffle_system.scheduler import setup_raffle_scheduler
 
+# Bot settings manager - loads settings from database with env var fallbacks
+from utils.bot_settings import BotSettingsManager
+
 # Slot call tracker import
 from features.slot_requests.slot_calls import setup_slot_call_tracker
 from features.slot_requests.slot_request_panel import setup_slot_panel
@@ -78,11 +81,12 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 if not DISCORD_TOKEN:
     raise ValueError("DISCORD_TOKEN not found in environment variables")
 
-KICK_CHANNEL = os.getenv("KICK_CHANNEL")
-if not KICK_CHANNEL:
-    raise ValueError("KICK_CHANNEL not found in environment variables")
+# KICK_CHANNEL can come from env var or database (via BotSettingsManager after engine init)
+# We'll set a temporary value here and load from settings later
+KICK_CHANNEL = os.getenv("KICK_CHANNEL")  # May be None, will be loaded from DB later
 
 # Optional: Hardcoded chatroom ID to bypass Cloudflare issues
+# Can also be configured via dashboard
 KICK_CHATROOM_ID = os.getenv("KICK_CHATROOM_ID")  # Set this on Railway to skip fetching
 
 DISCORD_GUILD_ID = int(os.getenv("DISCORD_GUILD_ID")) if os.getenv("DISCORD_GUILD_ID") else None
@@ -110,6 +114,7 @@ ROLE_UPDATE_INTERVAL_SECONDS = int(os.getenv("ROLE_UPDATE_INTERVAL_SECONDS", "60
 CODE_EXPIRY_MINUTES = int(os.getenv("CODE_EXPIRY_MINUTES", "10"))
 
 # Slot call tracker configuration
+# Can also be configured via dashboard
 SLOT_CALLS_CHANNEL_ID = int(os.getenv("SLOT_CALLS_CHANNEL_ID")) if os.getenv("SLOT_CALLS_CHANNEL_ID") else None
 
 # OAuth configuration
@@ -553,6 +558,33 @@ except Exception as e:
     raise
 
 # -------------------------
+# Bot Settings Manager
+# -------------------------
+# Loads settings from database with environment variable fallbacks
+bot_settings = BotSettingsManager(engine)
+print("✅ Bot settings manager initialized")
+
+# Load KICK_CHANNEL from settings if not already set via env
+if not KICK_CHANNEL:
+    KICK_CHANNEL = bot_settings.kick_channel
+    if KICK_CHANNEL:
+        print(f"✅ Loaded KICK_CHANNEL from database: {KICK_CHANNEL}")
+    else:
+        print("⚠️ Warning: KICK_CHANNEL not set in env or database. Some features may be limited.")
+
+# Load KICK_CHATROOM_ID from settings if not already set via env
+if not KICK_CHATROOM_ID:
+    KICK_CHATROOM_ID = str(bot_settings.kick_chatroom_id) if bot_settings.kick_chatroom_id else None
+    if KICK_CHATROOM_ID:
+        print(f"✅ Loaded KICK_CHATROOM_ID from database: {KICK_CHATROOM_ID}")
+
+# Load SLOT_CALLS_CHANNEL_ID from settings if not already set via env
+if not SLOT_CALLS_CHANNEL_ID:
+    SLOT_CALLS_CHANNEL_ID = bot_settings.slot_calls_channel_id
+    if SLOT_CALLS_CHANNEL_ID:
+        print(f"✅ Loaded SLOT_CALLS_CHANNEL_ID from database: {SLOT_CALLS_CHANNEL_ID}")
+
+# -------------------------
 # Discord bot setup
 # -------------------------
 intents = discord.Intents.default()
@@ -561,6 +593,9 @@ intents.members = True
 intents.reactions = True  # Enable reaction events
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+# Store settings manager on bot for access throughout
+bot.settings_manager = bot_settings
 
 # In-memory active viewer tracking
 active_viewers = {}
@@ -3738,9 +3773,10 @@ async def on_ready():
             await setup_raffle_commands(bot, engine)
             
             # Setup raffle scheduler (monthly reset + auto-draw)
-            raffle_auto_draw = os.getenv("RAFFLE_AUTO_DRAW", "false").lower() == "true"
-            raffle_channel_id = os.getenv("RAFFLE_ANNOUNCEMENT_CHANNEL_ID")
-            raffle_channel_id = int(raffle_channel_id) if raffle_channel_id else None
+            # Load settings from database first, fall back to env vars
+            bot_settings.refresh()  # Ensure fresh settings
+            raffle_auto_draw = bot_settings.raffle_auto_draw
+            raffle_channel_id = bot_settings.raffle_announcement_channel_id
             
             await setup_raffle_scheduler(
                 bot=bot,

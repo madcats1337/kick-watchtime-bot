@@ -398,6 +398,43 @@ class RedisSubscriber:
             item_name = data.get('item_name')
             print(f"✅ Point shop item updated: {item_name} (ID: {item_id})")
     
+    async def handle_bot_settings_event(self, action, data):
+        """Handle bot settings events from dashboard"""
+        print(f"📥 Bot Settings Event: {action}")
+        
+        if action == 'sync':
+            # Refresh bot settings from database
+            if hasattr(self.bot, 'settings_manager') and self.bot.settings_manager:
+                try:
+                    self.bot.settings_manager.refresh()
+                    print("✅ Bot settings refreshed from database")
+                    
+                    # Log the updated values
+                    settings = self.bot.settings_manager
+                    print(f"   • kick_channel: {settings.kick_channel}")
+                    print(f"   • kick_chatroom_id: {settings.kick_chatroom_id}")
+                    print(f"   • slot_calls_channel_id: {settings.slot_calls_channel_id}")
+                    print(f"   • raffle_auto_draw: {settings.raffle_auto_draw}")
+                    print(f"   • raffle_announcement_channel_id: {settings.raffle_announcement_channel_id}")
+                    print(f"   • raffle_leaderboard_channel_id: {settings.raffle_leaderboard_channel_id}")
+                except Exception as e:
+                    print(f"⚠️ Failed to refresh bot settings: {e}")
+            else:
+                print("⚠️ Bot settings manager not initialized")
+        
+        elif action == 'update':
+            key = data.get('key')
+            value = data.get('value')
+            print(f"✅ Bot setting updated: {key} = {value}")
+            
+            # Refresh settings to pick up the change
+            if hasattr(self.bot, 'settings_manager') and self.bot.settings_manager:
+                try:
+                    self.bot.settings_manager.refresh()
+                    print("✅ Bot settings refreshed after update")
+                except Exception as e:
+                    print(f"⚠️ Failed to refresh bot settings: {e}")
+    
     async def announce_in_chat(self, message):
         """Send a message to the Kick chat"""
         try:
@@ -426,7 +463,8 @@ class RedisSubscriber:
             'dashboard:gtb',
             'dashboard:management',
             'dashboard:commands',
-            'dashboard:point_shop'
+            'dashboard:point_shop',
+            'dashboard:bot_settings'
         )
         
         print("🎧 Redis subscriber listening for dashboard events...")
@@ -456,6 +494,8 @@ class RedisSubscriber:
                             await self.handle_commands_event(action, data)
                         elif channel == 'dashboard:point_shop':
                             await self.handle_point_shop_event(action, data)
+                        elif channel == 'dashboard:bot_settings':
+                            await self.handle_bot_settings_event(action, data)
                     
                     except json.JSONDecodeError as e:
                         print(f"Failed to decode message: {e}")
@@ -478,7 +518,8 @@ class RedisSubscriber:
                         'dashboard:gtb',
                         'dashboard:management',
                         'dashboard:commands',
-                        'dashboard:point_shop'
+                        'dashboard:point_shop',
+                        'dashboard:bot_settings'
                     )
 
 async def start_redis_subscriber(bot, send_message_callback=None):
