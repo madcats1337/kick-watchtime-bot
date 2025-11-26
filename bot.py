@@ -5335,35 +5335,47 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                         
                         self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
                         
-                        # Media Gallery for items with images (max 10)
-                        items_with_images = [item for item in shop_items if item[5]][:10]
-                        if items_with_images:
-                            media_items = []
-                            for idx, item in enumerate(items_with_images):
-                                item_id, name, desc, price, stock, image_url, is_active = item
-                                stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "SOLD"
-                                alt_text = f"#{idx + 1} {name} - {price:,} pts ({stock_text})"
-                                media_items.append(discord.MediaGalleryItem(image_url, description=alt_text[:100]))
+                        # Group items in batches of 3 for alternating gallery/list pattern
+                        BATCH_SIZE = 3
+                        total_items = len(shop_items)
+                        
+                        for batch_start in range(0, total_items, BATCH_SIZE):
+                            batch_end = min(batch_start + BATCH_SIZE, total_items)
+                            batch_items = shop_items[batch_start:batch_end]
                             
-                            self.add_item(discord.ui.MediaGallery(*media_items))
-                            self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
-                        
-                        # Item list
-                        item_lines = ["## 📋 Available Items\n"]
-                        for idx, item in enumerate(shop_items):
-                            item_id, name, desc, price, stock, image_url, is_active = item
-                            stock_emoji = "🟢" if stock != 0 else "🔴"
-                            stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "SOLD"
-                            line = f"**#{idx + 1}** {name} — 💰 **{price:,}** pts | {stock_emoji} {stock_text}"
-                            if desc:
-                                short_desc = desc[:40] + "..." if len(desc) > 40 else desc
-                                line += f"\n> _{short_desc}_"
-                            item_lines.append(line)
-                        
-                        self.add_item(discord.ui.Container(
-                            discord.ui.TextDisplay("\n".join(item_lines)[:4000]),
-                            accent_colour=0x2F3136
-                        ))
+                            # Media Gallery for this batch (items with images)
+                            batch_with_images = [(batch_start + i, item) for i, item in enumerate(batch_items) if item[5]]
+                            if batch_with_images:
+                                media_items = []
+                                for global_idx, item in batch_with_images:
+                                    item_id, name, desc, price, stock, image_url, is_active = item
+                                    stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "SOLD"
+                                    alt_text = f"#{global_idx + 1} {name} - {price:,} pts ({stock_text})"
+                                    media_items.append(discord.MediaGalleryItem(image_url, description=alt_text[:100]))
+                                
+                                self.add_item(discord.ui.MediaGallery(*media_items))
+                            
+                            # Item list for this batch
+                            item_lines = []
+                            for i, item in enumerate(batch_items):
+                                global_idx = batch_start + i
+                                item_id, name, desc, price, stock, image_url, is_active = item
+                                stock_emoji = "🟢" if stock != 0 else "🔴"
+                                stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "SOLD"
+                                line = f"**#{global_idx + 1}** {name} — 💰 **{price:,}** pts | {stock_emoji} {stock_text}"
+                                if desc:
+                                    short_desc = desc[:40] + "..." if len(desc) > 40 else desc
+                                    line += f"\n> _{short_desc}_"
+                                item_lines.append(line)
+                            
+                            self.add_item(discord.ui.Container(
+                                discord.ui.TextDisplay("\n".join(item_lines)[:4000]),
+                                accent_colour=0x2F3136
+                            ))
+                            
+                            # Add separator between batches (but not after the last one)
+                            if batch_end < total_items:
+                                self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
                         
                         # Footer and interactive components
                         self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small, divider=False))
