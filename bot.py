@@ -5138,7 +5138,7 @@ class PointShopBalanceButton(discord.ui.Button):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int = None):
+async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int = None, update_existing: bool = True):
     """Post or update the point shop embed with interactive buttons to a Discord channel"""
     
     try:
@@ -5168,6 +5168,24 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                 WHERE is_active = TRUE
                 ORDER BY price ASC
             """)).fetchall()
+            
+            # Get existing message ID
+            existing_msg_result = conn.execute(text("""
+                SELECT value FROM point_settings WHERE key = 'shop_message_id'
+            """)).fetchone()
+            existing_message_id = int(existing_msg_result[0]) if existing_msg_result else None
+        
+        # Try to get existing message for update
+        existing_message = None
+        if update_existing and existing_message_id:
+            try:
+                existing_message = await channel.fetch_message(existing_message_id)
+            except discord.NotFound:
+                existing_message = None
+                print("[Point Shop] Previous message not found, will create new one")
+            except Exception as e:
+                print(f"[Point Shop] Error fetching existing message: {e}")
+                existing_message = None
         
         if not items:
             # No items - send info message
@@ -5176,51 +5194,72 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                 description="No items available at the moment. Check back later!",
                 color=0xFFD700
             )
-            await channel.send(embed=embed)
+            embed.set_footer(text="💡 Tip: Earn points by watching streams!")
+            
+            if existing_message:
+                await existing_message.edit(embed=embed, view=None)
+            else:
+                await channel.send(embed=embed)
             return True
         
-        # Build shop embed
-        embed = discord.Embed(
+        # Build main shop embed with item list
+        main_embed = discord.Embed(
             title="🛍️ Point Shop",
-            description="Spend your hard-earned points on awesome rewards!\nClick a button below to purchase an item.",
+            description="Spend your hard-earned points on awesome rewards!\nSelect an item from the dropdown below to purchase.",
             color=0xFFD700
         )
         
+        # Add items as fields
         for item in items:
             item_id, name, description, price, stock, image_url, is_active = item
             
             # Stock display
-            stock_text = "∞ in stock" if stock < 0 else f"{stock} left" if stock > 0 else "SOLD OUT"
+            stock_text = "∞ in stock" if stock < 0 else f"{stock} left" if stock > 0 else "🔴 SOLD OUT"
+            stock_emoji = "🟢" if stock != 0 else "🔴"
             
             # Item field
             field_value = f"💰 **{price:,} points**\n"
             if description:
-                field_value += f"{description}\n"
-            field_value += f"📦 {stock_text}"
+                field_value += f"_{description}_\n"
+            field_value += f"{stock_emoji} {stock_text}"
+            if image_url:
+                field_value += " 📷"  # Indicate item has image
             
-            embed.add_field(
+            main_embed.add_field(
                 name=f"🎁 {name}",
                 value=field_value,
                 inline=True
             )
         
-        embed.set_footer(text="💡 Tip: Earn points by watching streams! | Check your balance with !points")
+        # If there's only one item with an image, show it in the main embed
+        items_with_images = [item for item in items if item[5]]  # item[5] is image_url
+        if len(items_with_images) == 1:
+            main_embed.set_thumbnail(url=items_with_images[0][5])
+        elif len(items) == 1 and items[0][5]:
+            main_embed.set_image(url=items[0][5])
         
-        # Create view with buy buttons
+        main_embed.set_footer(text="💡 Earn points by watching streams! | Check balance: !points | Select an item below to buy")
+        
+        # Create view with dropdown selector
         view = PointShopView(items)
         
-        # Send the shop message
-        message = await channel.send(embed=embed, view=view)
+        # Update or send the shop message
+        if existing_message:
+            await existing_message.edit(embed=main_embed, view=view)
+            print(f"[Point Shop] Updated shop message in channel {channel_id}")
+        else:
+            message = await channel.send(embed=main_embed, view=view)
+            
+            # Store the message ID for future updates
+            with engine.begin() as conn:
+                conn.execute(text("""
+                    INSERT INTO point_settings (key, value, updated_at)
+                    VALUES ('shop_message_id', :m, CURRENT_TIMESTAMP)
+                    ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
+                """), {"m": str(message.id)})
+            
+            print(f"[Point Shop] Posted new shop to channel {channel_id}")
         
-        # Store the message ID for future updates
-        with engine.begin() as conn:
-            conn.execute(text("""
-                INSERT INTO point_settings (key, value, updated_at)
-                VALUES ('shop_message_id', :m, CURRENT_TIMESTAMP)
-                ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
-            """), {"m": str(message.id)})
-        
-        print(f"[Point Shop] Posted shop to channel {channel_id}")
         return True
         
     except Exception as e:
@@ -5228,6 +5267,11 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
         import traceback
         traceback.print_exc()
         return False
+
+
+async def update_point_shop_message(bot):
+    """Update the existing point shop message with current data"""
+    return await post_point_shop_to_discord(bot, update_existing=True)
 
 
 @bot.command(name="points", aliases=["balance", "pts"])

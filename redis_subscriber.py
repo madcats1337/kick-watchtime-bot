@@ -379,7 +379,7 @@ class RedisSubscriber:
             # Import the post function from bot module
             try:
                 from bot import post_point_shop_to_discord
-                success = await post_point_shop_to_discord(self.bot, channel_id=channel_id)
+                success = await post_point_shop_to_discord(self.bot, channel_id=channel_id, update_existing=False)
                 if success:
                     print("✅ Point shop posted to Discord")
                 else:
@@ -396,7 +396,21 @@ class RedisSubscriber:
         elif action == 'item_update':
             item_id = data.get('item_id')
             item_name = data.get('item_name')
-            print(f"✅ Point shop item updated: {item_name} (ID: {item_id})")
+            update_type = data.get('type', 'update')  # create, update, delete
+            print(f"✅ Point shop item {update_type}: {item_name} (ID: {item_id})")
+            
+            # Auto-update the shop message when items change
+            try:
+                from bot import update_point_shop_message
+                success = await update_point_shop_message(self.bot)
+                if success:
+                    print("✅ Point shop message auto-updated")
+                else:
+                    print("⚠️ Could not auto-update point shop (no channel configured?)")
+            except Exception as e:
+                print(f"⚠️ Failed to auto-update point shop: {e}")
+                import traceback
+                traceback.print_exc()
     
     async def handle_bot_settings_event(self, action, data):
         """Handle bot settings events from dashboard"""
