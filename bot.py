@@ -5036,7 +5036,9 @@ async def cmd_post_shop(ctx, channel: discord.TextChannel = None):
 if not DISCORD_TOKEN:
     raise SystemExit("❌ DISCORD_TOKEN environment variable is required")
 
+# Note: KICK_CHANNEL is no longer required as env var - can be configured via dashboard
 if not KICK_CHANNEL:
-    raise SystemExit("❌ KICK_CHANNEL environment variable is required")
+    print("⚠️ Warning: KICK_CHANNEL not set. Configure via dashboard Bot Settings or set KICK_CHANNEL env var.")
+    print("⚠️ Watchtime tracking and some features will be disabled until configured.")
 
 bot.run(DISCORD_TOKEN)
