@@ -1196,6 +1196,36 @@ async def kick_chat_loop(channel_name: str):
                                                     print(f"[Clip] 💾 Saved clip data for {username}")
                                                 except Exception as db_err:
                                                     print(f"[Clip] ⚠️ Failed to save clip to DB: {db_err}")
+                                                
+                                                # Post clip embed to Discord channel if configured
+                                                try:
+                                                    clip_channel_id = None
+                                                    with engine.connect() as conn:
+                                                        result = conn.execute(text("""
+                                                            SELECT value FROM bot_settings WHERE key = 'clip_channel_id'
+                                                        """)).fetchone()
+                                                        if result and result[0]:
+                                                            clip_channel_id = int(result[0])
+                                                    
+                                                    if clip_channel_id:
+                                                        discord_channel = bot.get_channel(clip_channel_id)
+                                                        if discord_channel:
+                                                            from datetime import datetime, timezone
+                                                            clip_embed = discord.Embed(
+                                                                title=f"🎬 {clip_title}",
+                                                                description=f"New clip created by **{username}** in Kick chat!",
+                                                                color=0x53FC18,
+                                                                url=clip_url,
+                                                                timestamp=datetime.now(timezone.utc)
+                                                            )
+                                                            clip_embed.add_field(name="Duration", value=f"{clip_duration} seconds", inline=True)
+                                                            clip_embed.add_field(name="Created by", value=username, inline=True)
+                                                            clip_embed.add_field(name="🔗 Watch Clip", value=f"[Click here]({clip_url})", inline=False)
+                                                            clip_embed.set_footer(text=f"Kick Channel: {KICK_CHANNEL}")
+                                                            await discord_channel.send(embed=clip_embed)
+                                                            print(f"[Clip] 📢 Posted clip to Discord channel {clip_channel_id}")
+                                                except Exception as discord_err:
+                                                    print(f"[Clip] ⚠️ Failed to post clip to Discord: {discord_err}")
                                         else:
                                             await send_kick_message(f"@{username} Couldn't create clip right now. Try again!")
                                             print(f"[Clip] ❌ Clip creation failed for {username}")
