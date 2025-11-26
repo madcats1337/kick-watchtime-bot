@@ -1139,7 +1139,7 @@ async def kick_chat_loop(channel_name: str):
                                             await send_kick_message(f"@{username} Usage: !gtb <amount> (e.g., !gtb 1234.56)")
                                     
                                     # Handle !clip command - Create a clip of the livestream
-                                    if content_stripped.lower() == "!clip":
+                                    if content_stripped.lower().startswith("!clip"):
                                         # Get clip duration from bot_settings (default 30 seconds)
                                         clip_duration = 30
                                         try:
@@ -1152,9 +1152,19 @@ async def kick_chat_loop(channel_name: str):
                                         except Exception as e:
                                             print(f"[Clip] Using default duration, couldn't load from DB: {e}")
                                         
+                                        # Check for custom title (everything after !clip)
+                                        custom_title = content_stripped[5:].strip()  # Remove "!clip" and trim
+                                        if custom_title:
+                                            clip_title = custom_title
+                                        else:
+                                            # Generate default title with username and timestamp
+                                            from datetime import datetime
+                                            timestamp = datetime.now().strftime("%b %d, %Y %H:%M")
+                                            clip_title = f"Clip by {username} - {timestamp}"
+                                        
                                         # Attempt to create the clip
-                                        print(f"[Clip] {username} requested a clip ({clip_duration}s)")
-                                        clip_result = await create_clip(KICK_CHANNEL, clip_duration)
+                                        print(f"[Clip] {username} requested a clip ({clip_duration}s) - Title: {clip_title}")
+                                        clip_result = await create_clip(KICK_CHANNEL, clip_duration, clip_title)
                                         print(f"[Clip] API response: {clip_result}")
                                         
                                         if clip_result:

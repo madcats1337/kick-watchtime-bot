@@ -208,7 +208,7 @@ async def get_channel_info(channel_name: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-async def create_clip(channel_name: str, duration_seconds: int = 30) -> Optional[Dict[str, Any]]:
+async def create_clip(channel_name: str, duration_seconds: int = 30, title: str = None) -> Optional[Dict[str, Any]]:
     """
     Create a clip of the current livestream.
     
@@ -222,6 +222,7 @@ async def create_clip(channel_name: str, duration_seconds: int = 30) -> Optional
     Args:
         channel_name: The Kick channel name/slug
         duration_seconds: Duration of the clip in seconds (default 30)
+        title: Custom title for the clip (optional)
         
     Returns:
         Dict with clip info (url, id, etc.) or None if failed
@@ -247,7 +248,7 @@ async def create_clip(channel_name: str, duration_seconds: int = 30) -> Optional
                     finalize_url = f'https://kick.com/api/v2/channels/{channel_name}/clips/finalize'
                     finalize_data = {
                         'duration': duration_seconds,
-                        'title': f'Clip from {channel_name}',
+                        'title': title or f'Clip from {channel_name}',
                     }
                     
                     # Add any required fields from init response
