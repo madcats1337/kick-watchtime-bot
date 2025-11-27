@@ -5387,13 +5387,17 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                             discord.ui.TextDisplay("💡 *Earn points by watching streams!* | Select an item below to purchase."),
                             accent_colour=0x2F3136
                         ))
-                        
-                        # Add interactive components directly (not in ActionRow for Components V2)
-                        self.add_item(PointShopItemSelect(shop_items))
-                        self.add_item(PointShopBalanceButton())
                 
+                # Create Components V2 layout (display only)
                 layout = ShopLayout(items)
+                
+                # Create traditional View for interactive components (select + button)
+                interactive_view = PointShopView(items)
+                
+                # Send both: LayoutView for display + traditional View for interactions
                 message = await channel.send(view=layout)
+                # Add interactive components in a follow-up edit
+                await message.edit(view=interactive_view)
                 
                 # Store the message ID
                 with engine.begin() as conn:
