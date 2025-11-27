@@ -5359,11 +5359,11 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                             for i, item in enumerate(batch_items):
                                 global_idx = batch_start + i
                                 item_id, name, desc, price, stock, image_url, is_active = item
-                                stock_emoji = "🟢" if stock != 0 else "🔴"
+                                stock_status = "🟢" if stock != 0 else "🔴"
                                 stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "SOLD"
                                 
                                 # Build item entry with aligned formatting
-                                item_entry = f"**#{global_idx + 1}** {name}\n💰 **{price:,}** pts | {stock_emoji} {stock_text}"
+                                item_entry = f"**#{global_idx + 1}** {name}\n$: **{price:,}** pts | In stock: {stock_status} {stock_text}"
                                 if desc:
                                     # Truncate long descriptions to prevent layout issues
                                     short_desc = desc[:60] + "..." if len(desc) > 60 else desc
@@ -5446,9 +5446,9 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
         for idx, item in enumerate(items):
             item_id, name, description, price, stock, image_url, is_active = item
             stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "SOLD"
-            stock_emoji = "🟢" if stock != 0 else "🔴"
+            stock_status = "🟢" if stock != 0 else "🔴"
             
-            field_value = f"💰 **{price:,}** pts | {stock_emoji} {stock_text}"
+            field_value = f"$: **{price:,}** pts | In stock: {stock_status} {stock_text}"
             if description:
                 desc_short = description[:50] + "..." if len(description) > 50 else description
                 field_value += f"\n_{desc_short}_"

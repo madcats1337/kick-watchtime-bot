@@ -389,6 +389,20 @@ class RedisSubscriber:
                 import traceback
                 traceback.print_exc()
         
+        elif action == 'sync_shop':
+            # Force update the shop message
+            try:
+                from bot import post_point_shop_to_discord
+                success = await post_point_shop_to_discord(self.bot, update_existing=True)
+                if success:
+                    print("✅ Point shop force synced to Discord")
+                else:
+                    print("⚠️ Failed to sync point shop")
+            except Exception as e:
+                print(f"⚠️ Failed to sync point shop: {e}")
+                import traceback
+                traceback.print_exc()
+        
         elif action == 'update_settings':
             print(f"✅ Point settings updated: {data}")
             # Settings are stored in DB, no action needed here
