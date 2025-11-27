@@ -5138,8 +5138,13 @@ class PointShopBalanceButton(discord.ui.Button):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-async def create_shop_mosaic_image(items):
-    """Create a grid mosaic image from shop item images"""
+async def create_shop_mosaic_image(items, tile_size=250):
+    """Create a grid mosaic image from shop item images
+    
+    Args:
+        items: List of shop items
+        tile_size: Size of each item tile in pixels (default 250 for high quality)
+    """
     from PIL import Image, ImageDraw, ImageFont
     import aiohttp
     import io
@@ -5151,10 +5156,11 @@ async def create_shop_mosaic_image(items):
     if not items_with_images:
         return None
     
-    # Settings
-    TILE_SIZE = 150  # Size of each item tile
-    PADDING = 10  # Padding between tiles
-    LABEL_HEIGHT = 30  # Height for item number label
+    # Settings - scale based on tile size
+    TILE_SIZE = tile_size
+    PADDING = max(10, tile_size // 15)  # Scale padding with tile size
+    LABEL_HEIGHT = max(30, tile_size // 5)  # Scale label height
+    FONT_SIZE = max(16, tile_size // 10)  # Scale font size
     BG_COLOR = (30, 30, 35)  # Dark background matching Discord
     LABEL_BG_COLOR = (50, 50, 60)  # Slightly lighter for labels
     TEXT_COLOR = (255, 255, 255)
@@ -5173,10 +5179,10 @@ async def create_shop_mosaic_image(items):
     
     # Try to load a font (fallback to default if not available)
     try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", FONT_SIZE)
     except:
         try:
-            font = ImageFont.truetype("arial.ttf", 16)
+            font = ImageFont.truetype("arial.ttf", FONT_SIZE)
         except:
             font = ImageFont.load_default()
     
@@ -5248,15 +5254,16 @@ async def create_shop_mosaic_image(items):
                 print(f"[Point Shop Mosaic] Failed to load image for {name}: {e}")
                 # Draw placeholder
                 draw.rectangle([x, y, x + TILE_SIZE, y + TILE_SIZE], fill=(60, 60, 70))
-                draw.text((x + 10, y + TILE_SIZE // 2), "No Image", fill=TEXT_COLOR, font=font)
+                draw.text((x + PADDING, y + TILE_SIZE // 2), "No Image", fill=TEXT_COLOR, font=font)
             
             # Draw label background
             label_y = y + TILE_SIZE
             draw.rectangle([x, label_y, x + TILE_SIZE, label_y + LABEL_HEIGHT], fill=LABEL_BG_COLOR)
             
-            # Draw item number and truncated name
-            label_text = f"#{item_idx + 1} {name[:12]}{'...' if len(name) > 12 else ''}"
-            draw.text((x + 5, label_y + 5), label_text, fill=TEXT_COLOR, font=font)
+            # Draw item number and truncated name - scale max chars with tile size
+            max_name_chars = max(12, TILE_SIZE // 12)
+            label_text = f"#{item_idx + 1} {name[:max_name_chars]}{'...' if len(name) > max_name_chars else ''}"
+            draw.text((x + PADDING // 2, label_y + PADDING // 2), label_text, fill=TEXT_COLOR, font=font)
     
     # Save to bytes
     output = io.BytesIO()
