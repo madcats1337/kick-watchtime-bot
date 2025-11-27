@@ -4968,7 +4968,12 @@ class PointShopItemSelect(discord.ui.Select):
             item_id, name, description, price, stock, image_url, is_active = item
             if is_active:
                 # Stock display
-                stock_text = "∞" if stock < 0 else f"{stock} left" if stock > 0 else "SOLD OUT"
+                if stock < 0:
+                    stock_text = "∞"
+                elif stock == 0:
+                    stock_text = "SOLD OUT"
+                else:
+                    stock_text = str(stock)
                 
                 self.items_data[str(item_id)] = {
                     "id": item_id,
@@ -4978,9 +4983,10 @@ class PointShopItemSelect(discord.ui.Select):
                     "stock": stock
                 }
                 
+                # Format: "Item Name: Xpts" with "In-stock: X" as description
                 options.append(discord.SelectOption(
-                    label=f"{name}"[:100],
-                    description=f"💰 {price:,} pts | 📦 {stock_text}"[:100],
+                    label=f"{name}: {price:,}pts"[:100],
+                    description=f"In-stock: {stock_text}"[:100],
                     value=str(item_id),
                     emoji="🎁"
                 ))
@@ -5138,12 +5144,23 @@ class PointShopBalanceButton(discord.ui.Button):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-async def create_shop_mosaic_image(items, max_width=800):
+async def create_shop_mosaic_image(items, max_width=1200):
     """Create a grid mosaic image from shop item images, preserving original aspect ratios
+    
+    Layout per item:
+    ┌─────────────┐
+    │#1 Item Name │  <- Title above image
+    ├─────────────┤ 
+    │   IMAGE     │  <- Larger image
+    │             │
+    ├─────────────┤  
+    │ 500 pts     │  <- Bigger price
+    │ In-stock: 10│  <- Full stock text
+    └─────────────┘
     
     Args:
         items: List of shop items
-        max_width: Maximum width of the entire mosaic (default 800px)
+        max_width: Maximum width of the entire mosaic (default 1200px for bigger images)
     """
     from PIL import Image, ImageDraw, ImageFont
     import aiohttp
@@ -5156,33 +5173,39 @@ async def create_shop_mosaic_image(items, max_width=800):
     if not items_with_images:
         return None
     
-    # Settings
+    # Settings - BIGGER sizes
     COLS = min(len(items_with_images), 3)  # Max 3 columns
-    PADDING = 10
-    LABEL_HEIGHT = 55  # Increased for two lines of text
-    FONT_SIZE = 16
-    SMALL_FONT_SIZE = 14
+    PADDING = 15
+    TITLE_HEIGHT = 35  # Title above image
+    FOOTER_HEIGHT = 70  # Price + stock below image
+    TITLE_FONT_SIZE = 20
+    PRICE_FONT_SIZE = 24  # Bigger price
+    STOCK_FONT_SIZE = 18
     BG_COLOR = (30, 30, 35)
-    LABEL_BG_COLOR = (50, 50, 60)
+    TITLE_BG_COLOR = (45, 45, 55)
+    FOOTER_BG_COLOR = (50, 50, 60)
     TEXT_COLOR = (255, 255, 255)
     PRICE_COLOR = (255, 215, 0)  # Gold for price
     STOCK_COLOR = (100, 200, 100)  # Green for stock
     SOLDOUT_COLOR = (255, 100, 100)  # Red for sold out
     
-    # Calculate cell width based on max_width and columns
+    # Calculate cell width based on max_width and columns (bigger cells)
     cell_width = (max_width - (COLS + 1) * PADDING) // COLS
     
     # Try to load fonts
     try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", FONT_SIZE)
-        small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", SMALL_FONT_SIZE)
+        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", TITLE_FONT_SIZE)
+        price_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", PRICE_FONT_SIZE)
+        stock_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", STOCK_FONT_SIZE)
     except:
         try:
-            font = ImageFont.truetype("arial.ttf", FONT_SIZE)
-            small_font = ImageFont.truetype("arial.ttf", SMALL_FONT_SIZE)
+            title_font = ImageFont.truetype("arial.ttf", TITLE_FONT_SIZE)
+            price_font = ImageFont.truetype("arial.ttf", PRICE_FONT_SIZE)
+            stock_font = ImageFont.truetype("arial.ttf", STOCK_FONT_SIZE)
         except:
-            font = ImageFont.load_default()
-            small_font = font
+            title_font = ImageFont.load_default()
+            price_font = title_font
+            stock_font = title_font
     
     # First pass: download all images and calculate row heights
     downloaded_images = []
@@ -5233,13 +5256,13 @@ async def create_shop_mosaic_image(items, max_width=800):
             if img:
                 max_img_height = max(max_img_height, img.size[1])
             else:
-                max_img_height = max(max_img_height, 150)  # Placeholder height
+                max_img_height = max(max_img_height, 200)  # Bigger placeholder height
         row_heights.append(max_img_height)
     
-    # Calculate total canvas size
+    # Calculate total canvas size (title + image + footer per row)
     total_height = PADDING
     for rh in row_heights:
-        total_height += rh + LABEL_HEIGHT + PADDING
+        total_height += TITLE_HEIGHT + rh + FOOTER_HEIGHT + PADDING
     
     canvas_width = COLS * cell_width + (COLS + 1) * PADDING
     canvas = Image.new('RGB', (canvas_width, total_height), BG_COLOR)
@@ -5255,57 +5278,67 @@ async def create_shop_mosaic_image(items, max_width=800):
             
             x = PADDING + col_idx * (cell_width + PADDING)
             
+            # Draw TITLE background (above image)
+            draw.rectangle([x, current_y, x + cell_width, current_y + TITLE_HEIGHT], fill=TITLE_BG_COLOR)
+            
+            # Draw item title
+            max_chars = cell_width // 12
+            name_text = f"#{item_idx + 1} {name[:max_chars]}{'...' if len(name) > max_chars else ''}"
+            draw.text((x + 8, current_y + 7), name_text, fill=TEXT_COLOR, font=title_font)
+            
+            # IMAGE area starts after title
+            img_y = current_y + TITLE_HEIGHT
+            
             if img:
                 # Center image vertically in its cell if shorter than row height
                 img_h = img.size[1]
                 y_offset = (row_height - img_h) // 2
-                canvas.paste(img, (x, current_y + y_offset))
+                canvas.paste(img, (x, img_y + y_offset))
                 
                 # Draw sold out overlay if applicable
                 if stock == 0:
                     overlay = Image.new('RGBA', img.size, (0, 0, 0, 150))
                     composited = Image.alpha_composite(img.convert('RGBA'), overlay).convert('RGB')
-                    canvas.paste(composited, (x, current_y + y_offset))
+                    canvas.paste(composited, (x, img_y + y_offset))
                     
                     # Draw "SOLD OUT" text centered on image
                     sold_text = "SOLD OUT"
-                    bbox = draw.textbbox((0, 0), sold_text, font=font)
+                    bbox = draw.textbbox((0, 0), sold_text, font=price_font)
                     tw = bbox[2] - bbox[0]
                     th = bbox[3] - bbox[1]
                     draw.text(
-                        (x + (cell_width - tw) // 2, current_y + y_offset + (img_h - th) // 2),
+                        (x + (cell_width - tw) // 2, img_y + y_offset + (img_h - th) // 2),
                         sold_text,
                         fill=SOLDOUT_COLOR,
-                        font=font
+                        font=price_font
                     )
             else:
                 # Draw placeholder
-                draw.rectangle([x, current_y, x + cell_width, current_y + row_height], fill=(60, 60, 70))
-                draw.text((x + 10, current_y + row_height // 2), "No Image", fill=TEXT_COLOR, font=font)
+                draw.rectangle([x, img_y, x + cell_width, img_y + row_height], fill=(60, 60, 70))
+                draw.text((x + 10, img_y + row_height // 2), "No Image", fill=TEXT_COLOR, font=title_font)
             
-            # Draw label background below image
-            label_y = current_y + row_height
-            draw.rectangle([x, label_y, x + cell_width, label_y + LABEL_HEIGHT], fill=LABEL_BG_COLOR)
+            # Draw FOOTER background (below image)
+            footer_y = img_y + row_height
+            draw.rectangle([x, footer_y, x + cell_width, footer_y + FOOTER_HEIGHT], fill=FOOTER_BG_COLOR)
             
-            # Line 1: Item number and name
-            max_chars = cell_width // 10
-            name_text = f"#{item_idx + 1} {name[:max_chars]}{'...' if len(name) > max_chars else ''}"
-            draw.text((x + 5, label_y + 5), name_text, fill=TEXT_COLOR, font=font)
-            
-            # Line 2: Price and stock
-            stock_text = "∞" if stock < 0 else str(stock) if stock > 0 else "SOLD OUT"
-            stock_color = SOLDOUT_COLOR if stock == 0 else STOCK_COLOR
+            # Line 1: Price (big, gold)
             price_text = f"{price:,} pts"
+            draw.text((x + 8, footer_y + 8), price_text, fill=PRICE_COLOR, font=price_font)
             
-            # Draw price
-            draw.text((x + 5, label_y + 28), price_text, fill=PRICE_COLOR, font=small_font)
+            # Line 2: Stock text
+            if stock < 0:
+                stock_text = "In-stock: ∞"
+                stock_color = STOCK_COLOR
+            elif stock == 0:
+                stock_text = "In-stock: SOLD OUT"
+                stock_color = SOLDOUT_COLOR
+            else:
+                stock_text = f"In-stock: {stock}"
+                stock_color = STOCK_COLOR
             
-            # Draw stock (right-aligned)
-            stock_bbox = draw.textbbox((0, 0), stock_text, font=small_font)
-            stock_w = stock_bbox[2] - stock_bbox[0]
-            draw.text((x + cell_width - stock_w - 5, label_y + 28), stock_text, fill=stock_color, font=small_font)
+            draw.text((x + 8, footer_y + 40), stock_text, fill=stock_color, font=stock_font)
         
-        current_y += row_height + LABEL_HEIGHT + PADDING
+        current_y += TITLE_HEIGHT + row_height + FOOTER_HEIGHT + PADDING
     
     # Save to bytes
     output = io.BytesIO()
