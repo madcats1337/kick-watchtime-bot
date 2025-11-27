@@ -639,6 +639,10 @@ last_chat_activity = None  # Track last time we saw any chat activity
 # 🔒 SECURITY: Track unique chatters in recent window for stream-live detection
 recent_chatters = {}  # {username: timestamp} - rolling window of recent chat activity
 
+# Clip buffer tracking
+clip_buffer_active = False  # Track if clip buffer is running on Dashboard
+last_stream_live_state = None  # Track last known stream live state (for detecting transitions)
+
 # Raffle system global tracker
 gifted_sub_tracker = None  # Will be initialized in on_ready()
 shuffle_tracker = None  # Will be initialized in on_ready()
@@ -2033,6 +2037,121 @@ async def cleanup_pending_links_task():
                     pass
         except Exception:
             pass
+
+@tasks.loop(seconds=30)
+async def clip_buffer_management_task():
+    """
+    Monitor stream status and manage clip buffer on Dashboard.
+    
+    - When stream goes LIVE: Start clip buffer on Dashboard
+    - When stream goes OFFLINE: Stop clip buffer on Dashboard
+    
+    This ensures the clip buffer is always recording when the stream is live,
+    so clips can capture the past 30+ seconds of footage.
+    """
+    global clip_buffer_active, last_stream_live_state
+    
+    try:
+        # Get settings from database
+        if not hasattr(bot, 'settings_manager') or not bot.settings_manager:
+            return
+        
+        # Refresh settings to get latest values
+        bot.settings_manager.refresh()
+        
+        dashboard_url = bot.settings_manager.dashboard_url
+        bot_api_key = bot.settings_manager.bot_api_key
+        kick_channel = bot.settings_manager.kick_channel
+        
+        if not dashboard_url or not bot_api_key or not kick_channel:
+            return
+        
+        # Check if stream is currently live
+        try:
+            is_live = await check_stream_live(kick_channel)
+        except Exception as e:
+            # Cloudflare block or other error - skip this iteration
+            if "403" not in str(e) and "Cloudflare" not in str(e):
+                print(f"[Clip Buffer] ⚠️ Error checking stream status: {e}")
+            return
+        
+        # Detect state transitions
+        should_start_buffer = False
+        if last_stream_live_state is None:
+            # First run - initialize state
+            last_stream_live_state = is_live
+            if is_live:
+                print(f"[Clip Buffer] 🎬 Stream is already live on startup, starting buffer...")
+                should_start_buffer = True
+            else:
+                print(f"[Clip Buffer] 📴 Stream is offline on startup")
+        
+        # Handle transition: OFFLINE -> LIVE (or first run while live)
+        if (is_live and not last_stream_live_state) or should_start_buffer:
+            if not should_start_buffer:
+                print(f"[Clip Buffer] 🟢 Stream went LIVE! Starting clip buffer...")
+            try:
+                async with aiohttp.ClientSession() as session:
+                    headers = {
+                        'X-API-Key': bot_api_key,
+                        'Content-Type': 'application/json'
+                    }
+                    async with session.post(
+                        f'{dashboard_url}/api/clips/buffer/start',
+                        headers=headers,
+                        json={'channel': kick_channel},
+                        timeout=aiohttp.ClientTimeout(total=30)
+                    ) as response:
+                        if response.status == 200:
+                            result = await response.json()
+                            clip_buffer_active = True
+                            print(f"[Clip Buffer] ✅ Buffer started: {result.get('message', 'OK')}")
+                        else:
+                            error = await response.text()
+                            print(f"[Clip Buffer] ❌ Failed to start buffer: HTTP {response.status} - {error}")
+            except Exception as e:
+                print(f"[Clip Buffer] ❌ Error starting buffer: {e}")
+        
+        # Handle transition: LIVE -> OFFLINE
+        elif not is_live and last_stream_live_state:
+            print(f"[Clip Buffer] 🔴 Stream went OFFLINE! Stopping clip buffer...")
+            try:
+                async with aiohttp.ClientSession() as session:
+                    headers = {
+                        'X-API-Key': bot_api_key,
+                        'Content-Type': 'application/json'
+                    }
+                    async with session.post(
+                        f'{dashboard_url}/api/clips/buffer/stop',
+                        headers=headers,
+                        json={'channel': kick_channel},
+                        timeout=aiohttp.ClientTimeout(total=30)
+                    ) as response:
+                        if response.status == 200:
+                            result = await response.json()
+                            clip_buffer_active = False
+                            print(f"[Clip Buffer] ✅ Buffer stopped: {result.get('message', 'OK')}")
+                        else:
+                            error = await response.text()
+                            print(f"[Clip Buffer] ⚠️ Failed to stop buffer: HTTP {response.status} - {error}")
+            except Exception as e:
+                print(f"[Clip Buffer] ⚠️ Error stopping buffer: {e}")
+        
+        # Update last known state
+        last_stream_live_state = is_live
+        
+    except Exception as e:
+        print(f"[Clip Buffer] ❌ Error in buffer management task: {e}")
+        import traceback
+        traceback.print_exc()
+
+@clip_buffer_management_task.before_loop
+async def before_clip_buffer_task():
+    """Wait for bot to be ready before starting clip buffer management."""
+    await bot.wait_until_ready()
+    # Initial delay to allow settings to load
+    await asyncio.sleep(10)
+    print("[Clip Buffer] 🎬 Starting clip buffer management task...")
 
 # -------------------------
 # Command cooldowns and checks
@@ -3823,6 +3942,11 @@ async def on_ready():
         if not check_oauth_notifications_task.is_running():
             check_oauth_notifications_task.start()
             print("✅ OAuth notifications task started")
+        
+        # Start clip buffer management task
+        if not clip_buffer_management_task.is_running():
+            clip_buffer_management_task.start()
+            print("✅ Clip buffer management task started (monitors stream status)")
         
         # Initialize raffle system
         try:
