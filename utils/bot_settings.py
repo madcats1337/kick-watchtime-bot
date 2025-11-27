@@ -239,6 +239,16 @@ class BotSettingsManager:
         """Default clip duration in seconds"""
         return self.get_int('clip_duration', default=30)
     
+    @property
+    def dashboard_url(self) -> str:
+        """Dashboard API URL for clip service etc."""
+        return self.get('dashboard_url', env_fallback='DASHBOARD_API_URL') or self.get('dashboard_url', env_fallback='DASHBOARD_URL')
+    
+    @property
+    def bot_api_key(self) -> str:
+        """API key for authenticating with Dashboard"""
+        return self.get('bot_api_key', env_fallback='BOT_API_KEY')
+    
     def to_dict(self) -> Dict[str, Any]:
         """Get all settings as a dictionary"""
         return {
@@ -251,6 +261,8 @@ class BotSettingsManager:
             'raffle_auto_draw': self.raffle_auto_draw,
             'gtb_channel_id': self.gtb_channel_id,
             'clip_duration': self.clip_duration,
+            'dashboard_url': self.dashboard_url,
+            'bot_api_key': '***' if self.bot_api_key else '',  # Don't expose key
         }
 
 

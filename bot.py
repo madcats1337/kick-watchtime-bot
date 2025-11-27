@@ -1308,12 +1308,12 @@ async def kick_chat_loop(channel_name: str):
                                         async def create_clip_background(user: str, duration: int, title: str):
                                             """Background task to create clip via Dashboard API"""
                                             try:
-                                                # Call Dashboard API to create clip
-                                                dashboard_url = os.getenv('DASHBOARD_API_URL', os.getenv('DASHBOARD_URL', ''))
-                                                api_key = os.getenv('BOT_API_KEY', '')
+                                                # Get Dashboard URL from bot_settings (database) with env var fallback
+                                                dashboard_url = bot_settings.dashboard_url
+                                                api_key = bot_settings.bot_api_key
                                                 
                                                 if not dashboard_url:
-                                                    print(f"[Clip] ❌ DASHBOARD_API_URL not configured")
+                                                    print(f"[Clip] ❌ Dashboard URL not configured in settings or env")
                                                     await send_kick_message(f"@{user} Clip service not configured - contact admin!")
                                                     return
                                                 
@@ -3968,11 +3968,12 @@ async def on_ready():
             
             # Clip service is now on Dashboard - no local buffer needed
             # Bot calls Dashboard API at /api/clips/create when !clip is used
-            dashboard_url = os.getenv('DASHBOARD_API_URL', os.getenv('DASHBOARD_URL', ''))
+            dashboard_url = bot_settings.dashboard_url
             if dashboard_url:
                 print(f"✅ Clip service configured: {dashboard_url}/api/clips/create")
             else:
-                print(f"⚠️ DASHBOARD_API_URL not set - !clip command will not work")
+                print(f"⚠️ Dashboard URL not set - configure in Dashboard → Admin Controls → Dashboard URL")
+                print(f"   Or set DASHBOARD_API_URL environment variable")
             
         except Exception as e:
             print(f"⚠️ Failed to initialize raffle system: {e}")
