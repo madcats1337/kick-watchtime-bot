@@ -136,7 +136,6 @@ Use `!leaderboard` to see top participants!
         """
         try:
             from datetime import datetime
-            import os
             
             stats = self.ticket_manager.get_period_stats()
             
@@ -183,8 +182,11 @@ Get ready to participate when the period starts!
                 history = self.raffle_draw.get_draw_history(limit=1)
                 last_winner = history[0] if history else None
                 
-                # Check if auto-leaderboard is configured
-                leaderboard_channel_id = os.getenv('RAFFLE_LEADERBOARD_CHANNEL_ID')
+                # Check if auto-leaderboard is configured (from database settings)
+                leaderboard_channel_id = None
+                if hasattr(self.bot, 'settings_manager') and self.bot.settings_manager:
+                    leaderboard_channel_id = self.bot.settings_manager.raffle_leaderboard_channel_id
+                
                 leaderboard_note = ""
                 if leaderboard_channel_id:
                     try:
@@ -1115,7 +1117,7 @@ Use `!rafflestats @user` to see individual stats
                 await self.bot.auto_leaderboard.update_leaderboard()
                 await ctx.send("✅ Raffle leaderboard updated!")
             else:
-                await ctx.send("❌ Auto-leaderboard is not configured. Set RAFFLE_LEADERBOARD_CHANNEL_ID environment variable.")
+                await ctx.send("❌ Auto-leaderboard is not configured. Set `raffle_leaderboard_channel_id` in the dashboard.")
         except Exception as e:
             logger.error(f"Error manually updating leaderboard: {e}")
             await ctx.send(f"❌ Error updating leaderboard: {str(e)}")
