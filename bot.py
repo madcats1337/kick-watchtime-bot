@@ -5393,7 +5393,7 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                         self.add_item(PointShopBalanceButton())
                 
                 layout = ShopLayout(items)
-                message = await channel.send(view=layout, flags=discord.MessageFlags.is_components_v2)
+                message = await channel.send(view=layout)
                 
                 # Store the message ID
                 with engine.begin() as conn:
