@@ -37,7 +37,12 @@ class ShuffleWagerTracker:
         self._load_settings()
         
         print(f"[Shuffle Tracker] 🎰 Initialized for platform: {self.platform_name}")
-        print(f"[Shuffle Tracker] 📊 Campaign code: {self.campaign_code}")
+        # Show campaign codes (supports comma-separated multiple codes)
+        codes = [c.strip() for c in self.campaign_code.split(',')]
+        if len(codes) > 1:
+            print(f"[Shuffle Tracker] 📊 Campaign codes ({len(codes)}): {', '.join(codes)}")
+        else:
+            print(f"[Shuffle Tracker] 📊 Campaign code: {self.campaign_code}")
         print(f"[Shuffle Tracker] 🎫 Rate: {self.tickets_per_1000} tickets per $1000 wagered")
         if self.affiliate_url:
             print(f"[Shuffle Tracker] 🔗 Affiliate URL configured: {self.affiliate_url[:50]}...")
@@ -64,7 +69,9 @@ class ShuffleWagerTracker:
     def refresh_settings(self):
         """Reload settings from database"""
         self._load_settings()
-        print(f"[Shuffle Tracker] 🔄 Settings refreshed - URL: {bool(self.affiliate_url)}, Code: {self.campaign_code}")
+        codes = [c.strip() for c in self.campaign_code.split(',')]
+        codes_str = f"{len(codes)} codes" if len(codes) > 1 else self.campaign_code
+        print(f"[Shuffle Tracker] 🔄 Settings refreshed - URL: {bool(self.affiliate_url)}, Codes: {codes_str}")
     
     async def update_shuffle_wagers(self):
         """

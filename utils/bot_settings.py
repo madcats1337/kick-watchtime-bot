@@ -271,7 +271,10 @@ class BotSettingsManager:
     
     @property
     def shuffle_campaign_code(self) -> str:
-        """Wager/Shuffle campaign/affiliate code to track"""
+        """
+        Wager/Shuffle campaign/affiliate code(s) to track.
+        Supports multiple codes separated by comma (e.g., 'lele,maikelele,lele2')
+        """
         # Priority: wager_campaign_code (DB) -> shuffle_campaign_code (DB) -> env vars
         return (self.get('wager_campaign_code') or 
                 self.get('shuffle_campaign_code') or 
