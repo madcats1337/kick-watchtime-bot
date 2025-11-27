@@ -5138,12 +5138,12 @@ class PointShopBalanceButton(discord.ui.Button):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-async def create_shop_mosaic_image(items, tile_size=250):
-    """Create a grid mosaic image from shop item images
+async def create_shop_mosaic_image(items, max_width=800):
+    """Create a grid mosaic image from shop item images, preserving original aspect ratios
     
     Args:
         items: List of shop items
-        tile_size: Size of each item tile in pixels (default 250 for high quality)
+        max_width: Maximum width of the entire mosaic (default 800px)
     """
     from PIL import Image, ImageDraw, ImageFont
     import aiohttp
@@ -5156,28 +5156,19 @@ async def create_shop_mosaic_image(items, tile_size=250):
     if not items_with_images:
         return None
     
-    # Settings - scale based on tile size
-    TILE_SIZE = tile_size
-    PADDING = max(10, tile_size // 15)  # Scale padding with tile size
-    LABEL_HEIGHT = max(30, tile_size // 5)  # Scale label height
-    FONT_SIZE = max(16, tile_size // 10)  # Scale font size
-    BG_COLOR = (30, 30, 35)  # Dark background matching Discord
-    LABEL_BG_COLOR = (50, 50, 60)  # Slightly lighter for labels
+    # Settings
+    COLS = min(len(items_with_images), 3)  # Max 3 columns
+    PADDING = 10
+    LABEL_HEIGHT = 35
+    FONT_SIZE = 18
+    BG_COLOR = (30, 30, 35)
+    LABEL_BG_COLOR = (50, 50, 60)
     TEXT_COLOR = (255, 255, 255)
     
-    # Calculate grid dimensions
-    num_items = len(items_with_images)
-    cols = min(num_items, 3)  # Max 3 columns
-    rows = math.ceil(num_items / cols)
+    # Calculate cell width based on max_width and columns
+    cell_width = (max_width - (COLS + 1) * PADDING) // COLS
     
-    # Create canvas
-    canvas_width = cols * (TILE_SIZE + PADDING) + PADDING
-    canvas_height = rows * (TILE_SIZE + LABEL_HEIGHT + PADDING) + PADDING
-    
-    canvas = Image.new('RGB', (canvas_width, canvas_height), BG_COLOR)
-    draw = ImageDraw.Draw(canvas)
-    
-    # Try to load a font (fallback to default if not available)
+    # Try to load a font
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", FONT_SIZE)
     except:
@@ -5186,19 +5177,13 @@ async def create_shop_mosaic_image(items, tile_size=250):
         except:
             font = ImageFont.load_default()
     
-    # Download and place images
+    # First pass: download all images and calculate row heights
+    downloaded_images = []
     async with aiohttp.ClientSession() as session:
-        for grid_idx, (item_idx, item) in enumerate(items_with_images):
+        for item_idx, item in items_with_images:
             item_id, name, description, price, stock, image_url, is_active = item
             
-            row = grid_idx // cols
-            col = grid_idx % cols
-            
-            x = PADDING + col * (TILE_SIZE + PADDING)
-            y = PADDING + row * (TILE_SIZE + LABEL_HEIGHT + PADDING)
-            
             try:
-                # Download image
                 async with session.get(image_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status == 200:
                         img_data = await resp.read()
@@ -5214,56 +5199,93 @@ async def create_shop_mosaic_image(items, tile_size=250):
                         elif img.mode != 'RGB':
                             img = img.convert('RGB')
                         
-                        # Resize to fit tile (maintain aspect ratio, crop to square)
-                        img.thumbnail((TILE_SIZE * 2, TILE_SIZE * 2), Image.Resampling.LANCZOS)
+                        # Scale image to fit cell width while preserving aspect ratio
+                        orig_w, orig_h = img.size
+                        scale = cell_width / orig_w
+                        new_h = int(orig_h * scale)
+                        img = img.resize((cell_width, new_h), Image.Resampling.LANCZOS)
                         
-                        # Center crop to square
-                        w, h = img.size
-                        if w > h:
-                            left = (w - h) // 2
-                            img = img.crop((left, 0, left + h, h))
-                        elif h > w:
-                            top = (h - w) // 2
-                            img = img.crop((0, top, w, top + w))
-                        
-                        # Resize to exact tile size
-                        img = img.resize((TILE_SIZE, TILE_SIZE), Image.Resampling.LANCZOS)
-                        
-                        # Paste onto canvas
-                        canvas.paste(img, (x, y))
-                        
-                        # Draw sold out overlay if applicable
-                        if stock == 0:
-                            overlay = Image.new('RGBA', (TILE_SIZE, TILE_SIZE), (0, 0, 0, 150))
-                            canvas.paste(Image.alpha_composite(
-                                img.convert('RGBA'), overlay
-                            ).convert('RGB'), (x, y))
-                            # Draw "SOLD OUT" text
-                            sold_text = "SOLD OUT"
-                            bbox = draw.textbbox((0, 0), sold_text, font=font)
-                            tw = bbox[2] - bbox[0]
-                            th = bbox[3] - bbox[1]
-                            draw.text(
-                                (x + (TILE_SIZE - tw) // 2, y + (TILE_SIZE - th) // 2),
-                                sold_text,
-                                fill=(255, 100, 100),
-                                font=font
-                            )
-                    
+                        downloaded_images.append((item_idx, item, img))
+                    else:
+                        downloaded_images.append((item_idx, item, None))
             except Exception as e:
                 print(f"[Point Shop Mosaic] Failed to load image for {name}: {e}")
+                downloaded_images.append((item_idx, item, None))
+    
+    if not downloaded_images:
+        return None
+    
+    # Group into rows and calculate height per row
+    rows_data = [downloaded_images[i:i + COLS] for i in range(0, len(downloaded_images), COLS)]
+    row_heights = []
+    
+    for row in rows_data:
+        # Find max image height in this row
+        max_img_height = 0
+        for item_idx, item, img in row:
+            if img:
+                max_img_height = max(max_img_height, img.size[1])
+            else:
+                max_img_height = max(max_img_height, 150)  # Placeholder height
+        row_heights.append(max_img_height)
+    
+    # Calculate total canvas size
+    total_height = PADDING
+    for rh in row_heights:
+        total_height += rh + LABEL_HEIGHT + PADDING
+    
+    canvas_width = COLS * cell_width + (COLS + 1) * PADDING
+    canvas = Image.new('RGB', (canvas_width, total_height), BG_COLOR)
+    draw = ImageDraw.Draw(canvas)
+    
+    # Second pass: place images on canvas
+    current_y = PADDING
+    for row_idx, row in enumerate(rows_data):
+        row_height = row_heights[row_idx]
+        
+        for col_idx, (item_idx, item, img) in enumerate(row):
+            item_id, name, description, price, stock, image_url, is_active = item
+            
+            x = PADDING + col_idx * (cell_width + PADDING)
+            
+            if img:
+                # Center image vertically in its cell if shorter than row height
+                img_h = img.size[1]
+                y_offset = (row_height - img_h) // 2
+                canvas.paste(img, (x, current_y + y_offset))
+                
+                # Draw sold out overlay if applicable
+                if stock == 0:
+                    overlay = Image.new('RGBA', img.size, (0, 0, 0, 150))
+                    composited = Image.alpha_composite(img.convert('RGBA'), overlay).convert('RGB')
+                    canvas.paste(composited, (x, current_y + y_offset))
+                    
+                    # Draw "SOLD OUT" text centered on image
+                    sold_text = "SOLD OUT"
+                    bbox = draw.textbbox((0, 0), sold_text, font=font)
+                    tw = bbox[2] - bbox[0]
+                    th = bbox[3] - bbox[1]
+                    draw.text(
+                        (x + (cell_width - tw) // 2, current_y + y_offset + (img_h - th) // 2),
+                        sold_text,
+                        fill=(255, 100, 100),
+                        font=font
+                    )
+            else:
                 # Draw placeholder
-                draw.rectangle([x, y, x + TILE_SIZE, y + TILE_SIZE], fill=(60, 60, 70))
-                draw.text((x + PADDING, y + TILE_SIZE // 2), "No Image", fill=TEXT_COLOR, font=font)
+                draw.rectangle([x, current_y, x + cell_width, current_y + row_height], fill=(60, 60, 70))
+                draw.text((x + 10, current_y + row_height // 2), "No Image", fill=TEXT_COLOR, font=font)
             
-            # Draw label background
-            label_y = y + TILE_SIZE
-            draw.rectangle([x, label_y, x + TILE_SIZE, label_y + LABEL_HEIGHT], fill=LABEL_BG_COLOR)
+            # Draw label background below image
+            label_y = current_y + row_height
+            draw.rectangle([x, label_y, x + cell_width, label_y + LABEL_HEIGHT], fill=LABEL_BG_COLOR)
             
-            # Draw item number and truncated name - scale max chars with tile size
-            max_name_chars = max(12, TILE_SIZE // 12)
-            label_text = f"#{item_idx + 1} {name[:max_name_chars]}{'...' if len(name) > max_name_chars else ''}"
-            draw.text((x + PADDING // 2, label_y + PADDING // 2), label_text, fill=TEXT_COLOR, font=font)
+            # Draw item number and truncated name
+            max_chars = cell_width // 10
+            label_text = f"#{item_idx + 1} {name[:max_chars]}{'...' if len(name) > max_chars else ''}"
+            draw.text((x + 5, label_y + 8), label_text, fill=TEXT_COLOR, font=font)
+        
+        current_y += row_height + LABEL_HEIGHT + PADDING
     
     # Save to bytes
     output = io.BytesIO()
