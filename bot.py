@@ -5302,17 +5302,25 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                 SELECT value FROM point_settings WHERE key = 'shop_message_id'
             """)).fetchone()
             existing_message_id = int(existing_msg_result[0]) if existing_msg_result else None
+            
+            # Get existing interactive message ID
+            existing_interactive_result = conn.execute(text("""
+                SELECT value FROM point_settings WHERE key = 'shop_interactive_id'
+            """)).fetchone()
+            existing_interactive_id = int(existing_interactive_result[0]) if existing_interactive_result else None
         
-        # Delete existing message if updating
-        if update_existing and existing_message_id:
-            try:
-                existing_message = await channel.fetch_message(existing_message_id)
-                await existing_message.delete()
-                print("[Point Shop] Deleted old shop message for refresh")
-            except discord.NotFound:
-                pass
-            except Exception as e:
-                print(f"[Point Shop] Error deleting existing message: {e}")
+        # Delete existing messages if updating
+        if update_existing:
+            for msg_id in [existing_message_id, existing_interactive_id]:
+                if msg_id:
+                    try:
+                        existing_message = await channel.fetch_message(msg_id)
+                        await existing_message.delete()
+                        print(f"[Point Shop] Deleted old shop message {msg_id}")
+                    except discord.NotFound:
+                        pass
+                    except Exception as e:
+                        print(f"[Point Shop] Error deleting message {msg_id}: {e}")
         
         # Check if Components V2 is supported (discord.py 2.6+)
         has_components_v2 = hasattr(discord.ui, 'LayoutView') and hasattr(discord.ui, 'MediaGallery')
@@ -5396,15 +5404,20 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                 
                 # Send a follow-up message with interactive components (select + button)
                 interactive_view = PointShopView(items)
-                await channel.send("**Purchase an item:**", view=interactive_view)
+                interactive_msg = await channel.send("**Purchase an item:**", view=interactive_view)
                 
-                # Store the main display message ID
+                # Store both message IDs
                 with engine.begin() as conn:
                     conn.execute(text("""
                         INSERT INTO point_settings (key, value, updated_at)
                         VALUES ('shop_message_id', :m, CURRENT_TIMESTAMP)
                         ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
                     """), {"m": str(message.id)})
+                    conn.execute(text("""
+                        INSERT INTO point_settings (key, value, updated_at)
+                        VALUES ('shop_interactive_id', :m, CURRENT_TIMESTAMP)
+                        ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
+                    """), {"m": str(interactive_msg.id)})
                 
                 print(f"[Point Shop] Posted Components V2 shop to channel {channel_id}")
                 return True
@@ -5468,13 +5481,17 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
         else:
             message = await channel.send(embed=embed, view=view)
         
-        # Store the message ID for future updates
+        # Store the message ID for future updates (legacy mode has interactive in same message)
         with engine.begin() as conn:
             conn.execute(text("""
                 INSERT INTO point_settings (key, value, updated_at)
                 VALUES ('shop_message_id', :m, CURRENT_TIMESTAMP)
                 ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
             """), {"m": str(message.id)})
+            # Clear interactive ID since legacy mode includes it in same message
+            conn.execute(text("""
+                DELETE FROM point_settings WHERE key = 'shop_interactive_id'
+            """))
         
         print(f"[Point Shop] Posted shop to channel {channel_id}")
         return True
