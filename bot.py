@@ -5377,33 +5377,60 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
         print(f"[Point Shop] Components V2 available: {has_components_v2}, use_components_v2: {use_components_v2}, items count: {len(items)}")
         
         if use_components_v2 and has_components_v2 and items:
-            # ==================== Components V2 Mode with Mosaic ====================
+            # ==================== Components V2 Mode with Section Thumbnails ====================
             try:
-                # Generate the mosaic image first (same as legacy mode)
-                mosaic_image = await create_shop_mosaic_image(items)
-                mosaic_file = None
-                if mosaic_image:
-                    mosaic_file = discord.File(mosaic_image, filename="shop_items.png")
-                
-                # Build the layout dynamically
+                # Build the layout dynamically using Section with Thumbnail per item
                 class ShopLayout(discord.ui.LayoutView):
-                    def __init__(self, shop_items, has_mosaic):
+                    def __init__(self, shop_items):
                         super().__init__(timeout=None)
-                        self.has_mosaic = has_mosaic
                         self._build_layout(shop_items)
                     
                     def _build_layout(self, shop_items):
                         # Header container
                         self.add_item(discord.ui.Container(
-                            discord.ui.TextDisplay("# 🛍️ Point Shop\nSpend your hard-earned points on awesome rewards!"),
+                            discord.ui.TextDisplay("# 🛍️ Point Shop"),
+                            discord.ui.TextDisplay("Spend your hard-earned points on awesome rewards!"),
                             accent_colour=0xFFD700
                         ))
                         
-                        # Show mosaic image in MediaGallery (includes all item info)
-                        if self.has_mosaic:
-                            self.add_item(discord.ui.MediaGallery(
-                                discord.MediaGalleryItem("attachment://shop_items.png")
-                            ))
+                        self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+                        
+                        # Create Section with Thumbnail for each item
+                        for idx, item in enumerate(shop_items):
+                            item_id, name, description, price, stock, image_url, is_active = item
+                            
+                            # Format stock text
+                            if stock < 0:
+                                stock_text = "∞ in stock"
+                            elif stock == 0:
+                                stock_text = "❌ SOLD OUT"
+                            else:
+                                stock_text = f"{stock} in stock"
+                            
+                            # Build item text with price and stock
+                            item_text = f"**#{idx + 1} {name}**\n💰 **{price:,}** pts | {stock_text}"
+                            if description:
+                                desc_short = description[:80] + "..." if len(description) > 80 else description
+                                item_text += f"\n_{desc_short}_"
+                            
+                            # Create Section with Thumbnail if image exists
+                            if image_url:
+                                section = discord.ui.Section(
+                                    accessory=discord.ui.Thumbnail(image_url)
+                                )
+                                section.add_item(discord.ui.TextDisplay(item_text))
+                            else:
+                                # No image - just text display in a container
+                                section = discord.ui.Container(
+                                    discord.ui.TextDisplay(item_text),
+                                    accent_colour=0x2F3136
+                                )
+                            
+                            self.add_item(section)
+                            
+                            # Add small separator between items (not after last)
+                            if idx < len(shop_items) - 1:
+                                self.add_item(discord.ui.Separator(divider=False, spacing=discord.SeparatorSpacing.small))
                         
                         # Footer
                         self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
@@ -5412,14 +5439,11 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                             accent_colour=0x2F3136
                         ))
                 
-                # Create Components V2 layout
-                layout = ShopLayout(items, mosaic_file is not None)
+                # Create Components V2 layout (no mosaic file needed)
+                layout = ShopLayout(items)
                 
-                # Send the Components V2 display with the mosaic file attached
-                if mosaic_file:
-                    message = await channel.send(view=layout, file=mosaic_file)
-                else:
-                    message = await channel.send(view=layout)
+                # Send the Components V2 display
+                message = await channel.send(view=layout)
                 
                 # Send a follow-up message with interactive components (select + button)
                 interactive_view = PointShopView(items)
