@@ -5388,12 +5388,9 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                             accent_colour=0x2F3136
                         ))
                         
-                        # Add action row with selector and balance button
-                        action_row = discord.ui.ActionRow(
-                            PointShopItemSelect(shop_items),
-                            PointShopBalanceButton()
-                        )
-                        self.add_item(action_row)
+                        # Add interactive components directly (not in ActionRow for Components V2)
+                        self.add_item(PointShopItemSelect(shop_items))
+                        self.add_item(PointShopBalanceButton())
                 
                 layout = ShopLayout(items)
                 message = await channel.send(view=layout, flags=discord.MessageFlags.is_components_v2)
