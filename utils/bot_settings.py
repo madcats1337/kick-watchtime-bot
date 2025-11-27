@@ -242,12 +242,14 @@ class BotSettingsManager:
     @property
     def dashboard_url(self) -> str:
         """Dashboard API URL for clip service etc."""
-        return self.get('dashboard_url', env_fallback='DASHBOARD_API_URL') or self.get('dashboard_url', env_fallback='DASHBOARD_URL')
+        # Check database first, no env fallback since we want DB only
+        return self._cache.get('dashboard_url', '') or ''
     
     @property
     def bot_api_key(self) -> str:
         """API key for authenticating with Dashboard"""
-        return self.get('bot_api_key', env_fallback='BOT_API_KEY')
+        # Check database first, no env fallback since we want DB only
+        return self._cache.get('bot_api_key', '') or ''
     
     def to_dict(self) -> Dict[str, Any]:
         """Get all settings as a dictionary"""

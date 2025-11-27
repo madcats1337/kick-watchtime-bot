@@ -1308,12 +1308,18 @@ async def kick_chat_loop(channel_name: str):
                                         async def create_clip_background(user: str, duration: int, title: str):
                                             """Background task to create clip via Dashboard API"""
                                             try:
-                                                # Get Dashboard URL from bot_settings (database) with env var fallback
+                                                # Refresh settings from database to get latest values
+                                                bot_settings.refresh()
+                                                
+                                                # Get Dashboard URL from bot_settings (database)
                                                 dashboard_url = bot_settings.dashboard_url
                                                 api_key = bot_settings.bot_api_key
                                                 
+                                                print(f"[Clip] DEBUG - dashboard_url from DB: '{dashboard_url}'")
+                                                print(f"[Clip] DEBUG - bot_api_key exists: {bool(api_key)}")
+                                                
                                                 if not dashboard_url:
-                                                    print(f"[Clip] ❌ Dashboard URL not configured in settings or env")
+                                                    print(f"[Clip] ❌ Dashboard URL not configured in bot_settings table")
                                                     await send_kick_message(f"@{user} Clip service not configured - contact admin!")
                                                     return
                                                 
