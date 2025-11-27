@@ -5317,6 +5317,8 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
         # Check if Components V2 is supported (discord.py 2.6+)
         has_components_v2 = hasattr(discord.ui, 'LayoutView') and hasattr(discord.ui, 'MediaGallery')
         
+        print(f"[Point Shop] Components V2 available: {has_components_v2}, use_components_v2: {use_components_v2}, items count: {len(items)}")
+        
         if use_components_v2 and has_components_v2 and items:
             # ==================== Components V2 Mode ====================
             try:
@@ -5350,6 +5352,7 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                                 for global_idx, item in batch_with_images:
                                     item_id, name, desc, price, stock, image_url, is_active = item
                                     # No description/alt text - keeps gallery clean
+                                    print(f"[Point Shop] Adding image to gallery: {name} - {image_url}")
                                     media_items.append(discord.MediaGalleryItem(image_url))
                                 
                                 self.add_item(discord.ui.MediaGallery(*media_items))
