@@ -5144,7 +5144,7 @@ class PointShopBalanceButton(discord.ui.Button):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-async def create_shop_mosaic_image(items, max_width=1600):
+async def create_shop_mosaic_image(items, max_width=2400):
     """Create a grid mosaic image from shop item images, preserving original aspect ratios
     
     Layout per item:
@@ -5160,7 +5160,7 @@ async def create_shop_mosaic_image(items, max_width=1600):
     
     Args:
         items: List of shop items
-        max_width: Maximum width of the entire mosaic (default 1600px for much bigger images)
+        max_width: Maximum width of the entire mosaic (default 2400px for very large images)
     """
     from PIL import Image, ImageDraw, ImageFont
     import aiohttp
@@ -5173,14 +5173,14 @@ async def create_shop_mosaic_image(items, max_width=1600):
     if not items_with_images:
         return None
     
-    # Settings - MUCH BIGGER sizes for high quality
+    # Settings - VERY LARGE sizes for maximum visibility
     COLS = min(len(items_with_images), 3)  # Max 3 columns
-    PADDING = 20
-    TITLE_HEIGHT = 45  # Title above image
-    FOOTER_HEIGHT = 85  # Price + stock below image
-    TITLE_FONT_SIZE = 26  # Bigger title
-    PRICE_FONT_SIZE = 30  # Much bigger price
-    STOCK_FONT_SIZE = 22
+    PADDING = 30
+    TITLE_HEIGHT = 70  # Title above image
+    FOOTER_HEIGHT = 120  # Price + stock below image
+    TITLE_FONT_SIZE = 42  # Much bigger title
+    PRICE_FONT_SIZE = 48  # Very large price
+    STOCK_FONT_SIZE = 36
     BG_COLOR = (30, 30, 35)
     TITLE_BG_COLOR = (45, 45, 55)
     FOOTER_BG_COLOR = (50, 50, 60)
@@ -5189,7 +5189,7 @@ async def create_shop_mosaic_image(items, max_width=1600):
     STOCK_COLOR = (100, 200, 100)  # Green for stock
     SOLDOUT_COLOR = (255, 100, 100)  # Red for sold out
     
-    # Calculate cell width based on max_width and columns (much bigger cells)
+    # Calculate cell width based on max_width and columns (very large cells)
     cell_width = (max_width - (COLS + 1) * PADDING) // COLS
     
     # Try to load fonts - prefer bold/semi-bold for titles
@@ -5261,7 +5261,7 @@ async def create_shop_mosaic_image(items, max_width=1600):
             if img:
                 max_img_height = max(max_img_height, img.size[1])
             else:
-                max_img_height = max(max_img_height, 300)  # Much bigger placeholder height
+                max_img_height = max(max_img_height, 500)  # Very large placeholder height
         row_heights.append(max_img_height)
     
     # Calculate total canvas size (title + image + footer per row)
@@ -5427,14 +5427,34 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                 if mosaic_image:
                     mosaic_file = discord.File(mosaic_image, filename="shop_items.png")
                 
-                # Send header message
-                await channel.send("# 🛍️ Point Shop\nSpend your hard-earned points on awesome rewards!")
+                # Build Components V2 layout with unfurled media for maximum size
+                class ShopLayout(discord.ui.LayoutView):
+                    def __init__(self, has_mosaic):
+                        super().__init__(timeout=None)
+                        self._build_layout(has_mosaic)
+                    
+                    def _build_layout(self, has_mosaic):
+                        # Header container
+                        self.add_item(discord.ui.Container(
+                            discord.ui.TextDisplay("# 🛍️ Point Shop"),
+                            discord.ui.TextDisplay("Spend your hard-earned points on awesome rewards!"),
+                            accent_colour=0xFFD700
+                        ))
+                        
+                        # Use unfurled MediaGallery for maximum image size
+                        if has_mosaic:
+                            gallery = discord.ui.MediaGallery(
+                                discord.MediaGalleryItem("attachment://shop_items.png")
+                            )
+                            self.add_item(gallery)
                 
-                # Send mosaic as standalone attachment (full size, no embed/gallery constraints)
+                layout = ShopLayout(mosaic_file is not None)
+                
+                # Send the Components V2 display with mosaic
                 if mosaic_file:
-                    message = await channel.send(file=mosaic_file)
+                    message = await channel.send(view=layout, file=mosaic_file)
                 else:
-                    message = await channel.send("*No items with images available*")
+                    message = await channel.send(view=layout)
                 
                 # Send a follow-up message with interactive components (select + button)
                 interactive_view = PointShopView(items)
