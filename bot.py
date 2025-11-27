@@ -5427,21 +5427,14 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                 if mosaic_image:
                     mosaic_file = discord.File(mosaic_image, filename="shop_items.png")
                 
-                # Use embed for full-size image display (MediaGallery constrains size)
-                embed = discord.Embed(
-                    title="🛍️ Point Shop",
-                    description="Spend your hard-earned points on awesome rewards!",
-                    color=0xFFD700
-                )
+                # Send header message
+                await channel.send("# 🛍️ Point Shop\nSpend your hard-earned points on awesome rewards!")
                 
+                # Send mosaic as standalone attachment (full size, no embed/gallery constraints)
                 if mosaic_file:
-                    embed.set_image(url="attachment://shop_items.png")
-                
-                # Send the shop display with full-size image
-                if mosaic_file:
-                    message = await channel.send(embed=embed, file=mosaic_file)
+                    message = await channel.send(file=mosaic_file)
                 else:
-                    message = await channel.send(embed=embed)
+                    message = await channel.send("*No items with images available*")
                 
                 # Send a follow-up message with interactive components (select + button)
                 interactive_view = PointShopView(items)
