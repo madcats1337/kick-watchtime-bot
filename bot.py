@@ -5159,23 +5159,30 @@ async def create_shop_mosaic_image(items, max_width=800):
     # Settings
     COLS = min(len(items_with_images), 3)  # Max 3 columns
     PADDING = 10
-    LABEL_HEIGHT = 35
-    FONT_SIZE = 18
+    LABEL_HEIGHT = 55  # Increased for two lines of text
+    FONT_SIZE = 16
+    SMALL_FONT_SIZE = 14
     BG_COLOR = (30, 30, 35)
     LABEL_BG_COLOR = (50, 50, 60)
     TEXT_COLOR = (255, 255, 255)
+    PRICE_COLOR = (255, 215, 0)  # Gold for price
+    STOCK_COLOR = (100, 200, 100)  # Green for stock
+    SOLDOUT_COLOR = (255, 100, 100)  # Red for sold out
     
     # Calculate cell width based on max_width and columns
     cell_width = (max_width - (COLS + 1) * PADDING) // COLS
     
-    # Try to load a font
+    # Try to load fonts
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", FONT_SIZE)
+        small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", SMALL_FONT_SIZE)
     except:
         try:
             font = ImageFont.truetype("arial.ttf", FONT_SIZE)
+            small_font = ImageFont.truetype("arial.ttf", SMALL_FONT_SIZE)
         except:
             font = ImageFont.load_default()
+            small_font = font
     
     # First pass: download all images and calculate row heights
     downloaded_images = []
@@ -5268,7 +5275,7 @@ async def create_shop_mosaic_image(items, max_width=800):
                     draw.text(
                         (x + (cell_width - tw) // 2, current_y + y_offset + (img_h - th) // 2),
                         sold_text,
-                        fill=(255, 100, 100),
+                        fill=SOLDOUT_COLOR,
                         font=font
                     )
             else:
@@ -5280,10 +5287,23 @@ async def create_shop_mosaic_image(items, max_width=800):
             label_y = current_y + row_height
             draw.rectangle([x, label_y, x + cell_width, label_y + LABEL_HEIGHT], fill=LABEL_BG_COLOR)
             
-            # Draw item number and truncated name
+            # Line 1: Item number and name
             max_chars = cell_width // 10
-            label_text = f"#{item_idx + 1} {name[:max_chars]}{'...' if len(name) > max_chars else ''}"
-            draw.text((x + 5, label_y + 8), label_text, fill=TEXT_COLOR, font=font)
+            name_text = f"#{item_idx + 1} {name[:max_chars]}{'...' if len(name) > max_chars else ''}"
+            draw.text((x + 5, label_y + 5), name_text, fill=TEXT_COLOR, font=font)
+            
+            # Line 2: Price and stock
+            stock_text = "∞" if stock < 0 else str(stock) if stock > 0 else "SOLD OUT"
+            stock_color = SOLDOUT_COLOR if stock == 0 else STOCK_COLOR
+            price_text = f"{price:,} pts"
+            
+            # Draw price
+            draw.text((x + 5, label_y + 28), price_text, fill=PRICE_COLOR, font=small_font)
+            
+            # Draw stock (right-aligned)
+            stock_bbox = draw.textbbox((0, 0), stock_text, font=small_font)
+            stock_w = stock_bbox[2] - stock_bbox[0]
+            draw.text((x + cell_width - stock_w - 5, label_y + 28), stock_text, fill=stock_color, font=small_font)
         
         current_y += row_height + LABEL_HEIGHT + PADDING
     
@@ -5379,35 +5399,10 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                             accent_colour=0xFFD700
                         ))
                         
-                        # Show mosaic image in MediaGallery if available
+                        # Show mosaic image in MediaGallery (includes all item info)
                         if self.has_mosaic:
                             self.add_item(discord.ui.MediaGallery(
                                 discord.MediaGalleryItem("attachment://shop_items.png")
-                            ))
-                        
-                        # Build item list in grid pattern (3 columns to match mosaic)
-                        COLS = 3
-                        rows = [shop_items[i:i + COLS] for i in range(0, len(shop_items), COLS)]
-                        
-                        for row_items in rows:
-                            # Build a row with fixed-width columns using code block formatting
-                            row_parts = []
-                            for idx_in_batch, item in enumerate(row_items):
-                                global_idx = rows.index(row_items) * COLS + idx_in_batch
-                                item_id, name, desc, price, stock, image_url, is_active = item
-                                stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "⛔"
-                                
-                                # Truncate name to fit grid cell
-                                short_name = name[:15] + "…" if len(name) > 15 else name
-                                row_parts.append(f"**#{global_idx + 1}** {short_name}\n💰 `{price:,}` • 📦 {stock_text}")
-                            
-                            # Join with spacing to create visual columns
-                            # Use a table-like format with separators
-                            row_text = "   ┃   ".join(row_parts)
-                            
-                            self.add_item(discord.ui.Container(
-                                discord.ui.TextDisplay(row_text),
-                                accent_colour=0x5865F2
                             ))
                         
                         # Footer
