@@ -4983,10 +4983,10 @@ class PointShopItemSelect(discord.ui.Select):
                     "stock": stock
                 }
                 
-                # Format: "Item Name: Xpts" with "In-stock: X" as description
+                # Format: "Item Name: Xpts" with "──── In-stock: X ────" as description
                 options.append(discord.SelectOption(
                     label=f"{name}: {price:,}pts"[:100],
-                    description=f"In-stock: {stock_text}"[:100],
+                    description=f"━━━━ In-stock: {stock_text} ━━━━"[:100],
                     value=str(item_id),
                     emoji="🎁"
                 ))
@@ -5144,14 +5144,14 @@ class PointShopBalanceButton(discord.ui.Button):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-async def create_shop_mosaic_image(items, max_width=1200):
+async def create_shop_mosaic_image(items, max_width=1600):
     """Create a grid mosaic image from shop item images, preserving original aspect ratios
     
     Layout per item:
     ┌─────────────┐
-    │#1 Item Name │  <- Title above image
+    │ Item Name   │  <- Title above image (no number)
     ├─────────────┤ 
-    │   IMAGE     │  <- Larger image
+    │   IMAGE     │  <- Much larger, high quality image
     │             │
     ├─────────────┤  
     │ 500 pts     │  <- Bigger price
@@ -5160,7 +5160,7 @@ async def create_shop_mosaic_image(items, max_width=1200):
     
     Args:
         items: List of shop items
-        max_width: Maximum width of the entire mosaic (default 1200px for bigger images)
+        max_width: Maximum width of the entire mosaic (default 1600px for much bigger images)
     """
     from PIL import Image, ImageDraw, ImageFont
     import aiohttp
@@ -5173,14 +5173,14 @@ async def create_shop_mosaic_image(items, max_width=1200):
     if not items_with_images:
         return None
     
-    # Settings - BIGGER sizes
+    # Settings - MUCH BIGGER sizes for high quality
     COLS = min(len(items_with_images), 3)  # Max 3 columns
-    PADDING = 15
-    TITLE_HEIGHT = 35  # Title above image
-    FOOTER_HEIGHT = 70  # Price + stock below image
-    TITLE_FONT_SIZE = 20
-    PRICE_FONT_SIZE = 24  # Bigger price
-    STOCK_FONT_SIZE = 18
+    PADDING = 20
+    TITLE_HEIGHT = 45  # Title above image
+    FOOTER_HEIGHT = 85  # Price + stock below image
+    TITLE_FONT_SIZE = 26  # Bigger title
+    PRICE_FONT_SIZE = 30  # Much bigger price
+    STOCK_FONT_SIZE = 22
     BG_COLOR = (30, 30, 35)
     TITLE_BG_COLOR = (45, 45, 55)
     FOOTER_BG_COLOR = (50, 50, 60)
@@ -5189,23 +5189,28 @@ async def create_shop_mosaic_image(items, max_width=1200):
     STOCK_COLOR = (100, 200, 100)  # Green for stock
     SOLDOUT_COLOR = (255, 100, 100)  # Red for sold out
     
-    # Calculate cell width based on max_width and columns (bigger cells)
+    # Calculate cell width based on max_width and columns (much bigger cells)
     cell_width = (max_width - (COLS + 1) * PADDING) // COLS
     
-    # Try to load fonts
+    # Try to load fonts - prefer bold/semi-bold for titles
     try:
         title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", TITLE_FONT_SIZE)
         price_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", PRICE_FONT_SIZE)
         stock_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", STOCK_FONT_SIZE)
     except:
         try:
-            title_font = ImageFont.truetype("arial.ttf", TITLE_FONT_SIZE)
-            price_font = ImageFont.truetype("arial.ttf", PRICE_FONT_SIZE)
+            title_font = ImageFont.truetype("arialbd.ttf", TITLE_FONT_SIZE)  # Arial Bold
+            price_font = ImageFont.truetype("arialbd.ttf", PRICE_FONT_SIZE)
             stock_font = ImageFont.truetype("arial.ttf", STOCK_FONT_SIZE)
         except:
-            title_font = ImageFont.load_default()
-            price_font = title_font
-            stock_font = title_font
+            try:
+                title_font = ImageFont.truetype("arial.ttf", TITLE_FONT_SIZE)
+                price_font = ImageFont.truetype("arial.ttf", PRICE_FONT_SIZE)
+                stock_font = ImageFont.truetype("arial.ttf", STOCK_FONT_SIZE)
+            except:
+                title_font = ImageFont.load_default()
+                price_font = title_font
+                stock_font = title_font
     
     # First pass: download all images and calculate row heights
     downloaded_images = []
@@ -5256,7 +5261,7 @@ async def create_shop_mosaic_image(items, max_width=1200):
             if img:
                 max_img_height = max(max_img_height, img.size[1])
             else:
-                max_img_height = max(max_img_height, 200)  # Bigger placeholder height
+                max_img_height = max(max_img_height, 300)  # Much bigger placeholder height
         row_heights.append(max_img_height)
     
     # Calculate total canvas size (title + image + footer per row)
@@ -5281,10 +5286,14 @@ async def create_shop_mosaic_image(items, max_width=1200):
             # Draw TITLE background (above image)
             draw.rectangle([x, current_y, x + cell_width, current_y + TITLE_HEIGHT], fill=TITLE_BG_COLOR)
             
-            # Draw item title
-            max_chars = cell_width // 12
-            name_text = f"#{item_idx + 1} {name[:max_chars]}{'...' if len(name) > max_chars else ''}"
-            draw.text((x + 8, current_y + 7), name_text, fill=TEXT_COLOR, font=title_font)
+            # Draw item title (no item number, just the name)
+            max_chars = cell_width // 14
+            name_text = f"{name[:max_chars]}{'...' if len(name) > max_chars else ''}"
+            # Center the title text
+            bbox = draw.textbbox((0, 0), name_text, font=title_font)
+            text_width = bbox[2] - bbox[0]
+            text_x = x + (cell_width - text_width) // 2
+            draw.text((text_x, current_y + 10), name_text, fill=TEXT_COLOR, font=title_font)
             
             # IMAGE area starts after title
             img_y = current_y + TITLE_HEIGHT
@@ -5340,9 +5349,9 @@ async def create_shop_mosaic_image(items, max_width=1200):
         
         current_y += TITLE_HEIGHT + row_height + FOOTER_HEIGHT + PADDING
     
-    # Save to bytes
+    # Save to bytes with high quality
     output = io.BytesIO()
-    canvas.save(output, format='PNG', optimize=True)
+    canvas.save(output, format='PNG', optimize=False)  # No optimization for better quality
     output.seek(0)
     
     return output
@@ -5418,45 +5427,28 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                 if mosaic_image:
                     mosaic_file = discord.File(mosaic_image, filename="shop_items.png")
                 
-                # Build the layout with mosaic
-                class ShopLayout(discord.ui.LayoutView):
-                    def __init__(self, has_mosaic):
-                        super().__init__(timeout=None)
-                        self._build_layout(has_mosaic)
-                    
-                    def _build_layout(self, has_mosaic):
-                        # Header container
-                        self.add_item(discord.ui.Container(
-                            discord.ui.TextDisplay("# 🛍️ Point Shop"),
-                            discord.ui.TextDisplay("Spend your hard-earned points on awesome rewards!"),
-                            accent_colour=0xFFD700
-                        ))
-                        
-                        # Show mosaic image in MediaGallery
-                        if has_mosaic:
-                            self.add_item(discord.ui.MediaGallery(
-                                discord.MediaGalleryItem("attachment://shop_items.png")
-                            ))
-                        
-                        # Footer
-                        self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
-                        self.add_item(discord.ui.Container(
-                            discord.ui.TextDisplay("💡 *Earn points by watching streams!* | Select an item below to purchase."),
-                            accent_colour=0x2F3136
-                        ))
+                # Use embed for full-size image display (MediaGallery constrains size)
+                embed = discord.Embed(
+                    title="🛍️ Point Shop",
+                    description="Spend your hard-earned points on awesome rewards!",
+                    color=0xFFD700
+                )
                 
-                # Create Components V2 layout
-                layout = ShopLayout(mosaic_file is not None)
-                
-                # Send the Components V2 display with the mosaic file attached
                 if mosaic_file:
-                    message = await channel.send(view=layout, file=mosaic_file)
+                    embed.set_image(url="attachment://shop_items.png")
+                
+                # Send the shop display with full-size image
+                if mosaic_file:
+                    message = await channel.send(embed=embed, file=mosaic_file)
                 else:
-                    message = await channel.send(view=layout)
+                    message = await channel.send(embed=embed)
                 
                 # Send a follow-up message with interactive components (select + button)
                 interactive_view = PointShopView(items)
                 interactive_msg = await channel.send("**Purchase an item:**", view=interactive_view)
+                
+                # Send footer message at the bottom
+                await channel.send("💡 *Earn points by watching streams!*")
                 
                 # Store both message IDs
                 with engine.begin() as conn:

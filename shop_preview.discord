@@ -1,0 +1,41 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Lebyy/discord-embed-creator/main/schema.json",
+  "content": "",
+  "embeds": [],
+  "components": [
+    {
+      "type": "container",
+      "accent_color": 16766720,
+      "components": [
+        {
+          "type": "text_display",
+          "content": "# 🛍️ Point Shop\nSpend your hard-earned points on awesome rewards!"
+        }
+      ]
+    },
+    {
+      "type": "media_gallery",
+      "items": [
+        {
+          "media": {
+            "url": "attachment://shop_items.png"
+          }
+        }
+      ]
+    },
+    {
+      "type": "separator",
+      "spacing": "large"
+    },
+    {
+      "type": "container",
+      "accent_color": 3092790,
+      "components": [
+        {
+          "type": "text_display",
+          "content": "💡 *Earn points by watching streams!* | Select an item below to purchase."
+        }
+      ]
+    }
+  ]
+}
