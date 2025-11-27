@@ -71,9 +71,18 @@ class BotSettingsManager:
         
         try:
             with self._engine.connect() as conn:
-                result = conn.execute(text("SELECT key, value FROM bot_settings"))
+                # Get all settings - both global (no server_id) and server-specific
+                # Server-specific settings override global ones
+                result = conn.execute(text("""
+                    SELECT key, value FROM bot_settings 
+                    WHERE discord_server_id IS NULL
+                    UNION ALL
+                    SELECT key, value FROM bot_settings 
+                    WHERE discord_server_id IS NOT NULL
+                """))
                 rows = result.fetchall()
                 
+                # Later rows override earlier ones (server-specific overrides global)
                 self._cache = {row[0]: row[1] for row in rows}
                 self._last_loaded = datetime.now(timezone.utc)
                 
