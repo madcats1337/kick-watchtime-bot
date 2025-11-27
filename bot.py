@@ -5328,12 +5328,19 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
         print(f"[Point Shop] Components V2 available: {has_components_v2}, use_components_v2: {use_components_v2}, items count: {len(items)}")
         
         if use_components_v2 and has_components_v2 and items:
-            # ==================== Components V2 Mode ====================
+            # ==================== Components V2 Mode with Mosaic ====================
             try:
+                # Generate the mosaic image first (same as legacy mode)
+                mosaic_image = await create_shop_mosaic_image(items)
+                mosaic_file = None
+                if mosaic_image:
+                    mosaic_file = discord.File(mosaic_image, filename="shop_items.png")
+                
                 # Build the layout dynamically
                 class ShopLayout(discord.ui.LayoutView):
-                    def __init__(self, shop_items):
+                    def __init__(self, shop_items, has_mosaic):
                         super().__init__(timeout=None)
+                        self.has_mosaic = has_mosaic
                         self._build_layout(shop_items)
                     
                     def _build_layout(self, shop_items):
@@ -5345,38 +5352,36 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                         
                         self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
                         
-                        # Each item gets its own Section with thumbnail
+                        # Show mosaic image in MediaGallery if available
+                        if self.has_mosaic:
+                            self.add_item(discord.ui.MediaGallery(
+                                discord.MediaGalleryItem("attachment://shop_items.png")
+                            ))
+                            self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+                        
+                        # Build item list - group into rows of 3 for compact display
+                        item_rows = []
+                        current_row = []
+                        
                         for idx, item in enumerate(shop_items):
                             item_id, name, desc, price, stock, image_url, is_active = item
-                            stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "**SOLD OUT**"
+                            stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "~~SOLD OUT~~"
                             
-                            # Build item text
-                            item_text = f"### #{idx + 1} — {name}\n"
-                            item_text += f"💰 **{price:,}** pts  •  📦 {stock_text}"
-                            if desc:
-                                short_desc = desc[:80] + "..." if len(desc) > 80 else desc
-                                item_text += f"\n_{short_desc}_"
+                            # Compact item format
+                            item_text = f"**#{idx + 1}** {name}\n💰 {price:,} pts • 📦 {stock_text}"
+                            current_row.append(item_text)
                             
-                            # Create section with thumbnail if image exists
-                            if image_url:
-                                print(f"[Point Shop] Adding item with thumbnail: {name} - {image_url}")
-                                section = discord.ui.Section(
-                                    discord.ui.TextDisplay(item_text),
-                                    accessory=discord.ui.Thumbnail(image_url)
-                                )
-                            else:
-                                section = discord.ui.Section(
-                                    discord.ui.TextDisplay(item_text)
-                                )
-                            
+                            # Every 3 items or last item, add to rows
+                            if len(current_row) == 3 or idx == len(shop_items) - 1:
+                                item_rows.append("\n\n".join(current_row))
+                                current_row = []
+                        
+                        # Add item list container(s)
+                        for row_text in item_rows:
                             self.add_item(discord.ui.Container(
-                                section,
+                                discord.ui.TextDisplay(row_text),
                                 accent_colour=0x5865F2
                             ))
-                            
-                            # Add separator between items (but not after the last one)
-                            if idx < len(shop_items) - 1:
-                                self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
                         
                         # Footer
                         self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
@@ -5385,11 +5390,14 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                             accent_colour=0x2F3136
                         ))
                 
-                # Create Components V2 layout (display only)
-                layout = ShopLayout(items)
+                # Create Components V2 layout
+                layout = ShopLayout(items, mosaic_file is not None)
                 
-                # Send the Components V2 display
-                message = await channel.send(view=layout)
+                # Send the Components V2 display with the mosaic file attached
+                if mosaic_file:
+                    message = await channel.send(view=layout, file=mosaic_file)
+                else:
+                    message = await channel.send(view=layout)
                 
                 # Send a follow-up message with interactive components (select + button)
                 interactive_view = PointShopView(items)
