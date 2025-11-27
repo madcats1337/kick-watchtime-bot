@@ -5419,47 +5419,41 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
         print(f"[Point Shop] Components V2 available: {has_components_v2}, use_components_v2: {use_components_v2}, items count: {len(items)}")
         
         if use_components_v2 and has_components_v2 and items:
-            # ==================== Individual Item Embeds for Maximum Image Size ====================
+            # ==================== Components V2 Mode with Mosaic ====================
             try:
-                # Send header message
-                header_embed = discord.Embed(
-                    title="🛍️ Point Shop",
-                    description="Spend your hard-earned points on awesome rewards!",
-                    color=0xFFD700
-                )
-                message = await channel.send(embed=header_embed)
+                # Generate the mosaic image (name, price, stock already included in image)
+                mosaic_image = await create_shop_mosaic_image(items)
+                mosaic_file = None
+                if mosaic_image:
+                    mosaic_file = discord.File(mosaic_image, filename="shop_items.png")
                 
-                # Send each item as a separate embed with its own image
-                for idx, item in enumerate(items):
-                    item_id, name, description, price, stock, image_url, is_active = item
+                # Build Components V2 layout
+                class ShopLayout(discord.ui.LayoutView):
+                    def __init__(self, has_mosaic):
+                        super().__init__(timeout=None)
+                        self._build_layout(has_mosaic)
                     
-                    # Format stock text
-                    if stock < 0:
-                        stock_text = "∞"
-                    elif stock == 0:
-                        stock_text = "SOLD OUT"
-                    else:
-                        stock_text = str(stock)
-                    
-                    # Create embed for this item
-                    item_embed = discord.Embed(
-                        title=name,
-                        color=0x2F3136 if stock != 0 else 0xFF0000
-                    )
-                    
-                    # Add price and stock as fields
-                    item_embed.add_field(name="💰 Price", value=f"**{price:,}** pts", inline=True)
-                    item_embed.add_field(name="📦 In-stock", value=stock_text, inline=True)
-                    
-                    # Add description if exists
-                    if description:
-                        item_embed.description = f"_{description}_"
-                    
-                    # Set the item image (this will display larger than mosaic)
-                    if image_url:
-                        item_embed.set_image(url=image_url)
-                    
-                    await channel.send(embed=item_embed)
+                    def _build_layout(self, has_mosaic):
+                        # Header container
+                        self.add_item(discord.ui.Container(
+                            discord.ui.TextDisplay("# 🛍️ Point Shop"),
+                            discord.ui.TextDisplay("Spend your hard-earned points on awesome rewards!"),
+                            accent_colour=0xFFD700
+                        ))
+                        
+                        # Show mosaic image in MediaGallery
+                        if has_mosaic:
+                            self.add_item(discord.ui.MediaGallery(
+                                discord.MediaGalleryItem("attachment://shop_items.png")
+                            ))
+                
+                layout = ShopLayout(mosaic_file is not None)
+                
+                # Send the Components V2 display with mosaic
+                if mosaic_file:
+                    message = await channel.send(view=layout, file=mosaic_file)
+                else:
+                    message = await channel.send(view=layout)
                 
                 # Send a follow-up message with interactive components (select + button)
                 interactive_view = PointShopView(items)
@@ -5481,11 +5475,11 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                         ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
                     """), {"m": str(interactive_msg.id)})
                 
-                print(f"[Point Shop] Posted {len(items)} individual item embeds to channel {channel_id}")
+                print(f"[Point Shop] Posted Components V2 mosaic shop to channel {channel_id}")
                 return True
                 
             except Exception as v2_error:
-                print(f"[Point Shop] Individual embeds failed, falling back to legacy: {v2_error}")
+                print(f"[Point Shop] Components V2 failed, falling back to legacy: {v2_error}")
                 import traceback
                 traceback.print_exc()
                 # Fall through to legacy mode
