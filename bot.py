@@ -5349,24 +5349,26 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                                 media_items = []
                                 for global_idx, item in batch_with_images:
                                     item_id, name, desc, price, stock, image_url, is_active = item
-                                    stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "SOLD"
-                                    alt_text = f"#{global_idx + 1} {name} - {price:,} pts ({stock_text})"
-                                    media_items.append(discord.MediaGalleryItem(image_url, description=alt_text[:100]))
+                                    # No description/alt text - keeps gallery clean
+                                    media_items.append(discord.MediaGalleryItem(image_url))
                                 
                                 self.add_item(discord.ui.MediaGallery(*media_items))
                             
-                            # Item list for this batch
+                            # Item list for this batch - each item on its own line with proper formatting
                             item_lines = []
                             for i, item in enumerate(batch_items):
                                 global_idx = batch_start + i
                                 item_id, name, desc, price, stock, image_url, is_active = item
                                 stock_emoji = "🟢" if stock != 0 else "🔴"
                                 stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "SOLD"
-                                line = f"**#{global_idx + 1}** {name} — 💰 **{price:,}** pts | {stock_emoji} {stock_text}"
+                                
+                                # Build item entry with aligned formatting
+                                item_entry = f"**#{global_idx + 1}** {name}\n💰 **{price:,}** pts | {stock_emoji} {stock_text}"
                                 if desc:
-                                    short_desc = desc[:40] + "..." if len(desc) > 40 else desc
-                                    line += f"\n> _{short_desc}_"
-                                item_lines.append(line)
+                                    # Truncate long descriptions to prevent layout issues
+                                    short_desc = desc[:60] + "..." if len(desc) > 60 else desc
+                                    item_entry += f"\n_{short_desc}_"
+                                item_lines.append(item_entry)
                             
                             self.add_item(discord.ui.Container(
                                 discord.ui.TextDisplay("\n".join(item_lines)[:4000]),
