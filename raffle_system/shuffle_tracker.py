@@ -2,11 +2,10 @@
 Multi-Platform Wager Tracker
 Polls gambling affiliate APIs (Shuffle, Stake, etc.) and awards raffle tickets based on wager amounts
 
-Supports any platform with an affiliate stats API via environment variables:
-- WAGER_PLATFORM_NAME: Platform name (shuffle, stake, stakeus, etc.)
-- WAGER_AFFILIATE_URL: Your affiliate stats API URL
-- WAGER_CAMPAIGN_CODE: Your affiliate/referral code to track
-- WAGER_TICKETS_PER_1000_USD: Tickets to award per $1000 wagered
+Settings loaded from database (bot_settings table) with env var fallbacks:
+- wager_affiliate_url / WAGER_AFFILIATE_URL: Your affiliate stats API URL
+- wager_campaign_code / WAGER_CAMPAIGN_CODE: Your affiliate/referral code to track
+- wager_tickets_per_1000 / WAGER_TICKETS_PER_1000_USD: Tickets to award per $1000 wagered
 """
 
 from sqlalchemy import text
@@ -14,17 +13,8 @@ from datetime import datetime
 import logging
 import aiohttp
 import asyncio
+import os
 
-from .config import (
-    WAGER_PLATFORM_NAME,
-    WAGER_AFFILIATE_URL, 
-    WAGER_CAMPAIGN_CODE, 
-    WAGER_TICKETS_PER_1000_USD,
-    # Backwards compatibility
-    SHUFFLE_TICKETS_PER_1000_USD,
-    SHUFFLE_AFFILIATE_URL,
-    SHUFFLE_CAMPAIGN_CODE
-)
 from .tickets import TicketManager
 
 logger = logging.getLogger(__name__)
@@ -35,20 +25,46 @@ class ShuffleWagerTracker:
     Tracks gambling platform wagers and awards raffle tickets
     
     Despite the class name, this now supports multiple platforms (Shuffle, Stake, Stake.us, etc.)
-    via environment variables. The name is kept for backwards compatibility.
+    Settings are loaded from database (bot_settings) with env var fallbacks.
     """
     
-    def __init__(self, engine):
+    def __init__(self, engine, bot_settings=None):
         self.engine = engine
         self.ticket_manager = TicketManager(engine)
-        self.platform_name = WAGER_PLATFORM_NAME
-        self.affiliate_url = WAGER_AFFILIATE_URL
-        self.campaign_code = WAGER_CAMPAIGN_CODE
-        self.tickets_per_1000 = WAGER_TICKETS_PER_1000_USD
+        self.bot_settings = bot_settings
         
-        logger.info(f"🎰 Wager tracker initialized for platform: {self.platform_name}")
-        logger.info(f"📊 Campaign code: {self.campaign_code}")
-        logger.info(f"🎫 Rate: {self.tickets_per_1000} tickets per $1000 wagered")
+        # Load settings from bot_settings (database) or fall back to env vars
+        self._load_settings()
+        
+        print(f"[Shuffle Tracker] 🎰 Initialized for platform: {self.platform_name}")
+        print(f"[Shuffle Tracker] 📊 Campaign code: {self.campaign_code}")
+        print(f"[Shuffle Tracker] 🎫 Rate: {self.tickets_per_1000} tickets per $1000 wagered")
+        if self.affiliate_url:
+            print(f"[Shuffle Tracker] 🔗 Affiliate URL configured: {self.affiliate_url[:50]}...")
+        else:
+            print(f"[Shuffle Tracker] ⚠️ No affiliate URL configured!")
+    
+    def _load_settings(self):
+        """Load wager settings from bot_settings (database) or environment variables"""
+        if self.bot_settings:
+            # Refresh to get latest values
+            self.bot_settings.refresh()
+            
+            self.affiliate_url = self.bot_settings.shuffle_affiliate_url or ''
+            self.campaign_code = self.bot_settings.shuffle_campaign_code or 'lele'
+            self.tickets_per_1000 = self.bot_settings.shuffle_tickets_per_1000 or 20
+            self.platform_name = self.bot_settings.get('wager_platform_name') or 'shuffle'
+        else:
+            # Fallback to environment variables
+            self.affiliate_url = os.getenv("WAGER_AFFILIATE_URL") or os.getenv("SHUFFLE_AFFILIATE_URL", "")
+            self.campaign_code = os.getenv("WAGER_CAMPAIGN_CODE") or os.getenv("SHUFFLE_CAMPAIGN_CODE", "lele")
+            self.tickets_per_1000 = int(os.getenv("WAGER_TICKETS_PER_1000_USD", "20"))
+            self.platform_name = os.getenv("WAGER_PLATFORM_NAME", "shuffle").lower()
+    
+    def refresh_settings(self):
+        """Reload settings from database"""
+        self._load_settings()
+        print(f"[Shuffle Tracker] 🔄 Settings refreshed - URL: {bool(self.affiliate_url)}, Code: {self.campaign_code}")
     
     async def update_shuffle_wagers(self):
         """
@@ -377,26 +393,38 @@ async def setup_shuffle_tracker(bot, engine):
     """
     from discord.ext import tasks
     
-    tracker = ShuffleWagerTracker(engine)
+    # Get bot_settings from bot if available
+    bot_settings = None
+    if hasattr(bot, 'settings_manager') and bot.settings_manager:
+        bot_settings = bot.settings_manager
+    
+    tracker = ShuffleWagerTracker(engine, bot_settings=bot_settings)
     
     @tasks.loop(minutes=15)  # Run every 15 minutes
     async def update_shuffle_task():
         """Periodic task to update Shuffle wagers and award tickets"""
-        logger.info("🔄 Checking Shuffle.com wagers...")
+        # Refresh settings before each update to get latest from database
+        tracker.refresh_settings()
+        
+        if not tracker.affiliate_url:
+            print("[Shuffle Tracker] ⚠️ No affiliate URL configured - skipping update")
+            return
+        
+        print("[Shuffle Tracker] 🔄 Checking wagers...")
         result = await tracker.update_shuffle_wagers()
         
         if result['status'] == 'success' and result['updates'] > 0:
-            logger.info(f"✅ Updated {result['updates']} Shuffle wager(s)")
+            print(f"[Shuffle Tracker] ✅ Updated {result['updates']} wager(s)")
         elif result['status'] == 'no_active_period':
-            logger.debug("No active raffle period")
+            print("[Shuffle Tracker] ⏸️ No active raffle period")
         elif result['status'] == 'error':
-            logger.error(f"Shuffle update failed: {result.get('error')}")
+            print(f"[Shuffle Tracker] ❌ Update failed: {result.get('error')}")
     
     @update_shuffle_task.before_loop
     async def before_shuffle_task():
         """Wait for bot to be ready before starting the task"""
         await bot.wait_until_ready()
-        logger.info("✅ Shuffle wager tracker started (runs every 15 minutes)")
+        print("[Shuffle Tracker] ✅ Started (runs every 15 minutes)")
     
     # Start the task
     update_shuffle_task.start()

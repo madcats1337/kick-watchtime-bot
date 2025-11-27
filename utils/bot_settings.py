@@ -260,6 +260,40 @@ class BotSettingsManager:
         # Check database first, no env fallback since we want DB only
         return self._cache.get('bot_api_key', '') or ''
     
+    @property
+    def shuffle_affiliate_url(self) -> str:
+        """Wager/Shuffle affiliate stats API URL - checks wager_affiliate_url first, then shuffle_affiliate_url"""
+        # Priority: wager_affiliate_url (DB) -> shuffle_affiliate_url (DB) -> WAGER_AFFILIATE_URL (env) -> SHUFFLE_AFFILIATE_URL (env)
+        return (self.get('wager_affiliate_url') or 
+                self.get('shuffle_affiliate_url') or 
+                self.get('wager_affiliate_url', env_fallback='WAGER_AFFILIATE_URL') or 
+                self.get('shuffle_affiliate_url', env_fallback='SHUFFLE_AFFILIATE_URL') or '')
+    
+    @property
+    def shuffle_campaign_code(self) -> str:
+        """Wager/Shuffle campaign/affiliate code to track"""
+        # Priority: wager_campaign_code (DB) -> shuffle_campaign_code (DB) -> env vars
+        return (self.get('wager_campaign_code') or 
+                self.get('shuffle_campaign_code') or 
+                self.get('wager_campaign_code', env_fallback='WAGER_CAMPAIGN_CODE') or 
+                self.get('shuffle_campaign_code', env_fallback='SHUFFLE_CAMPAIGN_CODE') or 'lele')
+    
+    @property
+    def shuffle_tickets_per_1000(self) -> int:
+        """Tickets to award per $1000 wagered"""
+        # Priority: wager_tickets_per_1000 (DB) -> shuffle_tickets_per_1000 (DB) -> env vars
+        val = self.get_int('wager_tickets_per_1000')
+        if val:
+            return val
+        val = self.get_int('shuffle_tickets_per_1000')
+        if val:
+            return val
+        val = self.get_int('wager_tickets_per_1000', env_fallback='WAGER_TICKETS_PER_1000_USD')
+        if val:
+            return val
+        val = self.get_int('shuffle_tickets_per_1000', env_fallback='SHUFFLE_TICKETS_PER_1000_USD')
+        return val if val else 20
+    
     def to_dict(self) -> Dict[str, Any]:
         """Get all settings as a dictionary"""
         return {
@@ -274,6 +308,9 @@ class BotSettingsManager:
             'clip_duration': self.clip_duration,
             'dashboard_url': self.dashboard_url,
             'bot_api_key': '***' if self.bot_api_key else '',  # Don't expose key
+            'wager_affiliate_url': '***configured***' if self.shuffle_affiliate_url else '',  # Don't expose full URL
+            'wager_campaign_code': self.shuffle_campaign_code,
+            'wager_tickets_per_1000': self.shuffle_tickets_per_1000,
         }
 
 

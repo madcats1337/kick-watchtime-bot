@@ -11,15 +11,11 @@ GIFTED_SUB_TICKETS = 15              # 1 gifted sub = 15 tickets
 
 # Wager tracking configuration (environment variable based)
 # Each streamer sets their own affiliate URL and campaign code
-WAGER_PLATFORM_NAME = os.getenv("WAGER_PLATFORM_NAME", "shuffle").lower()  # Platform name (shuffle, stake, stakeus, etc.)
-WAGER_AFFILIATE_URL = os.getenv("WAGER_AFFILIATE_URL", "")  # Affiliate stats URL
-WAGER_CAMPAIGN_CODE = os.getenv("WAGER_CAMPAIGN_CODE", "lele")  # Affiliate code to track
-WAGER_TICKETS_PER_1000_USD = int(os.getenv("WAGER_TICKETS_PER_1000_USD", "20"))  # Tickets per $1000 wagered
-
-# Legacy support - if WAGER_AFFILIATE_URL not set, use old SHUFFLE variables
-if not WAGER_AFFILIATE_URL:
-    WAGER_AFFILIATE_URL = "https://affiliate.shuffle.com/stats/1755f751-33a9-4532-804e-b14b5c90236b"
-    WAGER_PLATFORM_NAME = "shuffle"
+# Primary: WAGER_AFFILIATE_URL, Fallback: SHUFFLE_AFFILIATE_URL (legacy)
+WAGER_PLATFORM_NAME = os.getenv("WAGER_PLATFORM_NAME", "shuffle").lower()
+WAGER_AFFILIATE_URL = os.getenv("WAGER_AFFILIATE_URL") or os.getenv("SHUFFLE_AFFILIATE_URL", "")
+WAGER_CAMPAIGN_CODE = os.getenv("WAGER_CAMPAIGN_CODE") or os.getenv("SHUFFLE_CAMPAIGN_CODE", "lele")
+WAGER_TICKETS_PER_1000_USD = int(os.getenv("WAGER_TICKETS_PER_1000_USD", "20"))
 
 # Backwards compatibility aliases
 SHUFFLE_AFFILIATE_URL = WAGER_AFFILIATE_URL

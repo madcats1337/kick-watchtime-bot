@@ -58,24 +58,26 @@ class MultiPlatformWagerConfig:
         
         And so on...
         """
-        # Check for legacy SHUFFLE config (backwards compatibility)
-        legacy_shuffle_url = os.getenv("SHUFFLE_AFFILIATE_URL")
-        legacy_shuffle_code = os.getenv("SHUFFLE_CAMPAIGN_CODE", "lele")
+        # Check for WAGER_AFFILIATE_URL first (modern), then legacy SHUFFLE_AFFILIATE_URL
+        wager_url = os.getenv("WAGER_AFFILIATE_URL") or os.getenv("SHUFFLE_AFFILIATE_URL")
+        wager_code = os.getenv("WAGER_CAMPAIGN_CODE") or os.getenv("SHUFFLE_CAMPAIGN_CODE", "lele")
+        wager_platform = os.getenv("WAGER_PLATFORM_NAME", "shuffle").lower()
+        wager_tickets = int(os.getenv("WAGER_TICKETS_PER_1000_USD", "20"))
         
-        if legacy_shuffle_url:
-            logger.info("⚠️ Using legacy SHUFFLE_AFFILIATE_URL configuration")
-            logger.info("💡 Consider migrating to WAGER_PLATFORM_* format for multi-platform support")
+        if wager_url:
+            logger.info(f"✅ Loading wager platform config: {wager_platform}")
+            logger.info(f"📊 Campaign code: {wager_code}")
             
             try:
-                self.platforms["shuffle"] = WagerPlatformConfig(
-                    platform_name="shuffle",
-                    campaign_code=legacy_shuffle_code,
-                    affiliate_api_url=legacy_shuffle_url,
-                    tickets_per_1000_usd=20,
+                self.platforms[wager_platform] = WagerPlatformConfig(
+                    platform_name=wager_platform,
+                    campaign_code=wager_code,
+                    affiliate_api_url=wager_url,
+                    tickets_per_1000_usd=wager_tickets,
                     enabled=True
                 )
             except Exception as e:
-                logger.error(f"Failed to load legacy Shuffle config: {e}")
+                logger.error(f"Failed to load wager platform config: {e}")
         
         # Load modern multi-platform configs
         platform_index = 1
