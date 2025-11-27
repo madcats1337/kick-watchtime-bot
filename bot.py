@@ -5337,7 +5337,7 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                         self._build_layout(shop_items)
                     
                     def _build_layout(self, shop_items):
-                        # Header
+                        # Header container
                         self.add_item(discord.ui.Container(
                             discord.ui.TextDisplay("# 🛍️ Point Shop\nSpend your hard-earned points on awesome rewards!"),
                             accent_colour=0xFFD700
@@ -5345,51 +5345,40 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                         
                         self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
                         
-                        # Group items in batches of 3 for alternating gallery/list pattern
-                        BATCH_SIZE = 3
-                        total_items = len(shop_items)
-                        
-                        for batch_start in range(0, total_items, BATCH_SIZE):
-                            batch_end = min(batch_start + BATCH_SIZE, total_items)
-                            batch_items = shop_items[batch_start:batch_end]
+                        # Each item gets its own Section with thumbnail
+                        for idx, item in enumerate(shop_items):
+                            item_id, name, desc, price, stock, image_url, is_active = item
+                            stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "**SOLD OUT**"
                             
-                            # Media Gallery for this batch (items with images)
-                            batch_with_images = [(batch_start + i, item) for i, item in enumerate(batch_items) if item[5]]
-                            if batch_with_images:
-                                media_items = []
-                                for global_idx, item in batch_with_images:
-                                    item_id, name, desc, price, stock, image_url, is_active = item
-                                    # No description/alt text - keeps gallery clean
-                                    print(f"[Point Shop] Adding image to gallery: {name} - {image_url}")
-                                    media_items.append(discord.MediaGalleryItem(image_url))
-                                
-                                self.add_item(discord.ui.MediaGallery(*media_items))
+                            # Build item text
+                            item_text = f"### #{idx + 1} — {name}\n"
+                            item_text += f"💰 **{price:,}** pts  •  📦 {stock_text}"
+                            if desc:
+                                short_desc = desc[:80] + "..." if len(desc) > 80 else desc
+                                item_text += f"\n_{short_desc}_"
                             
-                            # Item list for this batch - each item on its own line with proper formatting
-                            item_lines = []
-                            for i, item in enumerate(batch_items):
-                                global_idx = batch_start + i
-                                item_id, name, desc, price, stock, image_url, is_active = item
-                                stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "SOLD OUT"
-                                
-                                # Build item entry with aligned formatting
-                                item_entry = f"**#{global_idx + 1}** {name}\n$: **{price:,}** pts | In stock: {stock_text}"
-                                if desc:
-                                    # Truncate long descriptions to prevent layout issues
-                                    short_desc = desc[:60] + "..." if len(desc) > 60 else desc
-                                    item_entry += f"\n_{short_desc}_"
-                                item_lines.append(item_entry)
+                            # Create section with thumbnail if image exists
+                            if image_url:
+                                print(f"[Point Shop] Adding item with thumbnail: {name} - {image_url}")
+                                section = discord.ui.Section(
+                                    discord.ui.TextDisplay(item_text),
+                                    accessory=discord.ui.Thumbnail(image_url)
+                                )
+                            else:
+                                section = discord.ui.Section(
+                                    discord.ui.TextDisplay(item_text)
+                                )
                             
                             self.add_item(discord.ui.Container(
-                                discord.ui.TextDisplay("\n\n".join(item_lines)[:4000]),
+                                section,
                                 accent_colour=0x5865F2
                             ))
                             
-                            # Add separator between batches (but not after the last one)
-                            if batch_end < total_items:
-                                self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+                            # Add separator between items (but not after the last one)
+                            if idx < len(shop_items) - 1:
+                                self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
                         
-                        # Footer and interactive components
+                        # Footer
                         self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
                         self.add_item(discord.ui.Container(
                             discord.ui.TextDisplay("💡 *Earn points by watching streams!* | Select an item below to purchase."),
