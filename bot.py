@@ -3984,7 +3984,11 @@ async def on_ready():
             shuffle_tracker = await setup_shuffle_tracker(bot, engine)
             
             # Setup auto-updating leaderboard (runs every 5 minutes)
-            auto_leaderboard = await setup_auto_leaderboard(bot, engine)
+            # Get channel ID from database settings
+            bot_settings.refresh()  # Ensure fresh settings
+            leaderboard_channel_id = bot_settings.raffle_leaderboard_channel_id
+            print(f"📊 Raffle leaderboard channel ID: {leaderboard_channel_id or 'Not configured'}")
+            auto_leaderboard = await setup_auto_leaderboard(bot, engine, leaderboard_channel_id)
             bot.auto_leaderboard = auto_leaderboard  # Store for manual updates
             
             # Setup raffle commands
@@ -3992,7 +3996,6 @@ async def on_ready():
             
             # Setup raffle scheduler (monthly reset + auto-draw)
             # Load settings from database first, fall back to env vars
-            bot_settings.refresh()  # Ensure fresh settings
             raffle_auto_draw = bot_settings.raffle_auto_draw
             raffle_channel_id = bot_settings.raffle_announcement_channel_id
             

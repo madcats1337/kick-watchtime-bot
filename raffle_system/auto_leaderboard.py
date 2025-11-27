@@ -31,8 +31,10 @@ class AutoLeaderboard:
             self.channel = self.bot.get_channel(self.channel_id)
             
             if not self.channel:
-                logger.error(f"Could not find channel with ID {self.channel_id}")
+                print(f"[Auto-Leaderboard] ❌ Could not find channel with ID {self.channel_id}")
                 return False
+            
+            print(f"[Auto-Leaderboard] Found channel: #{self.channel.name}")
             
             # Try to find existing leaderboard message
             async for message in self.channel.history(limit=50):
@@ -40,17 +42,20 @@ class AutoLeaderboard:
                     embed = message.embeds[0]
                     if embed.title and "🎟️ Raffle Ticket Leaderboard" in embed.title:
                         self.message_id = message.id
-                        logger.info(f"Found existing leaderboard message: {self.message_id}")
+                        print(f"[Auto-Leaderboard] Found existing message: {self.message_id}")
                         break
             
             if not self.message_id:
                 # Post initial leaderboard
+                print("[Auto-Leaderboard] No existing message found, posting new leaderboard...")
                 await self.post_new_leaderboard()
             
             return True
             
         except Exception as e:
-            logger.error(f"Failed to initialize auto-leaderboard: {e}")
+            print(f"[Auto-Leaderboard] ❌ Failed to initialize: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     async def post_new_leaderboard(self):
@@ -59,16 +64,18 @@ class AutoLeaderboard:
             embed = await self.create_leaderboard_embed()
             message = await self.channel.send(embed=embed)
             self.message_id = message.id
-            logger.info(f"Posted new leaderboard message: {self.message_id}")
+            print(f"[Auto-Leaderboard] Posted new message: {self.message_id}")
             
         except Exception as e:
-            logger.error(f"Failed to post new leaderboard: {e}")
+            print(f"[Auto-Leaderboard] ❌ Failed to post: {e}")
+            import traceback
+            traceback.print_exc()
     
     async def update_leaderboard(self):
         """Update the existing leaderboard message"""
         try:
             if not self.message_id:
-                logger.warning("No message ID stored, posting new leaderboard")
+                print("[Auto-Leaderboard] No message ID, posting new leaderboard...")
                 await self.post_new_leaderboard()
                 return
             
@@ -76,7 +83,7 @@ class AutoLeaderboard:
             try:
                 message = await self.channel.fetch_message(self.message_id)
             except discord.NotFound:
-                logger.warning("Leaderboard message not found, posting new one")
+                print("[Auto-Leaderboard] Message not found, posting new one...")
                 await self.post_new_leaderboard()
                 return
             
@@ -85,10 +92,10 @@ class AutoLeaderboard:
             
             # Edit the message
             await message.edit(embed=embed)
-            logger.info(f"Updated leaderboard message: {self.message_id}")
+            print(f"[Auto-Leaderboard] ✅ Updated message: {self.message_id}")
             
         except Exception as e:
-            logger.error(f"Failed to update leaderboard: {e}")
+            print(f"[Auto-Leaderboard] ❌ Failed to update: {e}")
             import traceback
             traceback.print_exc()
     
@@ -235,7 +242,9 @@ class AutoLeaderboard:
             return embed
             
         except Exception as e:
-            logger.error(f"Failed to create leaderboard embed: {e}")
+            print(f"[Auto-Leaderboard] ❌ Failed to create embed: {e}")
+            import traceback
+            traceback.print_exc()
             return discord.Embed(
                 title="🎟️ Raffle Ticket Leaderboard",
                 description="Error loading leaderboard data",
@@ -243,33 +252,43 @@ class AutoLeaderboard:
             )
 
 
-async def setup_auto_leaderboard(bot, engine):
+async def setup_auto_leaderboard(bot, engine, channel_id=None):
     """
     Setup the auto-updating leaderboard as a Discord bot task
     
     Args:
         bot: Discord bot instance
         engine: SQLAlchemy engine
+        channel_id: Discord channel ID for leaderboard (optional, falls back to env var)
     """
-    # Get channel ID from environment variable
-    channel_id_str = os.getenv('RAFFLE_LEADERBOARD_CHANNEL_ID')
+    # Get channel ID from parameter, bot_settings, or environment variable
+    if channel_id is None:
+        # Try to get from bot_settings if available
+        if hasattr(bot, 'settings_manager') and bot.settings_manager:
+            channel_id = bot.settings_manager.raffle_leaderboard_channel_id
+        
+        # Fall back to environment variable
+        if channel_id is None:
+            channel_id_str = os.getenv('RAFFLE_LEADERBOARD_CHANNEL_ID')
+            if channel_id_str:
+                try:
+                    channel_id = int(channel_id_str)
+                except ValueError:
+                    print(f"[Auto-Leaderboard] ❌ Invalid RAFFLE_LEADERBOARD_CHANNEL_ID: {channel_id_str}")
+                    return None
     
-    if not channel_id_str:
-        logger.info("RAFFLE_LEADERBOARD_CHANNEL_ID not set - auto-leaderboard disabled")
+    if not channel_id:
+        print("[Auto-Leaderboard] ⚠️ Channel ID not set - auto-leaderboard disabled")
         return None
     
-    try:
-        channel_id = int(channel_id_str)
-    except ValueError:
-        logger.error(f"Invalid RAFFLE_LEADERBOARD_CHANNEL_ID: {channel_id_str}")
-        return None
+    print(f"[Auto-Leaderboard] Setting up for channel ID: {channel_id}")
     
     leaderboard = AutoLeaderboard(bot, engine, channel_id)
     
     @tasks.loop(seconds=AUTO_LEADERBOARD_UPDATE_INTERVAL)
     async def update_leaderboard_task():
         """Periodic task to update the leaderboard"""
-        logger.info("🔄 Updating auto-leaderboard...")
+        print("🔄 [Auto-Leaderboard] Updating...")
         await leaderboard.update_leaderboard()
     
     @update_leaderboard_task.before_loop
@@ -277,18 +296,20 @@ async def setup_auto_leaderboard(bot, engine):
         """Wait for bot to be ready and initialize"""
         await bot.wait_until_ready()
         
+        print(f"[Auto-Leaderboard] Initializing for channel {channel_id}...")
+        
         # Initialize the leaderboard
         success = await leaderboard.initialize()
         
         if success:
             if AUTO_LEADERBOARD_UPDATE_INTERVAL >= 3600:
-                logger.info(f"✅ Auto-leaderboard started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/3600:.1f} hours)")
+                print(f"✅ [Auto-Leaderboard] Started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/3600:.1f} hours)")
             elif AUTO_LEADERBOARD_UPDATE_INTERVAL >= 60:
-                logger.info(f"✅ Auto-leaderboard started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/60:.0f} minutes)")
+                print(f"✅ [Auto-Leaderboard] Started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/60:.0f} minutes)")
             else:
-                logger.info(f"✅ Auto-leaderboard started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL} seconds)")
+                print(f"✅ [Auto-Leaderboard] Started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL} seconds)")
         else:
-            logger.error("❌ Failed to initialize auto-leaderboard")
+            print("❌ [Auto-Leaderboard] Failed to initialize - task cancelled")
             update_leaderboard_task.cancel()
     
     # Start the task
