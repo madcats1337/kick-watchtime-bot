@@ -57,9 +57,9 @@ async def get_stream_url(channel_name: str) -> Optional[str]:
                 'Referer': 'https://kick.com/',
             }
             
-            # Get channel info which includes livestream data
+            # Use v1 API - it has playback_url, v2 doesn't
             async with session.get(
-                f'https://kick.com/api/v2/channels/{channel_name}',
+                f'https://kick.com/api/v1/channels/{channel_name}',
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=10)
             ) as response:
@@ -69,52 +69,27 @@ async def get_stream_url(channel_name: str) -> Optional[str]:
                     
                 data = await response.json()
                 
+                # v1 API has playback_url at root level
+                playback_url = data.get('playback_url')
+                
                 # Check if stream is live
                 livestream = data.get('livestream')
-                if not livestream:
+                is_live = livestream.get('is_live', False) if livestream else False
+                
+                if not is_live:
                     print(f"[Clip] Channel {channel_name} is not live")
                     return None
                 
-                # Get playback URL from livestream data
-                # Kick uses different structures, try multiple paths
-                playback_url = None
-                
-                # Try direct playback_url
-                if 'playback_url' in livestream:
-                    playback_url = livestream['playback_url']
-                
-                # Try source - could be string, list, or dict
-                if not playback_url and 'source' in livestream:
-                    sources = livestream['source']
-                    print(f"[Clip] DEBUG source type: {type(sources).__name__}, value: {sources}")
-                    
-                    # Source might be a direct string URL
-                    if isinstance(sources, str) and sources:
-                        playback_url = sources
-                    elif isinstance(sources, list) and sources:
-                        playback_url = sources[0].get('src') or sources[0].get('url')
-                    elif isinstance(sources, dict):
-                        playback_url = sources.get('src') or sources.get('url')
-                
-                # Try video object
-                if not playback_url and 'video' in livestream:
-                    video = livestream['video']
-                    if isinstance(video, dict):
-                        playback_url = video.get('src') or video.get('url')
-                
-                # Try session data
-                if not playback_url:
-                    session_data = data.get('session') or livestream.get('session')
-                    if session_data:
-                        playback_url = session_data.get('playback_url')
+                # If playback_url not at root, try livestream object
+                if not playback_url and livestream:
+                    playback_url = livestream.get('playback_url')
                 
                 if playback_url:
                     print(f"[Clip] Found stream URL: {playback_url[:50]}...")
                     return playback_url
                 else:
-                    print(f"[Clip] Could not find playback URL in channel data")
-                    # Log the structure to help debug
-                    print(f"[Clip] Livestream keys: {livestream.keys() if livestream else 'None'}")
+                    print(f"[Clip] Could not find playback URL in v1 API response")
+                    print(f"[Clip] Available keys: {list(data.keys())[:10]}")
                     return None
                     
     except Exception as e:

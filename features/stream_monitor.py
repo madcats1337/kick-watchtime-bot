@@ -79,7 +79,8 @@ class StreamMonitor:
                     'Accept': 'application/json',
                 }
                 
-                url = f'https://kick.com/api/v2/channels/{self.channel_name}'
+                # Use v1 API - it has playback_url, v2 doesn't
+                url = f'https://kick.com/api/v1/channels/{self.channel_name}'
                 async with session.get(url, headers=headers, timeout=10) as response:
                     if response.status != 200:
                         return {'is_live': False, 'error': f'HTTP {response.status}'}
@@ -90,13 +91,16 @@ class StreamMonitor:
                     if not livestream:
                         return {'is_live': False}
                     
+                    # v1 API has playback_url at root level
+                    stream_url = data.get('playback_url') or livestream.get('playback_url')
+                    
                     # Extract stream info
                     return {
                         'is_live': True,
                         'title': livestream.get('session_title', ''),
                         'started_at': livestream.get('created_at'),
                         'viewer_count': livestream.get('viewer_count', 0),
-                        'stream_url': livestream.get('playback_url'),
+                        'stream_url': stream_url,
                         'thumbnail': livestream.get('thumbnail', {}).get('url'),
                     }
                     

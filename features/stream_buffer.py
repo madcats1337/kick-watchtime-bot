@@ -62,7 +62,7 @@ class StreamBuffer:
         print(f"[Buffer] Initialized for {channel_name}: {buffer_minutes}min buffer, {self.max_segments} segments")
     
     async def get_stream_url(self) -> Optional[str]:
-        """Fetch the HLS stream URL from Kick API."""
+        """Fetch the HLS stream URL from Kick API v1 (has playback_url, v2 doesn't)."""
         try:
             async with aiohttp.ClientSession() as session:
                 headers = {
@@ -70,24 +70,30 @@ class StreamBuffer:
                     'Accept': 'application/json',
                 }
                 
-                url = f'https://kick.com/api/v2/channels/{self.channel_name}'
+                # Use v1 API - it has playback_url, v2 doesn't
+                url = f'https://kick.com/api/v1/channels/{self.channel_name}'
                 async with session.get(url, headers=headers, timeout=10) as response:
                     if response.status != 200:
+                        print(f"[Buffer] v1 API returned {response.status}")
                         return None
                     
                     data = await response.json()
+                    
+                    # v1 API has playback_url at root level, not in livestream
+                    playback_url = data.get('playback_url')
+                    if playback_url:
+                        print(f"[Buffer] Found playback URL from v1 API")
+                        return playback_url
+                    
+                    # Fallback: check livestream object
                     livestream = data.get('livestream')
+                    if livestream:
+                        playback_url = livestream.get('playback_url')
+                        if playback_url:
+                            return playback_url
                     
-                    if not livestream:
-                        return None
-                    
-                    # Try to find playback URL
-                    playback_url = (
-                        livestream.get('playback_url') or
-                        livestream.get('source', [{}])[0].get('src') if isinstance(livestream.get('source'), list) else None
-                    )
-                    
-                    return playback_url
+                    print(f"[Buffer] No playback_url in v1 API response")
+                    return None
                     
         except Exception as e:
             print(f"[Buffer] Error getting stream URL: {e}")
