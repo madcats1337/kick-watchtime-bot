@@ -5335,7 +5335,7 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                             accent_colour=0xFFD700
                         ))
                         
-                        self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+                        self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
                         
                         # Group items in batches of 3 for alternating gallery/list pattern
                         BATCH_SIZE = 3
@@ -5373,17 +5373,20 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                                 item_lines.append(item_entry)
                             
                             self.add_item(discord.ui.Container(
-                                discord.ui.TextDisplay("\n".join(item_lines)[:4000]),
-                                accent_colour=0x2F3136
+                                discord.ui.TextDisplay("\n\n".join(item_lines)[:4000]),
+                                accent_colour=0x5865F2
                             ))
                             
                             # Add separator between batches (but not after the last one)
                             if batch_end < total_items:
-                                self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+                                self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
                         
                         # Footer and interactive components
-                        self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small, divider=False))
-                        self.add_item(discord.ui.TextDisplay("💡 *Earn points by watching streams!* | Select an item below to purchase."))
+                        self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+                        self.add_item(discord.ui.Container(
+                            discord.ui.TextDisplay("💡 *Earn points by watching streams!* | Select an item below to purchase."),
+                            accent_colour=0x2F3136
+                        ))
                         
                         # Add action row with selector and balance button
                         action_row = discord.ui.ActionRow(
