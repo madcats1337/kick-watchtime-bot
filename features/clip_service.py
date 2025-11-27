@@ -83,10 +83,15 @@ async def get_stream_url(channel_name: str) -> Optional[str]:
                 if 'playback_url' in livestream:
                     playback_url = livestream['playback_url']
                 
-                # Try source array
+                # Try source - could be string, list, or dict
                 if not playback_url and 'source' in livestream:
                     sources = livestream['source']
-                    if isinstance(sources, list) and sources:
+                    print(f"[Clip] DEBUG source type: {type(sources).__name__}, value: {sources}")
+                    
+                    # Source might be a direct string URL
+                    if isinstance(sources, str) and sources:
+                        playback_url = sources
+                    elif isinstance(sources, list) and sources:
                         playback_url = sources[0].get('src') or sources[0].get('url')
                     elif isinstance(sources, dict):
                         playback_url = sources.get('src') or sources.get('url')
