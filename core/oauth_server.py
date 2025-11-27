@@ -169,8 +169,11 @@ def handle_error(e):
 from flask import send_from_directory, make_response
 from pathlib import Path
 
-CLIPS_DIR = Path("clips")
+# Use absolute path for clips directory (relative to project root)
+PROJECT_ROOT = Path(__file__).parent.parent  # Go up from core/ to project root
+CLIPS_DIR = PROJECT_ROOT / "clips"
 CLIPS_DIR.mkdir(exist_ok=True)
+print(f"[OAuth] Clips directory: {CLIPS_DIR.absolute()}")
 
 def add_cors_headers(response):
     """Add CORS headers to allow dashboard access"""

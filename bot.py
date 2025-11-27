@@ -20,7 +20,7 @@ from redis_subscriber import start_redis_subscriber
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text # type: ignore
 from core.kick_api import fetch_chatroom_id, check_stream_live, get_clips, KickAPI, USER_AGENTS  # Consolidated Kick API module
-from features.clip_service import create_clip as create_clip_custom  # Custom clip service using FFmpeg
+# Clip service moved to Dashboard - bot now calls Dashboard API
 
 import discord
 from discord.ext import commands, tasks
@@ -53,10 +53,6 @@ from features.linking.link_panel import setup_link_panel_system
 
 # Custom commands import
 from features.custom_commands import CustomCommandsManager
-
-# Stream buffer for clip creation
-from features.stream_buffer import StreamBuffer, init_buffer, get_buffer
-from features.stream_monitor import StreamMonitor, init_monitor, get_monitor
 
 # -------------------------
 # Command checks and utils
@@ -1310,101 +1306,112 @@ async def kick_chat_loop(channel_name: str):
                                         print(f"[Clip] {username} requested a clip ({clip_duration}s) - Title: {clip_title}")
                                         
                                         async def create_clip_background(user: str, duration: int, title: str):
-                                            """Background task to create clip and respond when ready"""
+                                            """Background task to create clip via Dashboard API"""
                                             try:
-                                                stream_buffer = get_buffer()
-                                                if stream_buffer and stream_buffer.is_recording:
-                                                    clip_result = await stream_buffer.create_clip(
-                                                        duration=duration,
-                                                        username=user,
-                                                        title=title
-                                                    )
-                                                else:
-                                                    # Fallback to live capture if buffer not running
-                                                    clip_result = await create_clip_custom(
-                                                        channel_name=KICK_CHANNEL,
-                                                        duration=duration,
-                                                        username=user,
-                                                        title=title
-                                                    )
+                                                # Call Dashboard API to create clip
+                                                dashboard_url = os.getenv('DASHBOARD_API_URL', os.getenv('DASHBOARD_URL', ''))
+                                                api_key = os.getenv('BOT_API_KEY', '')
                                                 
-                                                print(f"[Clip] Result: {clip_result}")
+                                                if not dashboard_url:
+                                                    print(f"[Clip] ❌ DASHBOARD_API_URL not configured")
+                                                    await send_kick_message(f"@{user} Clip service not configured - contact admin!")
+                                                    return
                                                 
-                                                if clip_result:
-                                                    if 'error' in clip_result:
-                                                        # Handle specific error messages
-                                                        error_type = clip_result.get('error')
-                                                        if error_type == 'not_live' or error_type == 'not_recording':
-                                                            await send_kick_message(f"@{user} Stream must be live to create clips!")
-                                                        elif error_type == 'no_segments':
-                                                            await send_kick_message(f"@{user} Buffer still loading - try again in 30 seconds!")
-                                                        elif error_type == 'ffmpeg_not_found':
-                                                            await send_kick_message(f"@{user} Clip service unavailable - contact admin!")
-                                                        elif error_type == 'forbidden':
-                                                            await send_kick_message(f"@{user} Stream access denied - try again later!")
-                                                        else:
-                                                            await send_kick_message(f"@{user} Couldn't create clip - try again!")
-                                                    else:
-                                                        # Success - extract clip URL
-                                                        clip_url = clip_result.get('clip_url', '')
-                                                        clip_filename = clip_result.get('filename', '')
-                                                        file_size_mb = clip_result.get('file_size', 0) / 1024 / 1024
-                                                        actual_duration = clip_result.get('duration', duration)
+                                                # Create clip via Dashboard API
+                                                async with aiohttp.ClientSession() as http_session:
+                                                    headers = {
+                                                        'Content-Type': 'application/json',
+                                                        'X-API-Key': api_key
+                                                    }
+                                                    payload = {
+                                                        'channel': KICK_CHANNEL,
+                                                        'duration': duration,
+                                                        'username': user,
+                                                        'title': title
+                                                    }
+                                                    
+                                                    async with http_session.post(
+                                                        f"{dashboard_url}/api/clips/create",
+                                                        json=payload,
+                                                        headers=headers,
+                                                        timeout=aiohttp.ClientTimeout(total=60)
+                                                    ) as response:
+                                                        clip_result = await response.json()
                                                         
-                                                        await send_kick_message(f"@{user} Your clip is ready! ({actual_duration}s, {file_size_mb:.1f}MB) {clip_url}")
-                                                        print(f"[Clip] ✅ Clip created for {user}: {clip_filename}")
+                                                        print(f"[Clip] Dashboard API response: {clip_result}")
                                                         
-                                                        # Save clip data to database
-                                                        try:
-                                                            with engine.connect() as conn:
-                                                                conn.execute(text("""
-                                                                    INSERT INTO clips (kick_username, clip_duration, clip_url, filename, file_size)
-                                                                    VALUES (:username, :duration, :url, :filename, :file_size)
-                                                                """), {
-                                                                    "username": user,
-                                                                    "duration": actual_duration,
-                                                                    "url": clip_url,
-                                                                    "filename": clip_filename,
-                                                                    "file_size": clip_result.get('file_size', 0)
-                                                                })
-                                                                conn.commit()
-                                                            print(f"[Clip] 💾 Saved clip data for {user}")
-                                                        except Exception as db_err:
-                                                            print(f"[Clip] ⚠️ Failed to save clip to DB: {db_err}")
-                                                        
-                                                        # Post clip embed to Discord channel if configured
-                                                        try:
-                                                            clip_channel_id = None
-                                                            with engine.connect() as conn:
-                                                                result = conn.execute(text("""
-                                                                    SELECT value FROM bot_settings WHERE key = 'clip_channel_id'
-                                                                """)).fetchone()
-                                                                if result and result[0]:
-                                                                    clip_channel_id = int(result[0])
+                                                        if response.status == 200 and clip_result.get('success'):
+                                                            # Success - extract clip URL
+                                                            clip_url = clip_result.get('clip_url', '')
+                                                            clip_filename = clip_result.get('filename', '')
+                                                            file_size_mb = clip_result.get('file_size_mb', clip_result.get('file_size', 0) / 1024 / 1024)
+                                                            actual_duration = clip_result.get('duration', duration)
                                                             
-                                                            if clip_channel_id:
-                                                                discord_channel = bot.get_channel(clip_channel_id)
-                                                                if discord_channel:
-                                                                    clip_embed = discord.Embed(
-                                                                        title=f"🎬 {title}",
-                                                                        description=f"New clip created by **{user}** in Kick chat!",
-                                                                        color=0x53FC18,
-                                                                        url=clip_url if clip_url.startswith('http') else None,
-                                                                        timestamp=datetime.now(timezone.utc)
-                                                                    )
-                                                                    clip_embed.add_field(name="Duration", value=f"{actual_duration} seconds", inline=True)
-                                                                    clip_embed.add_field(name="Created by", value=user, inline=True)
-                                                                    clip_embed.add_field(name="Size", value=f"{file_size_mb:.1f} MB", inline=True)
-                                                                    if clip_url:
-                                                                        clip_embed.add_field(name="🔗 Watch Clip", value=f"[Click here]({clip_url})" if clip_url.startswith('http') else clip_url, inline=False)
-                                                                    clip_embed.set_footer(text=f"Kick Channel: {KICK_CHANNEL}")
-                                                                    await discord_channel.send(embed=clip_embed)
-                                                                    print(f"[Clip] 📢 Posted clip to Discord channel {clip_channel_id}")
-                                                        except Exception as discord_err:
-                                                            print(f"[Clip] ⚠️ Failed to post clip to Discord: {discord_err}")
-                                                else:
-                                                    await send_kick_message(f"@{user} Couldn't create clip - try again later!")
-                                                    print(f"[Clip] ❌ Clip creation failed for {user}")
+                                                            await send_kick_message(f"@{user} Your clip is ready! ({actual_duration}s, {file_size_mb:.1f}MB) {clip_url}")
+                                                            print(f"[Clip] ✅ Clip created for {user}: {clip_filename}")
+                                                            
+                                                            # Save clip data to database
+                                                            try:
+                                                                with engine.connect() as conn:
+                                                                    conn.execute(text("""
+                                                                        INSERT INTO clips (kick_username, clip_duration, clip_url, filename, file_size)
+                                                                        VALUES (:username, :duration, :url, :filename, :file_size)
+                                                                    """), {
+                                                                        "username": user,
+                                                                        "duration": actual_duration,
+                                                                        "url": clip_url,
+                                                                        "filename": clip_filename,
+                                                                        "file_size": clip_result.get('file_size', 0)
+                                                                    })
+                                                                    conn.commit()
+                                                                print(f"[Clip] 💾 Saved clip data for {user}")
+                                                            except Exception as db_err:
+                                                                print(f"[Clip] ⚠️ Failed to save clip to DB: {db_err}")
+                                                            
+                                                            # Post clip embed to Discord channel if configured
+                                                            try:
+                                                                clip_channel_id = None
+                                                                with engine.connect() as conn:
+                                                                    result = conn.execute(text("""
+                                                                        SELECT value FROM bot_settings WHERE key = 'clip_channel_id'
+                                                                    """)).fetchone()
+                                                                    if result and result[0]:
+                                                                        clip_channel_id = int(result[0])
+                                                                
+                                                                if clip_channel_id:
+                                                                    discord_channel = bot.get_channel(clip_channel_id)
+                                                                    if discord_channel:
+                                                                        clip_embed = discord.Embed(
+                                                                            title=f"🎬 {title}",
+                                                                            description=f"New clip created by **{user}** in Kick chat!",
+                                                                            color=0x53FC18,
+                                                                            url=clip_url if clip_url.startswith('http') else None,
+                                                                            timestamp=datetime.now(timezone.utc)
+                                                                        )
+                                                                        clip_embed.add_field(name="Duration", value=f"{actual_duration} seconds", inline=True)
+                                                                        clip_embed.add_field(name="Created by", value=user, inline=True)
+                                                                        clip_embed.add_field(name="Size", value=f"{file_size_mb:.1f} MB", inline=True)
+                                                                        if clip_url:
+                                                                            clip_embed.add_field(name="🔗 Watch Clip", value=f"[Click here]({clip_url})" if clip_url.startswith('http') else clip_url, inline=False)
+                                                                        clip_embed.set_footer(text=f"Kick Channel: {KICK_CHANNEL}")
+                                                                        await discord_channel.send(embed=clip_embed)
+                                                                        print(f"[Clip] 📢 Posted clip to Discord channel {clip_channel_id}")
+                                                            except Exception as discord_err:
+                                                                print(f"[Clip] ⚠️ Failed to post clip to Discord: {discord_err}")
+                                                        else:
+                                                            # Handle error from Dashboard API
+                                                            error_type = clip_result.get('error', 'unknown')
+                                                            error_msg = clip_result.get('message', 'Unknown error')
+                                                            
+                                                            if error_type == 'not_live' or error_type == 'not_recording':
+                                                                await send_kick_message(f"@{user} Stream must be live to create clips!")
+                                                            elif error_type == 'no_segments' or error_type == 'no_buffer':
+                                                                await send_kick_message(f"@{user} Buffer still loading - try again in 30 seconds!")
+                                                            else:
+                                                                await send_kick_message(f"@{user} Couldn't create clip - {error_msg}")
+                                                            
+                                                            print(f"[Clip] ❌ Clip creation failed for {user}: {error_type}")
+                                                            
                                             except Exception as e:
                                                 print(f"[Clip] ❌ Background clip error: {e}")
                                                 await send_kick_message(f"@{user} Clip failed - try again later!")
@@ -3959,38 +3966,13 @@ async def on_ready():
             else:
                 print("ℹ️  Custom commands disabled (set KICK_BOT_USER_TOKEN to enable)")
             
-            # Setup stream buffer for clip creation
-            if KICK_CHANNEL and KICK_CHANNEL.strip():
-                try:
-                    # Get buffer duration from settings (default 4 minutes)
-                    buffer_minutes = 4
-                    try:
-                        with engine.connect() as conn:
-                            result = conn.execute(text("""
-                                SELECT value FROM bot_settings WHERE key = 'clip_buffer_minutes'
-                            """)).fetchone()
-                            if result:
-                                buffer_minutes = int(result[0])
-                    except:
-                        pass
-                    
-                    # Initialize buffer and monitor
-                    stream_buffer = init_buffer(KICK_CHANNEL, buffer_minutes)
-                    stream_monitor = init_monitor(KICK_CHANNEL, stream_buffer, check_interval=30)
-                    
-                    # Store as bot attributes
-                    bot.stream_buffer = stream_buffer
-                    bot.stream_monitor = stream_monitor
-                    
-                    # Start monitoring in background
-                    asyncio.create_task(stream_monitor.start())
-                    
-                    print(f"✅ Stream buffer initialized ({buffer_minutes} min buffer)")
-                    print(f"✅ Stream monitor started (checks every 30s)")
-                except Exception as e:
-                    print(f"⚠️ Failed to initialize stream buffer: {e}")
-                    import traceback
-                    traceback.print_exc()
+            # Clip service is now on Dashboard - no local buffer needed
+            # Bot calls Dashboard API at /api/clips/create when !clip is used
+            dashboard_url = os.getenv('DASHBOARD_API_URL', os.getenv('DASHBOARD_URL', ''))
+            if dashboard_url:
+                print(f"✅ Clip service configured: {dashboard_url}/api/clips/create")
+            else:
+                print(f"⚠️ DASHBOARD_API_URL not set - !clip command will not work")
             
         except Exception as e:
             print(f"⚠️ Failed to initialize raffle system: {e}")
