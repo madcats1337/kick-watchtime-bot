@@ -5357,34 +5357,32 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                             accent_colour=0xFFD700
                         ))
                         
-                        self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
-                        
                         # Show mosaic image in MediaGallery if available
                         if self.has_mosaic:
                             self.add_item(discord.ui.MediaGallery(
                                 discord.MediaGalleryItem("attachment://shop_items.png")
                             ))
-                            self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
                         
-                        # Build item list - group into rows of 3 for compact display
-                        item_rows = []
-                        current_row = []
+                        # Build item list in grid pattern (3 columns to match mosaic)
+                        COLS = 3
+                        rows = [shop_items[i:i + COLS] for i in range(0, len(shop_items), COLS)]
                         
-                        for idx, item in enumerate(shop_items):
-                            item_id, name, desc, price, stock, image_url, is_active = item
-                            stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "~~SOLD OUT~~"
+                        for row_items in rows:
+                            # Build a row with fixed-width columns using code block formatting
+                            row_parts = []
+                            for idx_in_batch, item in enumerate(row_items):
+                                global_idx = rows.index(row_items) * COLS + idx_in_batch
+                                item_id, name, desc, price, stock, image_url, is_active = item
+                                stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "⛔"
+                                
+                                # Truncate name to fit grid cell
+                                short_name = name[:15] + "…" if len(name) > 15 else name
+                                row_parts.append(f"**#{global_idx + 1}** {short_name}\n💰 `{price:,}` • 📦 {stock_text}")
                             
-                            # Compact item format
-                            item_text = f"**#{idx + 1}** {name}\n💰 {price:,} pts • 📦 {stock_text}"
-                            current_row.append(item_text)
+                            # Join with spacing to create visual columns
+                            # Use a table-like format with separators
+                            row_text = "   ┃   ".join(row_parts)
                             
-                            # Every 3 items or last item, add to rows
-                            if len(current_row) == 3 or idx == len(shop_items) - 1:
-                                item_rows.append("\n\n".join(current_row))
-                                current_row = []
-                        
-                        # Add item list container(s)
-                        for row_text in item_rows:
                             self.add_item(discord.ui.Container(
                                 discord.ui.TextDisplay(row_text),
                                 accent_colour=0x5865F2
