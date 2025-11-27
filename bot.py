@@ -5430,7 +5430,7 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                             
                             # Add small separator between items (not after last)
                             if idx < len(shop_items) - 1:
-                                self.add_item(discord.ui.Separator(divider=False, spacing=discord.SeparatorSpacing.small))
+                                self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
                         
                         # Footer
                         self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
