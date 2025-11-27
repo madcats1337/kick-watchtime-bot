@@ -5391,15 +5391,14 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                 # Create Components V2 layout (display only)
                 layout = ShopLayout(items)
                 
-                # Create traditional View for interactive components (select + button)
-                interactive_view = PointShopView(items)
-                
-                # Send both: LayoutView for display + traditional View for interactions
+                # Send the Components V2 display
                 message = await channel.send(view=layout)
-                # Add interactive components in a follow-up edit
-                await message.edit(view=interactive_view)
                 
-                # Store the message ID
+                # Send a follow-up message with interactive components (select + button)
+                interactive_view = PointShopView(items)
+                await channel.send("**Purchase an item:**", view=interactive_view)
+                
+                # Store the main display message ID
                 with engine.begin() as conn:
                     conn.execute(text("""
                         INSERT INTO point_settings (key, value, updated_at)
