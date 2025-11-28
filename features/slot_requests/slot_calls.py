@@ -60,6 +60,12 @@ class SlotCallTracker:
                         picked_at TIMESTAMP
                     )
                 """))
+                
+                # Add performance index for requested_at ordering
+                conn.execute(text("""
+                    CREATE INDEX IF NOT EXISTS idx_slot_requests_requested_at 
+                    ON slot_requests(requested_at DESC)
+                """))
             logger.info("Slot call tables initialized")
         except Exception as e:
             logger.error(f"Failed to initialize slot call tables: {e}")
