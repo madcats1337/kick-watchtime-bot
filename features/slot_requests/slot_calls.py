@@ -415,6 +415,19 @@ class SlotCallTracker:
                             VALUES (:username, :slot_call, CURRENT_TIMESTAMP)
                         """), {"username": kick_username_safe, "slot_call": slot_call_safe})
                     logger.debug(f"Saved slot request to database")
+                    
+                    # Publish event for real-time dashboard updates
+                    try:
+                        from bot import publish_redis_event
+                        publish_redis_event('dashboard:slot_requests', {
+                            'action': 'new_request',
+                            'data': {
+                                'username': kick_username_safe,
+                                'slot_call': slot_call_safe
+                            }
+                        })
+                    except Exception as redis_err:
+                        logger.debug(f"Redis publish failed (non-critical): {redis_err}")
                 except Exception as e:
                     logger.error(f"Failed to save slot request to database: {e}")
             
