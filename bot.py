@@ -2083,6 +2083,7 @@ async def clip_buffer_management_task():
     try:
         # Get settings from database
         if not hasattr(bot, 'settings_manager') or not bot.settings_manager:
+            print(f"[Clip Buffer] ⚠️ settings_manager not initialized")
             return
 
         # Refresh settings to get latest values
@@ -2093,11 +2094,13 @@ async def clip_buffer_management_task():
         kick_channel = bot.settings_manager.kick_channel
 
         if not dashboard_url or not bot_api_key or not kick_channel:
+            print(f"[Clip Buffer] ⚠️ Missing configuration: dashboard_url={bool(dashboard_url)}, bot_api_key={bool(bot_api_key)}, kick_channel={kick_channel}")
             return
 
         # Check if stream is currently live
         try:
             is_live = await check_stream_live(kick_channel)
+            print(f"[Clip Buffer] Stream live check for '{kick_channel}': {is_live}")
         except Exception as e:
             # Cloudflare block or other error - skip this iteration
             if "403" not in str(e) and "Cloudflare" not in str(e):
@@ -2120,6 +2123,7 @@ async def clip_buffer_management_task():
             if not should_start_buffer:
                 print(f"[Clip Buffer] 🟢 Stream went LIVE! Starting clip buffer...")
             try:
+                print(f"[Clip Buffer] Sending start request to {dashboard_url}/api/clips/buffer/start")
                 async with aiohttp.ClientSession() as session:
                     headers = {
                         'X-API-Key': bot_api_key,
@@ -2131,15 +2135,18 @@ async def clip_buffer_management_task():
                         json={'channel': kick_channel},
                         timeout=aiohttp.ClientTimeout(total=30)
                     ) as response:
+                        response_text = await response.text()
+                        print(f"[Clip Buffer] Start response: HTTP {response.status} - {response_text}")
                         if response.status == 200:
                             result = await response.json()
                             clip_buffer_active = True
                             print(f"[Clip Buffer] ✅ Buffer started: {result.get('message', 'OK')}")
                         else:
-                            error = await response.text()
-                            print(f"[Clip Buffer] ❌ Failed to start buffer: HTTP {response.status} - {error}")
+                            print(f"[Clip Buffer] ❌ Failed to start buffer: HTTP {response.status} - {response_text}")
             except Exception as e:
                 print(f"[Clip Buffer] ❌ Error starting buffer: {e}")
+                import traceback
+                traceback.print_exc()
 
         # Handle transition: LIVE -> OFFLINE
         elif not is_live and last_stream_live_state:
