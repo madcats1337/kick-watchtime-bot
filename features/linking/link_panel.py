@@ -77,42 +77,19 @@ class LinkPanelView(View):
             )
             return
 
-        # Create embed with instructions
-        embed = discord.Embed(
-            title="🔗 Link Your Kick Account",
-            description="Click the button below to securely link your Kick account with Discord.",
-            color=0x53FC18
-        )
-        embed.add_field(
-            name="📝 Instructions",
-            value=(
-                "1. Click the **'Link with Kick'** button below\n"
-                "2. Log in to Kick (if needed)\n"
-                "3. Authorize the connection\n"
-                "4. You're done! 🎉"
-            ),
-            inline=False
-        )
-        embed.add_field(
-            name="🔒 Security",
-            value="This link is unique to you and expires in 10 minutes.",
-            inline=False
-        )
-        embed.set_footer(text="Keep this link private • Expires in 10 minutes")
-
-        # Create view with OAuth link button
+        # Create simple view with just the OAuth link button
         view = View(timeout=600)  # 10 minute timeout
         oauth_button = Button(
-            label="Link with Kick",
+            label="Authorize with Kick",
             style=discord.ButtonStyle.link,
             url=oauth_url,
             emoji="🎮"
         )
         view.add_item(oauth_button)
 
-        # Send ephemeral message (only visible to user)
+        # Send simple ephemeral message - just the button, no extra steps
         await interaction.response.send_message(
-            embed=embed,
+            "🔗 Click the button below to link your Kick account (expires in 10 minutes):",
             view=view,
             ephemeral=True
         )
