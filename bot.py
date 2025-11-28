@@ -2118,6 +2118,30 @@ async def clip_buffer_management_task():
             else:
                 print(f"[Clip Buffer] 📴 Stream is offline on startup")
 
+        # If stream is live but buffer is not active, check if we need to start it
+        if is_live and not clip_buffer_active and not should_start_buffer:
+            # Verify buffer status with dashboard
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        f'{dashboard_url}/api/clips/buffer/status?channel={kick_channel}',
+                        timeout=aiohttp.ClientTimeout(total=10)
+                    ) as response:
+                        if response.status == 404:
+                            # No buffer exists, need to start it
+                            print(f"[Clip Buffer] 🔄 Stream is live but no buffer running, starting...")
+                            should_start_buffer = True
+                        elif response.status == 200:
+                            status = await response.json()
+                            if status.get('is_recording'):
+                                clip_buffer_active = True
+                                print(f"[Clip Buffer] ℹ️ Buffer already running")
+                            else:
+                                print(f"[Clip Buffer] ⚠️ Buffer exists but not recording, restarting...")
+                                should_start_buffer = True
+            except Exception as e:
+                print(f"[Clip Buffer] ⚠️ Error checking buffer status: {e}")
+
         # Handle transition: OFFLINE -> LIVE (or first run while live)
         if (is_live and not last_stream_live_state) or should_start_buffer:
             if not should_start_buffer:
