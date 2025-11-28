@@ -48,4 +48,3 @@ REQUIRE_SHUFFLE_VERIFICATION = True  # Require admin verification for Shuffle li
 DEFAULT_LEADERBOARD_SIZE = 10
 MAX_LEADERBOARD_SIZE = 25
 AUTO_LEADERBOARD_UPDATE_INTERVAL = 300  # 5 minutes in seconds (was 3600 = 1 hour)
-

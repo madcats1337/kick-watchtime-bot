@@ -40,7 +40,6 @@ from datetime import datetime, timezone
 from dataclasses import dataclass
 import aiohttp
 
-
 # -------------------------
 # Configuration
 # -------------------------
@@ -87,7 +86,6 @@ WEBHOOK_EVENTS = [
     "kicks.gifted",
 ]
 
-
 @dataclass
 class OAuthTokens:
     """OAuth token response data"""
@@ -97,17 +95,17 @@ class OAuthTokens:
     expires_in: int
     scope: str
     created_at: datetime = None
-    
+
     def __post_init__(self):
         if self.created_at is None:
             self.created_at = datetime.now(timezone.utc)
-    
+
     @property
     def is_expired(self) -> bool:
         """Check if the access token is expired"""
         age = (datetime.now(timezone.utc) - self.created_at).total_seconds()
         return age >= self.expires_in
-    
+
     def to_dict(self) -> dict:
         return {
             "access_token": self.access_token,
@@ -117,7 +115,6 @@ class OAuthTokens:
             "scope": self.scope,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
-
 
 @dataclass
 class WebhookSubscription:
@@ -131,11 +128,10 @@ class WebhookSubscription:
     updated_at: str
     broadcaster_user_id: Optional[int] = None
 
-
 class KickOfficialAPI:
     """
     Official Kick API client using OAuth 2.1 with PKCE.
-    
+
     This client provides access to all official Kick API endpoints including:
     - User information
     - Channel data and management
@@ -144,7 +140,7 @@ class KickOfficialAPI:
     - Moderation actions
     - Kicks (tips) leaderboard
     """
-    
+
     def __init__(
         self,
         client_id: str = None,
@@ -159,40 +155,40 @@ class KickOfficialAPI:
         self.access_token = access_token
         self.refresh_token = refresh_token
         self._session: Optional[aiohttp.ClientSession] = None
-    
+
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session"""
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
         return self._session
-    
+
     async def close(self):
         """Close the aiohttp session"""
         if self._session and not self._session.closed:
             await self._session.close()
-    
+
     # -------------------------
     # OAuth 2.1 PKCE Flow
     # -------------------------
-    
+
     @staticmethod
     def generate_pkce_pair() -> tuple[str, str]:
         """
         Generate PKCE code_verifier and code_challenge for OAuth 2.1.
-        
+
         Returns:
             Tuple of (code_verifier, code_challenge)
         """
         # Generate random 32 bytes for code verifier
         code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8').rstrip('=')
-        
+
         # Create SHA256 hash of verifier for challenge
         code_challenge = base64.urlsafe_b64encode(
             hashlib.sha256(code_verifier.encode('utf-8')).digest()
         ).decode('utf-8').rstrip('=')
-        
+
         return code_verifier, code_challenge
-    
+
     def get_authorization_url(
         self,
         scopes: List[str] = None,
@@ -201,21 +197,21 @@ class KickOfficialAPI:
     ) -> tuple[str, str]:
         """
         Generate the OAuth authorization URL for user consent.
-        
+
         Args:
             scopes: List of OAuth scopes to request
             state: Random state for CSRF protection
             code_challenge: PKCE code challenge
-            
+
         Returns:
             Tuple of (authorization_url, state)
         """
         if state is None:
             state = secrets.token_urlsafe(32)
-        
+
         if scopes is None:
             scopes = ["user:read", "channel:read", "chat:write"]
-        
+
         params = {
             "client_id": self.client_id,
             "redirect_uri": self.redirect_uri,
@@ -223,15 +219,15 @@ class KickOfficialAPI:
             "scope": " ".join(scopes),
             "state": state,
         }
-        
+
         # Add PKCE challenge if provided
         if code_challenge:
             params["code_challenge"] = code_challenge
             params["code_challenge_method"] = "S256"
-        
+
         query = "&".join(f"{k}={v}" for k, v in params.items())
         return f"{KICK_AUTHORIZE_URL}?{query}", state
-    
+
     async def exchange_code(
         self,
         code: str,
@@ -239,16 +235,16 @@ class KickOfficialAPI:
     ) -> OAuthTokens:
         """
         Exchange authorization code for access tokens.
-        
+
         Args:
             code: Authorization code from callback
             code_verifier: PKCE code verifier (required if PKCE was used)
-            
+
         Returns:
             OAuthTokens object with access and refresh tokens
         """
         session = await self._get_session()
-        
+
         data = {
             "grant_type": "authorization_code",
             "client_id": self.client_id,
@@ -256,14 +252,14 @@ class KickOfficialAPI:
             "redirect_uri": self.redirect_uri,
             "code": code,
         }
-        
+
         if code_verifier:
             data["code_verifier"] = code_verifier
-        
+
         async with session.post(KICK_TOKEN_URL, data=data) as response:
             response.raise_for_status()
             token_data = await response.json()
-            
+
             tokens = OAuthTokens(
                 access_token=token_data["access_token"],
                 refresh_token=token_data["refresh_token"],
@@ -271,38 +267,38 @@ class KickOfficialAPI:
                 expires_in=token_data["expires_in"],
                 scope=token_data.get("scope", ""),
             )
-            
+
             self.access_token = tokens.access_token
             self.refresh_token = tokens.refresh_token
-            
+
             return tokens
-    
+
     async def refresh_tokens(self) -> OAuthTokens:
         """
         Refresh the access token using the refresh token.
-        
+
         Note: As of 25/11/2025, refresh tokens are now reusable and won't be rotated
         on each use. This makes them safe to use multiple times.
-        
+
         Returns:
             New OAuthTokens object
         """
         if not self.refresh_token:
             raise ValueError("No refresh token available")
-        
+
         session = await self._get_session()
-        
+
         data = {
             "grant_type": "refresh_token",
             "client_id": self.client_id,
             "client_secret": self.client_secret,
             "refresh_token": self.refresh_token,
         }
-        
+
         async with session.post(KICK_TOKEN_URL, data=data) as response:
             response.raise_for_status()
             token_data = await response.json()
-            
+
             tokens = OAuthTokens(
                 access_token=token_data["access_token"],
                 refresh_token=token_data.get("refresh_token", self.refresh_token),
@@ -310,35 +306,35 @@ class KickOfficialAPI:
                 expires_in=token_data["expires_in"],
                 scope=token_data.get("scope", ""),
             )
-            
+
             self.access_token = tokens.access_token
             if token_data.get("refresh_token"):
                 self.refresh_token = tokens.refresh_token
-            
+
             return tokens
-    
+
     async def revoke_token(self, token: str = None):
         """
         Revoke an access or refresh token.
-        
+
         Args:
             token: Token to revoke (defaults to current access token)
         """
         session = await self._get_session()
-        
+
         data = {
             "client_id": self.client_id,
             "client_secret": self.client_secret,
             "token": token or self.access_token,
         }
-        
+
         async with session.post(KICK_REVOKE_URL, data=data) as response:
             response.raise_for_status()
-    
+
     # -------------------------
     # API Request Helpers
     # -------------------------
-    
+
     async def _request(
         self,
         method: str,
@@ -347,11 +343,11 @@ class KickOfficialAPI:
     ) -> Dict[str, Any]:
         """Make an authenticated API request"""
         session = await self._get_session()
-        
+
         headers = kwargs.pop("headers", {})
         headers["Authorization"] = f"Bearer {self.access_token}"
         headers["Accept"] = "application/json"
-        
+
         async with session.request(method, url, headers=headers, **kwargs) as response:
             if response.status == 401:
                 # Try to refresh token and retry
@@ -360,41 +356,41 @@ class KickOfficialAPI:
                 async with session.request(method, url, headers=headers, **kwargs) as retry_response:
                     retry_response.raise_for_status()
                     return await retry_response.json()
-            
+
             response.raise_for_status()
             return await response.json()
-    
+
     async def _get(self, url: str, **kwargs) -> Dict[str, Any]:
         return await self._request("GET", url, **kwargs)
-    
+
     async def _post(self, url: str, **kwargs) -> Dict[str, Any]:
         return await self._request("POST", url, **kwargs)
-    
+
     async def _delete(self, url: str, **kwargs) -> Dict[str, Any]:
         return await self._request("DELETE", url, **kwargs)
-    
+
     # -------------------------
     # User API
     # -------------------------
-    
+
     async def get_user(self) -> Dict[str, Any]:
         """
         Get the authenticated user's information.
         Requires: user:read scope
-        
+
         Returns:
             User data including user_id, name, email (if available)
         """
         return await self._get(KICK_USER_INFO_URL)
-    
+
     async def get_users(self, user_ids: List[int] = None) -> Dict[str, Any]:
         """
         Get user information by IDs.
         Requires: user:read scope
-        
+
         Args:
             user_ids: List of user IDs to fetch (max 100)
-            
+
         Returns:
             List of user data
         """
@@ -402,19 +398,19 @@ class KickOfficialAPI:
         if user_ids:
             params["id"] = user_ids
         return await self._get(KICK_USERS_URL, params=params)
-    
+
     # -------------------------
     # Channel API
     # -------------------------
-    
+
     async def get_channels(self, broadcaster_user_ids: List[int] = None) -> Dict[str, Any]:
         """
         Get channel information.
         Requires: channel:read scope
-        
+
         Args:
             broadcaster_user_ids: List of broadcaster user IDs
-            
+
         Returns:
             Channel data including stream status, viewer count, etc.
         """
@@ -422,7 +418,7 @@ class KickOfficialAPI:
         if broadcaster_user_ids:
             params["broadcaster_user_id"] = broadcaster_user_ids
         return await self._get(KICK_CHANNELS_URL, params=params)
-    
+
     async def update_channel(
         self,
         broadcaster_user_id: int,
@@ -433,13 +429,13 @@ class KickOfficialAPI:
         """
         Update channel information.
         Requires: channel:write scope
-        
+
         Args:
             broadcaster_user_id: The broadcaster's user ID
             title: New stream title
             category_id: New category ID
             language: Stream language (ISO 639-1 code)
-            
+
         Returns:
             Updated channel data
         """
@@ -450,18 +446,18 @@ class KickOfficialAPI:
             data["category_id"] = category_id
         if language:
             data["language"] = language
-        
+
         return await self._request(
             "PATCH",
             KICK_CHANNELS_URL,
             params={"broadcaster_user_id": broadcaster_user_id},
             json=data
         )
-    
+
     # -------------------------
     # Chat API
     # -------------------------
-    
+
     async def send_chat_message(
         self,
         content: str,
@@ -471,15 +467,15 @@ class KickOfficialAPI:
         """
         Send a chat message to a channel.
         Requires: chat:write scope
-        
+
         If type="bot" and no broadcaster_user_id specified, message goes to
         the channel attached to the OAuth application.
-        
+
         Args:
             content: Message content (max 500 chars)
             broadcaster_user_id: Target channel's broadcaster ID (optional)
             reply_to_message_id: Message ID to reply to (optional)
-            
+
         Returns:
             Message data including message_id
         """
@@ -487,22 +483,22 @@ class KickOfficialAPI:
             "content": content,
             "type": "bot",
         }
-        
+
         if broadcaster_user_id:
             payload["broadcaster_user_id"] = broadcaster_user_id
-        
+
         if reply_to_message_id:
             payload["reply_to_original_message"] = {
                 "original_message_id": reply_to_message_id
             }
-        
+
         headers = {"Content-Type": "application/json"}
         return await self._post(KICK_CHAT_URL, json=payload, headers=headers)
-    
+
     # -------------------------
     # Categories API
     # -------------------------
-    
+
     async def get_categories(
         self,
         query: str = None,
@@ -511,11 +507,11 @@ class KickOfficialAPI:
         """
         Get stream categories.
         Requires: channel:read scope
-        
+
         Args:
             query: Search query for categories
             category_ids: Specific category IDs to fetch
-            
+
         Returns:
             List of categories
         """
@@ -525,11 +521,11 @@ class KickOfficialAPI:
         if category_ids:
             params["id"] = category_ids
         return await self._get(KICK_CATEGORIES_URL, params=params)
-    
+
     # -------------------------
     # Webhooks API
     # -------------------------
-    
+
     async def subscribe_webhook(
         self,
         event: str,
@@ -539,7 +535,7 @@ class KickOfficialAPI:
         """
         Subscribe to a webhook event.
         Requires: events:subscribe scope
-        
+
         Available events:
         - chat.message.sent
         - channel.followed
@@ -549,12 +545,12 @@ class KickOfficialAPI:
         - livestream.status.updated
         - moderation.banned
         - kicks.gifted
-        
+
         Args:
             event: Event type to subscribe to
             callback_url: HTTPS URL to receive webhook callbacks
             broadcaster_user_id: Filter events to specific broadcaster (optional)
-            
+
         Returns:
             WebhookSubscription object
         """
@@ -568,13 +564,13 @@ class KickOfficialAPI:
             "method": "webhook",
             "callback_url": callback_url,
         }
-        
+
         if broadcaster_user_id:
             payload["events"][0]["broadcaster_user_id"] = broadcaster_user_id
-        
+
         response = await self._post(KICK_WEBHOOKS_URL, json=payload)
         sub_data = response.get("data", [{}])[0]
-        
+
         return WebhookSubscription(
             id=sub_data.get("id"),
             event=sub_data.get("event"),
@@ -585,18 +581,18 @@ class KickOfficialAPI:
             updated_at=sub_data.get("updated_at"),
             broadcaster_user_id=sub_data.get("broadcaster_user_id"),
         )
-    
+
     async def get_webhook_subscriptions(self) -> List[WebhookSubscription]:
         """
         Get all active webhook subscriptions.
         Requires: events:subscribe scope
-        
+
         Returns:
             List of WebhookSubscription objects
         """
         response = await self._get(KICK_WEBHOOKS_URL)
         subscriptions = []
-        
+
         for sub in response.get("data", []):
             subscriptions.append(WebhookSubscription(
                 id=sub.get("id"),
@@ -608,27 +604,27 @@ class KickOfficialAPI:
                 updated_at=sub.get("updated_at"),
                 broadcaster_user_id=sub.get("broadcaster_user_id"),
             ))
-        
+
         return subscriptions
-    
+
     async def delete_webhook_subscription(self, subscription_id: str) -> bool:
         """
         Delete a webhook subscription.
         Requires: events:subscribe scope
-        
+
         Args:
             subscription_id: The subscription ID to delete
-            
+
         Returns:
             True if successful
         """
         await self._delete(f"{KICK_WEBHOOKS_URL}/{subscription_id}")
         return True
-    
+
     # -------------------------
     # Moderation API
     # -------------------------
-    
+
     async def ban_user(
         self,
         broadcaster_user_id: int,
@@ -639,30 +635,30 @@ class KickOfficialAPI:
         """
         Ban a user from chat.
         Requires: moderation:ban scope
-        
+
         Args:
             broadcaster_user_id: The broadcaster's user ID
             user_id: User ID to ban
             duration_minutes: Ban duration (None = permanent)
             reason: Ban reason
-            
+
         Returns:
             Ban confirmation data
         """
         url = KICK_MODERATION_URL.format(broadcaster_user_id=broadcaster_user_id) + "/bans"
-        
+
         payload = {
             "banned_user_id": user_id,
         }
-        
+
         if duration_minutes:
             payload["duration"] = duration_minutes
-        
+
         if reason:
             payload["reason"] = reason
-        
+
         return await self._post(url, json=payload)
-    
+
     async def unban_user(
         self,
         broadcaster_user_id: int,
@@ -671,22 +667,22 @@ class KickOfficialAPI:
         """
         Unban a user from chat.
         Requires: moderation:ban scope
-        
+
         Args:
             broadcaster_user_id: The broadcaster's user ID
             user_id: User ID to unban
-            
+
         Returns:
             True if successful
         """
         url = KICK_MODERATION_URL.format(broadcaster_user_id=broadcaster_user_id) + "/bans"
         await self._delete(url, params={"banned_user_id": user_id})
         return True
-    
+
     # -------------------------
     # Kicks (Tips) API
     # -------------------------
-    
+
     async def get_kicks_leaderboard(
         self,
         broadcaster_user_id: int,
@@ -695,21 +691,21 @@ class KickOfficialAPI:
         """
         Get the Kicks (tips) leaderboard for a channel.
         Requires: kicks:read scope
-        
+
         Args:
             broadcaster_user_id: The broadcaster's user ID
             range_type: Time range - "all_time", "month", "week"
-            
+
         Returns:
             Leaderboard data with top tippers
         """
         url = KICK_KICKS_LEADERBOARD.format(broadcaster_user_id=broadcaster_user_id)
         return await self._get(url, params={"range": range_type})
-    
+
     # -------------------------
     # Livestream API
     # -------------------------
-    
+
     async def get_livestreams(
         self,
         broadcaster_user_ids: List[int] = None,
@@ -721,14 +717,14 @@ class KickOfficialAPI:
         """
         Get currently live streams.
         Requires: channel:read scope
-        
+
         Args:
             broadcaster_user_ids: Filter by broadcaster IDs
-            category_ids: Filter by category IDs  
+            category_ids: Filter by category IDs
             language: Filter by language code
             sort: Sort by "viewers_count" or "created_at"
             limit: Max results (25-100)
-            
+
         Returns:
             List of live streams
         """
@@ -736,16 +732,15 @@ class KickOfficialAPI:
             "sort": sort,
             "limit": min(max(limit, 25), 100),
         }
-        
+
         if broadcaster_user_ids:
             params["broadcaster_user_id"] = broadcaster_user_ids
         if category_ids:
             params["category_id"] = category_ids
         if language:
             params["language"] = language
-        
-        return await self._get(f"{KICK_API_PUBLIC}/livestreams", params=params)
 
+        return await self._get(f"{KICK_API_PUBLIC}/livestreams", params=params)
 
 # -------------------------
 # Webhook Payload Classes
@@ -761,7 +756,7 @@ class WebhookChatMessage:
     content: str
     sent_at: str
     badges: List[Dict]
-    
+
     @classmethod
     def from_payload(cls, data: dict) -> "WebhookChatMessage":
         return cls(
@@ -774,7 +769,6 @@ class WebhookChatMessage:
             badges=data.get("sender", {}).get("badges", []),
         )
 
-
 @dataclass
 class WebhookSubscription:
     """Parsed channel.subscription.* webhook payload"""
@@ -784,7 +778,7 @@ class WebhookSubscription:
     subscriber_username: str
     created_at: str
     duration: int  # months
-    
+
     @classmethod
     def from_payload(cls, data: dict) -> "WebhookSubscription":
         return cls(
@@ -796,7 +790,6 @@ class WebhookSubscription:
             duration=data.get("duration", 1),
         )
 
-
 @dataclass
 class WebhookGiftedSubs:
     """Parsed channel.subscription.gifts webhook payload"""
@@ -806,7 +799,7 @@ class WebhookGiftedSubs:
     gifter_username: str
     created_at: str
     giftees: List[Dict]  # List of {user_id, username}
-    
+
     @classmethod
     def from_payload(cls, data: dict) -> "WebhookGiftedSubs":
         return cls(
@@ -818,7 +811,6 @@ class WebhookGiftedSubs:
             giftees=data.get("giftees", []),
         )
 
-
 @dataclass
 class WebhookKicksGifted:
     """Parsed kicks.gifted webhook payload (Tips)"""
@@ -829,7 +821,7 @@ class WebhookKicksGifted:
     created_at: str
     amount: float
     kick_count: int
-    
+
     @classmethod
     def from_payload(cls, data: dict) -> "WebhookKicksGifted":
         return cls(
@@ -842,7 +834,6 @@ class WebhookKicksGifted:
             kick_count=data.get("kick_count", 0),
         )
 
-
 @dataclass
 class WebhookLivestreamStatus:
     """Parsed livestream.status.updated webhook payload"""
@@ -852,7 +843,7 @@ class WebhookLivestreamStatus:
     stream_id: str
     title: str
     started_at: str
-    
+
     @classmethod
     def from_payload(cls, data: dict) -> "WebhookLivestreamStatus":
         return cls(
@@ -863,7 +854,6 @@ class WebhookLivestreamStatus:
             title=data.get("livestream", {}).get("session_title"),
             started_at=data.get("livestream", {}).get("created_at"),
         )
-
 
 # -------------------------
 # Utility Functions
@@ -878,16 +868,16 @@ def verify_webhook_signature(
 ) -> bool:
     """
     Verify webhook signature from Kick.
-    
+
     Signature is HMAC SHA256 of: {message_id}.{timestamp}.{raw_body}
-    
+
     Args:
         signature: The Kick-Event-Signature header value
         message_id: The Kick-Event-Message-Id header value
         timestamp: The Kick-Event-Message-Timestamp header value
         body: Raw request body bytes
         secret: Your webhook secret
-        
+
     Returns:
         True if signature is valid
     """
@@ -895,9 +885,8 @@ def verify_webhook_signature(
     expected = hashlib.sha256(
         (secret + message).encode()
     ).hexdigest()
-    
-    return signature == expected
 
+    return signature == expected
 
 # Export all public interfaces
 __all__ = [

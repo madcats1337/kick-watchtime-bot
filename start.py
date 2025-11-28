@@ -27,7 +27,7 @@ def main():
     print(f"Working directory: {os.getcwd()}", flush=True)
     print(f"Port: {os.getenv('PORT', '8000')}", flush=True)
     print(f"Files in directory: {os.listdir('.')}", flush=True)
-    
+
     # Check if critical files exist
     if not os.path.exists('core/oauth_server.py'):
         print("❌ ERROR: core/oauth_server.py not found!", flush=True)
@@ -35,12 +35,12 @@ def main():
     if not os.path.exists('bot.py'):
         print("❌ ERROR: bot.py not found!", flush=True)
         sys.exit(1)
-    
+
     print("✅ Critical files found", flush=True)
-    
+
     processes = []
     threads = []
-    
+
     try:
         # Start Flask OAuth server
         print("📡 Starting OAuth web server...", flush=True)
@@ -53,21 +53,21 @@ def main():
                 bufsize=1
             )
             processes.append(("Flask", flask_process))
-            
+
             # Stream Flask output
             flask_thread = threading.Thread(target=stream_output, args=(flask_process, "Flask"))
             flask_thread.daemon = True
             flask_thread.start()
             threads.append(flask_thread)
-            
+
             print(f"✅ OAuth server process started (PID: {flask_process.pid})", flush=True)
         except Exception as e:
             print(f"❌ Failed to start Flask: {e}", flush=True)
             raise
-        
+
         # Give Flask time to start
         time.sleep(3)
-        
+
         # Check if Flask is still running
         if flask_process.poll() is not None:
             print(f"❌ Flask died immediately with code {flask_process.returncode}", flush=True)
@@ -75,7 +75,7 @@ def main():
             if remaining:
                 print(f"[Flask] {remaining}", flush=True)
             sys.exit(flask_process.returncode)
-        
+
         # Start Discord bot
         print("🤖 Starting Discord bot...", flush=True)
         try:
@@ -87,22 +87,22 @@ def main():
                 bufsize=1
             )
             processes.append(("Bot", bot_process))
-            
+
             # Stream bot output
             bot_thread = threading.Thread(target=stream_output, args=(bot_process, "Bot"))
             bot_thread.daemon = True
             bot_thread.start()
             threads.append(bot_thread)
-            
+
             print(f"✅ Discord bot process started (PID: {bot_process.pid})", flush=True)
         except Exception as e:
             print(f"❌ Failed to start bot: {e}", flush=True)
             if flask_process.poll() is None:
                 flask_process.terminate()
             raise
-        
+
         print("✅ Both services started! Monitoring...", flush=True)
-        
+
         # Monitor both processes
         while True:
             for name, process in processes:
@@ -121,9 +121,9 @@ def main():
                             print(f"🛑 Terminating {other_name}...", flush=True)
                             other_process.terminate()
                     sys.exit(process.returncode if process.returncode else 1)
-            
+
             time.sleep(1)
-            
+
     except KeyboardInterrupt:
         print("\n🛑 Shutting down...", flush=True)
         for name, process in processes:

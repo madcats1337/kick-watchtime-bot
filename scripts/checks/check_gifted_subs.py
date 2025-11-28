@@ -25,23 +25,23 @@ with engine.begin() as conn:
     """))
     for row in result:
         print(f"  - {row[0]}: {row[1]} (nullable: {row[2]})")
-    
+
     # Check total count
     print("\n2. TOTAL RECORDS:")
     result = conn.execute(text("SELECT COUNT(*) FROM raffle_gifted_subs"))
     count = result.fetchone()[0]
     print(f"  Total: {count} records")
-    
+
     # Check last 10 records
     print("\n3. LAST 10 RECORDS:")
     result = conn.execute(text("""
-        SELECT id, period_id, gifter_kick_name, gifter_discord_id, 
+        SELECT id, period_id, gifter_kick_name, gifter_discord_id,
                sub_count, tickets_awarded, kick_event_id, gifted_at
         FROM raffle_gifted_subs
         ORDER BY gifted_at DESC
         LIMIT 10;
     """))
-    
+
     rows = result.fetchall()
     if rows:
         print(f"  {'ID':<5} {'Period':<8} {'Kick Name':<20} {'Discord ID':<20} {'Subs':<6} {'Tickets':<8} {'Event ID':<30} {'Gifted At'}")
@@ -50,7 +50,7 @@ with engine.begin() as conn:
             print(f"  {row[0]:<5} {row[1]:<8} {row[2]:<20} {str(row[3]):<20} {row[4]:<6} {row[5]:<8} {str(row[6]):<30} {row[7]}")
     else:
         print("  No records found")
-    
+
     # Check for records without Discord ID (not linked users)
     print("\n4. RECORDS WITHOUT DISCORD ID (NOT LINKED):")
     result = conn.execute(text("""
@@ -60,14 +60,14 @@ with engine.begin() as conn:
         ORDER BY gifted_at DESC
         LIMIT 5;
     """))
-    
+
     rows = result.fetchall()
     if rows:
         for row in rows:
             print(f"  - {row[0]}: {row[1]} subs (event: {row[2]}, at: {row[3]})")
     else:
         print("  All records have Discord IDs")
-    
+
     # Check active raffle period
     print("\n5. ACTIVE RAFFLE PERIOD:")
     result = conn.execute(text("""
@@ -77,7 +77,7 @@ with engine.begin() as conn:
         ORDER BY start_date DESC
         LIMIT 1;
     """))
-    
+
     row = result.fetchone()
     if row:
         print(f"  ID: {row[0]}")
@@ -86,7 +86,7 @@ with engine.begin() as conn:
         print(f"  Status: {row[3]}")
     else:
         print("  No active raffle period!")
-    
+
     # Check for LuckyUsersWhoGotGiftSubscriptionsEvent patterns
     print("\n6. CHECKING FOR EVENT ID PATTERNS:")
     result = conn.execute(text("""
@@ -96,7 +96,7 @@ with engine.begin() as conn:
         ORDER BY count DESC
         LIMIT 5;
     """))
-    
+
     rows = result.fetchall()
     if rows:
         print("  Most common event ID patterns:")

@@ -39,24 +39,24 @@ with engine.begin() as conn:
     if not row:
         print("\n❌ ERROR: No active raffle period found!")
         exit(1)
-    
+
     period_id = row[0]
     print(f"\nActive Period ID: {period_id}")
-    
+
     # Check if gifter is linked
     result = conn.execute(text("""
         SELECT discord_id FROM links
         WHERE LOWER(kick_name) = LOWER(:kick_name)
     """), {'kick_name': GIFTER_KICK_NAME})
-    
+
     row = result.fetchone()
     gifter_discord_id = row[0] if row else None
-    
+
     if gifter_discord_id:
         print(f"Gifter Discord ID: {gifter_discord_id}")
         tickets_awarded = SUB_COUNT * TICKETS_PER_SUB
         print(f"Tickets to award: {tickets_awarded}")
-        
+
         # Award tickets using TicketManager
         print("\n📝 Awarding tickets...")
         success = ticket_manager.award_tickets(
@@ -67,7 +67,7 @@ with engine.begin() as conn:
             description=f"Gifted {SUB_COUNT} sub(s) in chat (manual entry)",
             period_id=period_id
         )
-        
+
         if success:
             print(f"✅ Awarded {tickets_awarded} tickets to {GIFTER_KICK_NAME}")
         else:
@@ -76,11 +76,11 @@ with engine.begin() as conn:
     else:
         print(f"⚠️  Gifter {GIFTER_KICK_NAME} is not linked to Discord")
         tickets_awarded = 0
-    
+
     # Log the gifted sub event
     event_id = f"manual_{GIFTER_KICK_NAME}_{int(EVENT_TIME.timestamp())}"
     print(f"\n📝 Logging gifted sub event (ID: {event_id})...")
-    
+
     conn.execute(text("""
         INSERT INTO raffle_gifted_subs
             (period_id, gifter_kick_name, gifter_discord_id, recipient_kick_name,
@@ -99,7 +99,7 @@ with engine.begin() as conn:
         'event_id': event_id,
         'discord_server_id': DISCORD_SERVER_ID
     })
-    
+
     print(f"✅ Logged gifted sub event in database")
 
 print("\n" + "=" * 80)

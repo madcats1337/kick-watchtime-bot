@@ -28,7 +28,7 @@ try:
     with engine.begin() as conn:
         # Drop old table if it has wrong schema
         conn.execute(text("DROP TABLE IF EXISTS bot_tokens"))
-        
+
         # Create bot_tokens table with OAuth authentication fields and expiration tracking
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS bot_tokens (
@@ -40,7 +40,7 @@ try:
             )
         """))
         print("\n✅ bot_tokens table created successfully (OAuth with expiration tracking)!")
-        
+
         # Check if table exists and show structure (works for both PostgreSQL and SQLite)
         print("\n📋 Table structure:")
         print("   - bot_username: TEXT (PRIMARY KEY)")
@@ -48,11 +48,11 @@ try:
         print("   - refresh_token: TEXT")
         print("   - expires_at: TIMESTAMP (when access token expires)")
         print("   - created_at: TIMESTAMP")
-        
+
         # Show any existing bot tokens (just count, not the actual tokens)
         count = conn.execute(text("SELECT COUNT(*) FROM bot_tokens")).fetchone()[0]
         print(f"\n📊 Existing bot tokens: {count}")
-        
+
 except Exception as e:
     print(f"\n❌ Error creating table: {e}")
     import traceback

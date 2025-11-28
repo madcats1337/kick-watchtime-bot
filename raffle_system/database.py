@@ -33,16 +33,16 @@ CREATE TABLE IF NOT EXISTS raffle_tickets (
     period_id INTEGER REFERENCES raffle_periods(id) ON DELETE CASCADE,
     discord_id BIGINT NOT NULL,
     kick_name TEXT NOT NULL,
-    
+
     -- Ticket sources
     watchtime_tickets INTEGER DEFAULT 0,
     gifted_sub_tickets INTEGER DEFAULT 0,
     shuffle_wager_tickets INTEGER DEFAULT 0,
     bonus_tickets INTEGER DEFAULT 0,  -- Manual admin awards
-    
+
     -- Totals
     total_tickets INTEGER DEFAULT 0,
-    
+
     -- Metadata
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(period_id, discord_id)
@@ -79,17 +79,17 @@ CREATE TABLE IF NOT EXISTS raffle_shuffle_wagers (
     shuffle_username TEXT NOT NULL,
     kick_name TEXT,  -- If we can map shuffle→kick
     discord_id BIGINT,  -- NULL if not linked
-    
+
     -- Wager tracking
     total_wager_usd DECIMAL(15, 2) DEFAULT 0,
     last_known_wager DECIMAL(15, 2) DEFAULT 0,
     tickets_awarded INTEGER DEFAULT 0,
-    
+
     -- Metadata
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_checked TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    
+
     UNIQUE(period_id, shuffle_username)
 );
 
@@ -157,7 +157,7 @@ DROP VIEW IF EXISTS raffle_current_stats;
 
 -- Leaderboard view
 CREATE VIEW raffle_leaderboard AS
-SELECT 
+SELECT
     rt.period_id,
     rt.discord_id,
     rt.kick_name,
@@ -173,7 +173,7 @@ ORDER BY rt.period_id DESC, rt.total_tickets DESC;
 
 -- Current period stats
 CREATE VIEW raffle_current_stats AS
-SELECT 
+SELECT
     rp.id as period_id,
     rp.start_date,
     rp.end_date,
@@ -190,40 +190,39 @@ WHERE rp.status = 'active'
 GROUP BY rp.id;
 """
 
-
 def setup_raffle_database(engine):
     """
     Create all raffle system tables, indices, and views
-    
+
     Args:
         engine: SQLAlchemy engine instance
-        
+
     Returns:
         bool: True if successful, False otherwise
     """
     try:
         logger.info("Setting up raffle system database schema...")
-        
+
         with engine.begin() as conn:
             # Split SQL into individual statements and execute one by one
             # This is required for SQLite which can only execute one statement at a time
             statements = []
             current_statement = []
-            
+
             for line in RAFFLE_SCHEMA_SQL.split('\n'):
                 # Skip comments and empty lines
                 stripped = line.strip()
                 if not stripped or stripped.startswith('--'):
                     continue
-                
+
                 current_statement.append(line)
-                
+
                 # Check if this line ends a statement
                 if stripped.endswith(';'):
                     statement = '\n'.join(current_statement)
                     statements.append(statement)
                     current_statement = []
-            
+
             # Execute each statement
             for statement in statements:
                 if statement.strip():
@@ -232,22 +231,21 @@ def setup_raffle_database(engine):
                     except Exception as e:
                         # Log but continue (some statements might fail on re-run)
                         logger.debug(f"Statement warning: {e}")
-            
+
         logger.info("✅ Raffle database schema created successfully")
         return True
-        
+
     except Exception as e:
         logger.error(f"❌ Failed to setup raffle database: {e}")
         return False
 
-
 def verify_raffle_schema(engine):
     """
     Verify that all required tables exist
-    
+
     Args:
         engine: SQLAlchemy engine instance
-        
+
     Returns:
         dict: Status of each table (True/False)
     """
@@ -261,33 +259,32 @@ def verify_raffle_schema(engine):
         'raffle_ticket_log',
         'raffle_draws'
     ]
-    
+
     status = {}
-    
+
     try:
         with engine.begin() as conn:
             for table in required_tables:
                 result = conn.execute(text(f"""
                     SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
+                        SELECT FROM information_schema.tables
                         WHERE table_name = '{table}'
                     );
                 """))
                 status[table] = result.scalar()
-                
+
     except Exception as e:
         logger.error(f"Failed to verify schema: {e}")
-        
-    return status
 
+    return status
 
 def get_current_period(engine):
     """
     Get the currently active raffle period
-    
+
     Args:
         engine: SQLAlchemy engine instance
-        
+
     Returns:
         dict: Current period info or None
     """
@@ -301,7 +298,7 @@ def get_current_period(engine):
                 LIMIT 1
             """))
             row = result.fetchone()
-            
+
             if row:
                 return {
                     'id': row[0],
@@ -311,21 +308,20 @@ def get_current_period(engine):
                     'total_tickets': row[4]
                 }
             return None
-            
+
     except Exception as e:
         logger.error(f"Failed to get current period: {e}")
         return None
 
-
 def create_new_period(engine, start_date, end_date):
     """
     Create a new raffle period and reset all tickets
-    
+
     Args:
         engine: SQLAlchemy engine instance
         start_date: datetime - Period start
         end_date: datetime - Period end
-        
+
     Returns:
         int: New period ID or None
     """
@@ -338,7 +334,7 @@ def create_new_period(engine, start_date, end_date):
                 ORDER BY id DESC
                 LIMIT 1
             """)).fetchone()
-            
+
             # Close any active periods
             if old_period:
                 conn.execute(text("""
@@ -347,7 +343,7 @@ def create_new_period(engine, start_date, end_date):
                     WHERE id = :period_id
                 """), {'period_id': old_period[0]})
                 logger.info(f"Closed old raffle period #{old_period[0]}")
-            
+
             # Create new period
             result = conn.execute(text("""
                 INSERT INTO raffle_periods (start_date, end_date, status)
@@ -358,15 +354,15 @@ def create_new_period(engine, start_date, end_date):
                 'end': end_date
             })
             period_id = result.scalar()
-            
+
             # Delete ALL tickets from all periods (fresh start)
             deleted_tickets = conn.execute(text("DELETE FROM raffle_tickets")).rowcount
             logger.info(f"Deleted {deleted_tickets} ticket records from all periods")
-            
+
             # Clear ALL conversion tracking (fresh start)
             deleted_watchtime = conn.execute(text("DELETE FROM raffle_watchtime_converted")).rowcount
             logger.info(f"Deleted {deleted_watchtime} watchtime conversion records")
-            
+
             # Snapshot current watchtime as "already converted" for new period
             # This prevents awarding tickets for watchtime earned before this period
             conn.execute(text("""
@@ -376,21 +372,20 @@ def create_new_period(engine, start_date, end_date):
                 WHERE minutes > 0
             """), {'period_id': period_id})
             logger.info(f"Snapshotted existing watchtime for new period (prevents double-awarding)")
-            
+
             deleted_subs = conn.execute(text("DELETE FROM raffle_gifted_subs")).rowcount
             logger.info(f"Deleted {deleted_subs} gifted sub records")
-            
+
             # Clear ALL shuffle wager tracking (fresh start)
             deleted_wagers = conn.execute(text("DELETE FROM raffle_shuffle_wagers")).rowcount
             logger.info(f"Deleted {deleted_wagers} shuffle wager records")
-            
+
         logger.info(f"✅ Created new raffle period #{period_id} and reset all tickets")
         return period_id
-        
+
     except Exception as e:
         logger.error(f"Failed to create new period: {e}")
         return None
-
 
 def migrate_add_created_at_to_shuffle_wagers(engine):
     """
@@ -401,36 +396,35 @@ def migrate_add_created_at_to_shuffle_wagers(engine):
         with engine.begin() as conn:
             # Check if column already exists
             result = conn.execute(text("""
-                SELECT column_name 
-                FROM information_schema.columns 
-                WHERE table_name = 'raffle_shuffle_wagers' 
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'raffle_shuffle_wagers'
                 AND column_name = 'created_at'
             """))
-            
+
             if result.fetchone():
                 logger.info("✓ Column 'created_at' already exists in raffle_shuffle_wagers")
                 return True
-            
+
             # Add the column
             conn.execute(text("""
                 ALTER TABLE raffle_shuffle_wagers
                 ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             """))
-            
+
             # Set created_at for existing rows to last_checked (best approximation)
             conn.execute(text("""
                 UPDATE raffle_shuffle_wagers
                 SET created_at = last_checked
                 WHERE created_at IS NULL
             """))
-            
+
             logger.info("✅ Added 'created_at' column to raffle_shuffle_wagers table")
             return True
-            
+
     except Exception as e:
         logger.error(f"Migration failed: {e}")
         return False
-
 
 def migrate_add_platform_to_wager_tables(engine):
     """
@@ -439,66 +433,65 @@ def migrate_add_platform_to_wager_tables(engine):
     """
     try:
         from .config import WAGER_PLATFORM_NAME
-        
+
         with engine.begin() as conn:
             # Add platform column to raffle_shuffle_wagers if it doesn't exist
             result = conn.execute(text("""
-                SELECT column_name 
-                FROM information_schema.columns 
-                WHERE table_name = 'raffle_shuffle_wagers' 
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'raffle_shuffle_wagers'
                 AND column_name = 'platform'
             """))
-            
+
             if not result.fetchone():
                 # Add the column
                 conn.execute(text("""
                     ALTER TABLE raffle_shuffle_wagers
                     ADD COLUMN platform VARCHAR(50) DEFAULT 'shuffle'
                 """))
-                
+
                 # Set platform for existing rows
                 conn.execute(text("""
                     UPDATE raffle_shuffle_wagers
                     SET platform = 'shuffle'
                     WHERE platform IS NULL
                 """))
-                
+
                 logger.info("✅ Added 'platform' column to raffle_shuffle_wagers table")
             else:
                 logger.info("✓ Column 'platform' already exists in raffle_shuffle_wagers")
-            
+
             # Add platform column to raffle_shuffle_links if it doesn't exist
             result2 = conn.execute(text("""
-                SELECT column_name 
-                FROM information_schema.columns 
-                WHERE table_name = 'raffle_shuffle_links' 
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'raffle_shuffle_links'
                 AND column_name = 'platform'
             """))
-            
+
             if not result2.fetchone():
                 # Add the column
                 conn.execute(text("""
                     ALTER TABLE raffle_shuffle_links
                     ADD COLUMN platform VARCHAR(50) DEFAULT 'shuffle'
                 """))
-                
+
                 # Set platform for existing rows
                 conn.execute(text("""
                     UPDATE raffle_shuffle_links
                     SET platform = 'shuffle'
                     WHERE platform IS NULL
                 """))
-                
+
                 logger.info("✅ Added 'platform' column to raffle_shuffle_links table")
             else:
                 logger.info("✓ Column 'platform' already exists in raffle_shuffle_links")
-            
+
             return True
-            
+
     except Exception as e:
         logger.error(f"Migration failed: {e}")
         return False
-
 
 if __name__ == "__main__":
     """
@@ -507,32 +500,32 @@ if __name__ == "__main__":
     import os
     from dotenv import load_dotenv
     from sqlalchemy import create_engine
-    
+
     # Setup logging
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    
+
     # Load environment variables
     load_dotenv()
-    
+
     DATABASE_URL = os.getenv("DATABASE_URL")
     if not DATABASE_URL:
         logger.error("❌ DATABASE_URL not found in environment variables")
         exit(1)
-    
+
     # Create engine
     engine = create_engine(DATABASE_URL)
-    
+
     # Setup schema
     success = setup_raffle_database(engine)
-    
+
     if success:
         # Verify schema
         logger.info("\nVerifying schema...")
         status = verify_raffle_schema(engine)
-        
+
         all_ok = all(status.values())
         if all_ok:
             logger.info("✅ All tables created successfully:")

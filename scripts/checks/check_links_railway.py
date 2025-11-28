@@ -10,18 +10,18 @@ with engine.begin() as conn:
     for row in result:
         print(f"{row[0]}:")
         print(f"  {row[1]}\n")
-    
+
     print("\n=== Links Table Constraints ===")
     result = conn.execute(text("""
-        SELECT conname, contype, pg_get_constraintdef(oid) 
-        FROM pg_constraint 
+        SELECT conname, contype, pg_get_constraintdef(oid)
+        FROM pg_constraint
         WHERE conrelid = 'links'::regclass
     """))
     for row in result:
         constraint_type = {'p': 'PRIMARY KEY', 'u': 'UNIQUE', 'f': 'FOREIGN KEY', 'c': 'CHECK'}.get(row[1], row[1])
         print(f"{row[0]} ({constraint_type}):")
         print(f"  {row[2]}\n")
-    
+
     print("\n=== Links Table Structure ===")
     result = conn.execute(text("""
         SELECT column_name, data_type, is_nullable

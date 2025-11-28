@@ -14,28 +14,27 @@ from .config import AUTO_LEADERBOARD_UPDATE_INTERVAL
 
 logger = logging.getLogger(__name__)
 
-
 class AutoLeaderboard:
     """Manages auto-updating raffle leaderboard"""
-    
+
     def __init__(self, bot, engine, channel_id):
         self.bot = bot
         self.engine = engine
         self.channel_id = channel_id
         self.message_id = None
         self.channel = None
-    
+
     async def initialize(self):
         """Initialize the leaderboard system"""
         try:
             self.channel = self.bot.get_channel(self.channel_id)
-            
+
             if not self.channel:
                 print(f"[Auto-Leaderboard] ❌ Could not find channel with ID {self.channel_id}")
                 return False
-            
+
             print(f"[Auto-Leaderboard] Found channel: #{self.channel.name}")
-            
+
             # Try to find existing leaderboard message
             async for message in self.channel.history(limit=50):
                 if message.author == self.bot.user and message.embeds:
@@ -44,20 +43,20 @@ class AutoLeaderboard:
                         self.message_id = message.id
                         print(f"[Auto-Leaderboard] Found existing message: {self.message_id}")
                         break
-            
+
             if not self.message_id:
                 # Post initial leaderboard
                 print("[Auto-Leaderboard] No existing message found, posting new leaderboard...")
                 await self.post_new_leaderboard()
-            
+
             return True
-            
+
         except Exception as e:
             print(f"[Auto-Leaderboard] ❌ Failed to initialize: {e}")
             import traceback
             traceback.print_exc()
             return False
-    
+
     async def post_new_leaderboard(self):
         """Post a new leaderboard message"""
         try:
@@ -65,12 +64,12 @@ class AutoLeaderboard:
             message = await self.channel.send(embed=embed)
             self.message_id = message.id
             print(f"[Auto-Leaderboard] Posted new message: {self.message_id}")
-            
+
         except Exception as e:
             print(f"[Auto-Leaderboard] ❌ Failed to post: {e}")
             import traceback
             traceback.print_exc()
-    
+
     async def update_leaderboard(self):
         """Update the existing leaderboard message"""
         try:
@@ -78,7 +77,7 @@ class AutoLeaderboard:
                 print("[Auto-Leaderboard] No message ID, posting new leaderboard...")
                 await self.post_new_leaderboard()
                 return
-            
+
             # Fetch the message
             try:
                 message = await self.channel.fetch_message(self.message_id)
@@ -86,51 +85,51 @@ class AutoLeaderboard:
                 print("[Auto-Leaderboard] Message not found, posting new one...")
                 await self.post_new_leaderboard()
                 return
-            
+
             # Create updated embed
             embed = await self.create_leaderboard_embed()
-            
+
             # Edit the message
             await message.edit(embed=embed)
             print(f"[Auto-Leaderboard] ✅ Updated message: {self.message_id}")
-            
+
         except Exception as e:
             print(f"[Auto-Leaderboard] ❌ Failed to update: {e}")
             import traceback
             traceback.print_exc()
-    
+
     async def create_leaderboard_embed(self):
         """Create the leaderboard embed"""
         try:
             with self.engine.begin() as conn:
                 # Get active period
                 period_result = conn.execute(text("""
-                    SELECT id, start_date, end_date 
-                    FROM raffle_periods 
+                    SELECT id, start_date, end_date
+                    FROM raffle_periods
                     WHERE status = 'active'
                 """))
-                
+
                 period_row = period_result.fetchone()
-                
+
                 if not period_row:
                     return discord.Embed(
                         title="🎟️ Raffle Ticket Leaderboard",
                         description="No active raffle period",
                         color=discord.Color.red()
                     )
-                
+
                 period_id = period_row[0]
                 start_date = period_row[1]
                 end_date = period_row[2]
-                
+
                 # Check if period hasn't started yet
                 now = datetime.now()
                 if now < start_date:
                     days_until_start = (start_date - now).days
                     hours_until_start = ((start_date - now).seconds // 3600)
-                    
+
                     time_msg = f"{days_until_start} days" if days_until_start > 0 else f"{hours_until_start} hours"
-                    
+
                     return discord.Embed(
                         title="🎟️ Raffle Ticket Leaderboard",
                         description=(
@@ -142,10 +141,10 @@ class AutoLeaderboard:
                         ),
                         color=discord.Color.blue()
                     )
-                
+
                 # Get top 5 participants
                 result = conn.execute(text("""
-                    SELECT 
+                    SELECT
                         kick_name,
                         total_tickets,
                         watchtime_tickets,
@@ -157,22 +156,22 @@ class AutoLeaderboard:
                     ORDER BY total_tickets DESC
                     LIMIT 5
                 """), {'period_id': period_id})
-                
+
                 rows = result.fetchall()
-                
+
                 # Get total stats
                 stats_result = conn.execute(text("""
-                    SELECT 
+                    SELECT
                         COUNT(DISTINCT discord_id),
                         COALESCE(SUM(total_tickets), 0)
                     FROM raffle_tickets
                     WHERE period_id = :period_id
                 """), {'period_id': period_id})
-                
+
                 stats_row = stats_result.fetchone()
                 total_participants = stats_row[0] or 0
                 total_tickets = stats_row[1] or 0
-            
+
             # Create embed
             embed = discord.Embed(
                 title="🎟️ Raffle Ticket Leaderboard",
@@ -181,7 +180,7 @@ class AutoLeaderboard:
                 color=discord.Color.gold(),
                 timestamp=datetime.utcnow()
             )
-            
+
             if not rows:
                 embed.add_field(
                     name="No Participants Yet",
@@ -191,7 +190,7 @@ class AutoLeaderboard:
             else:
                 # Medals for top 3
                 medals = ["🥇", "🥈", "🥉"]
-                
+
                 leaderboard_text = ""
                 for idx, row in enumerate(rows, 1):
                     kick_name = row[0] or "Unknown"
@@ -200,22 +199,22 @@ class AutoLeaderboard:
                     gifted = row[3]
                     shuffle = row[4]
                     bonus = row[5]
-                    
+
                     # Medal or rank number
                     rank = medals[idx-1] if idx <= 3 else f"`{idx}.`"
-                    
+
                     # Calculate win probability
                     win_prob = (total / total_tickets * 100) if total_tickets > 0 else 0
-                    
+
                     leaderboard_text += f"{rank} **{kick_name}** - {total:,} tickets ({win_prob:.2f}%)\n"
                     leaderboard_text += f"    ⏱️ {watchtime} 🎁 {gifted} 🎲 {shuffle} ⭐ {bonus}\n"
-                
+
                 embed.add_field(
                     name="🏆 Top 5",
                     value=leaderboard_text,
                     inline=False
                 )
-            
+
             # Add how to earn tickets section
             embed.add_field(
                 name="📋 How to Earn Tickets",
@@ -228,7 +227,7 @@ class AutoLeaderboard:
                 ),
                 inline=False
             )
-            
+
             # Dynamic footer based on update interval
             if AUTO_LEADERBOARD_UPDATE_INTERVAL >= 3600:
                 update_text = f"Updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/3600:.1f} hours"
@@ -236,11 +235,11 @@ class AutoLeaderboard:
                 update_text = f"Updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/60:.0f} minutes"
             else:
                 update_text = f"Updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL} seconds"
-            
+
             embed.set_footer(text=update_text)
-            
+
             return embed
-            
+
         except Exception as e:
             print(f"[Auto-Leaderboard] ❌ Failed to create embed: {e}")
             import traceback
@@ -251,11 +250,10 @@ class AutoLeaderboard:
                 color=discord.Color.red()
             )
 
-
 async def setup_auto_leaderboard(bot, engine, channel_id=None):
     """
     Setup the auto-updating leaderboard as a Discord bot task
-    
+
     Args:
         bot: Discord bot instance
         engine: SQLAlchemy engine
@@ -266,7 +264,7 @@ async def setup_auto_leaderboard(bot, engine, channel_id=None):
         # Try to get from bot_settings if available
         if hasattr(bot, 'settings_manager') and bot.settings_manager:
             channel_id = bot.settings_manager.raffle_leaderboard_channel_id
-        
+
         # Fall back to environment variable
         if channel_id is None:
             channel_id_str = os.getenv('RAFFLE_LEADERBOARD_CHANNEL_ID')
@@ -276,31 +274,31 @@ async def setup_auto_leaderboard(bot, engine, channel_id=None):
                 except ValueError:
                     print(f"[Auto-Leaderboard] ❌ Invalid RAFFLE_LEADERBOARD_CHANNEL_ID: {channel_id_str}")
                     return None
-    
+
     if not channel_id:
         print("[Auto-Leaderboard] ⚠️ Channel ID not set - auto-leaderboard disabled")
         return None
-    
+
     print(f"[Auto-Leaderboard] Setting up for channel ID: {channel_id}")
-    
+
     leaderboard = AutoLeaderboard(bot, engine, channel_id)
-    
+
     @tasks.loop(seconds=AUTO_LEADERBOARD_UPDATE_INTERVAL)
     async def update_leaderboard_task():
         """Periodic task to update the leaderboard"""
         print("🔄 [Auto-Leaderboard] Updating...")
         await leaderboard.update_leaderboard()
-    
+
     @update_leaderboard_task.before_loop
     async def before_leaderboard_task():
         """Wait for bot to be ready and initialize"""
         await bot.wait_until_ready()
-        
+
         print(f"[Auto-Leaderboard] Initializing for channel {channel_id}...")
-        
+
         # Initialize the leaderboard
         success = await leaderboard.initialize()
-        
+
         if success:
             if AUTO_LEADERBOARD_UPDATE_INTERVAL >= 3600:
                 print(f"✅ [Auto-Leaderboard] Started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/3600:.1f} hours)")
@@ -311,8 +309,8 @@ async def setup_auto_leaderboard(bot, engine, channel_id=None):
         else:
             print("❌ [Auto-Leaderboard] Failed to initialize - task cancelled")
             update_leaderboard_task.cancel()
-    
+
     # Start the task
     update_leaderboard_task.start()
-    
+
     return leaderboard

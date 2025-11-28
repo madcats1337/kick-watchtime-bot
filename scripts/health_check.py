@@ -21,13 +21,13 @@ print(f"URL: {DATABASE_URL.split('@')[0] if '@' in DATABASE_URL else DATABASE_UR
 
 try:
     engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-    
+
     with engine.connect() as conn:
         # Test connection
         result = conn.execute(text("SELECT 1"))
         result.fetchone()
         print("✅ Database connection successful!")
-        
+
         # Check tables
         print("\n📋 Checking tables...")
         tables = ['watchtime', 'links', 'pending_links']
@@ -38,9 +38,9 @@ try:
                 print(f"  ✅ {table}: {count} rows")
             except Exception as e:
                 print(f"  ❌ {table}: {e}")
-        
+
         print("\n✅ Database health check passed!")
-        
+
 except Exception as e:
     print(f"\n❌ Database health check failed: {e}")
     sys.exit(1)

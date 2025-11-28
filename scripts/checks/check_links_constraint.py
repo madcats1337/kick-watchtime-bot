@@ -17,8 +17,8 @@ print("\n" + "="*80 + "\n")
 # Check current constraints
 print("Current constraints on links table:")
 result = conn.execute(text("""
-    SELECT conname, contype, pg_get_constraintdef(oid) 
-    FROM pg_constraint 
+    SELECT conname, contype, pg_get_constraintdef(oid)
+    FROM pg_constraint
     WHERE conrelid = 'links'::regclass
 """))
 for row in result:
