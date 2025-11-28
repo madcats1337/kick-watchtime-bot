@@ -11,6 +11,7 @@ import websockets
 import hmac
 import hashlib
 import base64
+import redis
 from typing import Optional
 from core.kick_api import USER_AGENTS
 from datetime import datetime, timedelta, timezone
@@ -96,6 +97,36 @@ if not DISCORD_GUILD_ID:
 
 # Database configuration with cloud PostgreSQL support
 DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+# Redis configuration for publishing events
+REDIS_URL = os.getenv("REDIS_URL", "")
+redis_client = None
+if REDIS_URL:
+    try:
+        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+        redis_client.ping()
+        print("✅ Redis client connected for event publishing")
+    except Exception as e:
+        print(f"⚠️  Redis unavailable: {e}")
+        redis_client = None
+else:
+    print("⚠️  REDIS_URL not set, events will not be published")
+
+def publish_redis_event(channel: str, action: str, data: dict = None):
+    """Publish an event to Redis for dashboard real-time updates"""
+    if not redis_client:
+        return False
+    try:
+        payload = {
+            'action': action,
+            'data': data or {},
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        }
+        redis_client.publish(channel, json.dumps(payload))
+        return True
+    except Exception as e:
+        print(f"Failed to publish Redis event: {e}")
+        return False
 
 if not DATABASE_URL:
     print("⚠️ WARNING: DATABASE_URL not set! Using in-memory SQLite database.")
@@ -4994,6 +5025,15 @@ class PointShopConfirmView(discord.ui.View):
                 new_balance = conn.execute(text("""
                     SELECT points FROM user_points WHERE kick_username = :k
                 """), {"k": self.kick_username}).fetchone()[0]
+            
+            # Publish event to notify dashboard of new purchase
+            publish_redis_event('point_shop', 'new_purchase', {
+                'item_id': item_id,
+                'item_name': item_name,
+                'buyer': self.kick_username,
+                'price': price,
+                'discord_id': self.discord_id
+            })
             
             # Success response
             note_text = f"\n📝 Note: _{self.note}_" if self.note else ""
