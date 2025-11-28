@@ -350,6 +350,217 @@ async def get_clips(channel_name: str, limit: int = 10) -> Optional[list]:
         print(f"[Kick] Error getting clips: {type(e).__name__}: {str(e)}")
         return None
 
+# Playback URL cache to reduce API calls and Cloudflare detection risk
+_playback_cache = {}
+
+async def get_playback_url(channel_name: str, force_refresh: bool = False) -> Optional[str]:
+    """
+    Get HLS playback URL for a live channel with caching and validation.
+    
+    This function attempts multiple strategies to obtain a valid playback URL:
+    1. Return cached URL if still valid (60 second TTL)
+    2. Check top-level playback_url field from v2 API
+    3. Check nested livestream.playback_url / hls_url / source
+    4. Fallback to cloudscraper if aiohttp gets blocked
+    5. Fallback to KICK_PLAYBACK_URL environment variable
+    6. Validate URL is M3U8 format
+    
+    Args:
+        channel_name: The Kick channel name/slug
+        force_refresh: Force a new API fetch even if cached
+    
+    Returns:
+        Valid M3U8 playback URL string, or None if unavailable
+    """
+    import time
+    
+    cache_key = f"playback:{channel_name}"
+    cache_ttl = 60  # seconds
+    
+    # Check cache first (unless force refresh)
+    if not force_refresh and cache_key in _playback_cache:
+        cached_data = _playback_cache[cache_key]
+        age = time.time() - cached_data['timestamp']
+        if age < cache_ttl:
+            print(f"[Kick] 📦 Using cached playback URL (age: {age:.1f}s)")
+            return cached_data['url']
+    
+    print(f"[Kick] 🔍 Fetching playback URL for {channel_name}...")
+    
+    try:
+        # Try aiohttp first (faster)
+        channel_info = await get_channel_info(channel_name)
+        
+        if channel_info and isinstance(channel_info, dict):
+            playback_url = _extract_playback_url(channel_info)
+            if playback_url:
+                _cache_playback_url(cache_key, playback_url)
+                return playback_url
+        
+        # If aiohttp failed or returned no URL, try cloudscraper (Cloudflare bypass)
+        print(f"[Kick] 🔄 Trying cloudscraper for Cloudflare bypass...")
+        playback_url = await _fetch_with_cloudscraper(channel_name)
+        if playback_url:
+            _cache_playback_url(cache_key, playback_url)
+            return playback_url
+        
+        # Strategy 3: Environment variable override
+        env_url = _check_env_override()
+        if env_url:
+            _cache_playback_url(cache_key, env_url)
+            return env_url
+        
+        print(f"[Kick] ❌ No valid playback URL found in any source")
+        print(f"[Kick] 💡 TIP: Set KICK_PLAYBACK_URL env var as fallback")
+        return None
+        
+    except Exception as e:
+        print(f"[Kick] ❌ Error fetching playback URL: {type(e).__name__}: {str(e)}")
+        return _check_env_override()
+
+async def _fetch_with_cloudscraper(channel_name: str) -> Optional[str]:
+    """
+    Fetch channel info using cloudscraper to bypass Cloudflare protection.
+    Runs in thread pool to avoid blocking the async event loop.
+    
+    Args:
+        channel_name: The Kick channel name/slug
+    
+    Returns:
+        Valid playback URL or None
+    """
+    def _sync_fetch():
+        try:
+            import cloudscraper
+            scraper = cloudscraper.create_scraper(
+                browser={
+                    'browser': 'chrome',
+                    'platform': 'windows',
+                    'mobile': False
+                }
+            )
+            
+            response = scraper.get(
+                f'https://kick.com/api/v2/channels/{channel_name}',
+                timeout=15
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                return _extract_playback_url(data)
+            else:
+                print(f"[Kick] Cloudscraper returned: HTTP {response.status_code}")
+                return None
+                
+        except Exception as e:
+            print(f"[Kick] Cloudscraper error: {type(e).__name__}: {str(e)}")
+            return None
+    
+    # Run in thread pool to avoid blocking
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _sync_fetch)
+
+def _extract_playback_url(channel_info: dict) -> Optional[str]:
+    """
+    Extract and validate playback URL from channel info dict.
+    
+    Args:
+        channel_info: Channel data from API
+    
+    Returns:
+        Valid playback URL or None
+    """
+    # Strategy 1: Check top-level playback_url field (most reliable)
+    playback_url = channel_info.get('playback_url')
+    if playback_url and _validate_playback_url(playback_url):
+        print(f"[Kick] ✅ Found top-level playback_url")
+        return playback_url
+    
+    # Strategy 2: Check nested livestream object
+    livestream = channel_info.get('livestream')
+    if isinstance(livestream, dict):
+        # Try multiple possible field names
+        for field in ['playback_url', 'hls_url', 'source', 'video_url']:
+            url = livestream.get(field)
+            if url and _validate_playback_url(url):
+                print(f"[Kick] ✅ Found playback URL in livestream.{field}")
+                return url
+    
+    return None
+
+def _validate_playback_url(url: str) -> bool:
+    """
+    Validate that a URL is a valid M3U8 playlist.
+    
+    Args:
+        url: URL string to validate
+    
+    Returns:
+        True if URL appears valid, False otherwise
+    """
+    if not url or not isinstance(url, str):
+        return False
+    
+    url_lower = url.lower()
+    
+    # Must be HTTP/HTTPS
+    if not (url_lower.startswith('http://') or url_lower.startswith('https://')):
+        return False
+    
+    # Must contain .m3u8 or be an index/master playlist
+    if '.m3u8' not in url_lower:
+        return False
+    
+    # Reject HTML responses (Cloudflare blocks)
+    if any(pattern in url_lower for pattern in ['<html', '<!doctype', '<head>']):
+        print(f"[Kick] ⚠️ Rejected HTML-like URL (likely Cloudflare block)")
+        return False
+    
+    return True
+
+def _check_env_override() -> Optional[str]:
+    """
+    Check for KICK_PLAYBACK_URL environment variable override.
+    
+    Returns:
+        Environment URL if set and valid, None otherwise
+    """
+    env_url = os.getenv('KICK_PLAYBACK_URL')
+    if env_url and _validate_playback_url(env_url):
+        print(f"[Kick] 📺 Using KICK_PLAYBACK_URL from environment")
+        return env_url
+    return None
+
+def _cache_playback_url(cache_key: str, url: str) -> None:
+    """
+    Store playback URL in cache with timestamp.
+    
+    Args:
+        cache_key: Cache key for this channel
+        url: Playback URL to cache
+    """
+    import time
+    _playback_cache[cache_key] = {
+        'url': url,
+        'timestamp': time.time()
+    }
+
+def clear_playback_cache(channel_name: Optional[str] = None) -> None:
+    """
+    Clear playback URL cache for a specific channel or all channels.
+    
+    Args:
+        channel_name: Channel to clear, or None to clear all
+    """
+    global _playback_cache
+    if channel_name:
+        cache_key = f"playback:{channel_name}"
+        _playback_cache.pop(cache_key, None)
+        print(f"[Kick] 🗑️ Cleared playback cache for {channel_name}")
+    else:
+        _playback_cache.clear()
+        print(f"[Kick] 🗑️ Cleared all playback cache")
+
 class KickHybridAPI:
     """
     Hybrid Kick API client that uses official API when authenticated,

@@ -2147,16 +2147,36 @@ async def clip_buffer_management_task():
             if not should_start_buffer:
                 print(f"[Clip Buffer] 🟢 Stream went LIVE! Starting clip buffer...")
             try:
+                # Use the robust playback URL fetcher with caching and validation
+                playback_url: Optional[str] = None
+                try:
+                    from core.kick_api import get_playback_url
+                    # Force refresh if this is a new live transition (not a retry)
+                    force_refresh = not should_start_buffer
+                    playback_url = await get_playback_url(kick_channel, force_refresh=force_refresh)
+                    
+                    if playback_url:
+                        print(f"[Clip Buffer] 📺 Obtained playback URL: {playback_url[:80]}...")
+                    else:
+                        print(f"[Clip Buffer] ⚠️ No playback URL available")
+                        print(f"[Clip Buffer] 💡 Set KICK_PLAYBACK_URL env var for manual override")
+                except Exception as e:
+                    print(f"[Clip Buffer] ⚠️ Error fetching playback URL: {e}")
+                    playback_url = None
+
                 print(f"[Clip Buffer] Sending start request to {dashboard_url}/api/clips/buffer/start")
                 async with aiohttp.ClientSession() as session:
                     headers = {
                         'X-API-Key': bot_api_key,
                         'Content-Type': 'application/json'
                     }
+                    payload = {'channel': kick_channel}
+                    if playback_url:
+                        payload['playback_url'] = playback_url
                     async with session.post(
                         f'{dashboard_url}/api/clips/buffer/start',
                         headers=headers,
-                        json={'channel': kick_channel},
+                        json=payload,
                         timeout=aiohttp.ClientTimeout(total=30)
                     ) as response:
                         response_text = await response.text()

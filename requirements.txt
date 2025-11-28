@@ -12,3 +12,4 @@ cryptography==44.0.0
 gunicorn==23.0.0
 redis==5.0.1
 Pillow==11.0.0
+cloudscraper==1.2.71
