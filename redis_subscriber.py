@@ -379,7 +379,7 @@ class RedisSubscriber:
             # Import the post function from bot module
             try:
                 from bot import post_point_shop_to_discord
-                success = await post_point_shop_to_discord(self.bot, channel_id=channel_id, update_existing=False)
+                success = await post_point_shop_to_discord(self.bot, channel_id=channel_id, update_existing=True)
                 if success:
                     print("✅ Point shop posted to Discord")
                 else:
