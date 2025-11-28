@@ -246,6 +246,9 @@ def delete_clip(filename):
 KICK_CLIENT_ID = os.getenv("KICK_CLIENT_ID")
 KICK_CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET")
 OAUTH_BASE_URL = os.getenv("OAUTH_BASE_URL", "")  # e.g., https://your-app.up.railway.app
+# Ensure OAUTH_BASE_URL has https:// scheme
+if OAUTH_BASE_URL and not OAUTH_BASE_URL.startswith(('http://', 'https://')):
+    OAUTH_BASE_URL = f"https://{OAUTH_BASE_URL}"
 
 if not KICK_CLIENT_ID or not KICK_CLIENT_SECRET:
     print("⚠️ WARNING: KICK_CLIENT_ID and KICK_CLIENT_SECRET not set!")

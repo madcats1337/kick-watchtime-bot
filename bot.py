@@ -152,6 +152,9 @@ SLOT_CALLS_CHANNEL_ID = int(os.getenv("SLOT_CALLS_CHANNEL_ID")) if os.getenv("SL
 
 # OAuth configuration
 OAUTH_BASE_URL = os.getenv("OAUTH_BASE_URL", "")  # e.g., https://your-app.up.railway.app
+# Ensure OAUTH_BASE_URL has https:// scheme
+if OAUTH_BASE_URL and not OAUTH_BASE_URL.startswith(('http://', 'https://')):
+    OAUTH_BASE_URL = f"https://{OAUTH_BASE_URL}"
 KICK_CLIENT_ID = os.getenv("KICK_CLIENT_ID", "")
 KICK_CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET", "")  # Used for both OAuth and Kick bot
 OAUTH_SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "")
