@@ -5394,7 +5394,7 @@ async def create_shop_mosaic_image(items, max_width=2400):
     downloaded_images = []
     async with aiohttp.ClientSession() as session:
         for item_idx, item in items_with_images:
-            item_id, name, description, price, stock, image_url, is_active = item
+            item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer = item
             
             try:
                 async with session.get(image_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
@@ -5457,7 +5457,7 @@ async def create_shop_mosaic_image(items, max_width=2400):
         row_height = row_heights[row_idx]
         
         for col_idx, (item_idx, item, img) in enumerate(row):
-            item_id, name, description, price, stock, image_url, is_active = item
+            item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer = item
             
             x = PADDING + col_idx * (cell_width + PADDING)
             
