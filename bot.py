@@ -5515,10 +5515,16 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                 SELECT value FROM point_settings WHERE key = 'shop_interactive_id'
             """)).fetchone()
             existing_interactive_id = int(existing_interactive_result[0]) if existing_interactive_result else None
+            
+            # Get existing footer message ID
+            existing_footer_result = conn.execute(text("""
+                SELECT value FROM point_settings WHERE key = 'shop_footer_id'
+            """)).fetchone()
+            existing_footer_id = int(existing_footer_result[0]) if existing_footer_result else None
         
         # Delete existing messages if updating
         if update_existing:
-            for msg_id in [existing_message_id, existing_interactive_id]:
+            for msg_id in [existing_message_id, existing_interactive_id, existing_footer_id]:
                 if msg_id:
                     try:
                         existing_message = await channel.fetch_message(msg_id)
@@ -5576,9 +5582,9 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                 interactive_msg = await channel.send("**Purchase an item:**", view=interactive_view)
                 
                 # Send footer message at the bottom
-                await channel.send("💡 *Earn points by watching streams!*")
+                footer_msg = await channel.send("💡 *Earn points by watching streams!*")
                 
-                # Store both message IDs
+                # Store all three message IDs
                 with engine.begin() as conn:
                     conn.execute(text("""
                         INSERT INTO point_settings (key, value, updated_at)
@@ -5590,6 +5596,11 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                         VALUES ('shop_interactive_id', :m, CURRENT_TIMESTAMP)
                         ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
                     """), {"m": str(interactive_msg.id)})
+                    conn.execute(text("""
+                        INSERT INTO point_settings (key, value, updated_at)
+                        VALUES ('shop_footer_id', :m, CURRENT_TIMESTAMP)
+                        ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
+                    """), {"m": str(footer_msg.id)})
                 
                 print(f"[Point Shop] Posted Components V2 mosaic shop to channel {channel_id}")
                 return True
