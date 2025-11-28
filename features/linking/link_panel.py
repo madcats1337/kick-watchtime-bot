@@ -20,27 +20,24 @@ class LinkPanelView(View):
         self.engine = engine
         self.oauth_url_generator = oauth_url_generator
 
-        # Add link button
-        self.add_item(Button(
-            style=discord.ButtonStyle.success,
-            label="Link Account",
-            emoji="🔗",
-            custom_id="link_account"
-        ))
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """This runs before any button callback"""
-        return True  # Allow everyone to use the link button
-
-    async def callback(self, interaction: discord.Interaction, button: Button):
-        """Handle button clicks"""
+    @discord.ui.button(
+        style=discord.ButtonStyle.success,
+        label="Link Account",
+        emoji="🔗",
+        custom_id="link_account"
+    )
+    async def link_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Handle link account button click"""
         try:
-            if button.custom_id == "link_account":
-                await self.handle_link_account(interaction)
+            await self.handle_link_account(interaction)
         except Exception as e:
             logger.error(f"Error handling link button interaction: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message("❌ An error occurred.", ephemeral=True)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """This runs before any button callback"""
+        return True  # Allow everyone to use the link button
 
     async def handle_link_account(self, interaction: discord.Interaction):
         """Handle link account button click"""
@@ -218,11 +215,6 @@ class LinkPanel:
             # Create the view
             view = LinkPanelView(self.bot, self.engine, self.oauth_url_generator)
 
-            # Setup button callback
-            for item in view.children:
-                if isinstance(item, Button):
-                    item.callback = lambda interaction, b=item: view.callback(interaction, b)
-
             # Send the message
             message = await channel.send(embed=embed, view=view)
 
@@ -261,11 +253,6 @@ async def setup_link_panel_system(bot, engine, oauth_url_generator):
             if channel:
                 message = await channel.fetch_message(panel.panel_message_id)
                 view = LinkPanelView(bot, engine, oauth_url_generator)
-
-                # Setup button callback
-                for item in view.children:
-                    if isinstance(item, Button):
-                        item.callback = lambda interaction, b=item: view.callback(interaction, b)
 
                 # Re-attach the view
                 await message.edit(view=view)
