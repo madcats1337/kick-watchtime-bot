@@ -27,6 +27,8 @@ class RedisSubscriber:
         self.enabled = False
 
         if self.redis_url:
+            if '://' not in self.redis_url:
+                self.redis_url = f'redis://{self.redis_url}'
             try:
                 self.client = redis.from_url(self.redis_url, decode_responses=True)
                 self.pubsub = self.client.pubsub()
