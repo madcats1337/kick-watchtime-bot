@@ -2146,24 +2146,25 @@ async def clip_buffer_management_task():
         if (is_live and not last_stream_live_state) or should_start_buffer:
             if not should_start_buffer:
                 print(f"[Clip Buffer] 🟢 Stream went LIVE! Starting clip buffer...")
+            
+            # Use the robust playback URL fetcher with caching and validation
+            playback_url: Optional[str] = None
             try:
-                # Use the robust playback URL fetcher with caching and validation
-                playback_url: Optional[str] = None
-                try:
-                    from core.kick_api import get_playback_url
-                    # Force refresh if this is a new live transition (not a retry)
-                    force_refresh = not should_start_buffer
-                    playback_url = await get_playback_url(kick_channel, force_refresh=force_refresh)
-                    
-                    if playback_url:
-                        print(f"[Clip Buffer] 📺 Obtained playback URL: {playback_url[:80]}...")
-                    else:
-                        print(f"[Clip Buffer] ⚠️ No playback URL available")
-                        print(f"[Clip Buffer] 💡 Set KICK_PLAYBACK_URL env var for manual override")
-                except Exception as e:
-                    print(f"[Clip Buffer] ⚠️ Error fetching playback URL: {e}")
-                    playback_url = None
+                from core.kick_api import get_playback_url
+                # Force refresh if this is a new live transition (not a retry)
+                force_refresh = not should_start_buffer
+                playback_url = await get_playback_url(kick_channel, force_refresh=force_refresh)
+                
+                if playback_url:
+                    print(f"[Clip Buffer] 📺 Obtained playback URL: {playback_url[:80]}...")
+                else:
+                    print(f"[Clip Buffer] ⚠️ No playback URL available")
+                    print(f"[Clip Buffer] 💡 Set KICK_PLAYBACK_URL env var for manual override")
+            except Exception as e:
+                print(f"[Clip Buffer] ⚠️ Error fetching playback URL: {e}")
+                # Don't set to None here - keep whatever value we had
 
+            try:
                 print(f"[Clip Buffer] Sending start request to {dashboard_url}/api/clips/buffer/start")
                 async with aiohttp.ClientSession() as session:
                     headers = {
@@ -2173,6 +2174,10 @@ async def clip_buffer_management_task():
                     payload = {'channel': kick_channel}
                     if playback_url:
                         payload['playback_url'] = playback_url
+                        print(f"[Clip Buffer] 📤 Including playback_url in request")
+                    else:
+                        print(f"[Clip Buffer] ⚠️ No playback_url to include - dashboard will attempt fetch")
+                    
                     async with session.post(
                         f'{dashboard_url}/api/clips/buffer/start',
                         headers=headers,
