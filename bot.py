@@ -4905,6 +4905,124 @@ async def fixlinks_resolve(ctx, kick_name: str, keep_server_id: int):
 # Point Shop Interactive Components
 # -------------------------
 
+class PointShopConfirmView(discord.ui.View):
+    """View with button to confirm purchase"""
+    
+    def __init__(self, item_id: int, item_name: str, price: int, kick_username: str, discord_id: int, requirement_value: str = None, note: str = None):
+        super().__init__(timeout=300)  # 5 minute timeout
+        self.item_id = item_id
+        self.item_name = item_name
+        self.price = price
+        self.kick_username = kick_username
+        self.discord_id = discord_id
+        self.requirement_value = requirement_value
+        self.note = note
+    
+    @discord.ui.button(label="Complete Purchase", style=discord.ButtonStyle.success, emoji="✅")
+    async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Process the purchase when button is clicked"""
+        try:
+            with engine.begin() as conn:
+                # Get item details (fresh from DB)
+                item = conn.execute(text("""
+                    SELECT id, name, price, stock, is_active
+                    FROM point_shop_items
+                    WHERE id = :id
+                """), {"id": self.item_id}).fetchone()
+                
+                if not item:
+                    await interaction.response.edit_message(content="❌ This item no longer exists.", view=None)
+                    return
+                
+                item_id, item_name, price, stock, is_active = item
+                
+                if not is_active:
+                    await interaction.response.edit_message(content="❌ This item is no longer available.", view=None)
+                    return
+                
+                if stock == 0:
+                    await interaction.response.edit_message(content="❌ This item is sold out!", view=None)
+                    return
+                
+                # Check user's points balance
+                user_points = conn.execute(text("""
+                    SELECT points FROM user_points 
+                    WHERE kick_username = :k
+                """), {"k": self.kick_username}).fetchone()
+                
+                if not user_points or user_points[0] < price:
+                    current_balance = user_points[0] if user_points else 0
+                    await interaction.response.edit_message(
+                        content=f"❌ Insufficient points! You have **{current_balance:,}** points but need **{price:,}** points.",
+                        view=None
+                    )
+                    return
+                
+                # Deduct points
+                conn.execute(text("""
+                    UPDATE user_points 
+                    SET points = points - :p, 
+                        total_spent = total_spent + :p,
+                        last_updated = CURRENT_TIMESTAMP
+                    WHERE kick_username = :k
+                """), {"p": price, "k": self.kick_username})
+                
+                # Reduce stock if not unlimited
+                if stock > 0:
+                    conn.execute(text("""
+                        UPDATE point_shop_items 
+                        SET stock = stock - 1, 
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = :id
+                    """), {"id": item_id})
+                
+                # Record the sale with note and requirement input
+                conn.execute(text("""
+                    INSERT INTO point_sales (item_id, kick_username, discord_id, item_name, price_paid, quantity, status, notes, requirement_input)
+                    VALUES (:item_id, :kick, :discord, :name, :price, 1, 'pending', :notes, :req_input)
+                """), {
+                    "item_id": item_id,
+                    "kick": self.kick_username,
+                    "discord": self.discord_id,
+                    "name": item_name,
+                    "price": price,
+                    "notes": self.note,
+                    "req_input": self.requirement_value
+                })
+                
+                # Get updated balance
+                new_balance = conn.execute(text("""
+                    SELECT points FROM user_points WHERE kick_username = :k
+                """), {"k": self.kick_username}).fetchone()[0]
+            
+            # Success response
+            note_text = f"\n📝 Note: _{self.note}_" if self.note else ""
+            req_text = f"\n📋 {self.requirement_value}" if self.requirement_value else ""
+            await interaction.response.edit_message(
+                content=f"✅ **Purchase Successful!**\n"
+                f"🛒 You bought **{item_name}** for **{price:,}** points!\n"
+                f"💰 Your new balance: **{new_balance:,}** points{req_text}{note_text}\n\n"
+                f"_An admin will fulfill your purchase soon._",
+                view=None
+            )
+            
+            print(f"[Point Shop] {self.kick_username} (Discord ID: {self.discord_id}) purchased {item_name} for {price} points")
+            
+        except Exception as e:
+            print(f"[Point Shop] Purchase error: {e}")
+            import traceback
+            traceback.print_exc()
+            await interaction.response.edit_message(
+                content=f"❌ An error occurred during purchase. Please try again later.",
+                view=None
+            )
+    
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Cancel the purchase"""
+        await interaction.response.edit_message(content="❌ Purchase cancelled.", view=None)
+
+
 class PointShopPurchaseModal(discord.ui.Modal):
     """Modal for confirming a point shop purchase"""
     
@@ -4935,16 +5053,6 @@ class PointShopPurchaseModal(discord.ui.Modal):
             )
             self.add_item(self.requirement_input)
         
-        # Add read-only info field (user types CONFIRM to proceed)
-        self.confirm_input = discord.ui.TextInput(
-            label=f"Type CONFIRM to buy for {price:,} points",
-            placeholder="Type CONFIRM here to complete purchase",
-            required=True,
-            max_length=10,
-            style=discord.TextStyle.short
-        )
-        self.add_item(self.confirm_input)
-        
         # Optional note/message field
         self.note_input = discord.ui.TextInput(
             label="Note for admin (optional)",
@@ -4956,139 +5064,71 @@ class PointShopPurchaseModal(discord.ui.Modal):
         self.add_item(self.note_input)
     
     async def on_submit(self, interaction: discord.Interaction):
-        """Process the purchase when modal is submitted"""
+        """Show confirmation view after modal is submitted"""
         
-        # Check confirmation
-        if self.confirm_input.value.upper() != "CONFIRM":
+        discord_id = interaction.user.id
+        note = self.note_input.value.strip() if self.note_input.value else None
+        requirement_value = self.requirement_input.value.strip() if self.requirement_input else None
+        
+        # Get user's balance
+        with engine.connect() as conn:
+            # Get linked account
+            link = conn.execute(text("""
+                SELECT kick_name FROM links 
+                WHERE discord_id = :d AND discord_server_id = :s
+            """), {"d": discord_id, "s": interaction.guild.id}).fetchone()
+            
+            if not link:
+                await interaction.response.send_message(
+                    "❌ You need to link your Kick account first!",
+                    ephemeral=True
+                )
+                return
+            
+            kick_username = link[0]
+            
+            # Get balance
+            points_data = conn.execute(text("""
+                SELECT points FROM user_points WHERE kick_username = :k
+            """), {"k": kick_username}).fetchone()
+            
+            current_balance = points_data[0] if points_data else 0
+        
+        # Check if they can afford it
+        if current_balance < self.price:
             await interaction.response.send_message(
-                "❌ Purchase cancelled. You must type `CONFIRM` to complete the purchase.",
+                f"❌ **Insufficient Points!**\n\n"
+                f"**{self.item_name}** costs **{self.price:,}** points\n"
+                f"Your balance: **{current_balance:,}** points\n"
+                f"You need **{self.price - current_balance:,}** more points!",
                 ephemeral=True
             )
             return
         
-        discord_id = interaction.user.id
-        discord_name = str(interaction.user)
-        note = self.note_input.value.strip() if self.note_input.value else None
-        requirement_value = self.requirement_input.value.strip() if self.requirement_input else None
+        # Build confirmation message
+        confirm_text = f"**Confirm Purchase**\n\n"
+        confirm_text += f"🛒 Item: **{self.item_name}**\n"
+        confirm_text += f"💰 Price: **{self.price:,}** points\n"
+        confirm_text += f"📊 Your balance: **{current_balance:,}** points\n"
+        confirm_text += f"📊 Balance after: **{current_balance - self.price:,}** points\n"
+        if requirement_value:
+            req_label = self.requirement_title or "Requirement"
+            confirm_text += f"\n📝 {req_label}: {requirement_value}\n"
+        if note:
+            confirm_text += f"\n💬 Note: _{note}_\n"
         
-        try:
-            with engine.begin() as conn:
-                # Get item details (fresh from DB)
-                item = conn.execute(text("""
-                    SELECT id, name, price, stock, is_active
-                    FROM point_shop_items
-                    WHERE id = :id
-                """), {"id": self.item_id}).fetchone()
-                
-                if not item:
-                    await interaction.response.send_message(
-                        "❌ This item no longer exists.", 
-                        ephemeral=True
-                    )
-                    return
-                
-                item_id, item_name, price, stock, is_active = item
-                
-                if not is_active:
-                    await interaction.response.send_message(
-                        "❌ This item is no longer available.", 
-                        ephemeral=True
-                    )
-                    return
-                
-                if stock == 0:
-                    await interaction.response.send_message(
-                        "❌ This item is sold out!", 
-                        ephemeral=True
-                    )
-                    return
-                
-                # Get user's linked Kick account
-                link = conn.execute(text("""
-                    SELECT kick_name FROM links 
-                    WHERE discord_id = :d AND discord_server_id = :s
-                """), {"d": discord_id, "s": interaction.guild.id}).fetchone()
-                
-                if not link:
-                    await interaction.response.send_message(
-                        "❌ You need to link your Kick account first! Use the link panel or `!link` command.", 
-                        ephemeral=True
-                    )
-                    return
-                
-                kick_username = link[0]
-                
-                # Check user's points balance
-                user_points = conn.execute(text("""
-                    SELECT points FROM user_points 
-                    WHERE kick_username = :k
-                """), {"k": kick_username}).fetchone()
-                
-                if not user_points or user_points[0] < price:
-                    current_balance = user_points[0] if user_points else 0
-                    await interaction.response.send_message(
-                        f"❌ Insufficient points! You have **{current_balance:,}** points but need **{price:,}** points.", 
-                        ephemeral=True
-                    )
-                    return
-                
-                # Deduct points
-                conn.execute(text("""
-                    UPDATE user_points 
-                    SET points = points - :p, 
-                        total_spent = total_spent + :p,
-                        last_updated = CURRENT_TIMESTAMP
-                    WHERE kick_username = :k
-                """), {"p": price, "k": kick_username})
-                
-                # Reduce stock if not unlimited
-                if stock > 0:
-                    conn.execute(text("""
-                        UPDATE point_shop_items 
-                        SET stock = stock - 1, 
-                            updated_at = CURRENT_TIMESTAMP
-                        WHERE id = :id
-                    """), {"id": item_id})
-                
-                # Record the sale with note and requirement input
-                conn.execute(text("""
-                    INSERT INTO point_sales (item_id, kick_username, discord_id, item_name, price_paid, quantity, status, notes, requirement_input)
-                    VALUES (:item_id, :kick, :discord, :name, :price, 1, 'pending', :notes, :req_input)
-                """), {
-                    "item_id": item_id,
-                    "kick": kick_username,
-                    "discord": discord_id,
-                    "name": item_name,
-                    "price": price,
-                    "notes": note,
-                    "req_input": requirement_value
-                })
-                
-                # Get updated balance
-                new_balance = conn.execute(text("""
-                    SELECT points FROM user_points WHERE kick_username = :k
-                """), {"k": kick_username}).fetchone()[0]
-            
-            # Success response
-            note_text = f"\n📝 Note: _{note}_" if note else ""
-            await interaction.response.send_message(
-                f"✅ **Purchase Successful!**\n"
-                f"🛒 You bought **{item_name}** for **{price:,}** points!\n"
-                f"💰 Your new balance: **{new_balance:,}** points{note_text}\n\n"
-                f"_An admin will fulfill your purchase soon._",
-                ephemeral=True
-            )
-            
-            print(f"[Point Shop] {kick_username} ({discord_name}) purchased {item_name} for {price} points")
-            
-        except Exception as e:
-            print(f"[Point Shop] Purchase error: {e}")
-            import traceback
-            traceback.print_exc()
-            await interaction.response.send_message(
-                f"❌ An error occurred during purchase. Please try again later.",
-                ephemeral=True
-            )
+        # Create confirmation view with button
+        view = PointShopConfirmView(
+            item_id=self.item_id,
+            item_name=self.item_name,
+            price=self.price,
+            kick_username=kick_username,
+            discord_id=discord_id,
+            requirement_value=requirement_value,
+            note=note
+        )
+        
+        await interaction.response.send_message(confirm_text, view=view, ephemeral=True)
 
 
 class PointShopItemSelect(discord.ui.Select):
