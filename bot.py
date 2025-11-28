@@ -5293,10 +5293,10 @@ async def create_shop_mosaic_image(items, max_width=2400):
     COLS = min(len(items_with_images), 3)  # Max 3 columns
     PADDING = 30
     TITLE_HEIGHT = 70  # Title above image
-    FOOTER_HEIGHT = 120  # Price + stock below image
+    FOOTER_HEIGHT = 140  # Price + stock below image (increased for larger fonts)
     TITLE_FONT_SIZE = 42  # Much bigger title
-    PRICE_FONT_SIZE = 38  # Adjusted price font size
-    STOCK_FONT_SIZE = 28  # Adjusted stock font size
+    PRICE_FONT_SIZE = 46  # Increased price font size
+    STOCK_FONT_SIZE = 34  # Increased stock font size
     BG_COLOR = (30, 30, 35)
     TITLE_BG_COLOR = (45, 45, 55)
     FOOTER_BG_COLOR = (50, 50, 60)
@@ -5448,7 +5448,7 @@ async def create_shop_mosaic_image(items, max_width=2400):
             
             # Line 1: Price (big, gold)
             price_text = f"{price:,} pts"
-            draw.text((x + 10, footer_y + 12), price_text, fill=PRICE_COLOR, font=price_font)
+            draw.text((x + 10, footer_y + 15), price_text, fill=PRICE_COLOR, font=price_font)
             
             # Line 2: Stock text
             if stock < 0:
@@ -5461,7 +5461,7 @@ async def create_shop_mosaic_image(items, max_width=2400):
                 stock_text = f"In-stock: {stock}"
                 stock_color = STOCK_COLOR
             
-            draw.text((x + 10, footer_y + 60), stock_text, fill=stock_color, font=stock_font)
+            draw.text((x + 10, footer_y + 75), stock_text, fill=stock_color, font=stock_font)
         
         current_y += TITLE_HEIGHT + row_height + FOOTER_HEIGHT + PADDING
     
