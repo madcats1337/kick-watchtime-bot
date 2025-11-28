@@ -4908,16 +4908,32 @@ async def fixlinks_resolve(ctx, kick_name: str, keep_server_id: int):
 class PointShopPurchaseModal(discord.ui.Modal):
     """Modal for confirming a point shop purchase"""
     
-    def __init__(self, item_id: int, item_name: str, price: int, description: str, stock: int):
+    def __init__(self, item_id: int, item_name: str, price: int, description: str, stock: int, requirement_title: str = None, requirement_footer: str = None):
         super().__init__(title=f"Purchase: {item_name[:40]}")
         self.item_id = item_id
         self.item_name = item_name
         self.price = price
         self.description = description
         self.stock = stock
+        self.requirement_title = requirement_title
+        self.requirement_footer = requirement_footer
         
         # Stock display text
         stock_text = "Unlimited" if stock < 0 else f"{stock} remaining"
+        
+        # Add requirement input field if needed
+        self.requirement_input = None
+        if requirement_title:
+            label = requirement_title[:45]  # Discord label limit
+            placeholder = requirement_footer[:100] if requirement_footer else "Enter required information"
+            self.requirement_input = discord.ui.TextInput(
+                label=label,
+                placeholder=placeholder,
+                required=True,
+                max_length=200,
+                style=discord.TextStyle.short
+            )
+            self.add_item(self.requirement_input)
         
         # Add read-only info field (user types CONFIRM to proceed)
         self.confirm_input = discord.ui.TextInput(
@@ -4932,7 +4948,7 @@ class PointShopPurchaseModal(discord.ui.Modal):
         # Optional note/message field
         self.note_input = discord.ui.TextInput(
             label="Note for admin (optional)",
-            placeholder="e.g., preferred delivery method, in-game name, etc.",
+            placeholder="e.g., preferred delivery method, etc.",
             required=False,
             max_length=200,
             style=discord.TextStyle.paragraph
@@ -4953,6 +4969,7 @@ class PointShopPurchaseModal(discord.ui.Modal):
         discord_id = interaction.user.id
         discord_name = str(interaction.user)
         note = self.note_input.value.strip() if self.note_input.value else None
+        requirement_value = self.requirement_input.value.strip() if self.requirement_input else None
         
         try:
             with engine.begin() as conn:
@@ -5033,17 +5050,18 @@ class PointShopPurchaseModal(discord.ui.Modal):
                         WHERE id = :id
                     """), {"id": item_id})
                 
-                # Record the sale with note
+                # Record the sale with note and requirement input
                 conn.execute(text("""
-                    INSERT INTO point_sales (item_id, kick_username, discord_id, item_name, price_paid, quantity, status, notes)
-                    VALUES (:item_id, :kick, :discord, :name, :price, 1, 'pending', :notes)
+                    INSERT INTO point_sales (item_id, kick_username, discord_id, item_name, price_paid, quantity, status, notes, requirement_input)
+                    VALUES (:item_id, :kick, :discord, :name, :price, 1, 'pending', :notes, :req_input)
                 """), {
                     "item_id": item_id,
                     "kick": kick_username,
                     "discord": discord_id,
                     "name": item_name,
                     "price": price,
-                    "notes": note
+                    "notes": note,
+                    "req_input": requirement_value
                 })
                 
                 # Get updated balance
@@ -5081,7 +5099,7 @@ class PointShopItemSelect(discord.ui.Select):
         options = []
         
         for item in items[:25]:  # Discord limit
-            item_id, name, description, price, stock, image_url, is_active = item
+            item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer = item
             if is_active:
                 # Stock display
                 if stock < 0:
@@ -5096,7 +5114,9 @@ class PointShopItemSelect(discord.ui.Select):
                     "name": name,
                     "description": description or "No description",
                     "price": price,
-                    "stock": stock
+                    "stock": stock,
+                    "requirement_title": requirement_title,
+                    "requirement_footer": requirement_footer
                 }
                 
                 # Format: "Item Name: Xpts" with "──── In-stock: X ────" as description
@@ -5189,7 +5209,9 @@ class PointShopItemSelect(discord.ui.Select):
             item_name=item["name"],
             price=item["price"],
             description=item["description"],
-            stock=item["stock"]
+            stock=item["stock"],
+            requirement_title=item.get("requirement_title"),
+            requirement_footer=item.get("requirement_footer")
         )
         await interaction.response.send_modal(modal)
 
@@ -5498,7 +5520,7 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
         # Get active shop items
         with engine.connect() as conn:
             items = conn.execute(text("""
-                SELECT id, name, description, price, stock, image_url, is_active
+                SELECT id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer
                 FROM point_shop_items
                 WHERE is_active = TRUE
                 ORDER BY price ASC
@@ -5645,7 +5667,7 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
             embed.set_image(url="attachment://shop_items.png")
         
         for idx, item in enumerate(items):
-            item_id, name, description, price, stock, image_url, is_active = item
+            item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer = item
             stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "SOLD OUT"
             
             field_value = f"$: **{price:,}** pts | In stock: {stock_text}"
