@@ -2240,6 +2240,12 @@ async def before_clip_buffer_task():
     # Initial delay to allow settings to load
     await asyncio.sleep(10)
     print("[Clip Buffer] 🎬 Starting clip buffer management task...")
+    print(f"[Clip Buffer] Settings manager initialized: {hasattr(bot, 'settings_manager') and bot.settings_manager is not None}")
+    if hasattr(bot, 'settings_manager') and bot.settings_manager:
+        bot.settings_manager.refresh()
+        print(f"[Clip Buffer] dashboard_url: {bool(bot.settings_manager.dashboard_url)}")
+        print(f"[Clip Buffer] bot_api_key: {bool(bot.settings_manager.bot_api_key)}")
+        print(f"[Clip Buffer] kick_channel: {bot.settings_manager.kick_channel}")
 
 # -------------------------
 # Command cooldowns and checks
