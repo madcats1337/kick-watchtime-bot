@@ -2103,7 +2103,7 @@ async def clip_buffer_management_task():
         # Check if stream is currently live
         try:
             is_live = await check_stream_live(kick_channel)
-            print(f"[Clip Buffer] Stream live check for '{kick_channel}': {is_live}")
+            print(f"[Clip Buffer] Stream live check for '{kick_channel}': {is_live} | Last state: {last_stream_live_state} | Buffer active: {clip_buffer_active}")
         except Exception as e:
             # Cloudflare block or other error - skip this iteration
             if "403" not in str(e) and "Cloudflare" not in str(e):
