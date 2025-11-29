@@ -108,7 +108,7 @@ class AutoLeaderboard:
                     SELECT id, start_date, end_date
                     FROM raffle_periods
                     WHERE status = 'active' AND discord_server_id = :server_id
-                """), {'server_id': self.guild_id}))
+                """), {'server_id': self.guild_id})
 
                 period_row = period_result.fetchone()
 
