@@ -395,7 +395,7 @@ class ShuffleWagerTracker:
 
 async def setup_shuffle_tracker(bot, engine):
     """
-    Setup the Shuffle wager tracker as a Discord bot task
+    Setup the Shuffle wager tracker as a Discord bot task (multi-server)
 
     Args:
         bot: Discord bot instance
@@ -408,35 +408,38 @@ async def setup_shuffle_tracker(bot, engine):
     if hasattr(bot, 'settings_manager') and bot.settings_manager:
         bot_settings = bot.settings_manager
 
-    tracker = ShuffleWagerTracker(engine, bot_settings=bot_settings)
-
     @tasks.loop(minutes=15)  # Run every 15 minutes
     async def update_shuffle_task():
-        """Periodic task to update Shuffle wagers and award tickets"""
-        # Refresh settings before each update to get latest from database
-        tracker.refresh_settings()
+        """Periodic task to update Shuffle wagers and award tickets for all guilds"""
+        # Process each guild separately
+        for guild in bot.guilds:
+            guild_id = guild.id
+            tracker = ShuffleWagerTracker(engine, guild_id, bot_settings=bot_settings)
+            
+            # Refresh settings before each update to get latest from database
+            tracker.refresh_settings()
 
-        if not tracker.affiliate_url:
-            print("[Shuffle Tracker] ⚠️ No affiliate URL configured - skipping update")
-            return
+            if not tracker.affiliate_url:
+                print(f"[Server {guild_id}] [Shuffle Tracker] ⚠️ No affiliate URL configured - skipping update")
+                continue
 
-        print("[Shuffle Tracker] 🔄 Checking wagers...")
-        result = await tracker.update_shuffle_wagers()
+            print(f"[Server {guild_id}] [Shuffle Tracker] 🔄 Checking wagers...")
+            result = await tracker.update_shuffle_wagers()
 
-        if result['status'] == 'success' and result['updates'] > 0:
-            print(f"[Shuffle Tracker] ✅ Updated {result['updates']} wager(s)")
-        elif result['status'] == 'no_active_period':
-            print("[Shuffle Tracker] ⏸️ No active raffle period")
-        elif result['status'] == 'error':
-            print(f"[Shuffle Tracker] ❌ Update failed: {result.get('error')}")
+            if result['status'] == 'success' and result['updates'] > 0:
+                print(f"[Server {guild_id}] [Shuffle Tracker] ✅ Updated {result['updates']} wager(s)")
+            elif result['status'] == 'no_active_period':
+                print(f"[Server {guild_id}] [Shuffle Tracker] ⏸️ No active raffle period")
+            elif result['status'] == 'error':
+                print(f"[Server {guild_id}] [Shuffle Tracker] ❌ Update failed: {result.get('error')}")
 
     @update_shuffle_task.before_loop
     async def before_shuffle_task():
         """Wait for bot to be ready before starting the task"""
         await bot.wait_until_ready()
-        print("[Shuffle Tracker] ✅ Started (runs every 15 minutes)")
+        print("[Shuffle Tracker] ✅ Started for all guilds (runs every 15 minutes)")
 
     # Start the task
     update_shuffle_task.start()
 
-    return tracker
+    return None  # No single tracker instance in multi-server mode

@@ -217,7 +217,7 @@ class WatchtimeConverter:
 
 async def setup_watchtime_converter(bot, engine):
     """
-    Setup the watchtime converter as a Discord bot task
+    Setup the watchtime converter as a Discord bot task (multi-server)
 
     Args:
         bot: Discord bot instance
@@ -225,41 +225,43 @@ async def setup_watchtime_converter(bot, engine):
     """
     from discord.ext import tasks
 
-    converter = WatchtimeConverter(engine)
-
     @tasks.loop(minutes=10)  # Run every 10 minutes
     async def convert_watchtime_task():
-        """Periodic task to convert watchtime to tickets"""
+        """Periodic task to convert watchtime to tickets for all guilds"""
         print("🔄 [WATCHTIME] Running watchtime → tickets conversion...")
         logger.info("🔄 Running watchtime → tickets conversion...")
-        result = await converter.convert_watchtime_to_tickets()
+        
+        # Process each guild separately
+        for guild in bot.guilds:
+            guild_id = guild.id
+            converter = WatchtimeConverter(engine, guild_id)
+            
+            result = await converter.convert_watchtime_to_tickets()
 
-        print(f"🔄 [WATCHTIME] Result: {result}")
+            print(f"🔄 [WATCHTIME] [Server {guild_id}] Result: {result}")
 
-        if result['status'] == 'success' and result['conversions'] > 0:
-            print(f"✅ [WATCHTIME] Converted watchtime for {result['conversions']} users")
-            logger.info(f"✅ Converted watchtime for {result['conversions']} users")
-        elif result['status'] == 'no_users':
-            print(f"ℹ️ [WATCHTIME] No users with 60+ minutes of unconverted watchtime")
-        elif result['status'] == 'no_active_period':
-            print(f"⚠️ [WATCHTIME] No active raffle period found!")
+            if result['status'] == 'success' and result['conversions'] > 0:
+                print(f"[Server {guild_id}] ✅ [WATCHTIME] Converted watchtime for {result['conversions']} users")
+                logger.info(f"[Server {guild_id}] ✅ Converted watchtime for {result['conversions']} users")
+            elif result['status'] == 'no_users':
+                print(f"[Server {guild_id}] ℹ️ [WATCHTIME] No users with 60+ minutes of unconverted watchtime")
+            elif result['status'] == 'no_active_period':
+                print(f"[Server {guild_id}] ⚠️ [WATCHTIME] No active raffle period found!")
 
-            # Optional: Send notification to raffle announcement channel
-            # You can uncomment this if you want Discord notifications
-            # channel_id = os.getenv("RAFFLE_ANNOUNCEMENT_CHANNEL_ID")
-            # if channel_id:
-            #     channel = bot.get_channel(int(channel_id))
-            #     if channel:
-            #         summary = "\n".join([
-            #             f"• {d['kick_name']}: {d['hours_converted']}h → {d['tickets_awarded']} tickets"
-            #             for d in result['details'][:5]  # Show first 5
-            #         ])
-            #         await channel.send(f"🎟️ **Watchtime Converted**\n{summary}")
+                # Optional: Send notification to raffle announcement channel
+                # You can uncomment this if you want Discord notifications
+                # channel_id = os.getenv("RAFFLE_ANNOUNCEMENT_CHANNEL_ID")
+                # if channel_id:
+                #     channel = bot.get_channel(int(channel_id))
+                #     if channel:
+                #         summary = "\n".join([
+                #             f"• {d['kick_name']}: {d['hours_converted']}h → {d['tickets_awarded']} tickets"
+                #             for d in result['details'][:5]  # Show first 5
+                #         ])
+                #         await channel.send(f"🎟️ **Watchtime Converted**\n{summary}")
 
-        elif result['status'] == 'no_active_period':
-            logger.debug("No active raffle period")
-        elif result['status'] == 'error':
-            logger.error(f"Watchtime conversion failed: {result.get('error')}")
+            elif result['status'] == 'error':
+                logger.error(f"[Server {guild_id}] Watchtime conversion failed: {result.get('error')}")
 
     @convert_watchtime_task.before_loop
     async def before_convert_watchtime():
@@ -270,4 +272,5 @@ async def setup_watchtime_converter(bot, engine):
     # Start the task
     convert_watchtime_task.start()
 
-    return converter
+    logger.info("✅ Watchtime converter task started for all guilds (runs every 10 minutes)")
+    return None  # No single converter instance in multi-server mode

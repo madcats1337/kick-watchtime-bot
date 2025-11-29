@@ -3192,7 +3192,7 @@ async def convert_watchtime_manual(ctx):
 
     try:
         from raffle_system.watchtime_converter import WatchtimeConverter
-        converter = WatchtimeConverter(engine)
+        converter = WatchtimeConverter(engine, ctx.guild.id)
         result = await converter.convert_watchtime_to_tickets()
 
         embed = discord.Embed(
@@ -3326,7 +3326,7 @@ async def check_watchtime_conversion(ctx, kick_username: str = None):
 
     try:
         from raffle_system.watchtime_converter import WatchtimeConverter
-        converter = WatchtimeConverter(engine)
+        converter = WatchtimeConverter(engine, ctx.guild.id)
         info = converter.get_unconverted_watchtime(kick_username)
 
         if not info:
@@ -4079,7 +4079,7 @@ async def on_ready():
             await setup_watchtime_converter(bot, engine)
 
             # Setup gifted sub tracker
-            gifted_sub_tracker = setup_gifted_sub_handler(engine)
+            gifted_sub_tracker = setup_gifted_sub_handler(engine, DISCORD_GUILD_ID)
 
             # Setup Shuffle wager tracker (runs every 15 minutes)
             shuffle_tracker = await setup_shuffle_tracker(bot, engine)

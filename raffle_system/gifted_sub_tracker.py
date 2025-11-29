@@ -249,16 +249,17 @@ class GiftedSubTracker:
             logger.error(f"Failed to get active period: {e}")
             return None
 
-def setup_gifted_sub_handler(engine):
+def setup_gifted_sub_handler(engine, discord_server_id: int):
     """
-    Create a gifted sub tracker instance
+    Create a gifted sub tracker instance for a specific server
 
     Args:
         engine: SQLAlchemy engine
+        discord_server_id: Discord guild/server ID
 
     Returns:
         GiftedSubTracker: Initialized tracker
     """
-    tracker = GiftedSubTracker(engine)
-    logger.info("✅ Gifted sub tracker initialized")
+    tracker = GiftedSubTracker(engine, discord_server_id)
+    logger.info(f"[Server {discord_server_id}] ✅ Gifted sub tracker initialized")
     return tracker
