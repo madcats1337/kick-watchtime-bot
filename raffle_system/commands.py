@@ -329,6 +329,7 @@ Get ready to participate when the period starts!
         Example: !verifyshuffle @John CryptoKing420
         """
         try:
+            managers = self._get_managers(ctx.guild.id)
             discord_id = user.id
             admin_id = ctx.author.id
 
@@ -434,7 +435,7 @@ Get ready to participate when the period starts!
 
                         if tickets_awarded > 0:
                             # Award the tickets
-                            success = self.ticket_manager.award_tickets(
+                            success = managers['ticket_manager'].award_tickets(
                                 discord_id=discord_id,
                                 kick_name=kick_name,
                                 tickets=tickets_awarded,
@@ -523,6 +524,8 @@ Get ready to participate when the period starts!
         Example: !rafflegive @John 100 Event participation bonus
         """
         try:
+            managers = self._get_managers(ctx.guild.id)
+            
             if tickets <= 0:
                 await ctx.send(f"❌ Ticket amount must be positive!")
                 return
@@ -543,7 +546,7 @@ Get ready to participate when the period starts!
                 kick_name = row[0]
 
             # Award tickets
-            success = self.ticket_manager.award_tickets(
+            success = managers['ticket_manager'].award_tickets(
                 discord_id=discord_id,
                 kick_name=kick_name,
                 tickets=tickets,
@@ -573,6 +576,8 @@ Get ready to participate when the period starts!
         Example: !raffleremove @John 50 Rule violation
         """
         try:
+            managers = self._get_managers(ctx.guild.id)
+            
             if tickets <= 0:
                 await ctx.send(f"❌ Ticket amount must be positive!")
                 return
@@ -593,7 +598,7 @@ Get ready to participate when the period starts!
                 kick_name = row[0]
 
             # Remove tickets
-            success = self.ticket_manager.remove_tickets(
+            success = managers['ticket_manager'].remove_tickets(
                 discord_id=discord_id,
                 kick_name=kick_name,
                 tickets=tickets,
@@ -622,10 +627,11 @@ Get ready to participate when the period starts!
         Example: !raffledraw $500 Cash Prize
         """
         try:
+            managers = self._get_managers(ctx.guild.id)
             admin_id = ctx.author.id
 
             # Get current period stats
-            stats = self.ticket_manager.get_period_stats()
+            stats = managers['ticket_manager'].get_period_stats()
 
             if not stats or stats['total_tickets'] == 0:
                 await ctx.send(f"❌ Cannot draw winner: No tickets in current raffle period!")
@@ -650,7 +656,7 @@ Get ready to participate when the period starts!
                          f"Prize: {prize_description}")
 
             # Draw winner
-            result = self.raffle_draw.draw_winner(
+            result = managers['raffle_draw'].draw_winner(
                 period_id=stats['period_id'],
                 prize_description=prize_description,
                 drawn_by_discord_id=admin_id
@@ -665,7 +671,7 @@ Get ready to participate when the period starts!
                     mention = f"Discord ID: {result['winner_discord_id']}"
 
                 # Get full ticket breakdown
-                winner_tickets = self.ticket_manager.get_user_tickets(result['winner_discord_id'])
+                winner_tickets = managers['ticket_manager'].get_user_tickets(result['winner_discord_id'])
 
                 await ctx.send(f"""
 🎉 **RAFFLE WINNER DRAWN!** 🎉
@@ -703,18 +709,20 @@ Congratulations! 🎊
         Usage: !rafflestats [@user]
         """
         try:
+            managers = self._get_managers(ctx.guild.id)
+            
             if user:
                 # Show user-specific stats
                 discord_id = user.id
-                tickets = self.ticket_manager.get_user_tickets(discord_id)
+                tickets = managers['ticket_manager'].get_user_tickets(discord_id)
 
                 if not tickets:
                     await ctx.send(f"❌ {user.mention} has no raffle tickets!")
                     return
 
                 # Get rank
-                rank = self.ticket_manager.get_user_rank(discord_id)
-                stats = self.ticket_manager.get_period_stats()
+                rank = managers['ticket_manager'].get_user_rank(discord_id)
+                stats = managers['ticket_manager'].get_period_stats()
 
                 # Get detailed breakdown from tables
                 with self.engine.begin() as conn:
@@ -747,7 +755,7 @@ Congratulations! 🎊
                     total_wager = shuffle_row[0] if shuffle_row else 0
 
                 # Get win probability
-                win_prob = self.raffle_draw.get_user_win_probability(discord_id, stats['period_id'])
+                win_prob = managers['raffle_draw'].get_user_win_probability(discord_id, stats['period_id'])
                 win_prob_text = f"{win_prob['probability_percent']:.2f}%" if win_prob else "N/A"
 
                 response = f"""
@@ -774,7 +782,7 @@ Congratulations! 🎊
 
             else:
                 # Show overall stats
-                stats = self.ticket_manager.get_period_stats()
+                stats = managers['ticket_manager'].get_period_stats()
 
                 response = f"""
 📊 **Overall Raffle Statistics**
