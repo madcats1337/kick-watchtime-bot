@@ -4078,19 +4078,28 @@ async def on_ready():
             # Setup watchtime converter (runs every hour)
             await setup_watchtime_converter(bot, engine)
 
-            # Setup gifted sub tracker
-            gifted_sub_tracker = setup_gifted_sub_handler(engine, DISCORD_GUILD_ID)
+            # Setup gifted sub tracker (per-server, will be created on-demand)
+            # Note: In multi-server mode, gifted_sub_tracker will be None at startup
+            # and created per-guild when handling gifted sub events
+            gifted_sub_tracker = setup_gifted_sub_handler(engine, DISCORD_GUILD_ID) if DISCORD_GUILD_ID else None
+            if not DISCORD_GUILD_ID:
+                print("ℹ️ Multi-server mode: Gifted sub trackers will be created per-server as needed")
 
             # Setup Shuffle wager tracker (runs every 15 minutes)
             shuffle_tracker = await setup_shuffle_tracker(bot, engine)
 
             # Setup auto-updating leaderboard (runs every 5 minutes)
-            # Get channel ID from database settings
-            bot_settings.refresh()  # Ensure fresh settings
-            leaderboard_channel_id = bot_settings.raffle_leaderboard_channel_id
-            print(f"📊 Raffle leaderboard channel ID: {leaderboard_channel_id or 'Not configured'}")
-            auto_leaderboard = await setup_auto_leaderboard(bot, engine, leaderboard_channel_id)
-            bot.auto_leaderboard = auto_leaderboard  # Store for manual updates
+            # In multi-server mode (DISCORD_GUILD_ID=None), skip global leaderboard setup
+            # Each server should configure its own leaderboard via dashboard
+            if DISCORD_GUILD_ID:
+                # Get channel ID from database settings
+                bot_settings.refresh()  # Ensure fresh settings
+                leaderboard_channel_id = bot_settings.raffle_leaderboard_channel_id
+                print(f"📊 Raffle leaderboard channel ID: {leaderboard_channel_id or 'Not configured'}")
+                auto_leaderboard = await setup_auto_leaderboard(bot, engine, leaderboard_channel_id, DISCORD_GUILD_ID)
+                bot.auto_leaderboard = auto_leaderboard  # Store for manual updates
+            else:
+                print("ℹ️ Multi-server mode: Auto-leaderboard setup skipped (configure per-server via dashboard)")
 
             # Setup raffle commands
             await setup_raffle_commands(bot, engine)
@@ -4138,10 +4147,13 @@ async def on_ready():
 
             # Setup Guess the Balance manager
             global gtb_manager
-            gtb_manager = GuessTheBalanceManager(engine, DISCORD_GUILD_ID)
-            bot.gtb_manager = gtb_manager  # Store as bot attribute for Redis subscriber
-            bot.gtb_channel_id = SLOT_CALLS_CHANNEL_ID  # Use same channel for GTB notifications
-            print("✅ Guess the Balance system initialized")
+            gtb_manager = GuessTheBalanceManager(engine, DISCORD_GUILD_ID) if DISCORD_GUILD_ID else None
+            if gtb_manager:
+                bot.gtb_manager = gtb_manager  # Store as bot attribute for Redis subscriber
+                bot.gtb_channel_id = SLOT_CALLS_CHANNEL_ID  # Use same channel for GTB notifications
+                print("✅ Guess the Balance system initialized")
+            else:
+                print("ℹ️ Multi-server mode: Guess the Balance not initialized (requires DISCORD_GUILD_ID)")
 
             # Setup slot request panel
             slot_panel = await setup_slot_panel(
