@@ -14,11 +14,12 @@ from .tickets import TicketManager
 logger = logging.getLogger(__name__)
 
 class GiftedSubTracker:
-    """Tracks gifted subs and awards raffle tickets"""
+    """Tracks gifted subs and awards raffle tickets for a specific server"""
 
-    def __init__(self, engine):
+    def __init__(self, engine, discord_server_id: int):
         self.engine = engine
-        self.ticket_manager = TicketManager(engine)
+        self.discord_server_id = discord_server_id
+        self.ticket_manager = TicketManager(engine, discord_server_id)
 
     async def handle_gifted_sub_event(self, event_data):
         """
@@ -119,18 +120,19 @@ class GiftedSubTracker:
 
                 if not discord_id:
                     logger.warning(f"User {gifter_kick_name} not linked - cannot award tickets")
-                    # Still log the event but don't award tickets
+                    # Still log the event but don't award tickets for this server
                     conn.execute(text("""
                         INSERT INTO raffle_gifted_subs
                             (period_id, gifter_kick_name, gifter_discord_id, sub_count,
-                             tickets_awarded, kick_event_id)
+                             tickets_awarded, kick_event_id, discord_server_id)
                         VALUES
-                            (:period_id, :kick_name, NULL, :sub_count, 0, :event_id)
+                            (:period_id, :kick_name, NULL, :sub_count, 0, :event_id, :server_id)
                     """), {
                         'period_id': period_id,
                         'kick_name': gifter_kick_name,
                         'sub_count': gift_count,
-                        'event_id': event_id
+                        'event_id': event_id,
+                        'server_id': self.discord_server_id
                     })
                     return {'status': 'not_linked', 'kick_name': gifter_kick_name}
 
@@ -152,21 +154,22 @@ class GiftedSubTracker:
                     logger.error(f"Failed to award tickets to {gifter_kick_name}")
                     return {'status': 'award_failed'}
 
-                # Log the gifted sub event
+                # Log the gifted sub event for this server
                 conn.execute(text("""
                     INSERT INTO raffle_gifted_subs
                         (period_id, gifter_kick_name, gifter_discord_id, sub_count,
-                         tickets_awarded, kick_event_id)
+                         tickets_awarded, kick_event_id, discord_server_id)
                     VALUES
                         (:period_id, :kick_name, :discord_id, :sub_count,
-                         :tickets, :event_id)
+                         :tickets, :event_id, :server_id)
                 """), {
                     'period_id': period_id,
                     'kick_name': gifter_kick_name,
                     'discord_id': discord_id,
                     'sub_count': gift_count,
                     'tickets': tickets_to_award,
-                    'event_id': event_id
+                    'event_id': event_id,
+                    'server_id': self.discord_server_id
                 })
 
             logger.info(f"🎁 {gifter_kick_name} gifted {gift_count} sub(s) → {tickets_to_award} tickets")
@@ -207,11 +210,13 @@ class GiftedSubTracker:
                         tickets_awarded,
                         gifted_at
                     FROM raffle_gifted_subs
-                    WHERE period_id = :period_id AND gifter_discord_id = :discord_id
+                    WHERE period_id = :period_id AND gifter_discord_id = :discord_id 
+                        AND discord_server_id = :server_id
                     ORDER BY gifted_at DESC
                 """), {
                     'period_id': period_id,
-                    'discord_id': discord_id
+                    'discord_id': discord_id,
+                    'server_id': self.discord_server_id
                 })
 
                 events = []
@@ -229,15 +234,15 @@ class GiftedSubTracker:
             return []
 
     def _get_active_period_id(self):
-        """Get the ID of the currently active raffle period"""
+        """Get the ID of the currently active raffle period for this server"""
         try:
             with self.engine.begin() as conn:
                 result = conn.execute(text("""
                     SELECT id FROM raffle_periods
-                    WHERE status = 'active'
+                    WHERE status = 'active' AND discord_server_id = :server_id
                     ORDER BY start_date DESC
                     LIMIT 1
-                """))
+                """), {'server_id': self.discord_server_id})
                 row = result.fetchone()
                 return row[0] if row else None
         except Exception as e:

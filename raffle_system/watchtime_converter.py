@@ -13,11 +13,12 @@ from .tickets import TicketManager
 logger = logging.getLogger(__name__)
 
 class WatchtimeConverter:
-    """Converts watchtime tracking into raffle tickets"""
+    """Converts watchtime tracking into raffle tickets for a specific server"""
 
-    def __init__(self, engine):
+    def __init__(self, engine, discord_server_id: int):
         self.engine = engine
-        self.ticket_manager = TicketManager(engine)
+        self.discord_server_id = discord_server_id
+        self.ticket_manager = TicketManager(engine, discord_server_id)
 
     async def convert_watchtime_to_tickets(self):
         """
@@ -43,7 +44,7 @@ class WatchtimeConverter:
             conversions = []
 
             with self.engine.begin() as conn:
-                # Get all users with watchtime and their Discord IDs from links table
+                # Get all users with watchtime for this server and their Discord IDs from links table
                 # Use LOWER() for case-insensitive comparison
                 result = conn.execute(text("""
                     SELECT
@@ -52,8 +53,8 @@ class WatchtimeConverter:
                         l.discord_id
                     FROM watchtime w
                     JOIN links l ON LOWER(l.kick_name) = LOWER(w.username)
-                    WHERE w.minutes > 0
-                """))
+                    WHERE w.minutes > 0 AND w.discord_server_id = :server_id
+                """), {"server_id": self.discord_server_id})
 
                 users = list(result)
 
@@ -64,14 +65,15 @@ class WatchtimeConverter:
                     return {'status': 'no_users', 'conversions': 0}
 
                 for kick_name, total_minutes, discord_id in users:
-                    # Check how much watchtime has already been converted this period
+                    # Check how much watchtime has already been converted this period for this server
                     converted_result = conn.execute(text("""
                         SELECT COALESCE(SUM(minutes_converted), 0)
                         FROM raffle_watchtime_converted
-                        WHERE period_id = :period_id AND kick_name = :kick_name
+                        WHERE period_id = :period_id AND kick_name = :kick_name AND discord_server_id = :server_id
                     """), {
                         'period_id': period_id,
-                        'kick_name': kick_name
+                        'kick_name': kick_name,
+                        'server_id': self.discord_server_id
                     })
 
                     minutes_already_converted = converted_result.scalar() or 0
@@ -104,17 +106,18 @@ class WatchtimeConverter:
                     )
 
                     if success:
-                        # Log the conversion to prevent double-counting
+                        # Log the conversion to prevent double-counting for this server
                         conn.execute(text("""
                             INSERT INTO raffle_watchtime_converted
-                                (period_id, kick_name, minutes_converted, tickets_awarded)
+                                (period_id, kick_name, minutes_converted, tickets_awarded, discord_server_id)
                             VALUES
-                                (:period_id, :kick_name, :minutes, :tickets)
+                                (:period_id, :kick_name, :minutes, :tickets, :server_id)
                         """), {
                             'period_id': period_id,
                             'kick_name': kick_name,
                             'minutes': minutes_to_convert,
-                            'tickets': tickets_to_award
+                            'tickets': tickets_to_award,
+                            'server_id': self.discord_server_id
                         })
 
                         conversions.append({

@@ -27,9 +27,10 @@ class ShuffleWagerTracker:
     Settings are loaded from database (bot_settings) with env var fallbacks.
     """
 
-    def __init__(self, engine, bot_settings=None):
+    def __init__(self, engine, discord_server_id: int, bot_settings=None):
         self.engine = engine
-        self.ticket_manager = TicketManager(engine)
+        self.discord_server_id = discord_server_id
+        self.ticket_manager = TicketManager(engine, discord_server_id)
         self.bot_settings = bot_settings
 
         # Load settings from bot_settings (database) or fall back to env vars
@@ -224,32 +225,34 @@ class ShuffleWagerTracker:
                                 'current_wager': current_wager
                             })
                     else:
-                        # New user - check if they're linked
+                        # New user - check if they're linked for this server
                         link_result = conn.execute(text("""
                             SELECT discord_id, kick_name FROM raffle_shuffle_links
-                            WHERE shuffle_username = :username AND verified = TRUE
-                        """), {'username': shuffle_username})
+                            WHERE shuffle_username = :username AND verified = TRUE 
+                                AND discord_server_id = :server_id
+                        """), {'username': shuffle_username, 'server_id': self.discord_server_id})
 
                         link_row = link_result.fetchone()
                         discord_id = link_row[0] if link_row else None
                         kick_name = link_row[1] if link_row else None
 
-                        # Create wager tracking entry
+                        # Create wager tracking entry for this server
                         # Set last_known_wager = total_wager so only FUTURE wagers earn tickets
                         conn.execute(text("""
                             INSERT INTO raffle_shuffle_wagers
                                 (period_id, shuffle_username, kick_name, discord_id,
-                                 total_wager_usd, last_known_wager, tickets_awarded, platform)
+                                 total_wager_usd, last_known_wager, tickets_awarded, platform, discord_server_id)
                             VALUES
                                 (:period_id, :username, :kick_name, :discord_id,
-                                 :wager, :wager, 0, :platform)
+                                 :wager, :wager, 0, :platform, :server_id)
                         """), {
                             'period_id': period_id,
                             'username': shuffle_username,
                             'kick_name': kick_name,
                             'discord_id': discord_id,
                             'wager': current_wager,
-                            'platform': self.platform_name
+                            'platform': self.platform_name,
+                            'server_id': self.discord_server_id
                         })
 
                         # No tickets awarded for initial/existing wagers
@@ -314,11 +317,11 @@ class ShuffleWagerTracker:
         """
         try:
             with self.engine.begin() as conn:
-                # Check if shuffle username already linked
+                # Check if shuffle username already linked for this server
                 existing = conn.execute(text("""
                     SELECT discord_id, kick_name FROM raffle_shuffle_links
-                    WHERE shuffle_username = :username
-                """), {'username': shuffle_username})
+                    WHERE shuffle_username = :username AND discord_server_id = :server_id
+                """), {'username': shuffle_username, 'server_id': self.discord_server_id})
 
                 existing_row = existing.fetchone()
 
@@ -329,11 +332,11 @@ class ShuffleWagerTracker:
                         'existing_kick_name': existing_row[1]
                     }
 
-                # Check if discord_id already has a shuffle link
+                # Check if discord_id already has a shuffle link in this server
                 discord_check = conn.execute(text("""
                     SELECT shuffle_username FROM raffle_shuffle_links
-                    WHERE discord_id = :discord_id
-                """), {'discord_id': discord_id})
+                    WHERE discord_id = :discord_id AND discord_server_id = :server_id
+                """), {'discord_id': discord_id, 'server_id': self.discord_server_id})
 
                 discord_row = discord_check.fetchone()
 
@@ -343,19 +346,21 @@ class ShuffleWagerTracker:
                         'existing_shuffle_username': discord_row[0]
                     }
 
-                # Create the link
+                # Create the link for this server
                 conn.execute(text("""
                     INSERT INTO raffle_shuffle_links
-                        (shuffle_username, kick_name, discord_id, verified, verified_by_discord_id, verified_at)
+                        (shuffle_username, kick_name, discord_id, verified, verified_by_discord_id, 
+                         verified_at, discord_server_id)
                     VALUES
                         (:shuffle_username, :kick_name, :discord_id, :verified, :verified_by,
-                         CASE WHEN :verified THEN CURRENT_TIMESTAMP ELSE NULL END)
+                         CASE WHEN :verified THEN CURRENT_TIMESTAMP ELSE NULL END, :server_id)
                 """), {
                     'shuffle_username': shuffle_username,
                     'kick_name': kick_name,
                     'discord_id': discord_id,
                     'verified': verified,
-                    'verified_by': verified_by
+                    'verified_by': verified_by,
+                    'server_id': self.discord_server_id
                 })
 
             logger.info(f"🔗 Linked Shuffle account: {shuffle_username} → {kick_name} (Discord: {discord_id}, verified: {verified})")
@@ -373,15 +378,15 @@ class ShuffleWagerTracker:
             return {'status': 'error', 'error': str(e)}
 
     def _get_active_period_id(self):
-        """Get the ID of the currently active raffle period"""
+        """Get the ID of the currently active raffle period for this server"""
         try:
             with self.engine.begin() as conn:
                 result = conn.execute(text("""
                     SELECT id FROM raffle_periods
-                    WHERE status = 'active'
+                    WHERE status = 'active' AND discord_server_id = :server_id
                     ORDER BY start_date DESC
                     LIMIT 1
-                """))
+                """), {'server_id': self.discord_server_id})
                 row = result.fetchone()
                 return row[0] if row else None
         except Exception as e:

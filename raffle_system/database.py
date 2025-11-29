@@ -278,12 +278,13 @@ def verify_raffle_schema(engine):
 
     return status
 
-def get_current_period(engine):
+def get_current_period(engine, discord_server_id: int):
     """
-    Get the currently active raffle period
+    Get the currently active raffle period for a specific server
 
     Args:
         engine: SQLAlchemy engine instance
+        discord_server_id: Discord server/guild ID
 
     Returns:
         dict: Current period info or None
@@ -293,10 +294,10 @@ def get_current_period(engine):
             result = conn.execute(text("""
                 SELECT id, start_date, end_date, status, total_tickets
                 FROM raffle_periods
-                WHERE status = 'active'
+                WHERE status = 'active' AND discord_server_id = :server_id
                 ORDER BY start_date DESC
                 LIMIT 1
-            """))
+            """), {"server_id": discord_server_id})
             row = result.fetchone()
 
             if row:
@@ -313,7 +314,7 @@ def get_current_period(engine):
         logger.error(f"Failed to get current period: {e}")
         return None
 
-def create_new_period(engine, start_date, end_date):
+def create_new_period(engine, start_date, end_date, discord_server_id: int):
     """
     Create a new raffle period and reset all tickets
 
@@ -321,66 +322,80 @@ def create_new_period(engine, start_date, end_date):
         engine: SQLAlchemy engine instance
         start_date: datetime - Period start
         end_date: datetime - Period end
+        discord_server_id: Discord server/guild ID
 
     Returns:
         int: New period ID or None
     """
     try:
         with engine.begin() as conn:
-            # Get the old active period if it exists
+            # Get the old active period if it exists (for this server)
             old_period = conn.execute(text("""
                 SELECT id FROM raffle_periods
-                WHERE status = 'active'
+                WHERE status = 'active' AND discord_server_id = :server_id
                 ORDER BY id DESC
                 LIMIT 1
-            """)).fetchone()
+            """), {"server_id": discord_server_id}).fetchone()
 
-            # Close any active periods
+            # Close any active periods (for this server)
             if old_period:
                 conn.execute(text("""
                     UPDATE raffle_periods
                     SET status = 'ended'
-                    WHERE id = :period_id
-                """), {'period_id': old_period[0]})
-                logger.info(f"Closed old raffle period #{old_period[0]}")
+                    WHERE id = :period_id AND discord_server_id = :server_id
+                """), {'period_id': old_period[0], 'server_id': discord_server_id})
+                logger.info(f"[Server {discord_server_id}] Closed old raffle period #{old_period[0]}")
 
-            # Create new period
+            # Create new period (with server_id)
             result = conn.execute(text("""
-                INSERT INTO raffle_periods (start_date, end_date, status)
-                VALUES (:start, :end, 'active')
+                INSERT INTO raffle_periods (start_date, end_date, status, discord_server_id)
+                VALUES (:start, :end, 'active', :server_id)
                 RETURNING id
             """), {
                 'start': start_date,
-                'end': end_date
+                'end': end_date,
+                'server_id': discord_server_id
             })
             period_id = result.scalar()
 
-            # Delete ALL tickets from all periods (fresh start)
-            deleted_tickets = conn.execute(text("DELETE FROM raffle_tickets")).rowcount
-            logger.info(f"Deleted {deleted_tickets} ticket records from all periods")
+            # Delete tickets from this server's periods only (not all servers)
+            deleted_tickets = conn.execute(text("""
+                DELETE FROM raffle_tickets 
+                WHERE discord_server_id = :server_id
+            """), {"server_id": discord_server_id}).rowcount
+            logger.info(f"[Server {discord_server_id}] Deleted {deleted_tickets} ticket records")
 
-            # Clear ALL conversion tracking (fresh start)
-            deleted_watchtime = conn.execute(text("DELETE FROM raffle_watchtime_converted")).rowcount
-            logger.info(f"Deleted {deleted_watchtime} watchtime conversion records")
+            # Clear conversion tracking for this server only
+            deleted_watchtime = conn.execute(text("""
+                DELETE FROM raffle_watchtime_converted 
+                WHERE discord_server_id = :server_id
+            """), {"server_id": discord_server_id}).rowcount
+            logger.info(f"[Server {discord_server_id}] Deleted {deleted_watchtime} watchtime conversion records")
 
-            # Snapshot current watchtime as "already converted" for new period
-            # This prevents awarding tickets for watchtime earned before this period
+            # Snapshot current watchtime for this server as "already converted"
             conn.execute(text("""
-                INSERT INTO raffle_watchtime_converted (period_id, kick_name, minutes_converted, tickets_awarded)
-                SELECT :period_id, username, minutes, 0
+                INSERT INTO raffle_watchtime_converted (period_id, kick_name, minutes_converted, tickets_awarded, discord_server_id)
+                SELECT :period_id, username, minutes, 0, :server_id
                 FROM watchtime
-                WHERE minutes > 0
-            """), {'period_id': period_id})
-            logger.info(f"Snapshotted existing watchtime for new period (prevents double-awarding)")
+                WHERE minutes > 0 AND discord_server_id = :server_id
+            """), {'period_id': period_id, 'server_id': discord_server_id})
+            logger.info(f"[Server {discord_server_id}] Snapshotted existing watchtime for new period")
 
-            deleted_subs = conn.execute(text("DELETE FROM raffle_gifted_subs")).rowcount
-            logger.info(f"Deleted {deleted_subs} gifted sub records")
+            # Clear gifted subs for this server only
+            deleted_subs = conn.execute(text("""
+                DELETE FROM raffle_gifted_subs 
+                WHERE discord_server_id = :server_id
+            """), {"server_id": discord_server_id}).rowcount
+            logger.info(f"[Server {discord_server_id}] Deleted {deleted_subs} gifted sub records")
 
-            # Clear ALL shuffle wager tracking (fresh start)
-            deleted_wagers = conn.execute(text("DELETE FROM raffle_shuffle_wagers")).rowcount
-            logger.info(f"Deleted {deleted_wagers} shuffle wager records")
+            # Clear shuffle wager tracking for this server only
+            deleted_wagers = conn.execute(text("""
+                DELETE FROM raffle_shuffle_wagers 
+                WHERE discord_server_id = :server_id
+            """), {"server_id": discord_server_id}).rowcount
+            logger.info(f"[Server {discord_server_id}] Deleted {deleted_wagers} shuffle wager records")
 
-        logger.info(f"✅ Created new raffle period #{period_id} and reset all tickets")
+        logger.info(f"✅ [Server {discord_server_id}] Created new raffle period #{period_id} and reset all tickets")
         return period_id
 
     except Exception as e:

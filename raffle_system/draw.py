@@ -11,10 +11,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 class RaffleDraw:
-    """Handles raffle drawing and winner selection"""
+    """Handles raffle drawing and winner selection for a specific server"""
 
-    def __init__(self, engine):
+    def __init__(self, engine, discord_server_id: int):
         self.engine = engine
+        self.discord_server_id = discord_server_id
 
     def draw_winner(self, period_id, drawn_by_discord_id=None, prize_description=None):
         """
@@ -102,11 +103,11 @@ class RaffleDraw:
                     logger.error("Failed to determine winner (should never happen)")
                     return None
 
-                # Get Shuffle username if linked
+                # Get Shuffle username if linked for this server
                 shuffle_result = conn.execute(text("""
                     SELECT shuffle_username FROM raffle_shuffle_links
-                    WHERE discord_id = :discord_id
-                """), {'discord_id': winner['discord_id']})
+                    WHERE discord_id = :discord_id AND discord_server_id = :server_id
+                """), {'discord_id': winner['discord_id'], 'server_id': server_id})
                 shuffle_row = shuffle_result.fetchone()
                 shuffle_username = shuffle_row[0] if shuffle_row else None
 

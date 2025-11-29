@@ -10,10 +10,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 class TicketManager:
-    """Manages raffle tickets for all users"""
+    """Manages raffle tickets for all users in a specific server"""
 
-    def __init__(self, engine):
+    def __init__(self, engine, discord_server_id: int):
         self.engine = engine
+        self.discord_server_id = discord_server_id
 
     def get_user_tickets(self, discord_id, period_id=None):
         """
@@ -110,12 +111,12 @@ class TicketManager:
                 return False
 
             with self.engine.begin() as conn:
-                # Insert or update user's ticket balance
+                # Insert or update user's ticket balance (with server_id)
                 conn.execute(text(f"""
                     INSERT INTO raffle_tickets
-                        (period_id, discord_id, kick_name, {source_column}, total_tickets, last_updated)
+                        (period_id, discord_id, kick_name, {source_column}, total_tickets, last_updated, discord_server_id)
                     VALUES
-                        (:period_id, :discord_id, :kick_name, :tickets, :tickets, CURRENT_TIMESTAMP)
+                        (:period_id, :discord_id, :kick_name, :tickets, :tickets, CURRENT_TIMESTAMP, :server_id)
                     ON CONFLICT (period_id, discord_id)
                     DO UPDATE SET
                         {source_column} = raffle_tickets.{source_column} + :tickets,
@@ -125,7 +126,8 @@ class TicketManager:
                     'period_id': period_id,
                     'discord_id': discord_id,
                     'kick_name': kick_name,
-                    'tickets': tickets
+                    'tickets': tickets,
+                    'server_id': self.discord_server_id
                 })
 
                 # Log the transaction
@@ -370,15 +372,15 @@ class TicketManager:
             return None
 
     def _get_active_period_id(self):
-        """Get the ID of the currently active raffle period"""
+        """Get the ID of the currently active raffle period for this server"""
         try:
             with self.engine.begin() as conn:
                 result = conn.execute(text("""
                     SELECT id FROM raffle_periods
-                    WHERE status = 'active'
+                    WHERE status = 'active' AND discord_server_id = :server_id
                     ORDER BY start_date DESC
                     LIMIT 1
-                """))
+                """), {"server_id": self.discord_server_id})
                 row = result.fetchone()
                 return row[0] if row else None
         except Exception as e:
