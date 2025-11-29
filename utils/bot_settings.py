@@ -17,10 +17,13 @@ class BotSettingsManager:
     Settings are loaded from the bot_settings table with fallback to
     environment variables for backwards compatibility.
 
+    Supports multi-server: Global settings (discord_server_id IS NULL) apply
+    to all servers, server-specific settings override globals.
+
     Usage:
-        settings = BotSettingsManager(engine)  # Pass SQLAlchemy engine
+        settings = BotSettingsManager(engine, discord_server_id=123456789)
         # OR
-        settings = BotSettingsManager(database_url)  # Pass connection string
+        settings = BotSettingsManager(database_url, discord_server_id=123456789)
 
         # Get a setting (with env var fallback)
         channel = settings.get('kick_channel', env_fallback='KICK_CHANNEL')
@@ -33,16 +36,30 @@ class BotSettingsManager:
         settings.refresh()
     """
 
-    def __init__(self, database_or_engine: Union[str, Engine]):
+    def __init__(
+        self, 
+        database_or_engine: Union[str, Engine],
+        discord_server_id: Optional[int] = None
+    ):
         """
         Initialize settings manager.
 
         Args:
             database_or_engine: Either a SQLAlchemy Engine or a database URL string
+            discord_server_id: Discord server/guild ID to load settings for (optional)
+                             If None, uses DISCORD_GUILD_ID env var as fallback
         """
         self._cache: Dict[str, str] = {}
         self._last_loaded: Optional[datetime] = None
         self._engine: Optional[Engine] = None
+        
+        # Store discord_server_id for this bot instance
+        if discord_server_id:
+            self._discord_server_id = discord_server_id
+        else:
+            # Fallback to env var for backward compatibility
+            guild_id = os.getenv('DISCORD_GUILD_ID')
+            self._discord_server_id = int(guild_id) if guild_id else None
 
         # Accept either an Engine or a connection string
         if isinstance(database_or_engine, Engine):
@@ -70,22 +87,31 @@ class BotSettingsManager:
 
         try:
             with self._engine.connect() as conn:
-                # Get all settings - both global (no server_id) and server-specific
+                # Get settings: Global (NULL server_id) + server-specific
                 # Server-specific settings override global ones
-                result = conn.execute(text("""
-                    SELECT key, value FROM bot_settings
-                    WHERE discord_server_id IS NULL
-                    UNION ALL
-                    SELECT key, value FROM bot_settings
-                    WHERE discord_server_id IS NOT NULL
-                """))
+                # Order by NULLS FIRST ensures globals load first, then server overrides
+                
+                if self._discord_server_id:
+                    # Multi-server mode: Load global + server-specific settings
+                    result = conn.execute(text("""
+                        SELECT key, value, discord_server_id FROM bot_settings
+                        WHERE discord_server_id IS NULL OR discord_server_id = :server_id
+                        ORDER BY discord_server_id NULLS FIRST
+                    """), {"server_id": self._discord_server_id})
+                else:
+                    # Fallback mode: Load all settings (backward compatibility)
+                    result = conn.execute(text("""
+                        SELECT key, value, discord_server_id FROM bot_settings
+                    """))
+                    
                 rows = result.fetchall()
 
                 # Later rows override earlier ones (server-specific overrides global)
                 self._cache = {row[0]: row[1] for row in rows}
                 self._last_loaded = datetime.now(timezone.utc)
 
-                print(f"[Settings] Loaded {len(self._cache)} settings from database")
+                server_info = f" for server {self._discord_server_id}" if self._discord_server_id else ""
+                print(f"[Settings] Loaded {len(self._cache)} settings from database{server_info}")
                 return True
         except Exception as e:
             print(f"[Settings] Error loading settings: {e}")

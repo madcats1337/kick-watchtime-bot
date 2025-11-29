@@ -113,12 +113,24 @@ if REDIS_URL:
 else:
     print("⚠️  REDIS_URL not set, events will not be published")
 
-def publish_redis_event(channel: str, action: str, data: dict = None):
-    """Publish an event to Redis for dashboard real-time updates"""
+def publish_redis_event(channel: str, action: str, data: dict = None, server_id: int = None):
+    """
+    Publish an event to Redis for dashboard real-time updates.
+    
+    Args:
+        channel: Redis channel name
+        action: Action type identifier
+        data: Event data dictionary
+        server_id: Discord server ID for multi-server isolation (uses DISCORD_GUILD_ID if not provided)
+    """
     if not redis_client:
         return False
     try:
+        # Use provided server_id or fallback to DISCORD_GUILD_ID
+        event_server_id = server_id if server_id is not None else DISCORD_GUILD_ID
+        
         payload = {
+            'server_id': event_server_id,  # Add server_id for multi-server filtering
             'action': action,
             'data': data or {},
             'timestamp': datetime.now(timezone.utc).isoformat()
@@ -606,7 +618,8 @@ except Exception as e:
 # Bot Settings Manager
 # -------------------------
 # Loads settings from database with environment variable fallbacks
-bot_settings = BotSettingsManager(engine)
+# Pass DISCORD_GUILD_ID for multi-server support (loads global + server-specific settings)
+bot_settings = BotSettingsManager(engine, discord_server_id=DISCORD_GUILD_ID)
 print("✅ Bot settings manager initialized")
 
 # Load KICK_CHANNEL from settings if not already set via env
