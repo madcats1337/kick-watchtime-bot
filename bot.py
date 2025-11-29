@@ -1319,19 +1319,8 @@ async def kick_chat_loop(channel_name: str):
                                         except Exception as e:
                                             print(f"[Clip] Using default duration, couldn't load from DB: {e}")
 
-                                        # Check for custom duration (!clip 60) or custom title
-                                        clip_args = content_stripped[5:].strip()  # Remove "!clip" and trim
-
-                                        # Check if first arg is a number (duration)
-                                        if clip_args:
-                                            parts = clip_args.split(maxsplit=1)
-                                            if parts[0].isdigit():
-                                                clip_duration = min(int(parts[0]), 240)  # Max 240 seconds (4 min)
-                                                clip_title = parts[1] if len(parts) > 1 else ""
-                                            else:
-                                                clip_title = clip_args
-                                        else:
-                                            clip_title = ""
+                                        # Everything after !clip is the title
+                                        clip_title = content_stripped[5:].strip()  # Remove "!clip" and trim
 
                                         if not clip_title:
                                             # Generate default title with username and timestamp
