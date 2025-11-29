@@ -57,9 +57,9 @@ class CustomCommandsManager:
         cursor = conn.cursor()
 
         cursor.execute("""
-            SELECT id, command, response, cooldown, enabled, use_count
+            SELECT id, command_name, response_text, 0 as cooldown, true as enabled, 0 as use_count
             FROM custom_commands
-            ORDER BY command
+            ORDER BY command_name
         """)
 
         commands = []

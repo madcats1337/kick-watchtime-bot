@@ -85,7 +85,7 @@ class TimedMessagesManager:
         try:
             with self.engine.begin() as conn:
                 result = conn.execute(text("""
-                    SELECT id, message, interval_minutes, enabled, last_sent
+                    SELECT id, message_text, interval_minutes, enabled, last_sent
                     FROM timed_messages
                     ORDER BY id
                 """))
