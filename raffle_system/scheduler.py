@@ -29,25 +29,28 @@ class RaffleScheduler:
         self.bot = bot
         self.auto_draw = auto_draw
         self.announcement_channel_id = announcement_channel_id
-        self.raffle_draw = RaffleDraw(engine)
+        # Note: RaffleDraw instances created per-guild as needed
 
         logger.info(f"📅 Raffle scheduler initialized (auto_draw: {auto_draw})")
 
-    def check_period_transition(self):
+    def check_period_transition(self, guild_id: int):
         """
-        Check if we need to transition to a new raffle period
+        Check if we need to transition to a new raffle period for a specific guild
         Also checks if it's time to draw winner (10 minutes before end)
+
+        Args:
+            guild_id: Discord guild/server ID
 
         Returns:
             dict: Transition info or None if no transition needed
         """
         try:
-            current_period = get_current_period(self.engine)
+            current_period = get_current_period(self.engine, guild_id)
 
             if not current_period:
-                logger.warning("No active raffle period found - creating monthly period!")
+                logger.warning(f"[Server {guild_id}] No active raffle period found - creating monthly period!")
                 # Auto-create monthly period starting on 1st of current month
-                return self._create_monthly_period()
+                return self._create_monthly_period(guild_id)
 
             now = datetime.now()
             end_date = current_period['end_date']
@@ -65,13 +68,13 @@ class RaffleScheduler:
             # Check if it's 10 minutes before period ends and winner not drawn yet
             time_until_end = (end_date - now).total_seconds()
             if 0 < time_until_end <= 600 and not current_period.get('winner_discord_id'):  # 600 seconds = 10 minutes
-                logger.info(f"⏰ 10 minutes until period end - drawing winner now!")
-                self._draw_winner_for_period(current_period)
+                logger.info(f"[Server {guild_id}] ⏰ 10 minutes until period end - drawing winner now!")
+                self._draw_winner_for_period(current_period, guild_id)
 
             # Check if current period has ended
             if now > end_date:
-                logger.info(f"🔔 Raffle period #{current_period['id']} has ended!")
-                return self._transition_to_new_period(current_period)
+                logger.info(f"[Server {guild_id}] 🔔 Raffle period #{current_period['id']} has ended!")
+                return self._transition_to_new_period(current_period, guild_id)
             else:
                 # Period still active
                 days_remaining = (end_date - now).days
@@ -82,8 +85,8 @@ class RaffleScheduler:
             logger.error(f"Failed to check period transition: {e}")
             return None
 
-    def _create_monthly_period(self):
-        """Create a new monthly raffle period starting on 1st of current month"""
+    def _create_monthly_period(self, guild_id: int):
+        """Create a new monthly raffle period starting on 1st of current month for a specific server"""
         try:
             now = datetime.now()
 
@@ -99,8 +102,8 @@ class RaffleScheduler:
 
             end = next_month - timedelta(seconds=1)
 
-            period_id = create_new_period(self.engine, start, end)
-            logger.info(f"✅ Auto-created monthly period #{period_id} ({start.strftime('%b %d')} - {end.strftime('%b %d, %Y')})")
+            period_id = create_new_period(self.engine, start, end, guild_id)
+            logger.info(f"[Server {guild_id}] ✅ Auto-created monthly period #{period_id} ({start.strftime('%b %d')} - {end.strftime('%b %d, %Y')})")
 
             return {
                 'old_period_id': None,
@@ -115,31 +118,33 @@ class RaffleScheduler:
             logger.error(f"Failed to create monthly period: {e}")
             return None
 
-    def _draw_winner_for_period(self, period):
-        """Draw winner for the given period"""
+    def _draw_winner_for_period(self, period, guild_id: int):
+        """Draw winner for the given period in a specific server"""
         try:
-            winner = self.raffle_draw.draw_winner(
+            raffle_draw = RaffleDraw(self.engine, guild_id)
+            winner = raffle_draw.draw_winner(
                 period_id=period['id'],
                 prize_description="Monthly Raffle Prize",
                 drawn_by_discord_id=None  # Automatic draw
             )
 
             if winner:
-                logger.info(f"🎉 Winner drawn for period #{period['id']}: {winner['winner_kick_name']}")
+                logger.info(f"[Server {guild_id}] 🎉 Winner drawn for period #{period['id']}: {winner['winner_kick_name']}")
                 return winner
             else:
-                logger.warning(f"No participants to draw from for period #{period['id']}")
+                logger.warning(f"[Server {guild_id}] No participants to draw from for period #{period['id']}")
                 return None
         except Exception as e:
             logger.error(f"Failed to draw winner: {e}")
             return None
 
-    def _transition_to_new_period(self, old_period):
+    def _transition_to_new_period(self, old_period, guild_id: int):
         """
-        Transition from old period to new period
+        Transition from old period to new period for a specific server
 
         Args:
             old_period: Current period that's ending
+            guild_id: Discord guild/server ID
 
         Returns:
             dict: Transition details
@@ -157,9 +162,10 @@ class RaffleScheduler:
 
             # Step 1: Draw winner if auto-draw enabled and not already drawn
             if self.auto_draw and not old_period.get('winner_discord_id'):
-                logger.info(f"🎲 Auto-drawing winner for period #{old_period['id']}...")
+                logger.info(f"[Server {guild_id}] 🎲 Auto-drawing winner for period #{old_period['id']}...")
 
-                winner = self.raffle_draw.draw_winner(
+                raffle_draw = RaffleDraw(self.engine, guild_id)
+                winner = raffle_draw.draw_winner(
                     period_id=old_period['id'],
                     prize_description="Monthly Raffle Prize",
                     drawn_by_discord_id=None  # Automatic draw
@@ -168,9 +174,9 @@ class RaffleScheduler:
                 if winner:
                     transition_info['winner_drawn'] = True
                     transition_info['winner_info'] = winner
-                    logger.info(f"🎉 Winner drawn: {winner['winner_kick_name']}")
+                    logger.info(f"[Server {guild_id}] 🎉 Winner drawn: {winner['winner_kick_name']}")
                 else:
-                    logger.warning("No participants to draw from")
+                    logger.warning(f"[Server {guild_id}] No participants to draw from")
 
             # Step 2: Close the old period
             with self.engine.begin() as conn:
@@ -202,11 +208,11 @@ class RaffleScheduler:
 
             end = next_month - timedelta(seconds=1)
 
-            new_period_id = create_new_period(self.engine, start, end)
+            new_period_id = create_new_period(self.engine, start, end, guild_id)
             transition_info['new_period_id'] = new_period_id
 
-            logger.info(f"✅ New monthly period #{new_period_id} created ({start.strftime('%b %d')} - {end.strftime('%b %d, %Y')})")
-            logger.info("� Next period will auto-start on 1st of next month")
+            logger.info(f"[Server {guild_id}] ✅ New monthly period #{new_period_id} created ({start.strftime('%b %d')} - {end.strftime('%b %d, %Y')})")
+            logger.info(f"[Server {guild_id}] 🔄 Next period will auto-start on 1st of next month")
 
             return transition_info
 
@@ -318,51 +324,55 @@ async def setup_raffle_scheduler(bot, engine, auto_draw=False, announcement_chan
 
     @tasks.loop(minutes=1)  # Check every minute
     async def check_raffle_period():
-        """Check every minute for: winner drawing (10 min before end) and period transitions (midnight on 1st)"""
+        """Check every minute for: winner drawing (10 min before end) and period transitions (midnight on 1st) - per guild"""
         try:
             now = datetime.now()
 
-            # Always check for winner drawing and period transitions
-            transition = scheduler.check_period_transition()
+            # Iterate over all guilds the bot is in
+            for guild in bot.guilds:
+                guild_id = guild.id
+                
+                # Always check for winner drawing and period transitions for this guild
+                transition = scheduler.check_period_transition(guild_id)
 
-            # If cleanup was performed, update leaderboard
-            if transition and transition.get('cleanup_performed'):
-                if hasattr(bot, 'auto_leaderboard') and bot.auto_leaderboard and bot.auto_leaderboard.message_id:
-                    logger.info("📊 Updating leaderboard after cleanup...")
-                    await bot.auto_leaderboard.update_leaderboard()
-                else:
-                    logger.info("📊 Leaderboard not initialized yet, skipping update after cleanup")
-                return
-
-            # If midnight on 1st of month, handle period transition
-            if now.hour == 0 and now.minute == 0 and now.day == 1:
-                logger.info("🕛 It's midnight on the 1st - monthly raffle transition time!")
-
-                if transition:
-                    logger.info(f"📊 Period transition completed (tickets automatically reset):")
-                    if transition['old_period_id']:
-                        logger.info(f"   Old period: #{transition['old_period_id']}")
-                    logger.info(f"   New period: #{transition['new_period_id']}")
-
-                    # Announce winner if drawn
-                    if transition['winner_drawn'] and transition['winner_info']:
-                        await scheduler.announce_winner(transition['winner_info'])
-
-                    # Announce new period (tickets already reset by create_new_period)
-                    if transition['new_period_id']:
-                        # Get new period details
-                        new_period = get_current_period(engine)
-                        if new_period:
-                            await scheduler.announce_new_period(
-                                new_period['id'],
-                                new_period['start_date'],
-                                new_period['end_date']
-                            )
-
-                    # Update the leaderboard immediately after period transition
-                    if hasattr(bot, 'auto_leaderboard') and bot.auto_leaderboard:
-                        logger.info("🔄 Updating leaderboard after period transition...")
+                # If cleanup was performed, update leaderboard
+                if transition and transition.get('cleanup_performed'):
+                    if hasattr(bot, 'auto_leaderboard') and bot.auto_leaderboard and bot.auto_leaderboard.message_id:
+                        logger.info(f"[Server {guild_id}] 📊 Updating leaderboard after cleanup...")
                         await bot.auto_leaderboard.update_leaderboard()
+                    else:
+                        logger.debug(f"[Server {guild_id}] 📊 Leaderboard not initialized yet, skipping update after cleanup")
+                    continue
+
+                # If midnight on 1st of month, handle period transition
+                if now.hour == 0 and now.minute == 0 and now.day == 1:
+                    logger.info(f"[Server {guild_id}] 🕛 It's midnight on the 1st - monthly raffle transition time!")
+
+                    if transition:
+                        logger.info(f"[Server {guild_id}] 📊 Period transition completed (tickets automatically reset):")
+                        if transition['old_period_id']:
+                            logger.info(f"[Server {guild_id}]    Old period: #{transition['old_period_id']}")
+                        logger.info(f"[Server {guild_id}]    New period: #{transition['new_period_id']}")
+
+                        # Announce winner if drawn
+                        if transition['winner_drawn'] and transition['winner_info']:
+                            await scheduler.announce_winner(transition['winner_info'])
+
+                        # Announce new period (tickets already reset by create_new_period)
+                        if transition['new_period_id']:
+                            # Get new period details for this guild
+                            new_period = get_current_period(engine, guild_id)
+                            if new_period:
+                                await scheduler.announce_new_period(
+                                    new_period['id'],
+                                    new_period['start_date'],
+                                    new_period['end_date']
+                                )
+
+                        # Update the leaderboard immediately after period transition
+                        if hasattr(bot, 'auto_leaderboard') and bot.auto_leaderboard:
+                            logger.info(f"[Server {guild_id}] 🔄 Updating leaderboard after period transition...")
+                            await bot.auto_leaderboard.update_leaderboard()
 
         except Exception as e:
             logger.error(f"Error in raffle period check task: {e}")

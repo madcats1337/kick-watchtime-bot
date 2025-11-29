@@ -15,12 +15,13 @@ from .config import AUTO_LEADERBOARD_UPDATE_INTERVAL
 logger = logging.getLogger(__name__)
 
 class AutoLeaderboard:
-    """Manages auto-updating raffle leaderboard"""
+    """Manages auto-updating raffle leaderboard for a specific server"""
 
-    def __init__(self, bot, engine, channel_id):
+    def __init__(self, bot, engine, channel_id, guild_id: int):
         self.bot = bot
         self.engine = engine
         self.channel_id = channel_id
+        self.guild_id = guild_id
         self.message_id = None
         self.channel = None
 
@@ -102,12 +103,12 @@ class AutoLeaderboard:
         """Create the leaderboard embed"""
         try:
             with self.engine.begin() as conn:
-                # Get active period
+                # Get active period for this server
                 period_result = conn.execute(text("""
                     SELECT id, start_date, end_date
                     FROM raffle_periods
-                    WHERE status = 'active'
-                """))
+                    WHERE status = 'active' AND discord_server_id = :server_id
+                """), {'server_id': self.guild_id}))
 
                 period_row = period_result.fetchone()
 
@@ -250,7 +251,7 @@ class AutoLeaderboard:
                 color=discord.Color.red()
             )
 
-async def setup_auto_leaderboard(bot, engine, channel_id=None):
+async def setup_auto_leaderboard(bot, engine, channel_id=None, guild_id=None):
     """
     Setup the auto-updating leaderboard as a Discord bot task
 
@@ -258,7 +259,22 @@ async def setup_auto_leaderboard(bot, engine, channel_id=None):
         bot: Discord bot instance
         engine: SQLAlchemy engine
         channel_id: Discord channel ID for leaderboard (optional, falls back to env var)
+        guild_id: Discord guild/server ID (required for multi-server)
     """
+    # Get guild_id from parameter or environment variable
+    if guild_id is None:
+        guild_id_str = os.getenv('DISCORD_GUILD_ID')
+        if guild_id_str:
+            try:
+                guild_id = int(guild_id_str)
+            except ValueError:
+                print(f"[Auto-Leaderboard] ❌ Invalid DISCORD_GUILD_ID: {guild_id_str}")
+                return None
+    
+    if not guild_id:
+        print("[Auto-Leaderboard] ⚠️ Guild ID not set - auto-leaderboard disabled")
+        return None
+    
     # Get channel ID from parameter, bot_settings, or environment variable
     if channel_id is None:
         # Try to get from bot_settings if available
@@ -279,9 +295,9 @@ async def setup_auto_leaderboard(bot, engine, channel_id=None):
         print("[Auto-Leaderboard] ⚠️ Channel ID not set - auto-leaderboard disabled")
         return None
 
-    print(f"[Auto-Leaderboard] Setting up for channel ID: {channel_id}")
+    print(f"[Auto-Leaderboard] Setting up for channel ID: {channel_id} (Server: {guild_id})")
 
-    leaderboard = AutoLeaderboard(bot, engine, channel_id)
+    leaderboard = AutoLeaderboard(bot, engine, channel_id, guild_id)
 
     @tasks.loop(seconds=AUTO_LEADERBOARD_UPDATE_INTERVAL)
     async def update_leaderboard_task():
