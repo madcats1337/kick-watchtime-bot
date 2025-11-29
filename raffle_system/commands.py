@@ -15,14 +15,20 @@ from .shuffle_tracker import ShuffleWagerTracker
 logger = logging.getLogger(__name__)
 
 class RaffleCommands(commands.Cog):
-    """Discord commands for raffle system"""
+    """Discord commands for raffle system - multi-server aware"""
 
     def __init__(self, bot, engine):
         self.bot = bot
         self.engine = engine
-        self.ticket_manager = TicketManager(engine)
-        self.raffle_draw = RaffleDraw(engine)
-        self.shuffle_tracker = ShuffleWagerTracker(engine)
+        # Note: ticket_manager, raffle_draw, shuffle_tracker are created per-command with guild_id
+    
+    def _get_managers(self, guild_id: int):
+        """Helper to create server-specific manager instances"""
+        return {
+            'ticket_manager': TicketManager(self.engine, guild_id),
+            'raffle_draw': RaffleDraw(self.engine, guild_id),
+            'shuffle_tracker': ShuffleWagerTracker(self.engine, guild_id, bot_settings=None)
+        }
 
     # ========================================
     # USER COMMANDS
@@ -36,7 +42,13 @@ class RaffleCommands(commands.Cog):
         """
         try:
             discord_id = ctx.author.id
-            tickets = self.ticket_manager.get_user_tickets(discord_id)
+            guild_id = ctx.guild.id
+            
+            # Create ticket manager and raffle draw for this server
+            ticket_manager = TicketManager(self.engine, guild_id)
+            raffle_draw = RaffleDraw(self.engine, guild_id)
+            
+            tickets = ticket_manager.get_user_tickets(discord_id)
 
             if not tickets or tickets['total_tickets'] == 0:
                 await ctx.send(f"❌ {ctx.author.mention} You don't have any raffle tickets yet!\n"
@@ -47,12 +59,12 @@ class RaffleCommands(commands.Cog):
                 return
 
             # Get user's rank
-            rank = self.ticket_manager.get_user_rank(discord_id)
-            stats = self.ticket_manager.get_period_stats()
+            rank = ticket_manager.get_user_rank(discord_id)
+            stats = ticket_manager.get_period_stats()
             total_participants = stats['total_participants'] if stats else 0
 
             # Calculate win probability
-            win_prob = self.raffle_draw.get_user_win_probability(discord_id, stats['period_id']) if stats else None
+            win_prob = raffle_draw.get_user_win_probability(discord_id, stats['period_id']) if stats else None
             win_prob_text = f"{win_prob['probability_percent']:.2f}%" if win_prob else "N/A"
 
             embed_text = f"""
@@ -85,17 +97,19 @@ Use `!leaderboard` to see top participants!
         Example: !raffleboard 20
         """
         try:
+            managers = self._get_managers(ctx.guild.id)
+            
             if limit < 1 or limit > 50:
                 limit = 10
 
-            leaderboard = self.ticket_manager.get_leaderboard(limit=limit)
+            leaderboard = managers['ticket_manager'].get_leaderboard(limit=limit)
 
             if not leaderboard:
                 await ctx.send("❌ No raffle participants yet!")
                 return
 
             # Get period stats
-            stats = self.ticket_manager.get_period_stats()
+            stats = managers['ticket_manager'].get_period_stats()
 
             response = f"🏆 **Raffle Leaderboard** (Period #{stats['period_id']})\n\n"
             response += f"**Total Tickets**: {stats['total_tickets']:,}\n"
@@ -135,8 +149,9 @@ Use `!leaderboard` to see top participants!
         """
         try:
             from datetime import datetime
-
-            stats = self.ticket_manager.get_period_stats()
+            
+            managers = self._get_managers(ctx.guild.id)
+            stats = managers['ticket_manager'].get_period_stats()
 
             if not stats:
                 await ctx.send("❌ No active raffle period!")
@@ -178,7 +193,7 @@ Get ready to participate when the period starts!
             else:
                 # Period is active
                 # Get draw history
-                history = self.raffle_draw.get_draw_history(limit=1)
+                history = managers['raffle_draw'].get_draw_history(limit=1)
                 last_winner = history[0] if history else None
 
                 # Check if auto-leaderboard is configured (from database settings)
@@ -240,6 +255,8 @@ Get ready to participate when the period starts!
         Earn 20 tickets per $1000 wagered when using affiliate code 'lele'
         """
         try:
+            managers = self._get_managers(ctx.guild.id)
+            
             if not shuffle_username:
                 await ctx.send(f"❌ {ctx.author.mention} Please provide your Shuffle username!\n\n"
                              f"**Usage**: `!linkshuffle <your_shuffle_username>`\n"
@@ -264,7 +281,7 @@ Get ready to participate when the period starts!
                 kick_name = row[0]
 
             # Attempt to link
-            result = self.shuffle_tracker.link_shuffle_account(
+            result = managers['shuffle_tracker'].link_shuffle_account(
                 shuffle_username=shuffle_username,
                 kick_name=kick_name,
                 discord_id=discord_id,
