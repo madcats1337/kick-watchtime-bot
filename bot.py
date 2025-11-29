@@ -4061,19 +4061,24 @@ async def on_ready():
             migrate_add_platform_to_wager_tables(engine)
 
             # Ensure there's an active raffle period
-            current_period = get_current_period(engine)
-            if not current_period:
-                # Create initial raffle period for this month
-                start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-                if start.month == 12:
-                    end = start.replace(year=start.year + 1, month=1, day=1) - timedelta(seconds=1)
-                else:
-                    end = start.replace(month=start.month + 1, day=1) - timedelta(seconds=1)
+            # In multi-server mode, skip initial period creation - periods will be created per-guild via commands or scheduler
+            if DISCORD_GUILD_ID:
+                current_period = get_current_period(engine, DISCORD_GUILD_ID)
+                if not current_period:
+                    # Create initial raffle period for this month
+                    start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                    if start.month == 12:
+                        end = start.replace(year=start.year + 1, month=1, day=1) - timedelta(seconds=1)
+                    else:
+                        end = start.replace(month=start.month + 1, day=1) - timedelta(seconds=1)
 
-                period_id = create_new_period(engine, start, end)
-                print(f"✅ Created initial raffle period #{period_id}")
+                    period_id = create_new_period(engine, start, end, DISCORD_GUILD_ID)
+                    print(f"✅ Created initial raffle period #{period_id}")
+                else:
+                    print(f"✅ Active raffle period found (#{current_period['id']})")
             else:
-                print(f"✅ Active raffle period found (#{current_period['id']})")
+                print("ℹ️ Multi-server mode: Raffle periods will be created per-server by scheduler or commands")
+
 
             # Setup watchtime converter (runs every hour)
             await setup_watchtime_converter(bot, engine)
