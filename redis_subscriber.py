@@ -676,6 +676,7 @@ Congratulations! Please contact an admin to claim your prize! 🎊
             'dashboard:timed_messages',
             'dashboard:gtb',
             'dashboard:management',
+            'dashboard:raffle',
             'dashboard:commands',
             'dashboard:point_shop',
             'dashboard:bot_settings'
