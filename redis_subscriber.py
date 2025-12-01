@@ -429,18 +429,9 @@ class RedisSubscriber:
                 self.client.setex(result_key, 30, json.dumps(result))  # Expire after 30 seconds
                 print(f"✅ Raffle draw completed, result stored in Redis")
 
-                # Announce winner(s) in chat
+                # Announce winner(s) in Discord raffle announcement channel
                 if result.get('success'):
-                    winners_list = result.get('winners', [])
-                    if len(winners_list) == 1:
-                        w = winners_list[0]
-                        await self.announce_in_chat(
-                            f"🎉 RAFFLE WINNER: {w['winner_kick_name']} "
-                            f"(Ticket #{w['winning_ticket']}/{w['total_tickets']}, {w['win_probability']:.2f}% chance)"
-                        )
-                    else:
-                        winner_names = ', '.join([w['winner_kick_name'] for w in winners_list])
-                        await self.announce_in_chat(f"🎉 RAFFLE WINNERS: {winner_names}")
+                    await self.announce_raffle_winners(result.get('winners', []), prize_description)
 
             except Exception as e:
                 print(f"❌ Raffle draw failed: {e}")
@@ -605,6 +596,72 @@ class RedisSubscriber:
                 print(f"💬 [No Kick callback] Would announce: {message}")
         except Exception as e:
             print(f"❌ Error sending to Kick chat: {e}")
+
+    async def announce_raffle_winners(self, winners, prize_description):
+        """Announce raffle winner(s) to Discord raffle announcement channel"""
+        try:
+            # Get announcement channel from bot settings
+            if not hasattr(self.bot, 'settings_manager'):
+                print("⚠️ Bot settings manager not available, cannot announce raffle winners")
+                return
+
+            channel_id = self.bot.settings_manager.raffle_announcement_channel_id
+            if not channel_id:
+                print("⚠️ Raffle announcement channel not configured, skipping announcement")
+                return
+
+            channel = self.bot.get_channel(channel_id)
+            if not channel:
+                print(f"⚠️ Raffle announcement channel {channel_id} not found")
+                return
+
+            # Single or multiple winners
+            if len(winners) == 1:
+                winner = winners[0]
+                
+                # Try to mention winner
+                try:
+                    discord_user = await self.bot.fetch_user(winner['winner_discord_id'])
+                    mention = discord_user.mention
+                except:
+                    mention = f"Discord ID: {winner['winner_discord_id']}"
+
+                message = f"""
+🎉 **RAFFLE WINNER DRAWN!** 🎉
+
+**Winner**: {winner['winner_kick_name']} ({mention})
+**Winning Ticket**: #{winner['winning_ticket']} out of {winner['total_tickets']:,}
+**Win Probability**: {winner['win_probability']:.2f}%
+**Prize**: {prize_description or 'Monthly Raffle Prize'}
+
+Congratulations! Please contact an admin to claim your prize! 🎊
+                """.strip()
+                
+                await channel.send(message)
+                print(f"✅ Raffle winner announced in Discord channel {channel_id}")
+            else:
+                # Multiple winners
+                message = f"🎉 **RAFFLE WINNERS DRAWN!** 🎉\n\n**Prize**: {prize_description or 'Monthly Raffle Prize'}\n\n"
+                
+                for i, winner in enumerate(winners, 1):
+                    try:
+                        discord_user = await self.bot.fetch_user(winner['winner_discord_id'])
+                        mention = discord_user.mention
+                    except:
+                        mention = f"Discord ID: {winner['winner_discord_id']}"
+                    
+                    message += f"**{i}. {winner['winner_kick_name']}** ({mention})\n"
+                    message += f"   • Ticket #{winner['winning_ticket']}/{winner['total_tickets']:,} ({winner['win_probability']:.2f}%)\n\n"
+                
+                message += "Congratulations to all winners! Please contact an admin to claim your prizes! 🎊"
+                
+                await channel.send(message)
+                print(f"✅ {len(winners)} raffle winners announced in Discord channel {channel_id}")
+
+        except Exception as e:
+            print(f"❌ Error announcing raffle winners to Discord: {e}")
+            import traceback
+            traceback.print_exc()
 
     async def listen(self):
         """Listen for events on all dashboard channels"""
