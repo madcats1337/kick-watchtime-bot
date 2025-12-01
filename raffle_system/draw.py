@@ -208,6 +208,47 @@ class RaffleDraw:
                 'proof_hash': proof_hash
             }
 
+            # Publish draw events to Redis for overlay visualization
+            try:
+                import redis
+                import json as json_lib
+                redis_client = redis.from_url(os.getenv('REDIS_URL', 'redis://localhost:6379'))
+                
+                # Event 1: Draw started
+                redis_client.publish('raffle:draw:events', json_lib.dumps({
+                    'type': 'draw_started',
+                    'payload': {
+                        'period_id': period_id,
+                        'total_tickets': total_tickets
+                    }
+                }))
+                
+                # Event 2: Spinning animation (3 seconds)
+                redis_client.publish('raffle:draw:events', json_lib.dumps({
+                    'type': 'draw_spinning',
+                    'payload': {
+                        'total_tickets': total_tickets,
+                        'duration': 3000
+                    }
+                }))
+                
+                # Event 3: Winner revealed (after spin duration)
+                import time
+                time.sleep(3)
+                redis_client.publish('raffle:draw:events', json_lib.dumps({
+                    'type': 'draw_complete',
+                    'payload': {
+                        'winning_ticket': winning_ticket,
+                        'winner_kick_name': winner['kick_name'],
+                        'winner_shuffle_name': shuffle_username,
+                        'winner_tickets': winner['ticket_count'],
+                        'total_tickets': total_tickets,
+                        'win_probability': result['win_probability']
+                    }
+                }))
+            except Exception as e:
+                logger.warning(f"Failed to publish draw events to Redis: {e}")
+
             logger.info(f"🎉 Winner: {winner['kick_name']} (Discord ID: {winner['discord_id']})")
             logger.info(f"   Winner's tickets: {winner['ticket_count']}/{total_tickets} ({result['win_probability']:.2f}%)")
 
