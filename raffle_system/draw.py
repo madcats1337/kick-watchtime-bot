@@ -58,7 +58,7 @@ class RaffleDraw:
                       AND NOT EXISTS (
                           SELECT 1 FROM raffle_exclusions re
                           WHERE (LOWER(re.kick_username) = LOWER(rt.kick_name)
-                                 OR re.discord_id = rt.discord_id)
+                                 OR re.discord_id = CAST(rt.discord_id AS TEXT))
                             AND re.discord_server_id = :server_id
                       )
                 """
@@ -317,7 +317,7 @@ class RaffleDraw:
                       AND NOT EXISTS (
                           SELECT 1 FROM raffle_exclusions re
                           WHERE (LOWER(re.kick_username) = LOWER(rt.kick_name)
-                                 OR re.discord_id = rt.discord_id)
+                                 OR re.discord_id = CAST(rt.discord_id AS TEXT))
                             AND re.discord_server_id = :server_id
                       )
                     ORDER BY rt.id
