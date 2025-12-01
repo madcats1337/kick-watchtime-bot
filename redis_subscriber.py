@@ -356,6 +356,100 @@ class RedisSubscriber:
             end_date = data.get('end_date')
             await self.announce_in_chat(f"🎟️ New raffle period started! {start_date} to {end_date}")
 
+    async def handle_raffle_event(self, action, data):
+        """Handle raffle events from dashboard"""
+        print(f"📥 Raffle Event: {action}")
+
+        if action == 'draw':
+            request_id = data.get('request_id')
+            period_id = data.get('period_id')
+            winner_count = data.get('winner_count', 1)
+            prize_description = data.get('prize_description', '')
+            drawn_by_discord_id = data.get('drawn_by_discord_id')
+            server_id = data.get('server_id')
+
+            print(f"🎲 Processing raffle draw request {request_id} for period {period_id}")
+
+            try:
+                from sqlalchemy import create_engine
+                from raffle_system.draw import RaffleDraw
+                
+                database_url = os.getenv('DATABASE_URL')
+                engine = create_engine(database_url)
+                draw_handler = RaffleDraw(engine)
+
+                if winner_count == 1:
+                    # Single winner
+                    winner = draw_handler.draw_winner(
+                        period_id=period_id,
+                        drawn_by_discord_id=drawn_by_discord_id,
+                        prize_description=prize_description
+                    )
+
+                    if not winner:
+                        result = {'success': False, 'error': 'No eligible participants found'}
+                    else:
+                        result = {
+                            'success': True,
+                            'winner': winner,
+                            'winners': [winner]
+                        }
+                else:
+                    # Multiple winners
+                    winners = []
+                    excluded_discord_ids = []
+
+                    for i in range(winner_count):
+                        winner = draw_handler.draw_winner(
+                            period_id=period_id,
+                            drawn_by_discord_id=drawn_by_discord_id,
+                            prize_description=f"{prize_description} (Winner {i+1}/{winner_count})",
+                            excluded_discord_ids=excluded_discord_ids,
+                            update_period=(i == 0)
+                        )
+
+                        if not winner:
+                            if i == 0:
+                                result = {'success': False, 'error': 'No eligible participants found'}
+                                break
+                            break
+
+                        winners.append(winner)
+                        excluded_discord_ids.append(winner['winner_discord_id'])
+
+                    if winners:
+                        result = {
+                            'success': True,
+                            'winners': winners,
+                            'winner': winners[0]
+                        }
+
+                # Store result in Redis for dashboard to retrieve
+                result_key = f'raffle_draw_result:{request_id}'
+                self.client.setex(result_key, 30, json.dumps(result))  # Expire after 30 seconds
+                print(f"✅ Raffle draw completed, result stored in Redis")
+
+                # Announce winner(s) in chat
+                if result.get('success'):
+                    winners_list = result.get('winners', [])
+                    if len(winners_list) == 1:
+                        w = winners_list[0]
+                        await self.announce_in_chat(
+                            f"🎉 RAFFLE WINNER: {w['winner_kick_name']} "
+                            f"(Ticket #{w['winning_ticket']}/{w['total_tickets']}, {w['win_probability']:.2f}% chance)"
+                        )
+                    else:
+                        winner_names = ', '.join([w['winner_kick_name'] for w in winners_list])
+                        await self.announce_in_chat(f"🎉 RAFFLE WINNERS: {winner_names}")
+
+            except Exception as e:
+                print(f"❌ Raffle draw failed: {e}")
+                import traceback
+                traceback.print_exc()
+                result = {'success': False, 'error': str(e)}
+                result_key = f'raffle_draw_result:{request_id}'
+                self.client.setex(result_key, 30, json.dumps(result))
+
     async def handle_commands_event(self, action, data):
         """Handle custom commands events from dashboard"""
         print(f"📥 Commands Event: {action}")
@@ -553,6 +647,8 @@ class RedisSubscriber:
                             await self.handle_gtb_event(action, data)
                         elif channel == 'dashboard:management':
                             await self.handle_management_event(action, data)
+                        elif channel == 'dashboard:raffle':
+                            await self.handle_raffle_event(action, data)
                         elif channel == 'dashboard:commands':
                             await self.handle_commands_event(action, data)
                         elif channel == 'dashboard:point_shop':
@@ -580,6 +676,7 @@ class RedisSubscriber:
                         'dashboard:timed_messages',
                         'dashboard:gtb',
                         'dashboard:management',
+                        'dashboard:raffle',
                         'dashboard:commands',
                         'dashboard:point_shop',
                         'dashboard:bot_settings'
