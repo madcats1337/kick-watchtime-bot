@@ -16,7 +16,7 @@ class RaffleDraw:
     def __init__(self, engine):
         self.engine = engine
 
-    def draw_winner(self, period_id, drawn_by_discord_id=None, prize_description=None):
+    def draw_winner(self, period_id, drawn_by_discord_id=None, prize_description=None, excluded_discord_ids=None, update_period=True):
         """
         Draw a random winner for the raffle period using cryptographic randomness
 
@@ -29,11 +29,15 @@ class RaffleDraw:
             period_id: Raffle period ID to draw from
             drawn_by_discord_id: Discord ID of admin who triggered draw (optional)
             prize_description: Description of the prize (optional)
+            excluded_discord_ids: List of discord IDs to exclude (for multiple winner draws)
+            update_period: Whether to mark raffle_periods as 'ended' (True only for first winner)
 
         Returns:
             dict: Winner info or None if no participants
         """
         try:
+            excluded_discord_ids = excluded_discord_ids or []
+            
             with self.engine.begin() as conn:
                 # Get server_id from the period
                 period_result = conn.execute(text("""
@@ -45,8 +49,8 @@ class RaffleDraw:
                     return None
                 server_id = period_row[0]
 
-                # Get all participants with tickets (excluding those in raffle_exclusions)
-                result = conn.execute(text("""
+                # Get all participants with tickets (excluding those in raffle_exclusions and excluded_discord_ids)
+                query = """
                     SELECT rt.discord_id, rt.kick_name, rt.total_tickets
                     FROM raffle_tickets rt
                     WHERE rt.period_id = :period_id
@@ -57,8 +61,20 @@ class RaffleDraw:
                                  OR re.discord_id = rt.discord_id)
                             AND re.discord_server_id = :server_id
                       )
-                    ORDER BY rt.id  -- Deterministic ordering for reproducibility
-                """), {'period_id': period_id, 'server_id': server_id})
+                """
+                
+                params = {'period_id': period_id, 'server_id': server_id}
+                
+                # Add exclusion for already drawn winners
+                if excluded_discord_ids:
+                    placeholders = ', '.join([f':excluded_{i}' for i in range(len(excluded_discord_ids))])
+                    query += f" AND rt.discord_id NOT IN ({placeholders})"
+                    for i, discord_id in enumerate(excluded_discord_ids):
+                        params[f'excluded_{i}'] = discord_id
+                
+                query += " ORDER BY rt.id"  # Deterministic ordering for reproducibility
+                
+                result = conn.execute(text(query), params)
 
                 participants = list(result)
 
@@ -113,15 +129,16 @@ class RaffleDraw:
                 # Record the draw
                 conn.execute(text("""
                     INSERT INTO raffle_draws
-                        (period_id, total_tickets, total_participants, winner_discord_id,
+                        (period_id, discord_server_id, total_tickets, total_participants, winner_discord_id,
                          winner_kick_name, winner_shuffle_name, winning_ticket,
                          prize_description, drawn_by_discord_id)
                     VALUES
-                        (:period_id, :total_tickets, :total_participants, :winner_discord_id,
+                        (:period_id, :server_id, :total_tickets, :total_participants, :winner_discord_id,
                          :winner_kick_name, :winner_shuffle_name, :winning_ticket,
                          :prize_description, :drawn_by_discord_id)
                 """), {
                     'period_id': period_id,
+                    'server_id': server_id,
                     'total_tickets': total_tickets,
                     'total_participants': total_participants,
                     'winner_discord_id': winner['discord_id'],
@@ -132,23 +149,18 @@ class RaffleDraw:
                     'drawn_by_discord_id': drawn_by_discord_id
                 })
 
-                # Update the raffle period with winner info
-                conn.execute(text("""
-                    UPDATE raffle_periods
-                    SET
-                        winner_discord_id = :winner_discord_id,
-                        winner_kick_name = :winner_kick_name,
-                        winning_ticket_number = :winning_ticket,
-                        total_tickets = :total_tickets,
-                        status = 'ended'
-                    WHERE id = :period_id
-                """), {
-                    'period_id': period_id,
-                    'winner_discord_id': winner['discord_id'],
-                    'winner_kick_name': winner['kick_name'],
-                    'winning_ticket': winning_ticket,
-                    'total_tickets': total_tickets
-                })
+                # Mark the raffle period as ended (only once for first winner)
+                if update_period:
+                    conn.execute(text("""
+                        UPDATE raffle_periods
+                        SET
+                            status = 'ended',
+                            total_tickets = :total_tickets
+                        WHERE id = :period_id
+                    """), {
+                        'period_id': period_id,
+                        'total_tickets': total_tickets
+                    })
 
             result = {
                 'winner_discord_id': winner['discord_id'],

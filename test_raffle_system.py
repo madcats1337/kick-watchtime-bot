@@ -165,13 +165,10 @@ def test_raffle_draw():
                 AND prize_description = 'TEST DRAW - Not a real raffle'
             """), {'period_id': period['id']})
 
-            # Reset period winner
+            # Reset period status (no winner fields to reset)
             conn.execute(text("""
                 UPDATE raffle_periods
-                SET winner_discord_id = NULL,
-                    winner_kick_name = NULL,
-                    winning_ticket_number = NULL,
-                    status = 'active'
+                SET status = 'active'
                 WHERE id = :period_id
             """), {'period_id': period['id']})
 

@@ -183,6 +183,14 @@ class RaffleScheduler:
             logger.info(f"✅ Period #{old_period['id']} closed")
 
             # Step 3: Create new monthly period
+            # IMPORTANT: Don't clear tickets if auto-draw is disabled and no winner drawn yet
+            # This allows manual winner drawing after period ends
+            clear_tickets = self.auto_draw or old_period.get('winner_discord_id') is not None
+            
+            if not clear_tickets:
+                logger.warning(f"⚠️  Tickets preserved! Winner NOT drawn for period #{old_period['id']}")
+                logger.warning("   Use !raffledraw or dashboard to draw winner before cleanup")
+            
             # New period starts on 1st of next month
             old_end = old_period['end_date']
             if isinstance(old_end, str):
@@ -202,7 +210,7 @@ class RaffleScheduler:
 
             end = next_month - timedelta(seconds=1)
 
-            new_period_id = create_new_period(self.engine, start, end)
+            new_period_id = create_new_period(self.engine, start, end, clear_tickets=clear_tickets)
             transition_info['new_period_id'] = new_period_id
 
             logger.info(f"✅ New monthly period #{new_period_id} created ({start.strftime('%b %d')} - {end.strftime('%b %d, %Y')})")

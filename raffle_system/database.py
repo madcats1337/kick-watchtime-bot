@@ -17,12 +17,10 @@ RAFFLE_SCHEMA_SQL = """
 -- Monthly raffle periods
 CREATE TABLE IF NOT EXISTS raffle_periods (
     id SERIAL PRIMARY KEY,
+    discord_server_id BIGINT NOT NULL,  -- Multi-server support
     start_date TIMESTAMP NOT NULL,
     end_date TIMESTAMP NOT NULL,
     status VARCHAR(20) DEFAULT 'active',  -- active, ended, archived
-    winner_discord_id BIGINT,
-    winner_kick_name TEXT,
-    winning_ticket_number INTEGER,
     total_tickets INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -31,6 +29,7 @@ CREATE TABLE IF NOT EXISTS raffle_periods (
 CREATE TABLE IF NOT EXISTS raffle_tickets (
     id SERIAL PRIMARY KEY,
     period_id INTEGER REFERENCES raffle_periods(id) ON DELETE CASCADE,
+    discord_server_id BIGINT NOT NULL,  -- Multi-server support
     discord_id BIGINT NOT NULL,
     kick_name TEXT NOT NULL,
 
@@ -120,7 +119,8 @@ CREATE TABLE IF NOT EXISTS raffle_ticket_log (
 -- Raffle draw history
 CREATE TABLE IF NOT EXISTS raffle_draws (
     id SERIAL PRIMARY KEY,
-    period_id INTEGER REFERENCES raffle_periods(id) UNIQUE,
+    period_id INTEGER REFERENCES raffle_periods(id),  -- REMOVED UNIQUE - allows multiple winners per period
+    discord_server_id BIGINT NOT NULL,  -- Multi-server support
     total_tickets INTEGER NOT NULL,
     total_participants INTEGER NOT NULL,
     winner_discord_id BIGINT NOT NULL,
@@ -146,6 +146,7 @@ CREATE INDEX IF NOT EXISTS idx_raffle_gifted_subs_discord ON raffle_gifted_subs(
 CREATE INDEX IF NOT EXISTS idx_raffle_shuffle_period ON raffle_shuffle_wagers(period_id);
 CREATE INDEX IF NOT EXISTS idx_raffle_shuffle_discord ON raffle_shuffle_wagers(discord_id);
 CREATE INDEX IF NOT EXISTS idx_raffle_periods_status ON raffle_periods(status);
+CREATE INDEX IF NOT EXISTS idx_raffle_draws_server ON raffle_draws(discord_server_id);
 
 -- ============================================
 -- VIEWS FOR EASY QUERYING
@@ -313,14 +314,16 @@ def get_current_period(engine):
         logger.error(f"Failed to get current period: {e}")
         return None
 
-def create_new_period(engine, start_date, end_date):
+def create_new_period(engine, start_date, end_date, clear_tickets=True):
     """
-    Create a new raffle period and reset all tickets
+    Create a new raffle period and optionally reset all tickets
 
     Args:
         engine: SQLAlchemy engine instance
         start_date: datetime - Period start
         end_date: datetime - Period end
+        clear_tickets: bool - Whether to delete all tickets (default True)
+                              Set to False if winner needs to be drawn first
 
     Returns:
         int: New period ID or None
@@ -355,13 +358,17 @@ def create_new_period(engine, start_date, end_date):
             })
             period_id = result.scalar()
 
-            # Delete ALL tickets from all periods (fresh start)
-            deleted_tickets = conn.execute(text("DELETE FROM raffle_tickets")).rowcount
-            logger.info(f"Deleted {deleted_tickets} ticket records from all periods")
+            # Delete tickets only if requested
+            if clear_tickets:
+                # Delete ALL tickets from all periods (fresh start)
+                deleted_tickets = conn.execute(text("DELETE FROM raffle_tickets")).rowcount
+                logger.info(f"Deleted {deleted_tickets} ticket records from all periods")
 
-            # Clear ALL conversion tracking (fresh start)
-            deleted_watchtime = conn.execute(text("DELETE FROM raffle_watchtime_converted")).rowcount
-            logger.info(f"Deleted {deleted_watchtime} watchtime conversion records")
+                # Clear ALL conversion tracking (fresh start)
+                deleted_watchtime = conn.execute(text("DELETE FROM raffle_watchtime_converted")).rowcount
+                logger.info(f"Deleted {deleted_watchtime} watchtime conversion records")
+            else:
+                logger.info(f"Tickets preserved - remember to draw winner for old period before cleanup!")
 
             # Snapshot current watchtime as "already converted" for new period
             # This prevents awarding tickets for watchtime earned before this period
