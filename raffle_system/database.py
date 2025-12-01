@@ -129,7 +129,11 @@ CREATE TABLE IF NOT EXISTS raffle_draws (
     winning_ticket INTEGER NOT NULL,
     prize_description TEXT,
     drawn_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    drawn_by_discord_id BIGINT  -- Admin who triggered draw
+    drawn_by_discord_id BIGINT,  -- Admin who triggered draw
+    server_seed TEXT,  -- Provably fair: server seed (64 hex chars)
+    client_seed TEXT,  -- Provably fair: client seed (period:tickets:participants)
+    nonce TEXT,  -- Provably fair: nonce (period_id)
+    proof_hash TEXT  -- Provably fair: SHA-256 hash result
 );
 
 -- ============================================

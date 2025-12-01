@@ -1,11 +1,12 @@
 """
 Raffle Draw Logic
-Implements provably fair random drawing using cryptographic randomness
+Implements provably fair random drawing using SHA-256 hashing
 """
 
 from sqlalchemy import text
 from datetime import datetime
 import secrets
+import hashlib
 import logging
 
 logger = logging.getLogger(__name__)
@@ -101,12 +102,34 @@ class RaffleDraw:
                 total_tickets = current_ticket - 1
                 total_participants = len(participants)
 
-                # Draw winning ticket using cryptographic randomness
-                winning_ticket = secrets.randbelow(total_tickets) + 1
+                # Draw winning ticket using provably fair SHA-256 hashing
+                # Generate server seed
+                server_seed = secrets.token_hex(32)  # 64 character hex string
+                
+                # Client seed: period_id:total_tickets:total_participants
+                client_seed = f"{period_id}:{total_tickets}:{total_participants}"
+                
+                # Nonce: period_id
+                nonce = str(period_id)
+                
+                # Create hash for provable fairness
+                combined = f"{server_seed}:{client_seed}:{nonce}"
+                hash_result = hashlib.sha256(combined.encode()).hexdigest()
+                
+                # Convert first 16 hex chars to integer for larger range
+                random_int = int(hash_result[:16], 16)
+                
+                # Map to winning ticket (1 to total_tickets)
+                winning_ticket = (random_int % total_tickets) + 1
+                
+                proof_hash = hash_result
 
                 logger.info(f"🎲 Drawing raffle for period {period_id}")
                 logger.info(f"   Total tickets: {total_tickets}")
                 logger.info(f"   Total participants: {total_participants}")
+                logger.info(f"   Server seed: {server_seed}")
+                logger.info(f"   Client seed: {client_seed}")
+                logger.info(f"   Proof hash: {proof_hash}")
                 logger.info(f"   Winning ticket: #{winning_ticket}")
 
                 # Find the winner
@@ -133,11 +156,13 @@ class RaffleDraw:
                     INSERT INTO raffle_draws
                         (period_id, discord_server_id, total_tickets, total_participants, winner_discord_id,
                          winner_kick_name, winner_shuffle_name, winning_ticket,
-                         prize_description, drawn_by_discord_id)
+                         prize_description, drawn_by_discord_id,
+                         server_seed, client_seed, nonce, proof_hash)
                     VALUES
                         (:period_id, :server_id, :total_tickets, :total_participants, :winner_discord_id,
                          :winner_kick_name, :winner_shuffle_name, :winning_ticket,
-                         :prize_description, :drawn_by_discord_id)
+                         :prize_description, :drawn_by_discord_id,
+                         :server_seed, :client_seed, :nonce, :proof_hash)
                 """), {
                     'period_id': period_id,
                     'server_id': server_id,
@@ -148,7 +173,11 @@ class RaffleDraw:
                     'winner_shuffle_name': shuffle_username,
                     'winning_ticket': winning_ticket,
                     'prize_description': prize_description,
-                    'drawn_by_discord_id': drawn_by_discord_id
+                    'drawn_by_discord_id': drawn_by_discord_id,
+                    'server_seed': server_seed,
+                    'client_seed': client_seed,
+                    'nonce': nonce,
+                    'proof_hash': proof_hash
                 })
 
                 # Mark the raffle period as ended (only once for first winner)
@@ -172,7 +201,11 @@ class RaffleDraw:
                 'winning_ticket': winning_ticket,
                 'total_tickets': total_tickets,
                 'total_participants': total_participants,
-                'win_probability': (winner['ticket_count'] / total_tickets * 100)
+                'win_probability': (winner['ticket_count'] / total_tickets * 100),
+                'server_seed': server_seed,
+                'client_seed': client_seed,
+                'nonce': nonce,
+                'proof_hash': proof_hash
             }
 
             logger.info(f"🎉 Winner: {winner['kick_name']} (Discord ID: {winner['discord_id']})")
