@@ -57,9 +57,11 @@ class RaffleDraw:
                       AND rt.total_tickets > 0
                       AND NOT EXISTS (
                           SELECT 1 FROM raffle_exclusions re
-                          WHERE (LOWER(re.kick_username) = LOWER(rt.kick_name)
-                                 OR re.discord_id = CAST(rt.discord_id AS TEXT))
-                            AND re.discord_server_id = :server_id
+                          WHERE re.discord_server_id = :server_id
+                            AND (
+                                (re.kick_username IS NOT NULL AND LOWER(re.kick_username) = LOWER(rt.kick_name))
+                                OR (re.discord_id IS NOT NULL AND re.discord_id != '' AND re.discord_id = CAST(rt.discord_id AS TEXT))
+                            )
                       )
                 """
                 
@@ -316,9 +318,11 @@ class RaffleDraw:
                       AND rt.total_tickets > 0
                       AND NOT EXISTS (
                           SELECT 1 FROM raffle_exclusions re
-                          WHERE (LOWER(re.kick_username) = LOWER(rt.kick_name)
-                                 OR re.discord_id = CAST(rt.discord_id AS TEXT))
-                            AND re.discord_server_id = :server_id
+                          WHERE re.discord_server_id = :server_id
+                            AND (
+                                (re.kick_username IS NOT NULL AND LOWER(re.kick_username) = LOWER(rt.kick_name))
+                                OR (re.discord_id IS NOT NULL AND re.discord_id != '' AND re.discord_id = CAST(rt.discord_id AS TEXT))
+                            )
                       )
                     ORDER BY rt.id
                 """), {'period_id': period_id, 'server_id': server_id})
