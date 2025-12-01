@@ -213,6 +213,20 @@ class SlotCallTracker:
             kick_username: Username from Kick chat
             slot_call: The slot call text (everything after !call)
         """
+        # 🔒 SECURITY: Check if user is blacklisted (defensive check)
+        if self.engine:
+            try:
+                username_lower = kick_username.lower()
+                with self.engine.connect() as conn:
+                    blacklist_check = conn.execute(text("""
+                        SELECT 1 FROM slot_call_blacklist WHERE kick_username = :username
+                    """), {"username": username_lower}).fetchone()
+                    if blacklist_check:
+                        logger.info(f"[Slot Call] Blocked blacklisted user in handle_slot_call: {kick_username}")
+                        return  # Silently block - no response to blacklisted users
+            except Exception as e:
+                logger.error(f"Error checking slot call blacklist: {e}")
+        
         if not self.enabled:
             # Send "slot requests not open" message to Kick chat
             if self.kick_send_callback:

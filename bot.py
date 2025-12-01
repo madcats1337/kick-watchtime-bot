@@ -1255,6 +1255,7 @@ async def kick_chat_loop(channel_name: str):
 
                                         if is_blacklisted:
                                             print(f"[Slot Call] Blocked blacklisted user: {username}")
+                                            # No response sent to blacklisted users
                                         else:
                                             # Extract the slot call (everything after "!call " or "!sr ")
                                             # 🔒 SECURITY: Limit length to prevent abuse (200 chars max)
@@ -1266,7 +1267,7 @@ async def kick_chat_loop(channel_name: str):
                                             if slot_call:  # Only process if there's actually a call
                                                 await slot_call_tracker.handle_slot_call(username, slot_call)
                                             else:
-                                                # Send usage message when no content is provided
+                                                # Send usage message when no content is provided (only to non-blacklisted users)
                                                 try:
                                                     await send_kick_message(f"@{username} Please specify a slot!")
                                                     print(f"[Slot Call] Sent usage instructions to {username}")
@@ -1322,9 +1323,9 @@ async def kick_chat_loop(channel_name: str):
 
                                         # Everything after !clip is the title
                                         clip_title = content_stripped[5:].strip()  # Remove "!clip" and trim
-
+                                        
                                         if not clip_title:
-                                            # Generate default title with username and timestamp
+                                            # No title provided - generate default
                                             timestamp = datetime.now().strftime("%b %d, %Y %H:%M")
                                             clip_title = f"Clip by {username} - {timestamp}"
 
