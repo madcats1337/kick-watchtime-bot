@@ -256,13 +256,16 @@ class SlotCallTracker:
 
         # Check per-user request limit (if enabled)
         # This counts picked + unpicked (available) requests - NOT added_to_hunt
+        # Using SELECT FOR UPDATE to prevent race conditions
         if self.max_requests_per_user > 0 and self.engine:
             try:
-                with self.engine.connect() as conn:
+                with self.engine.begin() as conn:
+                    # Lock the user's rows to prevent concurrent requests
                     result = conn.execute(text("""
                         SELECT COUNT(*) FROM slot_requests
                         WHERE LOWER(kick_username) = LOWER(:username)
                         AND (picked = FALSE OR (picked = TRUE AND added_to_hunt = FALSE))
+                        FOR UPDATE
                     """), {"username": kick_username}).fetchone()
 
                     active_requests = result[0] if result else 0
@@ -284,9 +287,10 @@ class SlotCallTracker:
                 # Continue anyway to not block legitimate requests on DB errors
 
         # Check max added to hunt limit (if enabled) - blocks new requests if user already has max in hunt
+        # Using transaction with locking to prevent race conditions
         if self.engine:
             try:
-                with self.engine.connect() as conn:
+                with self.engine.begin() as conn:
                     max_added_result = conn.execute(text("""
                         SELECT value FROM bot_settings
                         WHERE key = 'slot_max_added_requests'
@@ -295,11 +299,12 @@ class SlotCallTracker:
                     max_added = int(max_added_result[0]) if max_added_result else 0
 
                     if max_added > 0:
-                        # Count how many added_to_hunt requests this user already has
+                        # Count how many added_to_hunt requests this user already has (with lock)
                         added_count_result = conn.execute(text("""
                             SELECT COUNT(*) FROM slot_requests
                             WHERE LOWER(kick_username) = LOWER(:username)
                             AND added_to_hunt = TRUE
+                            FOR UPDATE
                         """), {"username": kick_username}).fetchone()
 
                         added_count = added_count_result[0] if added_count_result else 0
