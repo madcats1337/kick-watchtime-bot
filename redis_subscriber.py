@@ -543,6 +543,14 @@ class RedisSubscriber:
                         payload = json.loads(message['data'])
                         action = payload.get('action')
                         data = payload.get('data', {})
+                        server_id = payload.get('server_id')
+
+                        # Filter events by server_id - only process events for servers this bot is connected to
+                        if server_id:
+                            bot_guild_ids = [guild.id for guild in self.bot.guilds]
+                            if server_id not in bot_guild_ids:
+                                # Skip events from servers this bot doesn't manage
+                                continue
 
                         # Route to appropriate handler
                         if channel == 'dashboard:slot_requests':
