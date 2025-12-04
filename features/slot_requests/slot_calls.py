@@ -255,7 +255,7 @@ class SlotCallTracker:
         self.last_call_time[username_lower] = now
 
         # Check per-user request limit (if enabled)
-        # This counts picked + unpicked (available) requests - NOT added_to_hunt
+        # This counts ALL requests (picked, unpicked, added to hunt - everything)
         # Using SELECT FOR UPDATE to prevent race conditions
         if self.max_requests_per_user > 0 and self.engine:
             try:
@@ -264,21 +264,20 @@ class SlotCallTracker:
                     result = conn.execute(text("""
                         SELECT COUNT(*) FROM slot_requests
                         WHERE LOWER(kick_username) = LOWER(:username)
-                        AND (picked = FALSE OR (picked = TRUE AND added_to_hunt = FALSE))
                         FOR UPDATE
                     """), {"username": kick_username}).fetchone()
 
-                    active_requests = result[0] if result else 0
+                    total_requests = result[0] if result else 0
 
-                    if active_requests >= self.max_requests_per_user:
-                        # User has reached their active request limit
+                    if total_requests >= self.max_requests_per_user:
+                        # User has reached their request limit
                         if self.kick_send_callback:
                             try:
                                 await self.kick_send_callback(
-                                    f"@{kick_username} You have reached the maximum of {self.max_requests_per_user} active slot request(s). "
-                                    f"Please wait for your slots to be added to the hunt."
+                                    f"@{kick_username} You have reached the maximum of {self.max_requests_per_user} slot request(s). "
+                                    f"Please wait for the current hunt to complete."
                                 )
-                                logger.info(f"User {kick_username} blocked: {active_requests}/{self.max_requests_per_user} active requests")
+                                logger.info(f"User {kick_username} blocked: {total_requests}/{self.max_requests_per_user} total requests")
                             except Exception as e:
                                 logger.error(f"Failed to send limit message to Kick: {e}")
                         return
