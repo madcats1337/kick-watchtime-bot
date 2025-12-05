@@ -15,10 +15,11 @@ logger = logging.getLogger(__name__)
 class SlotCallTracker:
     """Track slot calls from Kick chat and post to Discord"""
 
-    def __init__(self, bot, discord_channel_id: Optional[int] = None, kick_send_callback=None, engine=None):
+    def __init__(self, bot, discord_channel_id: Optional[int] = None, kick_send_callback=None, engine=None, server_id: Optional[int] = None):
         self.bot = bot
         self.discord_channel_id = discord_channel_id
         self.engine = engine
+        self.server_id = server_id  # Discord server ID for multi-server support
         self.last_call_time: Dict[str, datetime] = {}  # Track per-user cooldown
         self.cooldown_seconds = 30  # Default 30 second cooldown per user (loaded from DB)
         self.max_username_length = 50  # Maximum username length
@@ -105,14 +106,29 @@ class SlotCallTracker:
 
         try:
             with self.engine.connect() as conn:
+                # Try to load server-specific setting first
+                if self.server_id:
+                    result = conn.execute(text("""
+                        SELECT value FROM bot_settings
+                        WHERE key = 'slot_max_requests_per_user'
+                        AND discord_server_id = :server_id
+                    """), {"server_id": self.server_id}).fetchone()
+                    
+                    if result:
+                        max_requests = int(result[0])
+                        logger.info(f"Loaded max slot requests per user (server {self.server_id}): {max_requests if max_requests > 0 else 'unlimited'}")
+                        return max_requests
+                
+                # Fallback to global setting if no server-specific setting
                 result = conn.execute(text("""
                     SELECT value FROM bot_settings
                     WHERE key = 'slot_max_requests_per_user'
+                    AND discord_server_id IS NULL
                 """)).fetchone()
 
                 if result:
                     max_requests = int(result[0])
-                    logger.info(f"Loaded max slot requests per user: {max_requests if max_requests > 0 else 'unlimited'}")
+                    logger.info(f"Loaded max slot requests per user (global): {max_requests if max_requests > 0 else 'unlimited'}")
                     return max_requests
                 else:
                     return 0  # Default to unlimited
@@ -152,15 +168,25 @@ class SlotCallTracker:
 
         try:
             with self.engine.begin() as conn:
-                conn.execute(text("""
-                    INSERT INTO bot_settings (key, value)
-                    VALUES ('slot_max_requests_per_user', :max_requests)
-                    ON CONFLICT (key)
-                    DO UPDATE SET value = :max_requests
-                """), {"max_requests": str(max_requests)})
+                if self.server_id:
+                    # Server-specific setting
+                    conn.execute(text("""
+                        INSERT INTO bot_settings (key, value, discord_server_id)
+                        VALUES ('slot_max_requests_per_user', :max_requests, :server_id)
+                        ON CONFLICT (key, discord_server_id)
+                        DO UPDATE SET value = :max_requests
+                    """), {"max_requests": str(max_requests), "server_id": self.server_id})
+                else:
+                    # Global setting
+                    conn.execute(text("""
+                        INSERT INTO bot_settings (key, value, discord_server_id)
+                        VALUES ('slot_max_requests_per_user', :max_requests, NULL)
+                        ON CONFLICT (key, discord_server_id)
+                        DO UPDATE SET value = :max_requests
+                    """), {"max_requests": str(max_requests)})
 
             self.max_requests_per_user = max_requests
-            logger.info(f"Set max slot requests per user to: {max_requests if max_requests > 0 else 'unlimited'}")
+            logger.info(f"Set max slot requests per user to: {max_requests if max_requests > 0 else 'unlimited'}" + (f" (server {self.server_id})" if self.server_id else " (global)"))
             return True
         except Exception as e:
             logger.error(f"Failed to set max requests: {e}")
@@ -636,7 +662,7 @@ class SlotCallCommands(commands.Cog):
         if isinstance(error, commands.MissingPermissions):
             await ctx.send("❌ You need administrator permission to use this command.")
 
-async def setup_slot_call_tracker(bot, discord_channel_id: Optional[int] = None, kick_send_callback=None, engine=None):
+async def setup_slot_call_tracker(bot, discord_channel_id: Optional[int] = None, kick_send_callback=None, engine=None, server_id: Optional[int] = None):
     """
     Setup slot call tracker
 
@@ -645,11 +671,12 @@ async def setup_slot_call_tracker(bot, discord_channel_id: Optional[int] = None,
         discord_channel_id: Discord channel ID to post slot calls to
         kick_send_callback: Optional callback function to send messages to Kick chat
         engine: SQLAlchemy engine for persisting state
+        server_id: Discord server/guild ID for multi-server support
 
     Returns:
         SlotCallTracker instance
     """
-    tracker = SlotCallTracker(bot, discord_channel_id, kick_send_callback, engine)
+    tracker = SlotCallTracker(bot, discord_channel_id, kick_send_callback, engine, server_id)
 
     # Add commands
     await bot.add_cog(SlotCallCommands(bot, tracker))

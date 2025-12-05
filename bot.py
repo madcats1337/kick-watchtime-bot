@@ -433,9 +433,11 @@ try:
         # Create bot_settings table for persistent configuration
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS bot_settings (
-            key TEXT PRIMARY KEY,
+            key TEXT NOT NULL,
             value TEXT NOT NULL,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            discord_server_id BIGINT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (key, discord_server_id)
         );
         """))
 
@@ -4126,7 +4128,8 @@ async def on_ready():
                 bot,
                 SLOT_CALLS_CHANNEL_ID,
                 kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None,
-                engine=engine
+                engine=engine,
+                server_id=DISCORD_GUILD_ID
             )
             # Store as bot attribute for Redis subscriber
             bot.slot_call_tracker = slot_call_tracker
