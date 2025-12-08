@@ -283,20 +283,31 @@ class SlotCallTracker:
         # Check per-user request limit (if enabled)
         # This counts ALL requests (picked, unpicked, added to hunt - everything)
         # Using SELECT FOR UPDATE to prevent race conditions
+        logger.info(f"[LIMIT CHECK] User: {kick_username}, max_requests_per_user: {self.max_requests_per_user}, engine: {bool(self.engine)}")
         if self.max_requests_per_user > 0 and self.engine:
             try:
                 with self.engine.begin() as conn:
                     # Lock the user's rows to prevent concurrent requests
-                    result = conn.execute(text("""
-                        SELECT COUNT(*) FROM slot_requests
-                        WHERE LOWER(kick_username) = LOWER(:username)
-                        FOR UPDATE
-                    """), {"username": kick_username}).fetchone()
+                    if self.server_id:
+                        result = conn.execute(text("""
+                            SELECT COUNT(*) FROM slot_requests
+                            WHERE LOWER(kick_username) = LOWER(:username)
+                            AND discord_server_id = :server_id
+                            FOR UPDATE
+                        """), {"username": kick_username, "server_id": self.server_id}).fetchone()
+                    else:
+                        result = conn.execute(text("""
+                            SELECT COUNT(*) FROM slot_requests
+                            WHERE LOWER(kick_username) = LOWER(:username)
+                            FOR UPDATE
+                        """), {"username": kick_username}).fetchone()
 
                     total_requests = result[0] if result else 0
+                    logger.info(f"[LIMIT CHECK] User {kick_username} has {total_requests} total requests, limit is {self.max_requests_per_user}")
 
                     if total_requests >= self.max_requests_per_user:
                         # User has reached their request limit
+                        logger.warning(f"[LIMIT CHECK] BLOCKING {kick_username}: {total_requests} >= {self.max_requests_per_user}")
                         if self.kick_send_callback:
                             try:
                                 await self.kick_send_callback(
@@ -307,9 +318,13 @@ class SlotCallTracker:
                             except Exception as e:
                                 logger.error(f"Failed to send limit message to Kick: {e}")
                         return
+                    else:
+                        logger.info(f"[LIMIT CHECK] ALLOWING {kick_username}: {total_requests} < {self.max_requests_per_user}")
             except Exception as e:
                 logger.error(f"Failed to check user request limit: {e}")
                 # Continue anyway to not block legitimate requests on DB errors
+        else:
+            logger.info(f"[LIMIT CHECK] SKIPPED - max_requests_per_user is {self.max_requests_per_user} (must be > 0) or engine is None")
 
         # Check max added to hunt limit (if enabled) - blocks new requests if user already has max in hunt
         # Using transaction with locking to prevent race conditions
@@ -656,6 +671,53 @@ class SlotCallCommands(commands.Cog):
         except Exception as e:
             logger.error(f"Failed to get slot request stats: {e}")
             await ctx.send(f"❌ Error getting slot list: {e}")
+
+    @commands.command(name='clearslots', aliases=['clearrequests', 'resetslots'])
+    @commands.has_permissions(administrator=True)
+    async def clear_slot_requests(self, ctx):
+        """
+        [ADMIN] Clear all slot requests (useful when starting a new hunt)
+        Usage: !clearslots
+        """
+        if not self.tracker.engine:
+            await ctx.send("❌ Database not available")
+            return
+
+        try:
+            with self.tracker.engine.begin() as conn:
+                result = conn.execute(text("DELETE FROM slot_requests"))
+                deleted_count = result.rowcount
+
+            embed = discord.Embed(
+                title="🗑️ Slot Requests Cleared",
+                description=f"Deleted **{deleted_count}** slot request(s)",
+                color=discord.Color.green()
+            )
+            embed.set_footer(text="Users can now make new requests")
+
+            await ctx.send(embed=embed)
+            logger.info(f"Cleared {deleted_count} slot requests (manual clear by {ctx.author})")
+
+            # Send message to Kick chat if callback available
+            if self.tracker.kick_send_callback:
+                try:
+                    await self.tracker.kick_send_callback(
+                        "🔄 Slot requests have been cleared! You can now make new requests with !call or !sr"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send Kick notification: {e}")
+
+            # Update panel if available
+            if self.tracker.panel:
+                try:
+                    await self.tracker.panel.update_panel(force=True)
+                    logger.info("Updated slot request panel after clear")
+                except Exception as panel_error:
+                    logger.error(f"Failed to update panel: {panel_error}")
+
+        except Exception as e:
+            logger.error(f"Failed to clear slot requests: {e}")
+            await ctx.send(f"❌ Error clearing slot requests: {e}")
 
     @toggle_slot_calls.error
     async def toggle_slot_calls_error(self, ctx, error):
