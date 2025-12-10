@@ -287,19 +287,17 @@ class SlotCallTracker:
         if self.max_requests_per_user > 0 and self.engine:
             try:
                 with self.engine.begin() as conn:
-                    # Lock the user's rows to prevent concurrent requests
+                    # Count the user's total requests
                     if self.server_id:
                         result = conn.execute(text("""
                             SELECT COUNT(*) FROM slot_requests
                             WHERE LOWER(kick_username) = LOWER(:username)
                             AND discord_server_id = :server_id
-                            FOR UPDATE
                         """), {"username": kick_username, "server_id": self.server_id}).fetchone()
                     else:
                         result = conn.execute(text("""
                             SELECT COUNT(*) FROM slot_requests
                             WHERE LOWER(kick_username) = LOWER(:username)
-                            FOR UPDATE
                         """), {"username": kick_username}).fetchone()
 
                     total_requests = result[0] if result else 0
