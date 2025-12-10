@@ -1243,7 +1243,8 @@ async def kick_chat_loop(channel_name: str):
 
                                     # Handle slot call commands (!call or !sr)
                                     content_stripped = content_text.strip()
-                                    if slot_call_tracker and (content_stripped.startswith("!call") or content_stripped.startswith("!sr")):
+                                    # Use bot.slot_call_tracker instead of global variable
+                                    if hasattr(bot, 'slot_call_tracker') and bot.slot_call_tracker and (content_stripped.startswith("!call") or content_stripped.startswith("!sr")):
                                         # 🔒 SECURITY: Check if user is blacklisted
                                         is_blacklisted = False
                                         try:
@@ -1267,7 +1268,7 @@ async def kick_chat_loop(channel_name: str):
                                                 slot_call = content_stripped[3:].strip()[:200]  # Remove "!sr"
 
                                             if slot_call:  # Only process if there's actually a call
-                                                await slot_call_tracker.handle_slot_call(username, slot_call)
+                                                await bot.slot_call_tracker.handle_slot_call(username, slot_call)
                                             else:
                                                 # Send usage message when no content is provided (only to non-blacklisted users)
                                                 try:

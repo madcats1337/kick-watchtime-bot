@@ -326,45 +326,6 @@ class SlotCallTracker:
         else:
             logger.info(f"[LIMIT CHECK] SKIPPED - max_requests_per_user is {self.max_requests_per_user} (must be > 0) or engine is None")
 
-        # Check max added to hunt limit (if enabled) - blocks new requests if user already has max in hunt
-        # Using transaction with locking to prevent race conditions
-        if self.engine:
-            try:
-                with self.engine.begin() as conn:
-                    max_added_result = conn.execute(text("""
-                        SELECT value FROM bot_settings
-                        WHERE key = 'slot_max_added_requests'
-                    """)).fetchone()
-
-                    max_added = int(max_added_result[0]) if max_added_result else 0
-
-                    if max_added > 0:
-                        # Count how many added_to_hunt requests this user already has (with lock)
-                        added_count_result = conn.execute(text("""
-                            SELECT COUNT(*) FROM slot_requests
-                            WHERE LOWER(kick_username) = LOWER(:username)
-                            AND added_to_hunt = TRUE
-                            FOR UPDATE
-                        """), {"username": kick_username}).fetchone()
-
-                        added_count = added_count_result[0] if added_count_result else 0
-
-                        if added_count >= max_added:
-                            # User has reached their added to hunt limit - block new requests
-                            if self.kick_send_callback:
-                                try:
-                                    await self.kick_send_callback(
-                                        f"@{kick_username} You already have {max_added} slot(s) in the active bonus hunt. "
-                                        f"Please wait for the hunt to complete before requesting more."
-                                    )
-                                    logger.info(f"User {kick_username} blocked: {added_count}/{max_added} slots in active hunt")
-                                except Exception as e:
-                                    logger.error(f"Failed to send max added message to Kick: {e}")
-                            return
-            except Exception as e:
-                logger.error(f"Failed to check max added to hunt limit: {e}")
-                # Continue anyway to not block legitimate requests on DB errors
-
         # 🔒 SECURITY: Input validation - prevent excessively long inputs
         kick_username_safe = kick_username[:self.max_username_length]
         slot_call_safe = slot_call[:self.max_slot_call_length]
@@ -430,11 +391,19 @@ class SlotCallTracker:
 
                     if prevent_duplicates:
                         # Check if this slot has already been requested (unpicked OR added to hunt)
-                        dup_result = conn.execute(text("""
-                            SELECT COUNT(*) FROM slot_requests
-                            WHERE LOWER(slot_call) = LOWER(:slot_call)
-                            AND (picked = FALSE OR added_to_hunt = TRUE)
-                        """), {"slot_call": slot_call_safe}).fetchone()
+                        if self.server_id:
+                            dup_result = conn.execute(text("""
+                                SELECT COUNT(*) FROM slot_requests
+                                WHERE LOWER(slot_call) = LOWER(:slot_call)
+                                AND (picked = FALSE OR added_to_hunt = TRUE)
+                                AND discord_server_id = :server_id
+                            """), {"slot_call": slot_call_safe, "server_id": self.server_id}).fetchone()
+                        else:
+                            dup_result = conn.execute(text("""
+                                SELECT COUNT(*) FROM slot_requests
+                                WHERE LOWER(slot_call) = LOWER(:slot_call)
+                                AND (picked = FALSE OR added_to_hunt = TRUE)
+                            """), {"slot_call": slot_call_safe}).fetchone()
 
                         if dup_result and dup_result[0] > 0:
                             # Slot already requested or in active hunt
@@ -474,10 +443,16 @@ class SlotCallTracker:
             if self.engine:
                 try:
                     with self.engine.begin() as conn:
-                        conn.execute(text("""
-                            INSERT INTO slot_requests (kick_username, slot_call, requested_at)
-                            VALUES (:username, :slot_call, CURRENT_TIMESTAMP)
-                        """), {"username": kick_username_safe, "slot_call": slot_call_safe})
+                        if self.server_id:
+                            conn.execute(text("""
+                                INSERT INTO slot_requests (kick_username, slot_call, requested_at, discord_server_id)
+                                VALUES (:username, :slot_call, CURRENT_TIMESTAMP, :server_id)
+                            """), {"username": kick_username_safe, "slot_call": slot_call_safe, "server_id": self.server_id})
+                        else:
+                            conn.execute(text("""
+                                INSERT INTO slot_requests (kick_username, slot_call, requested_at)
+                                VALUES (:username, :slot_call, CURRENT_TIMESTAMP)
+                            """), {"username": kick_username_safe, "slot_call": slot_call_safe})
                     logger.debug(f"Saved slot request to database")
 
                     # Publish event for real-time dashboard updates
