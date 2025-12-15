@@ -359,15 +359,7 @@ try:
             conn.execute(text("ALTER TABLE links ADD COLUMN IF NOT EXISTS linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
         except Exception as e:
             print(f"ℹ️ links table migration (linked_at) note: {e}")
-        # Backfill missing server ids (only if a guild id is configured)
-        if DISCORD_GUILD_ID:
-            try:
-                conn.execute(text("""
-                    UPDATE links SET discord_server_id = :sid
-                    WHERE discord_server_id IS NULL OR discord_server_id = 0
-                """), {"sid": DISCORD_GUILD_ID})
-            except Exception as e:
-                print(f"ℹ️ links table backfill note: {e}")
+        # Note: No automatic backfill for multiserver - each link must have discord_server_id set
 
         # Create pending_links table
         conn.execute(text("""
@@ -901,8 +893,9 @@ def load_watchtime_roles():
 # -------------------------
 async def log_link_attempt(discord_user, kick_username: str, success: bool, error_message: str = None):
     """Log account linking attempts to configured Discord channel."""
-    if not DISCORD_GUILD_ID:
-        return
+    # Multiserver: guild_id should be passed as parameter, but for now skip if not available
+    # TODO: Update callers to pass guild_id
+    return  # Temporarily disabled for multiserver migration
 
     try:
         with engine.connect() as conn:
@@ -1751,11 +1744,11 @@ async def award_points_for_watchtime(active_usernames: list, guild_id: Optional[
         guild_id: Discord guild/server ID for multi-server support
     """
     try:
-        # Use DISCORD_GUILD_ID if no guild_id provided (backwards compatible)
-        server_id = guild_id or DISCORD_GUILD_ID
-        if not server_id:
-            print("[Points] ⚠️ No guild_id provided and DISCORD_GUILD_ID not set")
+        # Multiserver: Require guild_id parameter
+        if not guild_id:
+            print("[Points] ⚠️ No guild_id provided for award_points")
             return
+        server_id = guild_id
             
         # Get point settings from database
         points_per_5min = 1  # Default: 1 point per 5 minutes
@@ -1925,31 +1918,41 @@ async def update_watchtime_task():
         # Calculate minutes to add
         minutes_to_add = WATCH_INTERVAL_SECONDS / 60
 
-        # Get guild_id for multiserver support (use DISCORD_GUILD_ID for backwards compatibility)
-        server_id = DISCORD_GUILD_ID
-        if not server_id:
-            print("[Watchtime] ⚠️ DISCORD_GUILD_ID not set, skipping watchtime update")
-            return
+        # Multiserver: Process each guild independently
+        for guild in bot.guilds:
+            server_id = guild.id
+            # Get active viewers for this guild
+            guild_active_viewers = active_viewers_by_guild.get(server_id, {})
+            
+            # Filter to active users (seen in last 5 minutes)
+            active_users = {
+                user: last_seen
+                for user, last_seen in list(guild_active_viewers.items())
+                if (datetime.now(timezone.utc) - last_seen).total_seconds() < (WATCH_INTERVAL_SECONDS + 60)
+            }
+            
+            if not active_users:
+                continue
 
-        # Update all active users in a single transaction (multiserver: composite PK with discord_server_id)
-        with engine.begin() as conn:
-            for user, last_seen in active_users.items():
-                try:
-                    conn.execute(text("""
-                        INSERT INTO watchtime (username, minutes, last_active, discord_server_id)
-                        VALUES (:u, :m, :t, :sid)
-                        ON CONFLICT(username, discord_server_id) DO UPDATE SET
-                            minutes = watchtime.minutes + :m,
-                            last_active = :t
-                    """), {
-                        "u": user,
-                        "m": minutes_to_add,
-                        "t": last_seen.isoformat(),
-                        "sid": server_id
-                    })
-                    if watchtime_debug_enabled:
-                        print(f"[Watchtime Debug] ✅ Updated {user}: +{minutes_to_add} minutes (server {server_id})")
-                except Exception as e:
+            # Update all active users for this guild
+            with engine.begin() as conn:
+                for user, last_seen in active_users.items():
+                    try:
+                        conn.execute(text("""
+                            INSERT INTO watchtime (username, minutes, last_active, discord_server_id)
+                            VALUES (:u, :m, :t, :sid)
+                            ON CONFLICT(username, discord_server_id) DO UPDATE SET
+                                minutes = watchtime.minutes + :m,
+                                last_active = :t
+                        """), {
+                            "u": user,
+                            "m": minutes_to_add,
+                            "t": last_seen.isoformat(),
+                            "sid": server_id
+                        })
+                        if watchtime_debug_enabled:
+                            print(f"[Watchtime Debug][Guild {guild.name}] \u2705 Updated {user}: +{minutes_to_add} minutes")
+                    except Exception as e:
                     print(f"⚠️ Error updating watchtime for {user}: {e}")
                     continue  # Skip this user but continue with others
 
@@ -1985,19 +1988,13 @@ async def update_watchtime_task_error(error):
 async def update_roles_task():
     """Update Discord roles based on watchtime."""
     try:
-        if not DISCORD_GUILD_ID:
-            print("⚠️ Role updates disabled: DISCORD_GUILD_ID not set")
-            return
-
-        guild = bot.get_guild(DISCORD_GUILD_ID)
-        if not guild:
-            print(f"⚠️ Could not find guild with ID {DISCORD_GUILD_ID}")
-            return
-
-        # Validate bot permissions
-        if not guild.me.guild_permissions.manage_roles:
-            print("⚠️ Bot lacks manage_roles permission!")
-            return
+        # Multiserver: Update roles for all guilds
+        for guild in bot.guilds:
+            try:
+                # Validate bot permissions
+                if not guild.me.guild_permissions.manage_roles:
+                    print(f"⚠️ [Guild {guild.name}] Bot lacks manage_roles permission!")
+                    continue
 
         # Load current role configuration from database
         current_roles = load_watchtime_roles()
@@ -2145,9 +2142,10 @@ async def check_oauth_notifications_task():
                                 await user.send(f"✅ **Verification Successful!**\n\nYour Discord account has been linked to Kick account **{actual_kick_username}**.")
                             except discord.Forbidden:
                                 # If DM fails, try to find a guild channel
-                                if DISCORD_GUILD_ID:
-                                    guild = bot.get_guild(DISCORD_GUILD_ID)
-                                    if guild:
+                                # Multiserver: Try all guilds where the user is a member
+                                for guild in bot.guilds:
+                                    if not guild:
+                                        continue
                                         member = guild.get_member(int(discord_id))
                                         if member:
                                             # Try to send in the same channel as original message, or system channel
