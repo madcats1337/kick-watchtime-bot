@@ -1996,82 +1996,80 @@ async def update_roles_task():
                     print(f"⚠️ [Guild {guild.name}] Bot lacks manage_roles permission!")
                     continue
 
-        # Load current role configuration from database
-        current_roles = load_watchtime_roles()
+                # Load current role configuration from database
+                current_roles = load_watchtime_roles()
 
-        # Cache role objects and validate they exist
-        role_cache = {}
-        for role_info in current_roles:
-            role = discord.utils.get(guild.roles, name=role_info["name"])
-            if not role:
-                print(f"⚠️ Role {role_info['name']} not found in server!")
-                continue
-            role_cache[role_info["name"]] = role
+                # Cache role objects and validate they exist
+                role_cache = {}
+                for role_info in current_roles:
+                    role = discord.utils.get(guild.roles, name=role_info["name"])
+                    if not role:
+                        print(f"⚠️ [Guild {guild.name}] Role {role_info['name']} not found in server!")
+                        continue
+                    role_cache[role_info["name"]] = role
 
+                # Get linked users with watchtime for this guild
+                with engine.connect() as conn:
+                    rows = conn.execute(text("""
+                        SELECT l.discord_id, w.minutes, l.kick_name
+                        FROM links l
+                        JOIN watchtime w ON l.kick_name = w.username AND l.discord_server_id = w.discord_server_id
+                        WHERE l.discord_server_id = :sid
+                    """), {"sid": guild.id}).fetchall()
+
+                # Update roles for each user
+                for discord_id, minutes, kick_name in rows:
+                    member = guild.get_member(int(discord_id))
+                    if not member:
+                        continue
+
+                    # Assign all eligible roles
+                    for role_info in current_roles:
+                        role = role_cache.get(role_info["name"])
+                        if role and minutes >= role_info["minutes"] and role not in member.roles:
+                            try:
+                                await member.add_roles(role, reason=f"Reached {role_info['minutes']} min watchtime")
+                                print(f"[Guild {guild.name}] Assigned {role.name} to {member.display_name} ({kick_name})")
+
+                                # Send DM notification to user
+                                try:
+                                    hours = minutes / 60
+                                    embed = discord.Embed(
+                                        title="🎉 New Role Unlocked!",
+                                        description=f"Congratulations! You've earned the **{role.name}** role!",
+                                        color=0x53FC18
+                                    )
+                                    embed.add_field(
+                                        name="Your Watchtime",
+                                        value=f"{minutes:.0f} minutes ({hours:.1f} hours)",
+                                        inline=False
+                                    )
+                                    embed.add_field(
+                                        name="Keep Watching",
+                                        value="Continue watching to unlock more exclusive roles!",
+                                        inline=False
+                                    )
+                                    embed.set_footer(text=f"Kick: {kick_name}")
+
+                                    await member.send(embed=embed)
+                                    print(f"[Guild {guild.name}] Sent role notification DM to {member.display_name}")
+                                except discord.Forbidden:
+                                    pass  # User has DMs disabled
+                                except Exception as dm_error:
+                                    print(f"[Guild {guild.name}] Error sending DM: {dm_error}")
+
+                            except discord.Forbidden:
+                                print(f"[Guild {guild.name}] Missing permission to assign {role.name}")
+                            except Exception as e:
+                                print(f"[Guild {guild.name}] Error assigning role: {e}")
+
+            except Exception as guild_error:
+                print(f"⚠️ [Guild {guild.name}] Role update error: {guild_error}")
+                
     except Exception as e:
         print(f"⚠️ Error in role update task: {e}")
-        await asyncio.sleep(5)  # Wait before retrying
-
-    # Get server_id for multiserver filtering
-    server_id = DISCORD_GUILD_ID
-    if not server_id:
-        print("⚠️ Role updates disabled: DISCORD_GUILD_ID not set")
-        return
-
-    with engine.connect() as conn:
-        # Multiserver: Filter links and watchtime by discord_server_id
-        rows = conn.execute(text("""
-            SELECT l.discord_id, w.minutes, l.kick_name
-            FROM links l
-            JOIN watchtime w ON l.kick_name = w.username AND l.discord_server_id = w.discord_server_id
-            WHERE l.discord_server_id = :sid
-        """), {"sid": server_id}).fetchall()
-
-    for discord_id, minutes, kick_name in rows:
-        member = guild.get_member(int(discord_id))
-        if not member:
-            continue
-
-        # Assign all eligible roles
-        for role_info in current_roles:
-            role = discord.utils.get(guild.roles, name=role_info["name"])
-            if role and minutes >= role_info["minutes"] and role not in member.roles:
-                try:
-                    await member.add_roles(role, reason=f"Reached {role_info['minutes']} min watchtime")
-                    print(f"[Discord] Assigned {role.name} to {member.display_name} ({kick_name})")
-
-                    # Send DM notification to user
-                    try:
-                        hours = minutes / 60
-                        embed = discord.Embed(
-                            title="🎉 New Role Unlocked!",
-                            description=f"Congratulations! You've earned the **{role.name}** role!",
-                            color=0x53FC18
-                        )
-                        embed.add_field(
-                            name="Your Watchtime",
-                            value=f"{minutes:.0f} minutes ({hours:.1f} hours)",
-                            inline=False
-                        )
-                        embed.add_field(
-                            name="Keep Watching",
-                            value="Continue watching to unlock more exclusive roles!",
-                            inline=False
-                        )
-                        embed.set_footer(text=f"Kick: {kick_name}")
-
-                        await member.send(embed=embed)
-                        print(f"[Discord] Sent role notification DM to {member.display_name}")
-                    except discord.Forbidden:
-                        # User has DMs disabled
-                        print(f"[Discord] Could not DM {member.display_name} (DMs disabled)")
-                    except Exception as dm_error:
-                        print(f"[Discord] Error sending DM: {dm_error}")
-
-                except discord.Forbidden:
-                    print(f"[Discord] Missing permission to assign {role.name}")
-                except Exception as e:
-                    print(f"[Discord] Error assigning role: {e}")
+        import traceback
+        traceback.print_exc()
 
 # -------------------------
 # Cleanup expired verification codes and old chat data
