@@ -4101,54 +4101,51 @@ async def health_check_error(ctx, error):
 async def sync_shuffle_role_on_startup(bot, engine):
     """Sync Shuffle Code User role with verified links on bot startup"""
     try:
-        # Get the guild
-        if not DISCORD_GUILD_ID:
-            return
+        # Sync for all guilds
+        for guild in bot.guilds:
+            # Get the "Shuffle Code User" role
+            shuffle_role = discord.utils.get(guild.roles, name="Shuffle Code User")
+            if not shuffle_role:
+                continue  # Skip guilds without this role
 
-        guild = bot.get_guild(DISCORD_GUILD_ID)
-        if not guild:
-            return
+            # Get all verified Shuffle links for this guild
+            with engine.begin() as conn:
+                result = conn.execute(text("""
+                    SELECT DISTINCT discord_id
+                    FROM raffle_shuffle_links
+                    WHERE verified = TRUE
+                        AND (discord_server_id IS NULL OR discord_server_id = :guild_id)
+                """), {"guild_id": guild.id})
+                verified_discord_ids = {row[0] for row in result.fetchall()}
 
-        # Get the "Shuffle Code User" role
-        shuffle_role = discord.utils.get(guild.roles, name="Shuffle Code User")
-        if not shuffle_role:
-            print("⚠️ 'Shuffle Code User' role not found - skipping sync")
-            return
+            if not verified_discord_ids:
+                continue  # No verified links for this guild
 
-        # Get all verified Shuffle links
-        with engine.begin() as conn:
-            result = conn.execute(text("""
-                SELECT DISTINCT discord_id
-                FROM raffle_shuffle_links
-                WHERE verified = TRUE
-            """))
-            verified_discord_ids = {row[0] for row in result.fetchall()}
+            added = 0
+            removed = 0
 
-        added = 0
-        removed = 0
+            # Remove role from users without verified links
+            members_with_role = shuffle_role.members
+            for member in members_with_role:
+                if member.id not in verified_discord_ids:
+                    try:
+                        await member.remove_roles(shuffle_role, reason="Startup sync: No verified Shuffle link")
+                        removed += 1
+                    except Exception as e:
+                        print(f"⚠️ Could not remove Shuffle role from {member}: {e}")
 
-        # Remove role from users without verified links
-        members_with_role = shuffle_role.members
-        for member in members_with_role:
-            if member.id not in verified_discord_ids:
-                try:
-                    await member.remove_roles(shuffle_role, reason="Startup sync: No verified Shuffle link")
-                    removed += 1
-                except Exception as e:
-                    print(f"⚠️ Could not remove Shuffle role from {member}: {e}")
+            # Add role to verified users who don't have it
+            for discord_id in verified_discord_ids:
+                member = guild.get_member(discord_id)
+                if member and shuffle_role not in member.roles:
+                    try:
+                        await member.add_roles(shuffle_role, reason="Startup sync: Has verified Shuffle link")
+                        added += 1
+                    except Exception as e:
+                        print(f"⚠️ Could not add Shuffle role to {member}: {e}")
 
-        # Add role to verified users who don't have it
-        for discord_id in verified_discord_ids:
-            member = guild.get_member(discord_id)
-            if member and shuffle_role not in member.roles:
-                try:
-                    await member.add_roles(shuffle_role, reason="Startup sync: Has verified Shuffle link")
-                    added += 1
-                except Exception as e:
-                    print(f"⚠️ Could not add Shuffle role to {member}: {e}")
-
-        if added > 0 or removed > 0:
-            print(f"✅ Shuffle role sync: +{added}, -{removed}")
+            if added > 0 or removed > 0:
+                print(f"✅ Shuffle role sync for {guild.name}: +{added}, -{removed}")
 
     except Exception as e:
         print(f"⚠️ Error syncing Shuffle roles on startup: {e}")
