@@ -57,9 +57,18 @@ class SlotCallTracker:
                         slot_call TEXT NOT NULL,
                         requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         picked BOOLEAN DEFAULT FALSE,
-                        picked_at TIMESTAMP
+                        picked_at TIMESTAMP,
+                        discord_server_id BIGINT
                     )
                 """))
+                
+                # Add discord_server_id column if it doesn't exist (migration)
+                try:
+                    conn.execute(text("""
+                        ALTER TABLE slot_requests ADD COLUMN IF NOT EXISTS discord_server_id BIGINT
+                    """))
+                except Exception:
+                    pass  # Column might already exist
 
                 # Add performance index for requested_at ordering
                 conn.execute(text("""
@@ -551,14 +560,23 @@ class SlotCallCommands(commands.Cog):
 
         try:
             with self.tracker.engine.connect() as conn:
-                # Get a random unpicked slot request
-                result = conn.execute(text("""
-                    SELECT id, kick_username, slot_call, requested_at
-                    FROM slot_requests
-                    WHERE picked = FALSE
-                    ORDER BY RANDOM()
-                    LIMIT 1
-                """)).fetchone()
+                # Get a random unpicked slot request (filter by server_id if available)
+                if self.tracker.server_id:
+                    result = conn.execute(text("""
+                        SELECT id, kick_username, slot_call, requested_at
+                        FROM slot_requests
+                        WHERE picked = FALSE AND discord_server_id = :server_id
+                        ORDER BY RANDOM()
+                        LIMIT 1
+                    """), {"server_id": self.tracker.server_id}).fetchone()
+                else:
+                    result = conn.execute(text("""
+                        SELECT id, kick_username, slot_call, requested_at
+                        FROM slot_requests
+                        WHERE picked = FALSE
+                        ORDER BY RANDOM()
+                        LIMIT 1
+                    """)).fetchone()
 
                 if not result:
                     await ctx.send("❌ No slot requests available. The list may be empty or all requests have been picked.")
@@ -621,10 +639,24 @@ class SlotCallCommands(commands.Cog):
 
         try:
             with self.tracker.engine.connect() as conn:
-                # Get counts
-                total = conn.execute(text("SELECT COUNT(*) FROM slot_requests")).fetchone()[0]
-                unpicked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = FALSE")).fetchone()[0]
-                picked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = TRUE")).fetchone()[0]
+                # Get counts (filter by server_id if available)
+                if self.tracker.server_id:
+                    total = conn.execute(text("""
+                        SELECT COUNT(*) FROM slot_requests
+                        WHERE discord_server_id = :server_id
+                    """), {"server_id": self.tracker.server_id}).fetchone()[0]
+                    unpicked = conn.execute(text("""
+                        SELECT COUNT(*) FROM slot_requests
+                        WHERE picked = FALSE AND discord_server_id = :server_id
+                    """), {"server_id": self.tracker.server_id}).fetchone()[0]
+                    picked = conn.execute(text("""
+                        SELECT COUNT(*) FROM slot_requests
+                        WHERE picked = TRUE AND discord_server_id = :server_id
+                    """), {"server_id": self.tracker.server_id}).fetchone()[0]
+                else:
+                    total = conn.execute(text("SELECT COUNT(*) FROM slot_requests")).fetchone()[0]
+                    unpicked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = FALSE")).fetchone()[0]
+                    picked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = TRUE")).fetchone()[0]
 
                 embed = discord.Embed(
                     title="🎰 Slot Request Statistics",
@@ -658,7 +690,13 @@ class SlotCallCommands(commands.Cog):
 
         try:
             with self.tracker.engine.begin() as conn:
-                result = conn.execute(text("DELETE FROM slot_requests"))
+                if self.tracker.server_id:
+                    result = conn.execute(text("""
+                        DELETE FROM slot_requests
+                        WHERE discord_server_id = :server_id
+                    """), {"server_id": self.tracker.server_id})
+                else:
+                    result = conn.execute(text("DELETE FROM slot_requests"))
                 deleted_count = result.rowcount
 
             embed = discord.Embed(

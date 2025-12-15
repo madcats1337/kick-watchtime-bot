@@ -16,9 +16,10 @@ logger = logging.getLogger(__name__)
 class GiftedSubTracker:
     """Tracks gifted subs and awards raffle tickets"""
 
-    def __init__(self, engine):
+    def __init__(self, engine, server_id=None):
         self.engine = engine
-        self.ticket_manager = TicketManager(engine)
+        self.server_id = server_id
+        self.ticket_manager = TicketManager(engine, server_id=server_id)
 
     async def handle_gifted_sub_event(self, event_data):
         """
@@ -108,11 +109,17 @@ class GiftedSubTracker:
                     logger.debug(f"Gifted sub event {event_id} already processed - skipping")
                     return {'status': 'duplicate', 'event_id': event_id}
 
-                # Look up Discord ID from links table
-                discord_result = conn.execute(text("""
-                    SELECT discord_id FROM links
-                    WHERE kick_name = :kick_name
-                """), {'kick_name': gifter_kick_name})
+                # Look up Discord ID from links table (multiserver: filter by server_id)
+                if self.server_id:
+                    discord_result = conn.execute(text("""
+                        SELECT discord_id FROM links
+                        WHERE kick_name = :kick_name AND discord_server_id = :sid
+                    """), {'kick_name': gifter_kick_name, 'sid': self.server_id})
+                else:
+                    discord_result = conn.execute(text("""
+                        SELECT discord_id FROM links
+                        WHERE kick_name = :kick_name
+                    """), {'kick_name': gifter_kick_name})
 
                 discord_row = discord_result.fetchone()
                 discord_id = discord_row[0] if discord_row else None
@@ -232,28 +239,39 @@ class GiftedSubTracker:
         """Get the ID of the currently active raffle period"""
         try:
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
-                    SELECT id FROM raffle_periods
-                    WHERE status = 'active'
-                    ORDER BY start_date DESC
-                    LIMIT 1
-                """))
+                if self.server_id:
+                    # Multiserver: filter by discord_server_id
+                    result = conn.execute(text("""
+                        SELECT id FROM raffle_periods
+                        WHERE status = 'active' AND discord_server_id = :sid
+                        ORDER BY start_date DESC
+                        LIMIT 1
+                    """), {"sid": self.server_id})
+                else:
+                    # Backwards compatible: no server filter
+                    result = conn.execute(text("""
+                        SELECT id FROM raffle_periods
+                        WHERE status = 'active'
+                        ORDER BY start_date DESC
+                        LIMIT 1
+                    """))
                 row = result.fetchone()
                 return row[0] if row else None
         except Exception as e:
             logger.error(f"Failed to get active period: {e}")
             return None
 
-def setup_gifted_sub_handler(engine):
+def setup_gifted_sub_handler(engine, server_id=None):
     """
     Create a gifted sub tracker instance
 
     Args:
         engine: SQLAlchemy engine
+        server_id: Discord server/guild ID for multi-server support (optional)
 
     Returns:
         GiftedSubTracker: Initialized tracker
     """
-    tracker = GiftedSubTracker(engine)
-    logger.info("✅ Gifted sub tracker initialized")
+    tracker = GiftedSubTracker(engine, server_id=server_id)
+    logger.info(f"✅ Gifted sub tracker initialized" + (f" (server {server_id})" if server_id else ""))
     return tracker

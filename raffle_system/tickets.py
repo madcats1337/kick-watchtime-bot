@@ -12,8 +12,9 @@ logger = logging.getLogger(__name__)
 class TicketManager:
     """Manages raffle tickets for all users"""
 
-    def __init__(self, engine):
+    def __init__(self, engine, server_id=None):
         self.engine = engine
+        self.server_id = server_id
 
     def get_user_tickets(self, discord_id, period_id=None):
         """
@@ -373,12 +374,22 @@ class TicketManager:
         """Get the ID of the currently active raffle period"""
         try:
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
-                    SELECT id FROM raffle_periods
-                    WHERE status = 'active'
-                    ORDER BY start_date DESC
-                    LIMIT 1
-                """))
+                if self.server_id:
+                    # Multiserver: filter by discord_server_id
+                    result = conn.execute(text("""
+                        SELECT id FROM raffle_periods
+                        WHERE status = 'active' AND discord_server_id = :sid
+                        ORDER BY start_date DESC
+                        LIMIT 1
+                    """), {"sid": self.server_id})
+                else:
+                    # Backwards compatible: no server filter
+                    result = conn.execute(text("""
+                        SELECT id FROM raffle_periods
+                        WHERE status = 'active'
+                        ORDER BY start_date DESC
+                        LIMIT 1
+                    """))
                 row = result.fetchone()
                 return row[0] if row else None
         except Exception as e:

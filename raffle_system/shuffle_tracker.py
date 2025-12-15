@@ -27,9 +27,10 @@ class ShuffleWagerTracker:
     Settings are loaded from database (bot_settings) with env var fallbacks.
     """
 
-    def __init__(self, engine, bot_settings=None):
+    def __init__(self, engine, bot_settings=None, server_id=None):
         self.engine = engine
-        self.ticket_manager = TicketManager(engine)
+        self.server_id = server_id
+        self.ticket_manager = TicketManager(engine, server_id=server_id)
         self.bot_settings = bot_settings
 
         # Load settings from bot_settings (database) or fall back to env vars
@@ -268,6 +269,32 @@ class ShuffleWagerTracker:
             traceback.print_exc()
             return {'status': 'error', 'error': str(e), 'updates': 0}
 
+    def _get_active_period_id(self):
+        """Get the ID of the currently active raffle period"""
+        try:
+            with self.engine.begin() as conn:
+                if self.server_id:
+                    # Multiserver: filter by discord_server_id
+                    result = conn.execute(text("""
+                        SELECT id FROM raffle_periods
+                        WHERE status = 'active' AND discord_server_id = :sid
+                        ORDER BY start_date DESC
+                        LIMIT 1
+                    """), {"sid": self.server_id})
+                else:
+                    # Backwards compatible: no server filter
+                    result = conn.execute(text("""
+                        SELECT id FROM raffle_periods
+                        WHERE status = 'active'
+                        ORDER BY start_date DESC
+                        LIMIT 1
+                    """))
+                row = result.fetchone()
+                return row[0] if row else None
+        except Exception as e:
+            logger.error(f"Failed to get active period: {e}")
+            return None
+
     async def _fetch_shuffle_data(self):
         """
         Fetch wager data from gambling platform affiliate page
@@ -388,13 +415,14 @@ class ShuffleWagerTracker:
             logger.error(f"Failed to get active period: {e}")
             return None
 
-async def setup_shuffle_tracker(bot, engine):
+async def setup_shuffle_tracker(bot, engine, server_id=None):
     """
     Setup the Shuffle wager tracker as a Discord bot task
 
     Args:
         bot: Discord bot instance
         engine: SQLAlchemy engine
+        server_id: Discord server/guild ID for multi-server support (optional)
     """
     from discord.ext import tasks
 
@@ -403,7 +431,7 @@ async def setup_shuffle_tracker(bot, engine):
     if hasattr(bot, 'settings_manager') and bot.settings_manager:
         bot_settings = bot.settings_manager
 
-    tracker = ShuffleWagerTracker(engine, bot_settings=bot_settings)
+    tracker = ShuffleWagerTracker(engine, bot_settings=bot_settings, server_id=server_id)
 
     @tasks.loop(minutes=15)  # Run every 15 minutes
     async def update_shuffle_task():
