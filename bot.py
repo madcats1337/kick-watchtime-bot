@@ -93,13 +93,12 @@ KICK_CHANNEL = os.getenv("KICK_CHANNEL")  # May be None, will be loaded from DB 
 KICK_CHATROOM_ID = os.getenv("KICK_CHATROOM_ID")  # Set this on Railway to skip fetching
 
 # Multiserver support - settings loaded per-guild dynamically
-# DISCORD_GUILD_ID kept for backwards compatibility but not required
+# DISCORD_GUILD_ID: If set, used for global bot_settings (single-server backwards compatibility)
 DISCORD_GUILD_ID = int(os.getenv("DISCORD_GUILD_ID")) if os.getenv("DISCORD_GUILD_ID") else None
 if DISCORD_GUILD_ID:
-    print(f"⚠️  DISCORD_GUILD_ID is set ({DISCORD_GUILD_ID}) but bot operates in multiserver mode")
-    print("   Settings will still be loaded per-guild. Consider removing this env var.")
+    print(f"✅ Single-server mode: Primary guild {DISCORD_GUILD_ID}")
 else:
-    print("✅ Multiserver mode: Settings loaded per-guild dynamically")
+    print("✅ Multiserver mode: No primary guild set")
 
 # Database configuration with cloud PostgreSQL support
 DATABASE_URL = os.getenv("DATABASE_URL", "")
@@ -747,15 +746,22 @@ except Exception as e:
 # Bot Settings Manager
 # -------------------------
 # Multi-server support: Per-guild settings managers
-# Initialize global settings manager for backwards compatibility only
-# NOTE: All features should use get_guild_settings(guild_id) for per-guild settings
-# The global bot_settings is only for legacy code and should eventually be phased out
-bot_settings = BotSettingsManager(engine)
-print("✅ Bot settings manager initialized")
-print("   Use get_guild_settings(guild_id) for per-guild configuration")
+# Initialize global settings manager
+# If DISCORD_GUILD_ID is set: Load settings for that guild (single-server mode)
+# If not set: Load global settings only (multiserver mode)
+if DISCORD_GUILD_ID:
+    bot_settings = BotSettingsManager(engine, guild_id=DISCORD_GUILD_ID)
+    print(f"✅ Bot settings loaded for guild {DISCORD_GUILD_ID}")
+else:
+    bot_settings = BotSettingsManager(engine)
+    print("✅ Bot settings loaded (global only - configure per-guild in Dashboard)")
 
 # Dictionary to store per-guild settings managers
 guild_settings_managers = {}
+
+# Pre-populate with primary guild if set
+if DISCORD_GUILD_ID:
+    guild_settings_managers[DISCORD_GUILD_ID] = bot_settings
 
 def get_guild_settings(guild_id: Optional[int] = None) -> BotSettingsManager:
     """
@@ -779,11 +785,19 @@ def get_guild_settings(guild_id: Optional[int] = None) -> BotSettingsManager:
     
     return guild_settings_managers[guild_id]
 
-# DO NOT load guild-specific settings at startup - they should be loaded per-command
-# Each command/event should call get_guild_settings(ctx.guild.id) or get_guild_settings(guild.id)
-print("⚠️  Note: Guild-specific settings (KICK_CHANNEL, channels, etc.) are NOT loaded globally")
-print("   Each Discord server must configure settings via Dashboard → Profile Settings")
-print("   Settings are loaded dynamically when commands are executed")
+# Load KICK_CHANNEL from global settings (will be per-guild in multiserver)
+if not KICK_CHANNEL:
+    KICK_CHANNEL = bot_settings.kick_channel
+    if KICK_CHANNEL:
+        print(f"✅ Loaded KICK_CHANNEL from database: {KICK_CHANNEL}")
+    else:
+        print("⚠️ Warning: KICK_CHANNEL not configured. Configure in Dashboard → Profile Settings")
+
+# Load SLOT_CALLS_CHANNEL_ID from global settings
+if not SLOT_CALLS_CHANNEL_ID:
+    SLOT_CALLS_CHANNEL_ID = bot_settings.slot_calls_channel_id
+    if SLOT_CALLS_CHANNEL_ID:
+        print(f"✅ Loaded SLOT_CALLS_CHANNEL_ID from database: {SLOT_CALLS_CHANNEL_ID}")
 
 # -------------------------
 # Discord bot setup
