@@ -619,59 +619,94 @@ try:
                     ALTER TABLE {table} ADD COLUMN IF NOT EXISTS discord_server_id BIGINT
                 """))
             except Exception as e:
-                print(f"ℹ️ Migration note ({table}): {e}")
+                # Column might already exist - this is fine
+                pass
 
         # Step 2: Backfill existing data with first server ID (if exists)
+        # Only attempt if servers table exists and has data
         try:
-            first_server = conn.execute(text("""
-                SELECT discord_server_id FROM servers LIMIT 1
-            """)).fetchone()
+            # Check if servers table exists
+            servers_exist = conn.execute(text("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_name = 'servers'
+                )
+            """)).fetchone()[0]
             
-            if first_server:
-                server_id = first_server[0]
-                print(f"🔄 Backfilling tables with server ID: {server_id}")
+            if servers_exist:
+                first_server = conn.execute(text("""
+                    SELECT discord_server_id FROM servers LIMIT 1
+                """)).fetchone()
                 
-                for table in migration_tables:
-                    try:
-                        result = conn.execute(text(f"""
-                            UPDATE {table} SET discord_server_id = :sid WHERE discord_server_id IS NULL
-                        """), {"sid": server_id})
-                        if result.rowcount > 0:
-                            print(f"   ✅ {table}: Updated {result.rowcount} rows")
-                    except Exception as e:
-                        print(f"   ℹ️ {table}: {e}")
+                if first_server:
+                    server_id = first_server[0]
+                    print(f"🔄 Backfilling tables with server ID: {server_id}")
+                    
+                    for table in migration_tables:
+                        try:
+                            result = conn.execute(text(f"""
+                                UPDATE {table} SET discord_server_id = :sid WHERE discord_server_id IS NULL
+                            """), {"sid": server_id})
+                            if result.rowcount > 0:
+                                print(f"   ✅ {table}: Updated {result.rowcount} rows")
+                        except Exception:
+                            pass  # Table might be empty or not exist yet
+                else:
+                    print("ℹ️ No servers found in servers table - skipping backfill")
+            else:
+                print("ℹ️ Servers table not found - skipping backfill")
         except Exception as e:
-            print(f"ℹ️ Backfill note: {e}")
+            print(f"ℹ️ Backfill skipped: {e}")
 
         # Step 3: Update primary keys for tables that need composite keys
+        # Only attempt if tables have data or NULL discord_server_id values filled
         # user_points: (kick_username, discord_server_id)
         try:
-            conn.execute(text("""
-                ALTER TABLE user_points DROP CONSTRAINT IF EXISTS user_points_kick_username_key
-            """))
-            conn.execute(text("""
-                ALTER TABLE user_points DROP CONSTRAINT IF EXISTS user_points_pkey
-            """))
-            conn.execute(text("""
-                ALTER TABLE user_points ADD CONSTRAINT user_points_pkey_multiserver 
-                PRIMARY KEY (kick_username, discord_server_id)
-            """))
-            print("   ✅ user_points: Updated primary key")
+            # First check if table has any rows with NULL discord_server_id
+            null_check = conn.execute(text("""
+                SELECT COUNT(*) FROM user_points WHERE discord_server_id IS NULL
+            """)).fetchone()[0]
+            
+            if null_check == 0:
+                # Safe to update primary key
+                conn.execute(text("""
+                    ALTER TABLE user_points DROP CONSTRAINT IF EXISTS user_points_kick_username_key
+                """))
+                conn.execute(text("""
+                    ALTER TABLE user_points DROP CONSTRAINT IF EXISTS user_points_pkey
+                """))
+                conn.execute(text("""
+                    ALTER TABLE user_points ADD CONSTRAINT user_points_pkey_multiserver 
+                    PRIMARY KEY (kick_username, discord_server_id)
+                """))
+                print("   ✅ user_points: Updated primary key")
+            else:
+                print(f"   ℹ️ user_points: Skipping PK update ({null_check} rows with NULL discord_server_id)")
         except Exception as e:
-            print(f"   ℹ️ user_points PK: {e}")
+            # PK might already be updated or table might be empty
+            pass
 
         # watchtime: (username, discord_server_id)
         try:
-            conn.execute(text("""
-                ALTER TABLE watchtime DROP CONSTRAINT IF EXISTS watchtime_pkey
-            """))
-            conn.execute(text("""
-                ALTER TABLE watchtime ADD CONSTRAINT watchtime_pkey_multiserver 
-                PRIMARY KEY (username, discord_server_id)
-            """))
-            print("   ✅ watchtime: Updated primary key")
+            # Check for NULL values first
+            null_check = conn.execute(text("""
+                SELECT COUNT(*) FROM watchtime WHERE discord_server_id IS NULL
+            """)).fetchone()[0]
+            
+            if null_check == 0:
+                conn.execute(text("""
+                    ALTER TABLE watchtime DROP CONSTRAINT IF EXISTS watchtime_pkey
+                """))
+                conn.execute(text("""
+                    ALTER TABLE watchtime ADD CONSTRAINT watchtime_pkey_multiserver 
+                    PRIMARY KEY (username, discord_server_id)
+                """))
+                print("   ✅ watchtime: Updated primary key")
+            else:
+                print(f"   ℹ️ watchtime: Skipping PK update ({null_check} rows with NULL discord_server_id)")
         except Exception as e:
-            print(f"   ℹ️ watchtime PK: {e}")
+            # PK might already be updated or table might be empty
+            pass
 
         # Step 4: Create indexes for performance
         indexes = {
@@ -691,8 +726,9 @@ try:
                 conn.execute(text(f"""
                     CREATE INDEX IF NOT EXISTS {idx_name} ON {idx_def}
                 """))
-            except Exception as e:
-                print(f"   ℹ️ Index {idx_name}: {e}")
+            except Exception:
+                # Index might already exist
+                pass
 
         print("✅ Multiserver migration complete")
         # =========================================================================
