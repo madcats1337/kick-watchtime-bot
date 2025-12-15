@@ -4343,8 +4343,8 @@ async def on_ready():
                 bot.gtb_managers_by_guild[guild.id] = gtb_managers[guild.id]
                 print(f"✅ [Guild {guild.name}] GTB system initialized")
 
-                # Sync Shuffle code user role for this guild
-                await sync_shuffle_role_on_startup(bot, engine)
+            # Sync Shuffle code user role (run once, not per-guild)
+            await sync_shuffle_role_on_startup(bot, engine)
 
             # Add cogs globally (only once, not per-guild)
             # These cogs will use the per-guild trackers from bot.slot_call_trackers_by_guild
@@ -4354,21 +4354,27 @@ async def on_ready():
                 await bot.add_cog(SlotCallCommands(bot, first_tracker))
                 print(f"✅ Slot call commands cog registered")
 
-            # Setup slot panels per-guild
+            # Create slot panels per-guild (but only add cogs once)
+            first_guild = True
             for guild in bot.guilds:
-                slot_panel = await setup_slot_panel(
-                    bot,
-                    engine,
+                # Create panel instances
+                from features.slot_requests.slot_request_panel import SlotRequestPanel
+                slot_panel = SlotRequestPanel(
+                    bot, 
+                    engine, 
                     slot_call_trackers[guild.id],
                     kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
                 )
+                slot_call_trackers[guild.id].panel = slot_panel
+                
                 if not hasattr(bot, 'slot_panels_by_guild'):
                     bot.slot_panels_by_guild = {}
                 bot.slot_panels_by_guild[guild.id] = slot_panel
                 print(f"✅ [Guild {guild.name}] Slot request panel initialized")
 
-                # Setup GTB panel for this guild
-                gtb_panel = await setup_gtb_panel(
+                # Setup GTB panel for this guild (just the instance, no commands)
+                from features.games.gtb_panel import GTBPanel
+                gtb_panel = GTBPanel(
                     bot,
                     engine,
                     gtb_managers[guild.id],
@@ -4378,6 +4384,30 @@ async def on_ready():
                     bot.gtb_panels_by_guild = {}
                 bot.gtb_panels_by_guild[guild.id] = gtb_panel
                 print(f"✅ [Guild {guild.name}] GTB panel initialized")
+                
+                # Add cogs only once on first iteration
+                if first_guild:
+                    from features.slot_requests.slot_request_panel import SlotRequestPanelCommands
+                    await bot.add_cog(SlotRequestPanelCommands(bot, slot_panel))
+                    print(f"✅ Slot request panel commands cog registered")
+                    
+                    # Add GTB panel command (only once)
+                    @bot.command(name='creategtbpanel')
+                    @commands.has_permissions(administrator=True)
+                    async def create_gtb_panel_cmd(ctx):
+                        """[ADMIN] Create the GTB panel in this channel"""
+                        guild_panel = bot.gtb_panels_by_guild.get(ctx.guild.id)
+                        if not guild_panel:
+                            await ctx.send("❌ GTB panel not initialized for this server")
+                            return
+                        success = await guild_panel.create_panel(ctx.channel)
+                        if success:
+                            await ctx.send("✅ GTB panel created!")
+                        else:
+                            await ctx.send("❌ Failed to create GTB panel.")
+                    
+                    print(f"✅ GTB panel commands registered")
+                    first_guild = False
 
             # Setup raffle commands (global cog)
             await setup_raffle_commands(bot, engine)
