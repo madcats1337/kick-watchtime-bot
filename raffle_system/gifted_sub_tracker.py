@@ -16,10 +16,25 @@ logger = logging.getLogger(__name__)
 class GiftedSubTracker:
     """Tracks gifted subs and awards raffle tickets"""
 
-    def __init__(self, engine, server_id=None):
+    def __init__(self, engine, server_id=None, bot_settings=None):
         self.engine = engine
         self.server_id = server_id
+        self.bot_settings = bot_settings
         self.ticket_manager = TicketManager(engine, server_id=server_id)
+        self._load_settings()
+    
+    def _load_settings(self):
+        """Load gifted sub ticket settings from bot_settings or config"""
+        if self.bot_settings:
+            # Try to get from database settings
+            try:
+                self.bot_settings.refresh()
+                self.gifted_sub_tickets = int(self.bot_settings.get('gifted_sub_tickets') or GIFTED_SUB_TICKETS)
+            except (ValueError, AttributeError):
+                self.gifted_sub_tickets = GIFTED_SUB_TICKETS
+        else:
+            # Fall back to config default
+            self.gifted_sub_tickets = GIFTED_SUB_TICKETS
 
     async def handle_gifted_sub_event(self, event_data):
         """
@@ -142,7 +157,7 @@ class GiftedSubTracker:
                     return {'status': 'not_linked', 'kick_name': gifter_kick_name}
 
                 # Calculate tickets
-                tickets_to_award = gift_count * GIFTED_SUB_TICKETS
+                tickets_to_award = gift_count * self.gifted_sub_tickets
 
                 # Award the tickets
                 sub_description = "Subscribed" if gift_count == 1 else f"Gifted {gift_count} subs"
@@ -261,17 +276,18 @@ class GiftedSubTracker:
             logger.error(f"Failed to get active period: {e}")
             return None
 
-def setup_gifted_sub_handler(engine, server_id=None):
+def setup_gifted_sub_handler(engine, server_id=None, bot_settings=None):
     """
     Create a gifted sub tracker instance
 
     Args:
         engine: SQLAlchemy engine
         server_id: Discord server/guild ID for multi-server support (optional)
+        bot_settings: BotSettingsManager instance for loading settings (optional)
 
     Returns:
         GiftedSubTracker: Initialized tracker
     """
-    tracker = GiftedSubTracker(engine, server_id=server_id)
+    tracker = GiftedSubTracker(engine, server_id=server_id, bot_settings=bot_settings)
     logger.info(f"✅ Gifted sub tracker initialized" + (f" (server {server_id})" if server_id else ""))
     return tracker

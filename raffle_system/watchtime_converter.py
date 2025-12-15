@@ -15,9 +15,25 @@ logger = logging.getLogger(__name__)
 class WatchtimeConverter:
     """Converts watchtime tracking into raffle tickets"""
 
-    def __init__(self, engine):
+    def __init__(self, engine, server_id=None, bot_settings=None):
         self.engine = engine
-        self.ticket_manager = TicketManager(engine)
+        self.server_id = server_id
+        self.bot_settings = bot_settings
+        self.ticket_manager = TicketManager(engine, server_id=server_id)
+        self._load_settings()
+    
+    def _load_settings(self):
+        """Load watchtime ticket settings from bot_settings or config"""
+        if self.bot_settings:
+            # Try to get from database settings
+            try:
+                self.bot_settings.refresh()
+                self.watchtime_tickets_per_hour = int(self.bot_settings.get('watchtime_tickets_per_hour') or WATCHTIME_TICKETS_PER_HOUR)
+            except (ValueError, AttributeError):
+                self.watchtime_tickets_per_hour = WATCHTIME_TICKETS_PER_HOUR
+        else:
+            # Fall back to config default
+            self.watchtime_tickets_per_hour = WATCHTIME_TICKETS_PER_HOUR
 
     async def convert_watchtime_to_tickets(self):
         """
@@ -88,7 +104,7 @@ class WatchtimeConverter:
                     # Convert to tickets (floor to whole hours)
                     hours_to_convert = new_minutes // 60
                     minutes_to_convert = hours_to_convert * 60
-                    tickets_to_award = hours_to_convert * WATCHTIME_TICKETS_PER_HOUR
+                    tickets_to_award = hours_to_convert * self.watchtime_tickets_per_hour
 
                     if tickets_to_award == 0:
                         continue
@@ -200,12 +216,22 @@ class WatchtimeConverter:
         """Get the ID of the currently active raffle period"""
         try:
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
-                    SELECT id FROM raffle_periods
-                    WHERE status = 'active'
-                    ORDER BY start_date DESC
-                    LIMIT 1
-                """))
+                if self.server_id:
+                    # Multiserver: filter by discord_server_id
+                    result = conn.execute(text("""
+                        SELECT id FROM raffle_periods
+                        WHERE status = 'active' AND discord_server_id = :sid
+                        ORDER BY start_date DESC
+                        LIMIT 1
+                    """), {"sid": self.server_id})
+                else:
+                    # Backwards compatible: no server filter
+                    result = conn.execute(text("""
+                        SELECT id FROM raffle_periods
+                        WHERE status = 'active'
+                        ORDER BY start_date DESC
+                        LIMIT 1
+                    """))
                 row = result.fetchone()
                 return row[0] if row else None
         except Exception as e:
