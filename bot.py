@@ -92,9 +92,9 @@ KICK_CHANNEL = os.getenv("KICK_CHANNEL")  # May be None, will be loaded from DB 
 # Can also be configured via dashboard
 KICK_CHATROOM_ID = os.getenv("KICK_CHATROOM_ID")  # Set this on Railway to skip fetching
 
-DISCORD_GUILD_ID = int(os.getenv("DISCORD_GUILD_ID")) if os.getenv("DISCORD_GUILD_ID") else None
-if not DISCORD_GUILD_ID:
-    print("⚠️ Warning: DISCORD_GUILD_ID not set. Some features may be limited.")
+# Multiserver support - no longer using hardcoded DISCORD_GUILD_ID
+# The bot now loads settings per-guild from the database
+DISCORD_GUILD_ID = None  # Deprecated - kept for backwards compatibility
 
 # Database configuration with cloud PostgreSQL support
 DATABASE_URL = os.getenv("DATABASE_URL", "")
@@ -742,13 +742,10 @@ except Exception as e:
 # Bot Settings Manager
 # -------------------------
 # Multi-server support: Per-guild settings managers
-# Initialize with DISCORD_GUILD_ID if set (single-server mode), otherwise global
-if DISCORD_GUILD_ID:
-    bot_settings = BotSettingsManager(engine, guild_id=DISCORD_GUILD_ID)
-    print(f"✅ Bot settings manager initialized for guild {DISCORD_GUILD_ID}")
-else:
-    bot_settings = BotSettingsManager(engine)
-    print("✅ Bot settings manager initialized (global)")
+# Initialize global settings manager (for backwards compatibility)
+# Per-guild settings are loaded via get_guild_settings(guild_id)
+bot_settings = BotSettingsManager(engine)
+print("✅ Bot settings manager initialized (multiserver mode)")
 
 # Dictionary to store per-guild settings managers
 guild_settings_managers = {}
@@ -790,11 +787,7 @@ if not KICK_CHANNEL:
     else:
         print("⚠️ Warning: KICK_CHANNEL not set in env or database. Some features may be limited.")
 
-# Load KICK_CHATROOM_ID from settings if not already set via env
-if not KICK_CHATROOM_ID:
-    KICK_CHATROOM_ID = str(bot_settings.kick_chatroom_id) if bot_settings.kick_chatroom_id else None
-    if KICK_CHATROOM_ID:
-        print(f"✅ Loaded KICK_CHATROOM_ID from database: {KICK_CHATROOM_ID}")
+# KICK_CHATROOM_ID is automatically fetched from channel username - no need to load from settings
 
 # Load SLOT_CALLS_CHANNEL_ID from settings if not already set via env
 if not SLOT_CALLS_CHANNEL_ID:
