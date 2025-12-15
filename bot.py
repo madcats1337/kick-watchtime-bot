@@ -92,13 +92,9 @@ KICK_CHANNEL = os.getenv("KICK_CHANNEL")  # May be None, will be loaded from DB 
 # Can also be configured via dashboard
 KICK_CHATROOM_ID = os.getenv("KICK_CHATROOM_ID")  # Set this on Railway to skip fetching
 
-# Multiserver support - settings loaded per-guild dynamically
-# DISCORD_GUILD_ID: If set, used for global bot_settings (single-server backwards compatibility)
-DISCORD_GUILD_ID = int(os.getenv("DISCORD_GUILD_ID")) if os.getenv("DISCORD_GUILD_ID") else None
-if DISCORD_GUILD_ID:
-    print(f"✅ Single-server mode: Primary guild {DISCORD_GUILD_ID}")
-else:
-    print("✅ Multiserver mode: No primary guild set")
+# Multiserver support: Settings are loaded per-guild dynamically
+# No need for DISCORD_GUILD_ID - each guild has its own configuration in the database
+print("✅ Multiserver mode: Settings loaded per-guild dynamically")
 
 # Database configuration with cloud PostgreSQL support
 DATABASE_URL = os.getenv("DATABASE_URL", "")
@@ -746,58 +742,36 @@ except Exception as e:
 # Bot Settings Manager
 # -------------------------
 # Multi-server support: Per-guild settings managers
-# Initialize global settings manager
-# If DISCORD_GUILD_ID is set: Load settings for that guild (single-server mode)
-# If not set: Load global settings only (multiserver mode)
-if DISCORD_GUILD_ID:
-    bot_settings = BotSettingsManager(engine, guild_id=DISCORD_GUILD_ID)
-    print(f"✅ Bot settings loaded for guild {DISCORD_GUILD_ID}")
-else:
-    bot_settings = BotSettingsManager(engine)
-    print("✅ Bot settings loaded (global only - configure per-guild in Dashboard)")
+# MULTISERVER: Initialize settings manager without guild-specific configuration
+# Guild settings are loaded dynamically via get_guild_settings(guild_id)
+bot_settings = BotSettingsManager(engine)
+print("✅ Multiserver bot initialized")
+print("   Each Discord server configures via Dashboard → Profile Settings")
 
 # Dictionary to store per-guild settings managers
 guild_settings_managers = {}
 
-# Pre-populate with primary guild if set
-if DISCORD_GUILD_ID:
-    guild_settings_managers[DISCORD_GUILD_ID] = bot_settings
-
-def get_guild_settings(guild_id: Optional[int] = None) -> BotSettingsManager:
+def get_guild_settings(guild_id: int) -> BotSettingsManager:
     """
     Get settings manager for a specific guild.
+    REQUIRED for all guild-specific operations.
     
     Args:
-        guild_id: Discord guild/server ID (required for multiserver)
+        guild_id: Discord guild/server ID
         
     Returns:
         BotSettingsManager instance for the guild
     """
-    # If no guild_id provided, return global settings (legacy behavior)
-    if guild_id is None:
-        print("⚠️  Warning: get_guild_settings() called without guild_id - using global settings")
-        return bot_settings
-    
     # Get or create guild-specific settings
     if guild_id not in guild_settings_managers:
         guild_settings_managers[guild_id] = BotSettingsManager(engine, guild_id=guild_id)
-        print(f"✅ Created settings manager for guild {guild_id}")
+        print(f"✅ Loaded settings for guild {guild_id}")
     
     return guild_settings_managers[guild_id]
 
-# Load KICK_CHANNEL from global settings (will be per-guild in multiserver)
-if not KICK_CHANNEL:
-    KICK_CHANNEL = bot_settings.kick_channel
-    if KICK_CHANNEL:
-        print(f"✅ Loaded KICK_CHANNEL from database: {KICK_CHANNEL}")
-    else:
-        print("⚠️ Warning: KICK_CHANNEL not configured. Configure in Dashboard → Profile Settings")
-
-# Load SLOT_CALLS_CHANNEL_ID from global settings
-if not SLOT_CALLS_CHANNEL_ID:
-    SLOT_CALLS_CHANNEL_ID = bot_settings.slot_calls_channel_id
-    if SLOT_CALLS_CHANNEL_ID:
-        print(f"✅ Loaded SLOT_CALLS_CHANNEL_ID from database: {SLOT_CALLS_CHANNEL_ID}")
+# Multiserver: No global KICK_CHANNEL or SLOT_CALLS_CHANNEL_ID
+# All features must use get_guild_settings(guild.id) to access per-guild configuration
+print("✅ Multiserver bot ready - configure each guild in Dashboard → Profile Settings")
 
 # -------------------------
 # Discord bot setup
@@ -812,10 +786,18 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # Store settings manager on bot for access throughout
 bot.settings_manager = bot_settings
 
-# In-memory active viewer tracking
-active_viewers = {}
+# Multiserver tracking - per-guild dictionaries
+# active_viewers_by_guild[guild_id][username] = last_seen_time
+active_viewers_by_guild = {}
+# recent_chatters_by_guild[guild_id][username] = last_chat_time
+recent_chatters_by_guild = {}
+# last_chat_activity_by_guild[guild_id] = last_activity_time
+last_chat_activity_by_guild = {}
+# kick_chatroom_ids[guild_id] = chatroom_id
+kick_chatroom_ids = {}
 
-# Kick chat WebSocket connection (for sending messages)
+# Legacy global variables (for backward compatibility during transition)
+active_viewers = {}
 kick_ws = None
 kick_chatroom_id_global = None
 
@@ -859,17 +841,27 @@ CHAT_ACTIVITY_WINDOW_MINUTES = 5  # Look back 5 minutes for unique chatters
 # -------------------------
 # Helper functions
 # -------------------------
-def get_active_chatters_count():
-    """Get the number of active chatters in the recent window"""
+def get_active_chatters_count(guild_id: Optional[int] = None):
+    """Get the number of active chatters in the recent window for a specific guild"""
     from datetime import datetime, timedelta, timezone
-    now = datetime.now(timezone.utc)  # Use timezone-aware datetime
+    now = datetime.now(timezone.utc)
     chat_cutoff = now - timedelta(minutes=CHAT_ACTIVITY_WINDOW_MINUTES)
 
-    active_chatters = {
-        username: timestamp
-        for username, timestamp in recent_chatters.items()
-        if timestamp >= chat_cutoff
-    }
+    if guild_id is None:
+        # Legacy: use global recent_chatters
+        active_chatters = {
+            username: timestamp
+            for username, timestamp in recent_chatters.items()
+            if timestamp >= chat_cutoff
+        }
+    else:
+        # Multiserver: use per-guild tracking
+        guild_chatters = recent_chatters_by_guild.get(guild_id, {})
+        active_chatters = {
+            username: timestamp
+            for username, timestamp in guild_chatters.items()
+            if timestamp >= chat_cutoff
+        }
 
     return len(active_chatters)
 
@@ -1192,21 +1184,31 @@ BROWSER_HEADERS = {
     "Origin": "https://kick.com"
 }
 
-async def kick_chat_loop(channel_name: str):
-    """Connect to Kick's Pusher WebSocket and listen for chat messages."""
-    global last_chat_activity, recent_chatters, kick_chatroom_id_global
+async def kick_chat_loop(channel_name: str, guild_id: int):
+    """Connect to Kick's Pusher WebSocket and listen for chat messages for a specific guild."""
+    global kick_chatroom_id_global
+    
+    # Initialize per-guild tracking dictionaries if they don't exist
+    if guild_id not in active_viewers_by_guild:
+        active_viewers_by_guild[guild_id] = {}
+    if guild_id not in recent_chatters_by_guild:
+        recent_chatters_by_guild[guild_id] = {}
+    if guild_id not in last_chat_activity_by_guild:
+        last_chat_activity_by_guild[guild_id] = None
 
     # Track current channel to detect changes
     current_channel = channel_name
+    
+    # Get guild settings
+    guild_settings = get_guild_settings(guild_id)
 
     while True:
         try:
             # Check if channel has been updated in settings (allow hot-reload on reconnect)
-            if hasattr(bot, 'settings_manager') and bot.settings_manager:
-                new_channel = bot.settings_manager.kick_channel
-                if new_channel and new_channel != current_channel:
-                    print(f"[Kick] 🔄 Channel changed from '{current_channel}' to '{new_channel}'")
-                    current_channel = new_channel
+            new_channel = guild_settings.kick_channel
+            if new_channel and new_channel != current_channel:
+                print(f"[Kick][Guild {guild_id}] 🔄 Channel changed from '{current_channel}' to '{new_channel}'")
+                current_channel = new_channel
 
             # Use current_channel instead of the original channel_name
             channel_to_use = current_channel
@@ -1216,15 +1218,14 @@ async def kick_chat_loop(channel_name: str):
             channel_id = None
 
             # Check if chatroom ID is hardcoded in environment (bypass for Cloudflare issues)
-            # Also check settings_manager for chatroom_id
-            chatroom_id_from_settings = None
-            if hasattr(bot, 'settings_manager') and bot.settings_manager:
-                chatroom_id_from_settings = bot.settings_manager.kick_chatroom_id
+            # Or configured in guild settings
+            chatroom_id_from_settings = guild_settings.kick_chatroom_id
 
             if KICK_CHATROOM_ID or chatroom_id_from_settings:
                 chatroom_id = KICK_CHATROOM_ID or chatroom_id_from_settings
-                kick_chatroom_id_global = chatroom_id
-                print(f"[Kick] Using configured chatroom ID: {chatroom_id}")
+                kick_chatroom_ids[guild_id] = chatroom_id  # Store per-guild
+                kick_chatroom_id_global = chatroom_id  # Legacy global
+                print(f"[Kick][Guild {guild_id}] Using configured chatroom ID: {chatroom_id}")
 
                 # Still try to fetch channel_id for subscription events
                 try:
@@ -1351,9 +1352,9 @@ async def kick_chat_loop(channel_name: str):
                 else:
                     print(f"[Kick] ⚠️ Channel ID not available - subscription events may not be received")
 
-                # Initialize last_chat_activity to assume stream is live when we connect
-                last_chat_activity = datetime.now(timezone.utc)
-                print(f"[Kick] Initialized chat activity tracking")
+                                # Initialize last_chat_activity to assume stream is live when we connect
+                last_chat_activity_by_guild[guild_id] = datetime.now(timezone.utc)
+                print(f"[Kick][Guild {guild_id}] Initialized chat activity tracking")
 
                 # Listen for messages
                 while True:
@@ -1381,7 +1382,7 @@ async def kick_chat_loop(channel_name: str):
                             # Handle chat message
                             if event_type == "App\\Events\\ChatMessageEvent":
                                 now = datetime.now(timezone.utc)
-                                last_chat_activity = now  # Update stream activity
+                                last_chat_activity_by_guild[guild_id] = now  # Update stream activity for this guild
 
                                 event_data = json.loads(data.get("data", "{}"))
                                 sender = event_data.get("sender", {})
@@ -1389,15 +1390,25 @@ async def kick_chat_loop(channel_name: str):
 
                                 if username:
                                     username_lower = username.lower()
-                                    # Only log if this is a new viewer (first time in active_viewers)
-                                    is_new_viewer = username_lower not in active_viewers
+                                    # Track per-guild active viewers
+                                    guild_active_viewers = active_viewers_by_guild.get(guild_id, {})
+                                    is_new_viewer = username_lower not in guild_active_viewers
+                                    guild_active_viewers[username_lower] = now
+                                    active_viewers_by_guild[guild_id] = guild_active_viewers
+                                    
+                                    # Track per-guild recent chatters for stream-live detection
+                                    guild_recent_chatters = recent_chatters_by_guild.get(guild_id, {})
+                                    guild_recent_chatters[username_lower] = now
+                                    recent_chatters_by_guild[guild_id] = guild_recent_chatters
+                                    
+                                    # Also update legacy global tracking (for backward compatibility)
                                     active_viewers[username_lower] = now
-                                    # 🔒 SECURITY: Track unique chatters for stream-live detection
                                     recent_chatters[username_lower] = now
+                                    
                                     content_text = event_data.get("content", "")
-                                    print(f"[Kick] {username}: {content_text}")
+                                    print(f"[Kick][Guild {guild_id}] {username}: {content_text}")
                                     if watchtime_debug_enabled and is_new_viewer:
-                                        print(f"[Watchtime Debug] New viewer: {username_lower} (total: {len(active_viewers)})")
+                                        print(f"[Watchtime Debug][Guild {guild_id}] New viewer: {username_lower} (total: {len(guild_active_viewers)})")
 
                                     # Check for custom commands first (they get priority)
                                     if hasattr(bot, 'custom_commands_manager') and bot.custom_commands_manager:
@@ -4424,13 +4435,20 @@ async def on_ready():
     except Exception as e:
         print(f"⚠️ Error during startup: {e}")
 
-    # Start Kick chat listener (only if KICK_CHANNEL is configured)
-    if KICK_CHANNEL and KICK_CHANNEL.strip():
-        bot.loop.create_task(kick_chat_loop(KICK_CHANNEL))
-        print(f"✅ Kick chat listener started for channel: {KICK_CHANNEL}")
-    else:
-        print("⚠️ Kick chat listener NOT started - KICK_CHANNEL not configured")
-        print("   Configure it in Dashboard → Admin Controls → Kick Channel Name")
+    # Start Kick chat listeners for all guilds with configured Kick channels
+    for guild in bot.guilds:
+        try:
+            guild_settings = get_guild_settings(guild.id)
+            kick_channel = guild_settings.kick_channel
+            
+            if kick_channel and kick_channel.strip():
+                bot.loop.create_task(kick_chat_loop(kick_channel, guild.id))
+                print(f"✅ Kick chat listener started for guild {guild.name} ({guild.id}) → {kick_channel}")
+            else:
+                print(f"⚠️ No Kick channel configured for guild {guild.name} ({guild.id})")
+                print(f"   Configure it in Dashboard → Profile Settings")
+        except Exception as e:
+            print(f"⚠️ Failed to start Kick listener for guild {guild.id}: {e}")
 
 async def handle_timer_panel_reaction(payload):
     """Handle reactions on timer panel messages."""
