@@ -1195,14 +1195,18 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
     if guild_id not in last_chat_activity_by_guild:
         last_chat_activity_by_guild[guild_id] = None
 
-    # Track current channel to detect changes
+    # Track current channel and chatroom to detect changes
     current_channel = channel_name
+    current_chatroom_id = None
     
     # Get guild settings
     guild_settings = get_guild_settings(guild_id)
 
     while True:
         try:
+            # Refresh settings to detect changes
+            guild_settings.refresh()
+            
             # Check if channel has been updated in settings (allow hot-reload on reconnect)
             new_channel = guild_settings.kick_channel
             if new_channel and new_channel != current_channel:
@@ -1276,6 +1280,13 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                     print(f"[Kick] Could not obtain chatroom id for {channel_to_use}. Retrying in 30s.")
                     await asyncio.sleep(30)
                     continue
+            
+            # Check if chatroom_id has changed (hot-reload support)
+            if current_chatroom_id and chatroom_id != current_chatroom_id:
+                print(f"[Kick][Guild {guild_id}] 🔄 Chatroom ID changed from {current_chatroom_id} to {chatroom_id} - reconnecting...")
+            
+            # Store current chatroom_id for change detection
+            current_chatroom_id = chatroom_id
 
             print(f"[Kick] Connecting to chatroom {chatroom_id} for channel {channel_to_use}...")
 
@@ -1356,9 +1367,23 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                 print(f"[Kick][Guild {guild_id}] Initialized chat activity tracking")
 
                 # Listen for messages
+                last_settings_check = datetime.now(timezone.utc)
+                settings_check_interval = 30  # Check for settings changes every 30 seconds
+                
                 while True:
                     try:
                         msg = await asyncio.wait_for(ws.recv(), timeout=30)
+                        
+                        # Periodically check if chatroom_id has changed in settings
+                        now = datetime.now(timezone.utc)
+                        if (now - last_settings_check).total_seconds() >= settings_check_interval:
+                            guild_settings.refresh()
+                            new_chatroom_id = guild_settings.kick_chatroom_id or KICK_CHATROOM_ID
+                            if new_chatroom_id and new_chatroom_id != current_chatroom_id:
+                                print(f"[Kick][Guild {guild_id}] 🔄 Detected chatroom ID change: {current_chatroom_id} → {new_chatroom_id}")
+                                print(f"[Kick][Guild {guild_id}] Breaking connection to reconnect with new chatroom...")
+                                break  # Break inner loop to reconnect with new chatroom_id
+                            last_settings_check = now
 
                         if not msg:
                             continue
@@ -1717,6 +1742,14 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                             print(f"[Kick] Error parsing message: {e}")
 
                     except asyncio.TimeoutError:
+                        # Check for settings changes on timeout
+                        guild_settings.refresh()
+                        new_chatroom_id = guild_settings.kick_chatroom_id or KICK_CHATROOM_ID
+                        if new_chatroom_id and new_chatroom_id != current_chatroom_id:
+                            print(f"[Kick][Guild {guild_id}] 🔄 Detected chatroom ID change during timeout: {current_chatroom_id} → {new_chatroom_id}")
+                            print(f"[Kick][Guild {guild_id}] Breaking connection to reconnect with new chatroom...")
+                            break  # Break inner loop to reconnect
+                        
                         # Send ping to keep connection alive
                         try:
                             await ws.send(json.dumps({"event": "pusher:ping"}))
