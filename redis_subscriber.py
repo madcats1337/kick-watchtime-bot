@@ -569,6 +569,30 @@ class RedisSubscriber:
                 except Exception as e:
                     print(f"⚠️ Failed to refresh bot settings: {e}")
 
+        elif action == 'reload':
+            # Profile settings were updated - refresh for specific guild or all
+            guild_id = data.get('guild_id')
+            print(f"✅ Reload request for guild: {guild_id}")
+            
+            # Refresh all per-guild settings managers
+            if hasattr(self.bot, 'guild_settings') and self.bot.guild_settings:
+                try:
+                    if guild_id and guild_id in self.bot.guild_settings:
+                        # Refresh specific guild
+                        self.bot.guild_settings[guild_id].refresh()
+                        print(f"✅ Refreshed settings for guild {guild_id}")
+                    else:
+                        # Refresh all guilds
+                        for gid, settings in self.bot.guild_settings.items():
+                            settings.refresh()
+                        print(f"✅ Refreshed settings for all {len(self.bot.guild_settings)} guilds")
+                except Exception as e:
+                    print(f"⚠️ Failed to refresh guild settings: {e}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                print("⚠️ Guild settings not initialized")
+
         elif action == 'kick_channel_synced':
             # Kick channel was synced from dashboard - refresh to pick up new chatroom_id
             kick_channel = data.get('kick_channel')
