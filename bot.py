@@ -4326,7 +4326,7 @@ async def on_ready():
                 slot_calls_channel_id = guild_settings.slot_calls_channel_id
                 slot_call_trackers[guild.id] = SlotCallTracker(
                     bot=bot,
-                    channel_id=slot_calls_channel_id,
+                    discord_channel_id=slot_calls_channel_id,
                     kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None,
                     engine=engine,
                     server_id=guild.id
@@ -4409,8 +4409,10 @@ async def on_ready():
                     print(f"✅ GTB panel commands registered")
                     first_guild = False
 
+            print("📝 About to setup raffle commands...")
             # Setup raffle commands (global cog)
             await setup_raffle_commands(bot, engine)
+            print("✅ Raffle commands setup complete")
             
             # Set legacy global references (use first guild for backward compatibility)
             if bot.guilds:
@@ -4424,6 +4426,7 @@ async def on_ready():
 
             print("✅ All guilds initialized with multiserver features")
 
+            print("📝 About to setup link panel...")
             # Setup link panel (button-based OAuth linking)
             link_panel = await setup_link_panel_system(
                 bot,
