@@ -742,9 +742,13 @@ except Exception as e:
 # Bot Settings Manager
 # -------------------------
 # Multi-server support: Per-guild settings managers
-# Global settings manager for backwards compatibility (single-server mode)
-bot_settings = BotSettingsManager(engine)
-print("✅ Bot settings manager initialized (global)")
+# Initialize with DISCORD_GUILD_ID if set (single-server mode), otherwise global
+if DISCORD_GUILD_ID:
+    bot_settings = BotSettingsManager(engine, guild_id=DISCORD_GUILD_ID)
+    print(f"✅ Bot settings manager initialized for guild {DISCORD_GUILD_ID}")
+else:
+    bot_settings = BotSettingsManager(engine)
+    print("✅ Bot settings manager initialized (global)")
 
 # Dictionary to store per-guild settings managers
 guild_settings_managers = {}
@@ -759,9 +763,17 @@ def get_guild_settings(guild_id: Optional[int] = None) -> BotSettingsManager:
     Returns:
         BotSettingsManager instance for the guild (or global if None)
     """
-    # If no guild_id or single-server mode, use global settings
-    if guild_id is None or DISCORD_GUILD_ID:
+    # If no guild_id specified, use the global/default settings manager
+    if guild_id is None:
         return bot_settings
+    
+    # Single-server mode: always use the configured guild's settings
+    if DISCORD_GUILD_ID:
+        if guild_id == DISCORD_GUILD_ID:
+            return bot_settings
+        else:
+            # Requesting different guild in single-server mode - still return main settings
+            return bot_settings
     
     # Multi-server mode: Get or create guild-specific settings
     if guild_id not in guild_settings_managers:
