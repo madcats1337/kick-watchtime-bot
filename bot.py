@@ -830,11 +830,17 @@ recent_chatters = {}  # {username: timestamp} - rolling window of recent chat ac
 clip_buffer_active = False  # Track if clip buffer is running on Dashboard
 last_stream_live_state = None  # Track last known stream live state (for detecting transitions)
 
-# Raffle system global tracker
-gifted_sub_tracker = None  # Will be initialized in on_ready()
-shuffle_tracker = None  # Will be initialized in on_ready()
-slot_call_tracker = None  # Will be initialized in on_ready()
-gtb_manager = None  # Will be initialized in on_ready()
+# Raffle system global trackers - now per-guild dictionaries
+gifted_sub_trackers = {}  # guild_id -> GiftedSubTracker
+shuffle_trackers = {}  # guild_id -> ShuffleTracker
+slot_call_trackers = {}  # guild_id -> SlotCallTracker
+gtb_managers = {}  # guild_id -> GTBManager
+
+# Legacy global variables (for backward compatibility)
+gifted_sub_tracker = None
+shuffle_tracker = None
+slot_call_tracker = None
+gtb_manager = None
 MIN_UNIQUE_CHATTERS = 2  # Require at least 2 different people chatting to consider stream "live"
 CHAT_ACTIVITY_WINDOW_MINUTES = 5  # Look back 5 minutes for unique chatters
 
@@ -4219,25 +4225,18 @@ async def on_ready():
             print(f"⚠️ Database migration check failed: {e}")
 
     try:
-        # Ensure we're connected to the right guild
-        if DISCORD_GUILD_ID:
-            guild = bot.get_guild(DISCORD_GUILD_ID)
-            if not guild:
-                print(f"⚠️ Could not find guild with ID {DISCORD_GUILD_ID}")
-                return
-
-            # Validate bot permissions
+        # Multiserver: Validate bot permissions for ALL guilds
+        for guild in bot.guilds:
             me = guild.me
             if not me.guild_permissions.manage_roles:
-                print("⚠️ Bot lacks manage_roles permission!")
-                return
-
+                print(f"⚠️ [Guild {guild.name}] Bot lacks manage_roles permission!")
+            
             # Validate roles exist
             current_roles = load_watchtime_roles()
             existing_roles = {role.name for role in guild.roles}
             for role_config in current_roles:
                 if role_config["name"] not in existing_roles:
-                    print(f"⚠️ Role {role_config['name']} does not exist in the server!")
+                    print(f"⚠️ [Guild {guild.name}] Role {role_config['name']} does not exist in the server!")
 
         # Start background tasks
         if not update_watchtime_task.is_running():
@@ -4295,89 +4294,99 @@ async def on_ready():
             # Setup watchtime converter (runs every hour)
             await setup_watchtime_converter(bot, engine)
 
-            # Setup gifted sub tracker
-            gifted_sub_tracker = setup_gifted_sub_handler(engine)
+            # Per-guild feature initialization
+            for guild in bot.guilds:
+                guild_settings = get_guild_settings(guild.id)
+                
+                # Setup gifted sub tracker for this guild
+                gifted_sub_trackers[guild.id] = setup_gifted_sub_handler(engine)
+                print(f"✅ [Guild {guild.name}] Gifted sub tracker initialized")
 
-            # Setup Shuffle wager tracker (runs every 15 minutes)
-            shuffle_tracker = await setup_shuffle_tracker(bot, engine)
+                # Setup Shuffle wager tracker for this guild
+                shuffle_trackers[guild.id] = await setup_shuffle_tracker(bot, engine)
+                print(f"✅ [Guild {guild.name}] Shuffle tracker initialized")
 
-            # Setup auto-updating leaderboard (runs every 5 minutes)
-            # Get channel ID from database settings
-            bot_settings.refresh()  # Ensure fresh settings
-            leaderboard_channel_id = bot_settings.raffle_leaderboard_channel_id
-            print(f"📊 Raffle leaderboard channel ID: {leaderboard_channel_id or 'Not configured'}")
-            auto_leaderboard = await setup_auto_leaderboard(bot, engine, leaderboard_channel_id)
-            bot.auto_leaderboard = auto_leaderboard  # Store for manual updates
+                # Setup auto-updating leaderboard for this guild
+                leaderboard_channel_id = guild_settings.raffle_leaderboard_channel_id
+                auto_leaderboard = await setup_auto_leaderboard(bot, engine, leaderboard_channel_id)
+                # Store with guild context
+                if not hasattr(bot, 'auto_leaderboards'):
+                    bot.auto_leaderboards = {}
+                bot.auto_leaderboards[guild.id] = auto_leaderboard
+                print(f"📊 [Guild {guild.name}] Leaderboard channel: {leaderboard_channel_id or 'Not configured'}")
 
-            # Setup raffle commands
+                # Setup raffle scheduler for this guild
+                raffle_auto_draw = guild_settings.raffle_auto_draw
+                raffle_channel_id = guild_settings.raffle_announcement_channel_id
+                await setup_raffle_scheduler(
+                    bot=bot,
+                    engine=engine,
+                    auto_draw=raffle_auto_draw,
+                    announcement_channel_id=raffle_channel_id
+                )
+                print(f"✅ [Guild {guild.name}] Raffle system initialized (auto-draw: {raffle_auto_draw})")
+
+                # Setup slot call tracker for this guild
+                slot_calls_channel_id = guild_settings.slot_calls_channel_id
+                slot_call_trackers[guild.id] = await setup_slot_call_tracker(
+                    bot,
+                    slot_calls_channel_id,
+                    kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None,
+                    engine=engine,
+                    server_id=guild.id
+                )
+                # Store as bot attribute for Redis subscriber (legacy)
+                if not hasattr(bot, 'slot_call_trackers_by_guild'):
+                    bot.slot_call_trackers_by_guild = {}
+                bot.slot_call_trackers_by_guild[guild.id] = slot_call_trackers[guild.id]
+                print(f"✅ [Guild {guild.name}] Slot call tracker initialized (channel: {slot_calls_channel_id or 'Not configured'})")
+
+                # Setup Guess the Balance manager for this guild
+                gtb_managers[guild.id] = GuessTheBalanceManager(engine, guild.id)
+                if not hasattr(bot, 'gtb_managers_by_guild'):
+                    bot.gtb_managers_by_guild = {}
+                bot.gtb_managers_by_guild[guild.id] = gtb_managers[guild.id]
+                print(f"✅ [Guild {guild.name}] GTB system initialized")
+
+                # Setup slot request panel for this guild
+                slot_panel = await setup_slot_panel(
+                    bot,
+                    engine,
+                    slot_call_trackers[guild.id],
+                    kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
+                )
+                if not hasattr(bot, 'slot_panels_by_guild'):
+                    bot.slot_panels_by_guild = {}
+                bot.slot_panels_by_guild[guild.id] = slot_panel
+                print(f"✅ [Guild {guild.name}] Slot request panel initialized")
+
+                # Setup GTB panel for this guild
+                gtb_panel = await setup_gtb_panel(
+                    bot,
+                    engine,
+                    gtb_managers[guild.id],
+                    kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
+                )
+                if not hasattr(bot, 'gtb_panels_by_guild'):
+                    bot.gtb_panels_by_guild = {}
+                bot.gtb_panels_by_guild[guild.id] = gtb_panel
+                print(f"✅ [Guild {guild.name}] GTB panel initialized")
+
+                # Sync Shuffle code user role for this guild
+                await sync_shuffle_role_on_startup(bot, engine)
+
+            # Setup raffle commands (global)
             await setup_raffle_commands(bot, engine)
-
-            # Setup raffle scheduler (monthly reset + auto-draw)
-            # Load settings from database first, fall back to env vars
-            raffle_auto_draw = bot_settings.raffle_auto_draw
-            raffle_channel_id = bot_settings.raffle_announcement_channel_id
-
-            await setup_raffle_scheduler(
-                bot=bot,
-                engine=engine,
-                auto_draw=raffle_auto_draw,
-                announcement_channel_id=raffle_channel_id
-            )
-
-            print("✅ Raffle system initialized")
-            print(f"   • Auto-draw: {raffle_auto_draw}")
-            print(f"   • Announcement channel: {raffle_channel_id or 'Not configured'}")
-
-            # Sync Shuffle code user role on startup
-            await sync_shuffle_role_on_startup(bot, engine)
-
-            # Setup slot call tracker with Kick chat callback
-            slot_call_tracker = await setup_slot_call_tracker(
-                bot,
-                SLOT_CALLS_CHANNEL_ID,
-                kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None,
-                engine=engine,
-                server_id=DISCORD_GUILD_ID
-            )
-            # Store as bot attribute for Redis subscriber
-            bot.slot_call_tracker = slot_call_tracker
-            bot.slot_calls_channel_id = SLOT_CALLS_CHANNEL_ID
-
-            if SLOT_CALLS_CHANNEL_ID:
-                print(f"✅ Slot call tracker initialized (channel: {SLOT_CALLS_CHANNEL_ID})")
-                if KICK_BOT_USER_TOKEN:
-                    print(f"✅ Kick chat responses enabled")
-                    print(f"   • Using User Access Token with 'chat:write' scope")
-                    print(f"   • Make sure bot account follows the channel")
-                else:
-                    print("ℹ️  Kick chat responses disabled (set KICK_BOT_USER_TOKEN to enable)")
-            else:
-                print("⚠️ Slot call tracker initialized but no channel configured (set SLOT_CALLS_CHANNEL_ID)")
-
-            # Setup Guess the Balance manager
-            global gtb_manager
-            gtb_manager = GuessTheBalanceManager(engine, DISCORD_GUILD_ID)
-            bot.gtb_manager = gtb_manager  # Store as bot attribute for Redis subscriber
-            bot.gtb_channel_id = SLOT_CALLS_CHANNEL_ID  # Use same channel for GTB notifications
-            print("✅ Guess the Balance system initialized")
-
-            # Setup slot request panel
-            slot_panel = await setup_slot_panel(
-                bot,
-                engine,
-                slot_call_tracker,
-                kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
-            )
-            # Store as bot attribute for Redis subscriber
-            bot.slot_request_panel = slot_panel
-            print(f"✅ Slot request panel system initialized")
-
-            # Setup GTB panel
-            gtb_panel = await setup_gtb_panel(
-                bot,
-                engine,
-                gtb_manager,
-                kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
+            
+            # Set legacy global references (use first guild for backward compatibility)
+            if bot.guilds:
+                first_guild_id = bot.guilds[0].id
+                gifted_sub_tracker = gifted_sub_trackers.get(first_guild_id)
+                shuffle_tracker = shuffle_trackers.get(first_guild_id)
+                slot_call_tracker = slot_call_trackers.get(first_guild_id)
+                gtb_manager = gtb_managers.get(first_guild_id)
+                bot.slot_call_tracker = slot_call_tracker
+                bot.gtb_manager = gtb_manager
             )
             # Store as bot attribute for Redis subscriber
             bot.gtb_panel = gtb_panel
@@ -4420,12 +4429,9 @@ async def on_ready():
 
             # Clip service is now on Dashboard - no local buffer needed
             # Bot calls Dashboard API at /api/clips/create when !clip is used
-            dashboard_url = bot_settings.dashboard_url
-            if dashboard_url:
-                print(f"✅ Clip service configured: {dashboard_url}/api/clips/create")
-            else:
-                print(f"⚠️ Dashboard URL not set - configure in Dashboard → Admin Controls → Dashboard URL")
-                print(f"   Or set DASHBOARD_API_URL environment variable")
+            # Dashboard URL is configured per-guild in settings
+            print(f"✅ Clip service configured via Dashboard API")
+            print(f"   Configure Dashboard URL in Profile Settings for each guild")
 
         except Exception as e:
             print(f"⚠️ Failed to initialize raffle system: {e}")
@@ -6185,9 +6191,8 @@ if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise SystemExit("❌ DISCORD_TOKEN environment variable is required")
 
-    # Note: KICK_CHANNEL is no longer required as env var - can be configured via dashboard
-    if not KICK_CHANNEL:
-        print("⚠️ Warning: KICK_CHANNEL not set. Configure via dashboard Bot Settings or set KICK_CHANNEL env var.")
-        print("⚠️ Watchtime tracking and some features will be disabled until configured.")
+    print("✅ Multiserver bot starting")
+    print("   Configure each Discord server in Dashboard → Profile Settings")
+    print("   Set Kick channel name, slot calls channel, raffle settings per-server")
 
     bot.run(DISCORD_TOKEN)
