@@ -496,6 +496,7 @@ try:
             kick_username TEXT NOT NULL,
             guess_amount NUMERIC(12, 2) NOT NULL,
             guessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            discord_server_id BIGINT,
             UNIQUE(session_id, kick_username)
         );
         """))
@@ -600,6 +601,102 @@ try:
         );
         """))
 
+        # =========================================================================
+        # MULTISERVER MIGRATION - Add discord_server_id to tables
+        # =========================================================================
+        print("🔄 Running multiserver migration...")
+
+        # Step 1: Add discord_server_id columns if they don't exist
+        migration_tables = [
+            'user_points', 'points_watchtime_converted', 'point_sales',
+            'watchtime', 'gtb_sessions', 'clips', 'watchtime_roles',
+            'pending_links', 'oauth_notifications'
+        ]
+        
+        for table in migration_tables:
+            try:
+                conn.execute(text(f"""
+                    ALTER TABLE {table} ADD COLUMN IF NOT EXISTS discord_server_id BIGINT
+                """))
+            except Exception as e:
+                print(f"ℹ️ Migration note ({table}): {e}")
+
+        # Step 2: Backfill existing data with first server ID (if exists)
+        try:
+            first_server = conn.execute(text("""
+                SELECT discord_server_id FROM servers LIMIT 1
+            """)).fetchone()
+            
+            if first_server:
+                server_id = first_server[0]
+                print(f"🔄 Backfilling tables with server ID: {server_id}")
+                
+                for table in migration_tables:
+                    try:
+                        result = conn.execute(text(f"""
+                            UPDATE {table} SET discord_server_id = :sid WHERE discord_server_id IS NULL
+                        """), {"sid": server_id})
+                        if result.rowcount > 0:
+                            print(f"   ✅ {table}: Updated {result.rowcount} rows")
+                    except Exception as e:
+                        print(f"   ℹ️ {table}: {e}")
+        except Exception as e:
+            print(f"ℹ️ Backfill note: {e}")
+
+        # Step 3: Update primary keys for tables that need composite keys
+        # user_points: (kick_username, discord_server_id)
+        try:
+            conn.execute(text("""
+                ALTER TABLE user_points DROP CONSTRAINT IF EXISTS user_points_kick_username_key
+            """))
+            conn.execute(text("""
+                ALTER TABLE user_points DROP CONSTRAINT IF EXISTS user_points_pkey
+            """))
+            conn.execute(text("""
+                ALTER TABLE user_points ADD CONSTRAINT user_points_pkey_multiserver 
+                PRIMARY KEY (kick_username, discord_server_id)
+            """))
+            print("   ✅ user_points: Updated primary key")
+        except Exception as e:
+            print(f"   ℹ️ user_points PK: {e}")
+
+        # watchtime: (username, discord_server_id)
+        try:
+            conn.execute(text("""
+                ALTER TABLE watchtime DROP CONSTRAINT IF EXISTS watchtime_pkey
+            """))
+            conn.execute(text("""
+                ALTER TABLE watchtime ADD CONSTRAINT watchtime_pkey_multiserver 
+                PRIMARY KEY (username, discord_server_id)
+            """))
+            print("   ✅ watchtime: Updated primary key")
+        except Exception as e:
+            print(f"   ℹ️ watchtime PK: {e}")
+
+        # Step 4: Create indexes for performance
+        indexes = {
+            'idx_user_points_server': 'user_points(discord_server_id)',
+            'idx_points_watchtime_server': 'points_watchtime_converted(discord_server_id)',
+            'idx_point_sales_server': 'point_sales(discord_server_id)',
+            'idx_watchtime_server': 'watchtime(discord_server_id)',
+            'idx_gtb_sessions_server': 'gtb_sessions(discord_server_id)',
+            'idx_clips_server': 'clips(discord_server_id)',
+            'idx_watchtime_roles_server': 'watchtime_roles(discord_server_id)',
+            'idx_pending_links_server': 'pending_links(discord_server_id)',
+            'idx_oauth_notifications_server': 'oauth_notifications(discord_server_id)'
+        }
+        
+        for idx_name, idx_def in indexes.items():
+            try:
+                conn.execute(text(f"""
+                    CREATE INDEX IF NOT EXISTS {idx_name} ON {idx_def}
+                """))
+            except Exception as e:
+                print(f"   ℹ️ Index {idx_name}: {e}")
+
+        print("✅ Multiserver migration complete")
+        # =========================================================================
+
     print("✅ Database tables initialized successfully")
 except Exception as e:
     print(f"⚠️ Database initialization error: {e}")
@@ -608,9 +705,34 @@ except Exception as e:
 # -------------------------
 # Bot Settings Manager
 # -------------------------
-# Loads settings from database with environment variable fallbacks
+# Multi-server support: Per-guild settings managers
+# Global settings manager for backwards compatibility (single-server mode)
 bot_settings = BotSettingsManager(engine)
-print("✅ Bot settings manager initialized")
+print("✅ Bot settings manager initialized (global)")
+
+# Dictionary to store per-guild settings managers
+guild_settings_managers = {}
+
+def get_guild_settings(guild_id: Optional[int] = None) -> BotSettingsManager:
+    """
+    Get settings manager for a specific guild.
+    
+    Args:
+        guild_id: Discord guild/server ID (optional)
+        
+    Returns:
+        BotSettingsManager instance for the guild (or global if None)
+    """
+    # If no guild_id or single-server mode, use global settings
+    if guild_id is None or DISCORD_GUILD_ID:
+        return bot_settings
+    
+    # Multi-server mode: Get or create guild-specific settings
+    if guild_id not in guild_settings_managers:
+        guild_settings_managers[guild_id] = BotSettingsManager(engine, guild_id=guild_id)
+        print(f"✅ Created settings manager for guild {guild_id}")
+    
+    return guild_settings_managers[guild_id]
 
 # Load KICK_CHANNEL from settings if not already set via env
 if not KICK_CHANNEL:
@@ -1556,23 +1678,35 @@ async def kick_chat_loop(channel_name: str):
 # -------------------------
 # Point Reward System
 # -------------------------
-async def award_points_for_watchtime(active_usernames: list):
+async def award_points_for_watchtime(active_usernames: list, guild_id: Optional[int] = None):
     """
     Award points to users based on their new watchtime.
     Similar to raffle ticket system but tracks points separately.
     Only awards points for NEW watchtime since last conversion.
+    
+    Args:
+        active_usernames: List of usernames to award points to
+        guild_id: Discord guild/server ID for multi-server support
     """
     try:
+        # Use DISCORD_GUILD_ID if no guild_id provided (backwards compatible)
+        server_id = guild_id or DISCORD_GUILD_ID
+        if not server_id:
+            print("[Points] ⚠️ No guild_id provided and DISCORD_GUILD_ID not set")
+            return
+            
         # Get point settings from database
         points_per_5min = 1  # Default: 1 point per 5 minutes
         sub_points_per_5min = 2  # Default: 2 points per 5 minutes for subs
 
         with engine.connect() as conn:
-            # Load settings
+            # Load settings (multiserver: filter by server_id)
             result = conn.execute(text("""
                 SELECT key, value FROM point_settings
                 WHERE key IN ('points_per_5min', 'sub_points_per_5min')
-            """)).fetchall()
+                AND (discord_server_id = :sid OR discord_server_id IS NULL)
+                ORDER BY discord_server_id NULLS FIRST
+            """), {"sid": server_id}).fetchall()
 
             for key, value in result:
                 if key == 'points_per_5min':
@@ -1586,22 +1720,23 @@ async def award_points_for_watchtime(active_usernames: list):
         with engine.begin() as conn:
             for username in active_usernames:
                 try:
-                    # Get current total watchtime for user
+                    # Get current total watchtime for user (multiserver: filter by server_id)
                     result = conn.execute(text("""
-                        SELECT minutes FROM watchtime WHERE username = :u
-                    """), {"u": username}).fetchone()
+                        SELECT minutes FROM watchtime 
+                        WHERE username = :u AND discord_server_id = :sid
+                    """), {"u": username, "sid": server_id}).fetchone()
 
                     if not result:
                         continue
 
                     total_minutes = result[0]
 
-                    # Get how many minutes have already been converted to points
+                    # Get how many minutes have already been converted to points (multiserver)
                     converted_result = conn.execute(text("""
                         SELECT COALESCE(SUM(minutes_converted), 0)
                         FROM points_watchtime_converted
-                        WHERE kick_username = :u
-                    """), {"u": username}).fetchone()
+                        WHERE kick_username = :u AND discord_server_id = :sid
+                    """), {"u": username, "sid": server_id}).fetchone()
 
                     minutes_already_converted = converted_result[0] if converted_result else 0
 
@@ -1619,29 +1754,30 @@ async def award_points_for_watchtime(active_usernames: list):
                         points_to_award = intervals * points_per_5min
 
                         if points_to_award > 0:
-                            # Get discord_id from links table if available
+                            # Get discord_id from links table if available (multiserver: filter by server)
                             link_result = conn.execute(text("""
-                                SELECT discord_id FROM links WHERE LOWER(kick_name) = LOWER(:u)
-                            """), {"u": username}).fetchone()
+                                SELECT discord_id FROM links 
+                                WHERE LOWER(kick_name) = LOWER(:u) AND discord_server_id = :sid
+                            """), {"u": username, "sid": server_id}).fetchone()
                             discord_id = link_result[0] if link_result else None
 
-                            # Update or insert user points
+                            # Update or insert user points (multiserver: composite PK with discord_server_id)
                             conn.execute(text("""
-                                INSERT INTO user_points (kick_username, discord_id, points, total_earned, last_updated)
-                                VALUES (:u, :d, :p, :p, CURRENT_TIMESTAMP)
-                                ON CONFLICT(kick_username) DO UPDATE SET
+                                INSERT INTO user_points (kick_username, discord_id, points, total_earned, discord_server_id, last_updated)
+                                VALUES (:u, :d, :p, :p, :sid, CURRENT_TIMESTAMP)
+                                ON CONFLICT(kick_username, discord_server_id) DO UPDATE SET
                                     points = user_points.points + :p,
                                     total_earned = user_points.total_earned + :p,
                                     discord_id = COALESCE(:d, user_points.discord_id),
                                     last_updated = CURRENT_TIMESTAMP
-                            """), {"u": username, "d": discord_id, "p": points_to_award})
+                            """), {"u": username, "d": discord_id, "p": points_to_award, "sid": server_id})
 
-                            # Log the conversion
+                            # Log the conversion (multiserver: add discord_server_id)
                             conn.execute(text("""
                                 INSERT INTO points_watchtime_converted
-                                (kick_username, minutes_converted, points_awarded)
-                                VALUES (:u, :m, :p)
-                            """), {"u": username, "m": minutes_to_convert, "p": points_to_award})
+                                (kick_username, minutes_converted, points_awarded, discord_server_id)
+                                VALUES (:u, :m, :p, :sid)
+                            """), {"u": username, "m": minutes_to_convert, "p": points_to_award, "sid": server_id})
 
                             if watchtime_debug_enabled:
                                 print(f"[Points] ✅ {username}: +{points_to_award} points ({minutes_to_convert} min converted)")
@@ -1727,29 +1863,36 @@ async def update_watchtime_task():
         # Calculate minutes to add
         minutes_to_add = WATCH_INTERVAL_SECONDS / 60
 
-        # Update all active users in a single transaction
+        # Get guild_id for multiserver support (use DISCORD_GUILD_ID for backwards compatibility)
+        server_id = DISCORD_GUILD_ID
+        if not server_id:
+            print("[Watchtime] ⚠️ DISCORD_GUILD_ID not set, skipping watchtime update")
+            return
+
+        # Update all active users in a single transaction (multiserver: composite PK with discord_server_id)
         with engine.begin() as conn:
             for user, last_seen in active_users.items():
                 try:
                     conn.execute(text("""
-                        INSERT INTO watchtime (username, minutes, last_active)
-                        VALUES (:u, :m, :t)
-                        ON CONFLICT(username) DO UPDATE SET
+                        INSERT INTO watchtime (username, minutes, last_active, discord_server_id)
+                        VALUES (:u, :m, :t, :sid)
+                        ON CONFLICT(username, discord_server_id) DO UPDATE SET
                             minutes = watchtime.minutes + :m,
                             last_active = :t
                     """), {
                         "u": user,
                         "m": minutes_to_add,
-                        "t": last_seen.isoformat()
+                        "t": last_seen.isoformat(),
+                        "sid": server_id
                     })
                     if watchtime_debug_enabled:
-                        print(f"[Watchtime Debug] ✅ Updated {user}: +{minutes_to_add} minutes")
+                        print(f"[Watchtime Debug] ✅ Updated {user}: +{minutes_to_add} minutes (server {server_id})")
                 except Exception as e:
                     print(f"⚠️ Error updating watchtime for {user}: {e}")
                     continue  # Skip this user but continue with others
 
         # Award points for new watchtime (runs after watchtime update)
-        await award_points_for_watchtime(list(active_users.keys()))
+        await award_points_for_watchtime(list(active_users.keys()), guild_id=server_id)
 
     except Exception as e:
         print(f"⚠️ Error in watchtime update task: {e}")
@@ -1810,12 +1953,20 @@ async def update_roles_task():
         print(f"⚠️ Error in role update task: {e}")
         await asyncio.sleep(5)  # Wait before retrying
 
+    # Get server_id for multiserver filtering
+    server_id = DISCORD_GUILD_ID
+    if not server_id:
+        print("⚠️ Role updates disabled: DISCORD_GUILD_ID not set")
+        return
+
     with engine.connect() as conn:
+        # Multiserver: Filter links and watchtime by discord_server_id
         rows = conn.execute(text("""
             SELECT l.discord_id, w.minutes, l.kick_name
             FROM links l
-            JOIN watchtime w ON l.kick_name = w.username
-        """)).fetchall()
+            JOIN watchtime w ON l.kick_name = w.username AND l.discord_server_id = w.discord_server_id
+            WHERE l.discord_server_id = :sid
+        """), {"sid": server_id}).fetchall()
 
     for discord_id, minutes, kick_name in rows:
         member = guild.get_member(int(discord_id))

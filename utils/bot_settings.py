@@ -18,9 +18,11 @@ class BotSettingsManager:
     environment variables for backwards compatibility.
 
     Usage:
-        settings = BotSettingsManager(engine)  # Pass SQLAlchemy engine
-        # OR
-        settings = BotSettingsManager(database_url)  # Pass connection string
+        # Single-server mode (backwards compatible)
+        settings = BotSettingsManager(engine)
+        
+        # Multi-server mode
+        settings = BotSettingsManager(engine, guild_id=123456789)
 
         # Get a setting (with env var fallback)
         channel = settings.get('kick_channel', env_fallback='KICK_CHANNEL')
@@ -33,16 +35,18 @@ class BotSettingsManager:
         settings.refresh()
     """
 
-    def __init__(self, database_or_engine: Union[str, Engine]):
+    def __init__(self, database_or_engine: Union[str, Engine], guild_id: Optional[int] = None):
         """
         Initialize settings manager.
 
         Args:
             database_or_engine: Either a SQLAlchemy Engine or a database URL string
+            guild_id: Discord guild/server ID for multi-server support (optional)
         """
         self._cache: Dict[str, str] = {}
         self._last_loaded: Optional[datetime] = None
         self._engine: Optional[Engine] = None
+        self._guild_id: Optional[int] = guild_id
 
         # Accept either an Engine or a connection string
         if isinstance(database_or_engine, Engine):
@@ -57,9 +61,12 @@ class BotSettingsManager:
         # Load settings
         self.refresh()
 
-    def refresh(self) -> bool:
+    def refresh(self, guild_id: Optional[int] = None) -> bool:
         """
         Refresh settings from database.
+
+        Args:
+            guild_id: Override the guild_id for this refresh (optional)
 
         Returns:
             True if successful, False otherwise
@@ -68,24 +75,35 @@ class BotSettingsManager:
             print("[Settings] No database engine, using env vars only")
             return False
 
+        # Use provided guild_id or instance's guild_id
+        active_guild_id = guild_id if guild_id is not None else self._guild_id
+
         try:
             with self._engine.connect() as conn:
-                # Get all settings - both global (no server_id) and server-specific
-                # Server-specific settings override global ones
-                result = conn.execute(text("""
-                    SELECT key, value FROM bot_settings
-                    WHERE discord_server_id IS NULL
-                    UNION ALL
-                    SELECT key, value FROM bot_settings
-                    WHERE discord_server_id IS NOT NULL
-                """))
+                if active_guild_id:
+                    # Multi-server mode: Load global settings first, then override with server-specific
+                    result = conn.execute(text("""
+                        SELECT key, value FROM bot_settings
+                        WHERE discord_server_id IS NULL
+                        UNION ALL
+                        SELECT key, value FROM bot_settings
+                        WHERE discord_server_id = :guild_id
+                    """), {"guild_id": active_guild_id})
+                else:
+                    # Single-server mode (backwards compatible): Load all settings
+                    result = conn.execute(text("""
+                        SELECT key, value FROM bot_settings
+                        WHERE discord_server_id IS NULL
+                    """))
+                
                 rows = result.fetchall()
 
                 # Later rows override earlier ones (server-specific overrides global)
                 self._cache = {row[0]: row[1] for row in rows}
                 self._last_loaded = datetime.now(timezone.utc)
 
-                print(f"[Settings] Loaded {len(self._cache)} settings from database")
+                guild_info = f" for guild {active_guild_id}" if active_guild_id else ""
+                print(f"[Settings] Loaded {len(self._cache)} settings from database{guild_info}")
                 return True
         except Exception as e:
             print(f"[Settings] Error loading settings: {e}")
@@ -93,6 +111,11 @@ class BotSettingsManager:
 
     # Alias for backwards compatibility
     reload = refresh
+    
+    @property
+    def guild_id(self) -> Optional[int]:
+        """Get the guild ID for this settings manager."""
+        return self._guild_id
 
     def get(
         self,
@@ -166,13 +189,14 @@ class BotSettingsManager:
             return default
         return value in ('true', '1', 'yes', 'on')
 
-    def set(self, key: str, value: Any) -> bool:
+    def set(self, key: str, value: Any, guild_id: Optional[int] = None) -> bool:
         """
         Update a setting in the database.
 
         Args:
             key: Setting key
             value: New value (will be converted to string)
+            guild_id: Discord guild/server ID (uses instance guild_id if not provided)
 
         Returns:
             True if successful
@@ -180,16 +204,19 @@ class BotSettingsManager:
         if not self._engine:
             return False
 
+        # Use provided guild_id or instance's guild_id
+        active_guild_id = guild_id if guild_id is not None else self._guild_id
+
         try:
             str_value = str(value) if value is not None else ''
 
             with self._engine.begin() as conn:
                 conn.execute(text("""
-                    INSERT INTO bot_settings (key, value, updated_at)
-                    VALUES (:key, :value, CURRENT_TIMESTAMP)
-                    ON CONFLICT (key) DO UPDATE
+                    INSERT INTO bot_settings (key, value, discord_server_id, updated_at)
+                    VALUES (:key, :value, :guild_id, CURRENT_TIMESTAMP)
+                    ON CONFLICT (key, discord_server_id) DO UPDATE
                     SET value = :value, updated_at = CURRENT_TIMESTAMP
-                """), {'key': key, 'value': str_value})
+                """), {'key': key, 'value': str_value, 'guild_id': active_guild_id})
 
             # Update cache
             self._cache[key] = str_value
