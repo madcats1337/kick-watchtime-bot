@@ -4290,7 +4290,7 @@ async def on_ready():
             # Setup watchtime converter (runs every hour)
             await setup_watchtime_converter(bot, engine)
 
-            # Per-guild feature initialization
+            # Initialize per-guild trackers and managers (without adding cogs yet)
             for guild in bot.guilds:
                 guild_settings = get_guild_settings(guild.id)
                 
@@ -4305,7 +4305,6 @@ async def on_ready():
                 # Setup auto-updating leaderboard for this guild
                 leaderboard_channel_id = guild_settings.raffle_leaderboard_channel_id
                 auto_leaderboard = await setup_auto_leaderboard(bot, engine, leaderboard_channel_id)
-                # Store with guild context
                 if not hasattr(bot, 'auto_leaderboards'):
                     bot.auto_leaderboards = {}
                 bot.auto_leaderboards[guild.id] = auto_leaderboard
@@ -4322,16 +4321,16 @@ async def on_ready():
                 )
                 print(f"✅ [Guild {guild.name}] Raffle system initialized (auto-draw: {raffle_auto_draw})")
 
-                # Setup slot call tracker for this guild
+                # Create slot call tracker for this guild (but don't register cog yet)
+                from features.slot_requests.slot_calls import SlotCallTracker
                 slot_calls_channel_id = guild_settings.slot_calls_channel_id
-                slot_call_trackers[guild.id] = await setup_slot_call_tracker(
-                    bot,
-                    slot_calls_channel_id,
+                slot_call_trackers[guild.id] = SlotCallTracker(
+                    bot=bot,
+                    channel_id=slot_calls_channel_id,
                     kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None,
                     engine=engine,
                     server_id=guild.id
                 )
-                # Store as bot attribute for Redis subscriber (legacy)
                 if not hasattr(bot, 'slot_call_trackers_by_guild'):
                     bot.slot_call_trackers_by_guild = {}
                 bot.slot_call_trackers_by_guild[guild.id] = slot_call_trackers[guild.id]
@@ -4344,7 +4343,19 @@ async def on_ready():
                 bot.gtb_managers_by_guild[guild.id] = gtb_managers[guild.id]
                 print(f"✅ [Guild {guild.name}] GTB system initialized")
 
-                # Setup slot request panel for this guild
+                # Sync Shuffle code user role for this guild
+                await sync_shuffle_role_on_startup(bot, engine)
+
+            # Add cogs globally (only once, not per-guild)
+            # These cogs will use the per-guild trackers from bot.slot_call_trackers_by_guild
+            if slot_call_trackers:
+                from features.slot_requests.slot_calls import SlotCallCommands
+                first_tracker = list(slot_call_trackers.values())[0]  # Use first guild's tracker for cog
+                await bot.add_cog(SlotCallCommands(bot, first_tracker))
+                print(f"✅ Slot call commands cog registered")
+
+            # Setup slot panels per-guild
+            for guild in bot.guilds:
                 slot_panel = await setup_slot_panel(
                     bot,
                     engine,
@@ -4368,10 +4379,7 @@ async def on_ready():
                 bot.gtb_panels_by_guild[guild.id] = gtb_panel
                 print(f"✅ [Guild {guild.name}] GTB panel initialized")
 
-                # Sync Shuffle code user role for this guild
-                await sync_shuffle_role_on_startup(bot, engine)
-
-            # Setup raffle commands (global)
+            # Setup raffle commands (global cog)
             await setup_raffle_commands(bot, engine)
             
             # Set legacy global references (use first guild for backward compatibility)
