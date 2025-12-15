@@ -4387,10 +4387,8 @@ async def on_ready():
                 gtb_manager = gtb_managers.get(first_guild_id)
                 bot.slot_call_tracker = slot_call_tracker
                 bot.gtb_manager = gtb_manager
-            )
-            # Store as bot attribute for Redis subscriber
-            bot.gtb_panel = gtb_panel
-            print(f"✅ Guess the Balance panel initialized")
+
+            print("✅ All guilds initialized with multiserver features")
 
             # Setup link panel (button-based OAuth linking)
             link_panel = await setup_link_panel_system(
