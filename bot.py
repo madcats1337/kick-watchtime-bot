@@ -4292,7 +4292,14 @@ async def on_ready():
 
             # Initialize per-guild trackers and managers (without adding cogs yet)
             for guild in bot.guilds:
+                print(f"[Init] Loading settings for guild {guild.name} ({guild.id})...")
                 guild_settings = get_guild_settings(guild.id)
+                
+                # Debug: Print loaded settings
+                print(f"[Init] Guild {guild.name} loaded {len(guild_settings._cache)} settings:")
+                print(f"  - kick_channel: '{guild_settings.kick_channel}'")
+                print(f"  - slot_calls_channel_id: {guild_settings.slot_calls_channel_id}")
+                print(f"  - raffle_announcement_channel_id: {guild_settings.raffle_announcement_channel_id}")
                 
                 # Setup gifted sub tracker for this guild
                 gifted_sub_trackers[guild.id] = setup_gifted_sub_handler(engine)
