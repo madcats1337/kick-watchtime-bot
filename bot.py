@@ -1951,13 +1951,13 @@ async def update_watchtime_task():
                             "sid": server_id
                         })
                         if watchtime_debug_enabled:
-                            print(f"[Watchtime Debug][Guild {guild.name}] \u2705 Updated {user}: +{minutes_to_add} minutes")
+                            print(f"[Watchtime Debug][Guild {guild.name}] ✅ Updated {user}: +{minutes_to_add} minutes")
                     except Exception as e:
-                    print(f"⚠️ Error updating watchtime for {user}: {e}")
-                    continue  # Skip this user but continue with others
+                        print(f"⚠️ Error updating watchtime for {user}: {e}")
+                        continue  # Skip this user but continue with others
 
-        # Award points for new watchtime (runs after watchtime update)
-        await award_points_for_watchtime(list(active_users.keys()), guild_id=server_id)
+            # Award points for new watchtime (runs after watchtime update)
+            await award_points_for_watchtime(list(active_users.keys()), guild_id=server_id)
 
     except Exception as e:
         print(f"⚠️ Error in watchtime update task: {e}")
