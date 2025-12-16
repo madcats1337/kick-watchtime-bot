@@ -191,7 +191,6 @@ class WebhookEventHandler:
 _event_handler: Optional[WebhookEventHandler] = None
 
 @kick_webhooks_bp.route('/webhooks/kick', methods=['POST'])
-@require_webhook_signature
 def handle_kick_webhook():
     """
     Main webhook endpoint for Kick events.
@@ -206,6 +205,9 @@ def handle_kick_webhook():
         401 Unauthorized if signature invalid
         500 Internal Server Error on handler error
     """
+    print(f"[Webhook] 🔔 INCOMING REQUEST to /webhooks/kick")
+    print(f"[Webhook] Headers: {dict(request.headers)}")
+    
     event_type = request.headers.get("Kick-Event-Subscription-Type", "unknown")
     message_id = request.headers.get("Kick-Event-Message-Id", "")
     subscription_id = request.headers.get("Kick-Event-Subscription-Id", "")
@@ -213,6 +215,11 @@ def handle_kick_webhook():
     print(f"[Webhook] 📥 Received event: {event_type}")
     print(f"  Message ID: {message_id}")
     print(f"  Subscription ID: {subscription_id}")
+    
+    # Verify signature
+    if not verify_kick_signature(request):
+        print(f"[Webhook] ❌ Signature verification failed")
+        return jsonify({"error": "Invalid signature"}), 401
 
     try:
         event_data = request.get_json()
@@ -245,6 +252,7 @@ def handle_webhook_challenge():
     Kick may send a challenge request when registering webhooks.
     We need to echo back the challenge value.
     """
+    print(f"[Webhook] 🔑 Challenge endpoint called ({request.method})")
     if request.method == 'GET':
         challenge = request.args.get('challenge', '')
     else:
@@ -256,6 +264,17 @@ def handle_webhook_challenge():
         return challenge, 200, {'Content-Type': 'text/plain'}
 
     return jsonify({"status": "ready"}), 200
+
+@kick_webhooks_bp.route('/webhooks/kick/test', methods=['GET'])
+def test_webhook_endpoint():
+    """Test endpoint to verify webhook server is reachable"""
+    print(f"[Webhook] ✅ Test endpoint accessed")
+    return jsonify({
+        "status": "ok", 
+        "message": "Webhook server is running",
+        "endpoint": "/webhooks/kick",
+        "secret_configured": bool(WEBHOOK_SECRET)
+    }), 200
 
 def _log_event(event_type: str, event_data: Dict[str, Any]):
     """Log webhook event for debugging (used when no handler registered)"""
