@@ -18,6 +18,7 @@ import json
 import os
 import asyncio
 from datetime import datetime
+import time
 
 class RedisSubscriber:
     def __init__(self, bot, send_message_callback=None):
@@ -25,6 +26,7 @@ class RedisSubscriber:
         self.send_message_callback = send_message_callback
         self.redis_url = os.getenv('REDIS_URL')
         self.enabled = False
+        self.last_shop_sync = 0  # Timestamp for debouncing shop sync
 
         if self.redis_url:
             if '://' not in self.redis_url:
@@ -477,6 +479,14 @@ class RedisSubscriber:
                 traceback.print_exc()
 
         elif action == 'sync_shop':
+            # Debounce: prevent duplicate syncs within 3 seconds
+            current_time = time.time()
+            if current_time - self.last_shop_sync < 3:
+                print(f"⏭️ Ignoring duplicate sync_shop (last sync {current_time - self.last_shop_sync:.1f}s ago)")
+                return
+            
+            self.last_shop_sync = current_time
+            
             # Force update the shop message
             try:
                 from bot import post_point_shop_to_discord

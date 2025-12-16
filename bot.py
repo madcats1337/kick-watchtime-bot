@@ -6049,6 +6049,7 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
 
         if use_components_v2 and has_components_v2 and items:
             # ==================== Components V2 Mode with Mosaic ====================
+            v2_success = False
             try:
                 # Generate the mosaic image (name, price, stock already included in image)
                 mosaic_image = await create_shop_mosaic_image(items)
@@ -6091,32 +6092,43 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                 # Send footer message at the bottom
                 footer_msg = await channel.send("💡 *Earn points by watching streams!*")
 
+                # Mark as successful after messages are sent
+                v2_success = True
+
                 # Store all three message IDs
-                with engine.begin() as conn:
-                    conn.execute(text("""
-                        INSERT INTO point_settings (key, value, updated_at)
-                        VALUES ('shop_message_id', :m, CURRENT_TIMESTAMP)
-                        ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
-                    """), {"m": str(message.id)})
-                    conn.execute(text("""
-                        INSERT INTO point_settings (key, value, updated_at)
-                        VALUES ('shop_interactive_id', :m, CURRENT_TIMESTAMP)
-                        ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
-                    """), {"m": str(interactive_msg.id)})
-                    conn.execute(text("""
-                        INSERT INTO point_settings (key, value, updated_at)
-                        VALUES ('shop_footer_id', :m, CURRENT_TIMESTAMP)
-                        ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
-                    """), {"m": str(footer_msg.id)})
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text("""
+                            INSERT INTO point_settings (key, value, updated_at)
+                            VALUES ('shop_message_id', :m, CURRENT_TIMESTAMP)
+                            ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
+                        """), {"m": str(message.id)})
+                        conn.execute(text("""
+                            INSERT INTO point_settings (key, value, updated_at)
+                            VALUES ('shop_interactive_id', :m, CURRENT_TIMESTAMP)
+                            ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
+                        """), {"m": str(interactive_msg.id)})
+                        conn.execute(text("""
+                            INSERT INTO point_settings (key, value, updated_at)
+                            VALUES ('shop_footer_id', :m, CURRENT_TIMESTAMP)
+                            ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
+                        """), {"m": str(footer_msg.id)})
+                except Exception as db_error:
+                    print(f"[Point Shop] Warning: Failed to save message IDs: {db_error}")
 
                 print(f"[Point Shop] Posted Components V2 mosaic shop to channel {channel_id}")
                 return True
 
             except Exception as v2_error:
-                print(f"[Point Shop] Components V2 failed, falling back to legacy: {v2_error}")
-                import traceback
-                traceback.print_exc()
-                # Fall through to legacy mode
+                if not v2_success:
+                    print(f"[Point Shop] Components V2 failed, falling back to legacy: {v2_error}")
+                    import traceback
+                    traceback.print_exc()
+                    # Fall through to legacy mode
+                else:
+                    # Messages were sent successfully, just log the error and return
+                    print(f"[Point Shop] Components V2 posted but error occurred: {v2_error}")
+                    return True
 
         # ==================== Legacy Mode (Embed + Mosaic) ====================
         if not items:
