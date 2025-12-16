@@ -254,8 +254,9 @@ class SlotCallTracker:
                 username_lower = kick_username.lower()
                 with self.engine.connect() as conn:
                     blacklist_check = conn.execute(text("""
-                        SELECT 1 FROM slot_call_blacklist WHERE kick_username = :username
-                    """), {"username": username_lower}).fetchone()
+                        SELECT 1 FROM slot_call_blacklist 
+                        WHERE kick_username = :username AND discord_server_id = :guild_id
+                    """), {"username": username_lower, "guild_id": self.discord_server_id}).fetchone()
                     if blacklist_check:
                         logger.info(f"[Slot Call] Blocked blacklisted user in handle_slot_call: {kick_username}")
                         return  # Silently block - no response to blacklisted users

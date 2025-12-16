@@ -1447,14 +1447,17 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                     content_stripped = content_text.strip()
                                     # Use bot.slot_call_tracker instead of global variable
                                     if hasattr(bot, 'slot_call_tracker') and bot.slot_call_tracker and (content_stripped.startswith("!call") or content_stripped.startswith("!sr")):
-                                        # 🔒 SECURITY: Check if user is blacklisted
+                                        # 🔒 SECURITY: Check if user is blacklisted (per-guild)
                                         is_blacklisted = False
                                         try:
-                                            with engine.begin() as check_conn:
-                                                blacklist_check = check_conn.execute(text("""
-                                                    SELECT 1 FROM slot_call_blacklist WHERE kick_username = :username
-                                                """), {"username": username_lower}).fetchone()
-                                                is_blacklisted = blacklist_check is not None
+                                            guild_id = bot.slot_call_tracker.discord_server_id if hasattr(bot.slot_call_tracker, 'discord_server_id') else None
+                                            if guild_id:
+                                                with engine.begin() as check_conn:
+                                                    blacklist_check = check_conn.execute(text("""
+                                                        SELECT 1 FROM slot_call_blacklist 
+                                                        WHERE kick_username = :username AND discord_server_id = :guild_id
+                                                    """), {"username": username_lower, "guild_id": guild_id}).fetchone()
+                                                    is_blacklisted = blacklist_check is not None
                                         except Exception as e:
                                             print(f"Error checking slot call blacklist: {e}")
 
@@ -2647,14 +2650,14 @@ async def cmd_link(ctx):
 
     # Store message info for later deletion
     with engine.begin() as conn:
-        # Delete any existing pending OAuth for this user
-        conn.execute(text("DELETE FROM oauth_notifications WHERE discord_id = :d AND processed = FALSE"), {"d": discord_id})
+        # Delete any existing pending OAuth for this user in this guild
+        conn.execute(text("DELETE FROM oauth_notifications WHERE discord_id = :d AND discord_server_id = :g AND processed = FALSE"), {"d": discord_id, "g": guild_id})
 
         # Store message info (will be updated with kick_username when OAuth completes)
         conn.execute(text("""
-            INSERT INTO oauth_notifications (discord_id, kick_username, channel_id, message_id, processed)
-            VALUES (:d, '', :c, :m, FALSE)
-        """), {"d": discord_id, "c": ctx.channel.id, "m": message.id})
+            INSERT INTO oauth_notifications (discord_id, kick_username, channel_id, message_id, processed, discord_server_id)
+            VALUES (:d, '', :c, :m, FALSE, :g)
+        """), {"d": discord_id, "c": ctx.channel.id, "m": message.id, "g": guild_id})
 
 @bot.command(name="unlink")
 @commands.has_permissions(manage_guild=True)
@@ -4272,10 +4275,12 @@ async def on_ready():
                 print("🔄 Checking slot_call_blacklist table...")
                 conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS slot_call_blacklist (
-                        kick_username TEXT PRIMARY KEY,
+                        kick_username TEXT,
+                        discord_server_id BIGINT,
                         reason TEXT,
                         blacklisted_by BIGINT,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (kick_username, discord_server_id)
                     )
                 """))
                 print("✅ slot_call_blacklist table ready")
@@ -4894,8 +4899,8 @@ async def on_raw_reaction_add(payload):
     # Check if already linked
     with engine.connect() as conn:
         existing = conn.execute(text(
-            "SELECT kick_name FROM links WHERE discord_id = :d"
-        ), {"d": discord_id}).fetchone()
+            "SELECT kick_name FROM links WHERE discord_id = :d AND discord_server_id = :g"
+        ), {"d": discord_id, "g": guild_id}).fetchone()
 
         if existing:
             # Send message in channel instead of DM
@@ -4975,14 +4980,14 @@ async def on_raw_reaction_add(payload):
 
         # Store the DM message info for later deletion
         with engine.begin() as conn:
-            # Delete any existing pending OAuth for this user
-            conn.execute(text("DELETE FROM oauth_notifications WHERE discord_id = :d AND processed = FALSE"), {"d": discord_id})
+            # Delete any existing pending OAuth for this user in this guild
+            conn.execute(text("DELETE FROM oauth_notifications WHERE discord_id = :d AND discord_server_id = :g AND processed = FALSE"), {"d": discord_id, "g": guild_id})
 
             # Store DM message info (will be updated with kick_username when OAuth completes)
             conn.execute(text("""
-                INSERT INTO oauth_notifications (discord_id, kick_username, channel_id, message_id, processed)
-                VALUES (:d, '', :c, :m, FALSE)
-            """), {"d": discord_id, "c": dm_message.channel.id, "m": dm_message.id})
+                INSERT INTO oauth_notifications (discord_id, kick_username, channel_id, message_id, processed, discord_server_id)
+                VALUES (:d, '', :c, :m, FALSE, :g)
+            """), {"d": discord_id, "c": dm_message.channel.id, "m": dm_message.id, "g": guild_id})
 
     except discord.Forbidden:
         # User has DMs disabled, send in channel instead
@@ -5009,14 +5014,14 @@ async def on_raw_reaction_add(payload):
 
             # Store the channel message info
             with engine.begin() as conn:
-                # Delete any existing pending OAuth for this user
-                conn.execute(text("DELETE FROM oauth_notifications WHERE discord_id = :d AND processed = FALSE"), {"d": discord_id})
+                # Delete any existing pending OAuth for this user in this guild
+                conn.execute(text("DELETE FROM oauth_notifications WHERE discord_id = :d AND discord_server_id = :g AND processed = FALSE"), {"d": discord_id, "g": guild_id})
 
                 # Store channel message info
                 conn.execute(text("""
-                    INSERT INTO oauth_notifications (discord_id, kick_username, channel_id, message_id, processed)
-                    VALUES (:d, '', :c, :m, FALSE)
-                """), {"d": discord_id, "c": channel_message.channel.id, "m": channel_message.id})
+                    INSERT INTO oauth_notifications (discord_id, kick_username, channel_id, message_id, processed, discord_server_id)
+                    VALUES (:d, '', :c, :m, FALSE, :g)
+                """), {"d": discord_id, "c": channel_message.channel.id, "m": channel_message.id, "g": guild_id})
 
         except Exception as e:
             print(f"Failed to send OAuth link to {member}: {e}")
