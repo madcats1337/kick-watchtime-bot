@@ -822,11 +822,11 @@ class RedisSubscriber:
                 except Exception as e:
                     print(f"⚠️ Failed to refresh bot settings: {e}")
 
-    async def announce_in_chat(self, message):
+    async def announce_in_chat(self, message, guild_id=None):
         """Send a message to the Kick chat"""
         try:
             if self.send_message_callback:
-                success = await self.send_message_callback(message)
+                success = await self.send_message_callback(message, guild_id=guild_id)
                 if success:
                     print(f"💬 Sent to Kick chat: {message}")
                 else:
