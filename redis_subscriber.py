@@ -487,10 +487,13 @@ class RedisSubscriber:
             
             self.last_shop_sync = current_time
             
+            # Get guild_id from event data
+            guild_id = data.get('discord_server_id')
+            
             # Force update the shop message
             try:
                 from bot import post_point_shop_to_discord
-                success = await post_point_shop_to_discord(self.bot, update_existing=True)
+                success = await post_point_shop_to_discord(self.bot, guild_id=guild_id, update_existing=True)
                 if success:
                     print("✅ Point shop force synced to Discord")
                 else:
@@ -508,12 +511,13 @@ class RedisSubscriber:
             item_id = data.get('item_id')
             item_name = data.get('item_name')
             update_type = data.get('type', 'update')  # create, update, delete
+            guild_id = data.get('discord_server_id')
             print(f"✅ Point shop item {update_type}: {item_name} (ID: {item_id})")
 
             # Auto-update the shop message when items change
             try:
-                from bot import update_point_shop_message
-                success = await update_point_shop_message(self.bot)
+                from bot import post_point_shop_to_discord
+                success = await post_point_shop_to_discord(self.bot, guild_id=guild_id, update_existing=True)
                 if success:
                     print("✅ Point shop message auto-updated")
                 else:
