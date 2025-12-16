@@ -365,7 +365,8 @@ class SlotCallTracker:
                         if self.kick_send_callback:
                             try:
                                 await self.kick_send_callback(
-                                    f"@{kick_username_safe} Sorry, {slot_call_safe} is currently banned."
+                                    f"@{kick_username_safe} Sorry, {slot_call_safe} is currently banned.",
+                                    guild_id=self.discord_server_id
                                 )
                                 logger.info(f"Blocked banned slot request: {slot_call_safe}")
                             except Exception as e:
@@ -377,7 +378,8 @@ class SlotCallTracker:
                         if self.kick_send_callback:
                             try:
                                 await self.kick_send_callback(
-                                    f"@{kick_username_safe} Sorry, {slot_call_safe} is currently unavailable."
+                                    f"@{kick_username_safe} Sorry, {slot_call_safe} is currently unavailable.",
+                                    guild_id=self.discord_server_id
                                 )
                                 logger.info(f"Blocked slot request for disabled provider: {slot_call_safe}")
                             except Exception as e:
@@ -420,7 +422,8 @@ class SlotCallTracker:
                             if self.kick_send_callback:
                                 try:
                                     await self.kick_send_callback(
-                                        f"@{kick_username_safe} Sorry, {slot_call_safe} has already been requested."
+                                        f"@{kick_username_safe} Sorry, {slot_call_safe} has already been requested.",
+                                        guild_id=self.discord_server_id
                                     )
                                     logger.info(f"Blocked duplicate slot request: {slot_call_safe} by {kick_username_safe}")
                                 except Exception as e:
@@ -484,7 +487,7 @@ class SlotCallTracker:
             if self.kick_send_callback:
                 kick_response = f"@{kick_username_safe} Your slot request for {slot_call_safe} has been received! ✅"
                 try:
-                    await self.kick_send_callback(kick_response)
+                    await self.kick_send_callback(kick_response, guild_id=self.discord_server_id)
                     logger.info(f"Sent Kick chat response to {kick_username_safe}")
                 except Exception as kick_error:
                     logger.error(f"Failed to send Kick chat response: {kick_error}")
@@ -612,7 +615,7 @@ class SlotCallCommands(commands.Cog):
                 if self.tracker.kick_send_callback:
                     try:
                         kick_message = f"🎰 Random slot picked: {slot_call} (requested by @{username})"
-                        await self.tracker.kick_send_callback(kick_message)
+                        await self.tracker.kick_send_callback(kick_message, guild_id=self.tracker.discord_server_id)
                         logger.info(f"Sent pick notification to Kick chat")
                     except Exception as kick_error:
                         logger.error(f"Failed to send pick notification to Kick: {kick_error}")
@@ -716,7 +719,8 @@ class SlotCallCommands(commands.Cog):
             if self.tracker.kick_send_callback:
                 try:
                     await self.tracker.kick_send_callback(
-                        "🔄 Slot requests have been cleared! You can now make new requests with !call or !sr"
+                        "🔄 Slot requests have been cleared! You can now make new requests with !call or !sr",
+                        guild_id=self.tracker.discord_server_id
                     )
                 except Exception as e:
                     logger.error(f"Failed to send Kick notification: {e}")
