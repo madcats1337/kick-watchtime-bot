@@ -3366,10 +3366,15 @@ async def test_subscription(ctx, kick_username: str = None, sub_count: int = 1):
     Usage: !testsub <kick_username> [sub_count]
     Example: !testsub testuser123 5  (simulates 5 gifted subs)
     """
-    global gifted_sub_tracker
+    guild_id = ctx.guild.id if ctx.guild else None
+    if not guild_id:
+        await ctx.send("❌ This command must be used in a server.")
+        return
+    
+    gifted_sub_tracker = gifted_sub_trackers.get(guild_id)
 
     if not gifted_sub_tracker:
-        await ctx.send("❌ **Gifted sub tracker not initialized!**\n\n"
+        await ctx.send("❌ **Gifted sub tracker not initialized for this server!**\n\n"
                        "**Possible reasons:**\n"
                        "• Bot is still starting up (wait a few seconds)\n"
                        "• Database connection failed\n"
@@ -3768,7 +3773,15 @@ async def raffle_system_info(ctx):
     [ADMIN/DEBUG] Check raffle system initialization status
     Usage: !systemstatus
     """
-    global gifted_sub_tracker, shuffle_tracker, slot_call_tracker
+    guild_id = ctx.guild.id if ctx.guild else None
+    if not guild_id:
+        await ctx.send("❌ This command must be used in a server.")
+        return
+    
+    # Get guild-specific trackers
+    gifted_sub_tracker = gifted_sub_trackers.get(guild_id)
+    shuffle_tracker = shuffle_trackers.get(guild_id)
+    slot_call_tracker = slot_call_trackers.get(guild_id)
 
     embed = discord.Embed(
         title="🎰 Raffle System Status",
