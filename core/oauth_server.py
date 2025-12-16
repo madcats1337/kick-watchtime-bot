@@ -136,8 +136,93 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
             
             print(f"[Webhook] 💬 Chat: {username}: {content}")
             
-            # TODO: Process commands here (!call, !sr, !raffle, etc.)
-            # For now, just log it
+            # Import here to avoid circular imports
+            from bot import bot, send_kick_message, engine
+            from sqlalchemy import text
+            
+            # Get guild_id from bot settings - need to determine which server this message is for
+            # For now, use maikelele's server (guild_id 914986636629143562)
+            guild_id = 914986636629143562  # TODO: Determine correct guild from broadcaster info
+            
+            content_stripped = content.strip()
+            username_lower = username.lower()
+            
+            # Check for custom commands first
+            if hasattr(bot, 'custom_commands_manager') and bot.custom_commands_manager:
+                try:
+                    async def send_message_with_guild(msg):
+                        return await send_kick_message(msg, guild_id=guild_id)
+                    
+                    bot.custom_commands_manager.send_message_callback = send_message_with_guild
+                    handled = await bot.custom_commands_manager.handle_message(content, username)
+                    if handled:
+                        print(f"[Webhook] ✅ Custom command handled")
+                        return
+                except Exception as e:
+                    print(f"[Webhook] ⚠️ Error handling custom command: {e}")
+            
+            # Handle slot call commands (!call or !sr)
+            if hasattr(bot, 'slot_call_tracker') and bot.slot_call_tracker and (content_stripped.startswith("!call") or content_stripped.startswith("!sr")):
+                # Check if user is blacklisted
+                is_blacklisted = False
+                try:
+                    with engine.begin() as check_conn:
+                        blacklist_check = check_conn.execute(text("""
+                            SELECT 1 FROM slot_call_blacklist 
+                            WHERE kick_username = :username AND discord_server_id = :guild_id
+                        """), {"username": username_lower, "guild_id": guild_id}).fetchone()
+                        is_blacklisted = blacklist_check is not None
+                except Exception as e:
+                    print(f"[Webhook] Error checking blacklist: {e}")
+                
+                if is_blacklisted:
+                    print(f"[Webhook] Blocked blacklisted user: {username}")
+                else:
+                    if content_stripped.startswith("!call"):
+                        slot_call = content_stripped[5:].strip()[:200]
+                    else:
+                        slot_call = content_stripped[3:].strip()[:200]
+                    
+                    if slot_call:
+                        await bot.slot_call_tracker.handle_slot_call(username, slot_call)
+                        print(f"[Webhook] ✅ Slot call processed")
+                    else:
+                        await send_kick_message(f"@{username} Please specify a slot!", guild_id=guild_id)
+            
+            # Handle !raffle command
+            elif content_stripped.lower() == "!raffle":
+                raffle_message = (
+                    "Do you want to win a $100 super buy on Sweet Bonanza 1000? "
+                    "All you gotta do is join my discord, verify with lelebot and follow the instructions -> "
+                    "https://discord.gg/k7CXJtfrPY"
+                )
+                await send_kick_message(raffle_message, guild_id=guild_id)
+                print(f"[Webhook] ✅ Raffle message sent")
+            
+            # Handle !gtb command
+            elif content_stripped.lower().startswith("!gtb"):
+                if hasattr(bot, 'gtb_manager'):
+                    gtb_parts = content_stripped.split(maxsplit=1)
+                    if len(gtb_parts) == 2:
+                        from bot import parse_amount
+                        amount = parse_amount(gtb_parts[1])
+                        if amount is not None:
+                            success, message = bot.gtb_manager.add_guess(username, amount)
+                            if success:
+                                response = f"@{username} {message} Good luck! 🎰"
+                                await send_kick_message(response, guild_id=guild_id)
+                            else:
+                                await send_kick_message(f"@{username} {message}", guild_id=guild_id)
+                        else:
+                            await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount>", guild_id=guild_id)
+                    else:
+                        await send_kick_message(f"@{username} Usage: !gtb <amount>", guild_id=guild_id)
+                    print(f"[Webhook] ✅ GTB command processed")
+            
+            # Handle !clip command
+            elif content_stripped.lower().startswith("!clip"):
+                # TODO: Implement clip command via webhook
+                print(f"[Webhook] ℹ️ Clip command received (not yet implemented)")
             
         except Exception as e:
             print(f"[Webhook] ❌ Error handling chat message: {e}")
