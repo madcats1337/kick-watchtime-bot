@@ -959,15 +959,23 @@ def auth_kick():
         """), {"state": state, "discord_id": int(discord_id), "code_verifier": code_verifier, "guild_id": int(guild_id)})
         print(f"✅ State saved to database with guild_id: {guild_id}", flush=True)
 
-    # Build authorization URL with user:read scope and PKCE
+    # Build authorization URL with required scopes and PKCE
     redirect_uri = f"{OAUTH_BASE_URL}/auth/kick/callback"
+
+    # Request all necessary scopes for bot functionality
+    scopes = [
+        'user:read',           # Read user profile
+        'chat:write',          # Send chat messages as bot
+        'events:subscribe',    # Subscribe to webhook events (chat messages, follows, subs)
+        'channel:read',        # Read channel information
+    ]
 
     auth_params = {
         'client_id': KICK_CLIENT_ID,
         'response_type': 'code',
         'redirect_uri': redirect_uri,
         'state': state,
-        'scope': 'user:read',  # Kick scope format (confirmed from lele.gg)
+        'scope': ' '.join(scopes),  # Space-separated scopes
         'code_challenge': code_challenge,
         'code_challenge_method': 'S256'
     }
