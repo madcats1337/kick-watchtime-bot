@@ -5348,13 +5348,14 @@ async def fixlinks_resolve(ctx, kick_name: str, keep_server_id: int):
 class PointShopConfirmView(discord.ui.View):
     """View with button to confirm purchase"""
 
-    def __init__(self, item_id: int, item_name: str, price: int, kick_username: str, discord_id: int, requirement_value: str = None, note: str = None):
+    def __init__(self, item_id: int, item_name: str, price: int, kick_username: str, discord_id: int, guild_id: int, requirement_value: str = None, note: str = None):
         super().__init__(timeout=300)  # 5 minute timeout
         self.item_id = item_id
         self.item_name = item_name
         self.price = price
         self.kick_username = kick_username
         self.discord_id = discord_id
+        self.guild_id = guild_id
         self.requirement_value = requirement_value
         self.note = note
 
@@ -5387,8 +5388,8 @@ class PointShopConfirmView(discord.ui.View):
                 # Check user's points balance
                 user_points = conn.execute(text("""
                     SELECT points FROM user_points
-                    WHERE kick_username = :k
-                """), {"k": self.kick_username}).fetchone()
+                    WHERE kick_username = :k AND discord_server_id = :g
+                """), {"k": self.kick_username, "g": self.guild_id}).fetchone()
 
                 if not user_points or user_points[0] < price:
                     current_balance = user_points[0] if user_points else 0
@@ -5404,8 +5405,8 @@ class PointShopConfirmView(discord.ui.View):
                     SET points = points - :p,
                         total_spent = total_spent + :p,
                         last_updated = CURRENT_TIMESTAMP
-                    WHERE kick_username = :k
-                """), {"p": price, "k": self.kick_username})
+                    WHERE kick_username = :k AND discord_server_id = :g
+                """), {"p": price, "k": self.kick_username, "g": self.guild_id})
 
                 # Reduce stock if not unlimited
                 if stock > 0:
@@ -5432,8 +5433,8 @@ class PointShopConfirmView(discord.ui.View):
 
                 # Get updated balance
                 new_balance = conn.execute(text("""
-                    SELECT points FROM user_points WHERE kick_username = :k
-                """), {"k": self.kick_username}).fetchone()[0]
+                    SELECT points FROM user_points WHERE kick_username = :k AND discord_server_id = :g
+                """), {"k": self.kick_username, "g": self.guild_id}).fetchone()[0]
 
             # Publish event to notify dashboard of new purchase
             publish_redis_event('point_shop', 'new_purchase', {
@@ -5572,6 +5573,7 @@ class PointShopPurchaseModal(discord.ui.Modal):
             price=self.price,
             kick_username=kick_username,
             discord_id=discord_id,
+            guild_id=interaction.guild_id,
             requirement_value=requirement_value,
             note=note
         )
@@ -6216,8 +6218,8 @@ async def cmd_points(ctx):
         points_data = conn.execute(text("""
             SELECT points, total_earned, total_spent
             FROM user_points
-            WHERE kick_username = :k
-        """), {"k": kick_username}).fetchone()
+            WHERE kick_username = :k AND discord_server_id = :s
+        """), {"k": kick_username, "s": ctx.guild.id}).fetchone()
 
         if not points_data:
             points, total_earned, total_spent = 0, 0, 0

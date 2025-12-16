@@ -20,9 +20,18 @@ class RaffleCommands(commands.Cog):
     def __init__(self, bot, engine):
         self.bot = bot
         self.engine = engine
-        self.ticket_manager = TicketManager(engine)
-        self.raffle_draw = RaffleDraw(engine)
-        self.shuffle_tracker = ShuffleWagerTracker(engine)
+        self.ticket_manager = TicketManager(engine)  # Default manager (backward compat)
+        self.raffle_draw = RaffleDraw(engine)  # Default draw (backward compat)
+        self.shuffle_tracker = ShuffleWagerTracker(engine)  # Default tracker (backward compat)
+    
+    def _get_guild_managers(self, ctx):
+        """Get guild-specific managers for multiserver support"""
+        guild_id = ctx.guild.id if ctx.guild else None
+        return {
+            'ticket_manager': TicketManager(self.engine, server_id=guild_id),
+            'raffle_draw': RaffleDraw(self.engine, server_id=guild_id),
+            'shuffle_tracker': ShuffleWagerTracker(self.engine, server_id=guild_id)
+        }
 
     # ========================================
     # USER COMMANDS
@@ -36,7 +45,11 @@ class RaffleCommands(commands.Cog):
         """
         try:
             discord_id = ctx.author.id
-            tickets = self.ticket_manager.get_user_tickets(discord_id)
+            managers = self._get_guild_managers(ctx)
+            ticket_manager = managers['ticket_manager']
+            raffle_draw = managers['raffle_draw']
+            
+            tickets = ticket_manager.get_user_tickets(discord_id)
 
             if not tickets or tickets['total_tickets'] == 0:
                 await ctx.send(f"❌ {ctx.author.mention} You don't have any raffle tickets yet!\n"
@@ -47,12 +60,12 @@ class RaffleCommands(commands.Cog):
                 return
 
             # Get user's rank
-            rank = self.ticket_manager.get_user_rank(discord_id)
-            stats = self.ticket_manager.get_period_stats()
+            rank = ticket_manager.get_user_rank(discord_id)
+            stats = ticket_manager.get_period_stats()
             total_participants = stats['total_participants'] if stats else 0
 
             # Calculate win probability
-            win_prob = self.raffle_draw.get_user_win_probability(discord_id, stats['period_id']) if stats else None
+            win_prob = raffle_draw.get_user_win_probability(discord_id, stats['period_id']) if stats else None
             win_prob_text = f"{win_prob['probability_percent']:.2f}%" if win_prob else "N/A"
 
             embed_text = f"""
