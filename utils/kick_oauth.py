@@ -10,11 +10,14 @@ def get_kick_token_for_server(engine, discord_server_id):
     
     Args:
         engine: SQLAlchemy engine
-        discord_server_id: Discord server/guild ID (as string)
+        discord_server_id: Discord server/guild ID (as int or None)
         
     Returns:
         dict with 'access_token', 'refresh_token', etc., or None if not found
     """
+    if not discord_server_id:
+        return None
+        
     try:
         with engine.connect() as conn:
             # First, get the configured kick_channel (streamer username) for this server
@@ -23,7 +26,7 @@ def get_kick_token_for_server(engine, discord_server_id):
                     SELECT value FROM bot_settings 
                     WHERE key = 'kick_channel' AND discord_server_id = :server_id
                 """),
-                {"server_id": str(discord_server_id)}
+                {"server_id": discord_server_id}
             )
             row = result.fetchone()
             
@@ -64,11 +67,14 @@ def get_chatroom_id_for_server(engine, discord_server_id):
     
     Args:
         engine: SQLAlchemy engine
-        discord_server_id: Discord server/guild ID (as string)
+        discord_server_id: Discord server/guild ID (as int or None)
         
     Returns:
         str: Chatroom ID or None
     """
+    if not discord_server_id:
+        return None
+        
     try:
         with engine.connect() as conn:
             result = conn.execute(
@@ -78,7 +84,7 @@ def get_chatroom_id_for_server(engine, discord_server_id):
                     WHERE discord_server_id = :server_id
                     LIMIT 1
                 """),
-                {"server_id": str(discord_server_id)}
+                {"server_id": discord_server_id}
             )
             row = result.fetchone()
             
