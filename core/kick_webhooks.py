@@ -223,6 +223,34 @@ def handle_kick_webhook():
 
     try:
         event_data = request.get_json()
+        
+        # Multiserver routing: Lookup which Discord server this subscription belongs to
+        discord_server_id = None
+        if subscription_id:
+            try:
+                from sqlalchemy import create_engine, text
+                db_url = os.getenv('DATABASE_URL')
+                if db_url:
+                    engine = create_engine(db_url)
+                    with engine.connect() as conn:
+                        result = conn.execute(text("""
+                            SELECT discord_server_id, broadcaster_user_id 
+                            FROM kick_webhook_subscriptions 
+                            WHERE subscription_id = :sub_id AND status = 'active'
+                        """), {"sub_id": subscription_id}).fetchone()
+                        
+                        if result:
+                            discord_server_id = result[0]
+                            broadcaster_user_id = result[1]
+                            print(f"[Webhook] 🎯 Routing to server: {discord_server_id} (broadcaster: {broadcaster_user_id})")
+                            
+                            # Add server context to event data for handler
+                            event_data['_server_id'] = discord_server_id
+                            event_data['_broadcaster_user_id'] = broadcaster_user_id
+                        else:
+                            print(f"[Webhook] ⚠️  No active subscription found for ID: {subscription_id}")
+            except Exception as db_err:
+                print(f"[Webhook] ⚠️  Database lookup error: {db_err}")
 
         if _event_handler:
             import asyncio
