@@ -37,10 +37,21 @@ class RedisSubscriber:
                 self.enabled = True
                 print("✅ Redis subscriber initialized")
             except Exception as e:
-                print(f"⚠️  Redis unavailable: {e}")
+                print("⚠️  Redis unavailable: {e}")
                 self.enabled = False
         else:
             print("⚠️  REDIS_URL not set, dashboard events will not be received")
+
+    async def announce_in_chat(self, message):
+        """Send a message to Kick chat using the callback function"""
+        if self.send_message_callback:
+            try:
+                await self.send_message_callback(message)
+                print(f"💬 Sent to Kick chat: {message}")
+            except Exception as e:
+                print(f"⚠️ Failed to send Kick message: {e}")
+        else:
+            print(f"ℹ️  Kick chat disabled: {message}")
 
     async def handle_slot_requests_event(self, action, data):
         """Handle slot request events from dashboard"""
