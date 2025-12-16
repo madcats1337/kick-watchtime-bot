@@ -926,18 +926,6 @@ intents.reactions = True  # Enable reaction events
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-@bot.event
-async def on_ready():
-    """Bot startup event - initialize Redis subscriber and other services"""
-    print(f'✅ Logged in as {bot.user} (ID: {bot.user.id})')
-    print(f'✅ Connected to {len(bot.guilds)} guilds')
-    
-    # Start Redis subscriber for dashboard events
-    print("🎧 Starting Redis subscriber for dashboard events...")
-    asyncio.create_task(start_redis_subscriber(bot, send_kick_message))
-    
-    print("✅ Bot is ready!")
-
 # Store settings manager on bot for access throughout
 bot.settings_manager = bot_settings
 
