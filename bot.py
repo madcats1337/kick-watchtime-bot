@@ -2672,12 +2672,13 @@ async def cmd_unlink(ctx, member: discord.Member = None):
         return
 
     discord_id = member.id
+    guild_id = ctx.guild.id if ctx.guild else None
 
     # Check if user has a linked account
     with engine.connect() as conn:
         existing = conn.execute(text(
-            "SELECT kick_name FROM links WHERE discord_id = :d"
-        ), {"d": discord_id}).fetchone()
+            "SELECT kick_name FROM links WHERE discord_id = :d AND discord_server_id = :guild_id"
+        ), {"d": discord_id, "guild_id": guild_id}).fetchone()
 
     if not existing:
         await ctx.send(f"❌ {member.mention} doesn't have a linked Kick account.")
@@ -2687,13 +2688,13 @@ async def cmd_unlink(ctx, member: discord.Member = None):
 
     # Unlink without confirmation (admin action)
     with engine.begin() as conn:
-        conn.execute(text("DELETE FROM links WHERE discord_id = :d"), {"d": discord_id})
+        conn.execute(text("DELETE FROM links WHERE discord_id = :d AND discord_server_id = :guild_id"), {"d": discord_id, "guild_id": guild_id})
 
         # Also clean up any pending OAuth notifications
-        conn.execute(text("DELETE FROM oauth_notifications WHERE discord_id = :d"), {"d": discord_id})
+        conn.execute(text("DELETE FROM oauth_notifications WHERE discord_id = :d AND discord_server_id = :guild_id"), {"d": discord_id, "guild_id": guild_id})
 
         # Clean up pending verifications
-        conn.execute(text("DELETE FROM pending_links WHERE discord_id = :d"), {"d": discord_id})
+        conn.execute(text("DELETE FROM pending_links WHERE discord_id = :d AND discord_server_id = :guild_id"), {"d": discord_id, "guild_id": guild_id})
 
     await ctx.send(
         f"🔓 Admin action: {member.mention}'s Kick account **{kick_name}** has been unlinked.\n"
@@ -2713,10 +2714,11 @@ async def cmd_leaderboard(ctx, top: int = 10):
     if top > 25:
         top = 25
 
+    guild_id = ctx.guild.id if ctx.guild else None
     with engine.connect() as conn:
         rows = conn.execute(text(
-            "SELECT username, minutes FROM watchtime ORDER BY minutes DESC LIMIT :n"
-        ), {"n": top}).fetchall()
+            "SELECT username, minutes FROM watchtime WHERE discord_server_id = :guild_id ORDER BY minutes DESC LIMIT :n"
+        ), {"n": top, "guild_id": guild_id}).fetchall()
 
     if not rows:
         await ctx.send("📊 No watchtime data yet. Start watching to appear on the leaderboard!")
@@ -2751,6 +2753,7 @@ async def cmd_watchtime(ctx, kick_username: str = None):
     discord_id = ctx.author.id
     is_admin = ctx.guild and ctx.author.guild_permissions.administrator
 
+    guild_id = ctx.guild.id if ctx.guild else None
     with engine.connect() as conn:
         # If kick_username provided, check if admin
         if kick_username:
@@ -2761,8 +2764,8 @@ async def cmd_watchtime(ctx, kick_username: str = None):
             # Admin lookup by Kick username
             kick_name = kick_username.lower()
             watchtime = conn.execute(text(
-                "SELECT minutes FROM watchtime WHERE username = :u"
-            ), {"u": kick_name}).fetchone()
+                "SELECT minutes FROM watchtime WHERE username = :u AND discord_server_id = :guild_id"
+            ), {"u": kick_name, "guild_id": guild_id}).fetchone()
 
             if not watchtime or watchtime[0] == 0:
                 await ctx.send(
@@ -2772,8 +2775,8 @@ async def cmd_watchtime(ctx, kick_username: str = None):
         else:
             # Regular user checking their own watchtime
             link = conn.execute(text(
-                "SELECT kick_name FROM links WHERE discord_id = :d"
-            ), {"d": discord_id}).fetchone()
+                "SELECT kick_name FROM links WHERE discord_id = :d AND discord_server_id = :guild_id"
+            ), {"d": discord_id, "guild_id": guild_id}).fetchone()
 
             if not link:
                 await ctx.send(
@@ -2785,8 +2788,8 @@ async def cmd_watchtime(ctx, kick_username: str = None):
 
             # Get watchtime
             watchtime = conn.execute(text(
-                "SELECT minutes FROM watchtime WHERE username = :u"
-            ), {"u": kick_name}).fetchone()
+                "SELECT minutes FROM watchtime WHERE username = :u AND discord_server_id = :guild_id"
+            ), {"u": kick_name, "guild_id": guild_id}).fetchone()
 
             if not watchtime or watchtime[0] == 0:
                 await ctx.send(
@@ -3141,12 +3144,14 @@ async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: 
 
     if action is None or action.lower() == "list":
         # Show current configuration
+        guild_id = ctx.guild.id if ctx.guild else None
         with engine.connect() as conn:
             roles = conn.execute(text("""
                 SELECT role_name, minutes_required, enabled, display_order
                 FROM watchtime_roles
+                WHERE discord_server_id = :guild_id
                 ORDER BY display_order ASC
-            """)).fetchall()
+            """), {"guild_id": guild_id}).fetchall()
 
         if not roles:
             await ctx.send("📋 No roles configured.")
@@ -3177,15 +3182,16 @@ async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: 
             return
 
         try:
+            guild_id = ctx.guild.id if ctx.guild else None
             with engine.begin() as conn:
-                # Get highest display order
-                max_order = conn.execute(text("SELECT COALESCE(MAX(display_order), 0) FROM watchtime_roles")).fetchone()[0]
+                # Get highest display order for this guild
+                max_order = conn.execute(text("SELECT COALESCE(MAX(display_order), 0) FROM watchtime_roles WHERE discord_server_id = :guild_id"), {"guild_id": guild_id}).fetchone()[0]
 
                 # Insert new role
                 conn.execute(text("""
-                    INSERT INTO watchtime_roles (role_name, minutes_required, display_order, enabled)
-                    VALUES (:name, :minutes, :order, TRUE)
-                """), {"name": role_name, "minutes": minutes, "order": max_order + 1})
+                    INSERT INTO watchtime_roles (role_name, minutes_required, display_order, enabled, discord_server_id)
+                    VALUES (:name, :minutes, :order, TRUE, :guild_id)
+                """), {"name": role_name, "minutes": minutes, "order": max_order + 1, "guild_id": guild_id})
 
             await ctx.send(f"✅ Added role **{role_name}** at **{minutes:,} minutes** ({minutes/60:.1f} hours)")
         except Exception as e:
@@ -3197,13 +3203,14 @@ async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: 
             return
 
         try:
+            guild_id = ctx.guild.id if ctx.guild else None
             with engine.begin() as conn:
                 result = conn.execute(text("""
                     UPDATE watchtime_roles
                     SET minutes_required = :minutes, updated_at = CURRENT_TIMESTAMP
-                    WHERE role_name = :name
+                    WHERE role_name = :name AND discord_server_id = :guild_id
                     RETURNING id
-                """), {"name": role_name, "minutes": minutes}).fetchone()
+                """), {"name": role_name, "minutes": minutes, "guild_id": guild_id}).fetchone()
 
                 if not result:
                     await ctx.send(f"❌ Role **{role_name}** not found.")
@@ -3219,12 +3226,13 @@ async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: 
             return
 
         try:
+            guild_id = ctx.guild.id if ctx.guild else None
             with engine.begin() as conn:
                 result = conn.execute(text("""
                     DELETE FROM watchtime_roles
-                    WHERE role_name = :name
+                    WHERE role_name = :name AND discord_server_id = :guild_id
                     RETURNING id
-                """), {"name": role_name}).fetchone()
+                """), {"name": role_name, "guild_id": guild_id}).fetchone()
 
                 if not result:
                     await ctx.send(f"❌ Role **{role_name}** not found.")
@@ -3241,13 +3249,14 @@ async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: 
 
         enabled = action.lower() == "enable"
         try:
+            guild_id = ctx.guild.id if ctx.guild else None
             with engine.begin() as conn:
                 result = conn.execute(text("""
                     UPDATE watchtime_roles
                     SET enabled = :enabled, updated_at = CURRENT_TIMESTAMP
-                    WHERE role_name = :name
+                    WHERE role_name = :name AND discord_server_id = :guild_id
                     RETURNING id
-                """), {"name": role_name, "enabled": enabled}).fetchone()
+                """), {"name": role_name, "enabled": enabled, "guild_id": guild_id}).fetchone()
 
                 if not result:
                     await ctx.send(f"❌ Role **{role_name}** not found.")
@@ -3987,15 +3996,28 @@ async def health_check(ctx):
 
     # 3. Kick API Check
     try:
-        if KICK_CHATROOM_ID:
-            checks.append(f"✅ **Kick Chatroom ID**: Configured ({KICK_CHATROOM_ID})")
-        else:
-            chatroom_id = await fetch_chatroom_id(KICK_CHANNEL)
-            if chatroom_id:
-                checks.append(f"✅ **Kick API**: Accessible (ID: {chatroom_id})")
+        guild_id = ctx.guild.id if ctx.guild else None
+        guild_settings = get_guild_settings(guild_id) if guild_id else None
+        
+        if guild_settings:
+            kick_channel = guild_settings.kick_channel
+            kick_chatroom_id = guild_settings.kick_chatroom_id
+            
+            if kick_chatroom_id:
+                checks.append(f"✅ **Kick Chatroom ID**: Configured ({kick_chatroom_id})")
+            elif kick_channel:
+                chatroom_id = await fetch_chatroom_id(kick_channel)
+                if chatroom_id:
+                    checks.append(f"✅ **Kick API**: Accessible (ID: {chatroom_id})")
+                else:
+                    checks.append(f"⚠️ **Kick API**: Could not fetch chatroom ID")
+                    has_warnings = True
             else:
-                checks.append(f"⚠️ **Kick API**: Could not fetch chatroom ID")
+                checks.append(f"⚠️ **Kick Channel**: Not configured for this server")
                 has_warnings = True
+        else:
+            checks.append(f"⚠️ **Settings**: Not loaded for this server")
+            has_warnings = True
     except Exception as e:
         checks.append(f"❌ **Kick API**: {str(e)[:50]}")
         has_errors = True
@@ -4054,25 +4076,26 @@ async def health_check(ctx):
 
     # 6. Database Tables Check
     try:
+        guild_id = ctx.guild.id if ctx.guild else None
         with engine.connect() as conn:
             tables_check = []
 
-            # Check watchtime table
-            result = conn.execute(text("SELECT COUNT(*) FROM watchtime"))
+            # Check watchtime table for this guild
+            result = conn.execute(text("SELECT COUNT(*) FROM watchtime WHERE discord_server_id = :guild_id"), {"guild_id": guild_id})
             watchtime_count = result.fetchone()[0]
             tables_check.append(f"{watchtime_count} viewers")
 
-            # Check links table
-            result = conn.execute(text("SELECT COUNT(*) FROM links"))
+            # Check links table for this guild
+            result = conn.execute(text("SELECT COUNT(*) FROM links WHERE discord_server_id = :guild_id"), {"guild_id": guild_id})
             links_count = result.fetchone()[0]
             tables_check.append(f"{links_count} linked accounts")
 
-            # Check watchtime_roles table
-            result = conn.execute(text("SELECT COUNT(*) FROM watchtime_roles WHERE enabled = true"))
+            # Check watchtime_roles table for this guild
+            result = conn.execute(text("SELECT COUNT(*) FROM watchtime_roles WHERE enabled = true AND discord_server_id = :guild_id"), {"guild_id": guild_id})
             roles_count = result.fetchone()[0]
             tables_check.append(f"{roles_count} active roles")
 
-            checks.append(f"✅ **Database Stats**: {' | '.join(tables_check)}")
+            checks.append(f"✅ **Database Stats** (This Server): {' | '.join(tables_check)}")
     except Exception as e:
         checks.append(f"⚠️ **Database Stats**: {str(e)[:50]}")
         has_warnings = True
@@ -6200,14 +6223,15 @@ async def cmd_points_leaderboard(ctx, limit: int = 10):
     if limit > 25:
         limit = 25
 
+    guild_id = ctx.guild.id if ctx.guild else None
     with engine.connect() as conn:
         leaders = conn.execute(text("""
             SELECT kick_username, points, total_earned
             FROM user_points
-            WHERE points > 0
+            WHERE points > 0 AND discord_server_id = :guild_id
             ORDER BY points DESC
             LIMIT :limit
-        """), {"limit": limit}).fetchall()
+        """), {"limit": limit, "guild_id": guild_id}).fetchall()
 
     if not leaders:
         await ctx.send("📊 No one has earned any points yet!")
