@@ -6018,12 +6018,28 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
 
         # Get active shop items
         with engine.connect() as conn:
+            # Temporarily query without discord_server_id filter to check if items exist
+            all_items = conn.execute(text("""
+                SELECT id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer, discord_server_id
+                FROM point_shop_items
+                WHERE is_active = TRUE
+                ORDER BY price ASC
+            """)).fetchall()
+            
+            print(f"[Point Shop Debug] Total active items in DB: {len(all_items)}")
+            if all_items:
+                for item in all_items:
+                    print(f"  - Item: {item.name}, discord_server_id: {item.discord_server_id}")
+            
+            # Now filter by guild_id
             items = conn.execute(text("""
                 SELECT id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer
                 FROM point_shop_items
                 WHERE is_active = TRUE AND discord_server_id = :guild_id
                 ORDER BY price ASC
             """), {"guild_id": guild_id}).fetchall()
+            
+            print(f"[Point Shop Debug] Items for guild_id {guild_id}: {len(items)}")
 
             # Get existing message ID
             existing_msg_result = conn.execute(text("""
