@@ -1221,14 +1221,14 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
             channel_id = None
 
             # Check if chatroom ID is hardcoded in environment (bypass for Cloudflare issues)
-            # Or configured in guild settings
+            # Or configured in guild settings (per-guild configuration)
             chatroom_id_from_settings = guild_settings.kick_chatroom_id
 
             if KICK_CHATROOM_ID or chatroom_id_from_settings:
                 chatroom_id = KICK_CHATROOM_ID or chatroom_id_from_settings
                 kick_chatroom_ids[guild_id] = chatroom_id  # Store per-guild
                 kick_chatroom_id_global = chatroom_id  # Legacy global
-                print(f"[Kick][Guild {guild_id}] Using configured chatroom ID: {chatroom_id}")
+                print(f"[Kick][Guild {guild_id} - {channel_to_use}] Using configured chatroom ID: {chatroom_id}")
 
                 # Still try to fetch channel_id for subscription events
                 try:
@@ -1283,12 +1283,12 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
             
             # Check if chatroom_id has changed (hot-reload support)
             if current_chatroom_id and chatroom_id != current_chatroom_id:
-                print(f"[Kick][Guild {guild_id}] 🔄 Chatroom ID changed from {current_chatroom_id} to {chatroom_id} - reconnecting...")
+                print(f"[Kick][Guild {guild_id}] 🔄 Chatroom ID changed from {current_chatroom_id} to {chatroom_id} for THIS GUILD ONLY - reconnecting...")
             
             # Store current chatroom_id for change detection
             current_chatroom_id = chatroom_id
 
-            print(f"[Kick] Connecting to chatroom {chatroom_id} for channel {channel_to_use}...")
+            print(f"[Kick][Guild {guild_id}] Connecting to chatroom {chatroom_id} for channel {channel_to_use}...")
 
             # Build WebSocket URL matching successful connection pattern
             ws_url = (
@@ -1380,8 +1380,8 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                             guild_settings.refresh()
                             new_chatroom_id = guild_settings.kick_chatroom_id or KICK_CHATROOM_ID
                             if new_chatroom_id and new_chatroom_id != current_chatroom_id:
-                                print(f"[Kick][Guild {guild_id}] 🔄 Detected chatroom ID change: {current_chatroom_id} → {new_chatroom_id}")
-                                print(f"[Kick][Guild {guild_id}] Breaking connection to reconnect with new chatroom...")
+                                print(f"[Kick][Guild {guild_id}] 🔄 Detected chatroom ID change for THIS GUILD: {current_chatroom_id} → {new_chatroom_id}")
+                                print(f"[Kick][Guild {guild_id}] Breaking connection to reconnect with new chatroom (other guilds unaffected)...")
                                 break  # Break inner loop to reconnect with new chatroom_id
                             last_settings_check = now
 
@@ -1746,8 +1746,8 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                         guild_settings.refresh()
                         new_chatroom_id = guild_settings.kick_chatroom_id or KICK_CHATROOM_ID
                         if new_chatroom_id and new_chatroom_id != current_chatroom_id:
-                            print(f"[Kick][Guild {guild_id}] 🔄 Detected chatroom ID change during timeout: {current_chatroom_id} → {new_chatroom_id}")
-                            print(f"[Kick][Guild {guild_id}] Breaking connection to reconnect with new chatroom...")
+                            print(f"[Kick][Guild {guild_id}] 🔄 Detected chatroom ID change during timeout for THIS GUILD: {current_chatroom_id} → {new_chatroom_id}")
+                            print(f"[Kick][Guild {guild_id}] Breaking connection to reconnect with new chatroom (other guilds unaffected)...")
                             break  # Break inner loop to reconnect
                         
                         # Send ping to keep connection alive
@@ -2590,17 +2590,11 @@ def dynamic_cooldown(cooldown_mapping):
 # -------------------------
 # Commands
 # -------------------------
-def in_guild():
-    """Check if command is used in the configured guild."""
-    async def predicate(ctx):
-        if not DISCORD_GUILD_ID:
-            return True
-        return ctx.guild and ctx.guild.id == DISCORD_GUILD_ID
-    return commands.check(predicate)
+# Note: Commands now work in all guilds (multiserver support)
+# Each guild has its own settings loaded dynamically
 
 @bot.command(name="link")
 @progressive_cooldown(base_seconds=10, increment_seconds=10, max_seconds=60)
-@in_guild()
 async def cmd_link(ctx):
     """Link your Kick account using OAuth (instant, no bio editing required)."""
 
@@ -2664,7 +2658,7 @@ async def cmd_link(ctx):
 
 @bot.command(name="unlink")
 @commands.has_permissions(manage_guild=True)
-@in_guild()
+
 async def cmd_unlink(ctx, member: discord.Member = None):
     """Admin command to unlink a user's Kick account from Discord.
 
@@ -2748,7 +2742,7 @@ async def cmd_leaderboard(ctx, top: int = 10):
 
 @bot.command(name="watchtime")
 @dynamic_cooldown(CommandCooldowns.WATCHTIME_COOLDOWN)
-@in_guild()
+
 async def cmd_watchtime(ctx, kick_username: str = None):
     """
     Check watchtime for yourself or another user.
@@ -2839,7 +2833,7 @@ async def cmd_watchtime(ctx, kick_username: str = None):
 # -------------------------
 @bot.command(name="tracking")
 @commands.has_permissions(administrator=True)
-@in_guild()  # 🔒 SECURITY: Ensure command only works in the configured guild
+  # 🔒 SECURITY: Ensure command only works in the configured guild
 async def toggle_tracking(ctx, action: str = None, subaction: str = None):
     """
     Admin command to control watchtime tracking.
@@ -2919,7 +2913,7 @@ async def tracking_error(ctx, error):
 
 @bot.command(name="linklogs")
 @commands.has_permissions(administrator=True)
-@in_guild()
+
 async def link_logs_toggle(ctx, action: str = None):
     """
     Admin command to configure link attempt logging to Discord channel.
@@ -2992,7 +2986,7 @@ async def link_logs_error(ctx, error):
 
 @bot.command(name="callblacklist", aliases=["srblacklist", "blockslotcall"])
 @commands.has_permissions(administrator=True)
-@in_guild()
+
 async def slot_call_blacklist(ctx, action: str = None, kick_username: str = None, *, reason: str = None):
     """
     Admin command to blacklist Kick users from using !call/!sr commands.
@@ -3130,7 +3124,7 @@ async def slot_call_blacklist_error(ctx, error):
 
 @bot.command(name="roles")
 @commands.has_permissions(administrator=True)
-@in_guild()
+
 async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: int = None):
     """
     Admin command to manage watchtime role thresholds.
@@ -3354,7 +3348,7 @@ async def manage_roles_error(ctx, error):
 
 @bot.command(name="testsub")
 @commands.has_permissions(administrator=True)
-@in_guild()
+
 async def test_subscription(ctx, kick_username: str = None, sub_count: int = 1):
     """
     [ADMIN/DEBUG] Simulate a subscription event to test raffle ticket awarding
@@ -3429,7 +3423,7 @@ async def test_subscription_error(ctx, error):
 
 @bot.command(name="convertwatchtime")
 @commands.has_permissions(administrator=True)
-@in_guild()
+
 async def convert_watchtime_manual(ctx):
     """
     [ADMIN/DEBUG] Manually trigger watchtime to tickets conversion
@@ -3480,7 +3474,7 @@ async def convert_watchtime_manual_error(ctx, error):
 
 @bot.command(name="fixwatchtime")
 @commands.has_permissions(administrator=True)
-@in_guild()
+
 async def fix_watchtime_for_current_period(ctx):
     """
     [ADMIN] Fix watchtime tracking for current period by snapshotting existing totals
@@ -3547,7 +3541,7 @@ async def fix_watchtime_for_current_period_error(ctx, error):
         await ctx.send("❌ You need administrator permissions to use this command.")
 
 @bot.command(name="checkwatchtime")
-@in_guild()
+
 async def check_watchtime_conversion(ctx, kick_username: str = None):
     """
     Check watchtime conversion status for a user
@@ -3610,7 +3604,7 @@ async def check_watchtime_conversion(ctx, kick_username: str = None):
         await ctx.send(f"❌ Error: {str(e)}")
 
 @bot.command(name="commandlist", aliases=["commands"])
-@in_guild()
+
 async def command_list(ctx):
     """
     Show available bot commands for regular users
@@ -3662,7 +3656,7 @@ async def command_list(ctx):
 
 @bot.command(name="admincommands", aliases=["adminhelp"])
 @commands.has_permissions(administrator=True)
-@in_guild()
+
 async def admin_command_list(ctx):
     """
     Show all available administrator commands
@@ -3757,7 +3751,7 @@ async def admin_command_list(ctx):
 
 @bot.command(name="systemstatus")
 @commands.has_permissions(administrator=True)
-@in_guild()
+
 async def raffle_system_info(ctx):
     """
     [ADMIN/DEBUG] Check raffle system initialization status
@@ -3809,7 +3803,7 @@ async def raffle_system_info_error(ctx, error):
 
 @bot.command(name="setup_link_panel")
 @commands.has_permissions(manage_guild=True)
-@in_guild()
+
 async def setup_link_panel(ctx, emoji: str = "🔗"):
     """
     Admin command to create a pinned message for reaction-based OAuth linking.
@@ -3871,7 +3865,7 @@ async def setup_link_panel_error(ctx, error):
 
 @bot.command(name="post_link_info")
 @commands.has_permissions(manage_guild=True)
-@in_guild()
+
 async def post_link_info(ctx):
     """
     Admin command to post an informational embed explaining why users should link their accounts.
@@ -3937,7 +3931,7 @@ async def post_link_info_error(ctx, error):
 
 @bot.command(name="health")
 @commands.has_permissions(manage_guild=True)
-@in_guild()
+
 async def health_check(ctx):
     """
     Admin command to check if all bot systems are functioning correctly.
