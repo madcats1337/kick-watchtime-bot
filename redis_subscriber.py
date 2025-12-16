@@ -53,6 +53,123 @@ class RedisSubscriber:
         else:
             print(f"ℹ️  Kick chat disabled: {message}")
 
+    async def handle_webhook_event(self, payload):
+        """Handle Kick webhook events forwarded via Redis"""
+        try:
+            event_type = payload.get('type')
+            if event_type != 'kick_chat_message':
+                return
+            
+            data = payload.get('data', {})
+            channel_slug = data.get('channel_slug', '')
+            username = data.get('username', '')
+            content = data.get('content', '')
+            
+            print(f"[Redis] 💬 [{channel_slug}] {username}: {content}")
+            
+            # Import bot utilities
+            from bot import send_kick_message, engine, parse_amount
+            from sqlalchemy import text
+            
+            # Lookup guild_id from channel_slug
+            guild_id = None
+            with engine.connect() as conn:
+                result = conn.execute(text("""
+                    SELECT discord_server_id FROM servers
+                    WHERE kick_channel = :channel_slug
+                    LIMIT 1
+                """), {"channel_slug": channel_slug}).fetchone()
+                
+                if result:
+                    guild_id = result[0]
+                    print(f"[Redis] 🎯 Matched to guild: {guild_id}")
+                else:
+                    print(f"[Redis] ⚠️ No server found for channel: {channel_slug}")
+                    return
+            
+            content_stripped = content.strip()
+            username_lower = username.lower()
+            
+            # Check for custom commands first
+            if hasattr(self.bot, 'custom_commands_manager') and self.bot.custom_commands_manager:
+                try:
+                    original_guild_id = getattr(self.bot.custom_commands_manager, 'discord_server_id', None)
+                    original_callback = self.bot.custom_commands_manager.send_message_callback
+                    
+                    # Set guild context
+                    self.bot.custom_commands_manager.discord_server_id = guild_id
+                    self.bot.custom_commands_manager.send_message_callback = lambda msg: send_kick_message(msg, guild_id=guild_id)
+                    
+                    handled = await self.bot.custom_commands_manager.handle_message(content, username)
+                    
+                    # Restore
+                    self.bot.custom_commands_manager.discord_server_id = original_guild_id
+                    self.bot.custom_commands_manager.send_message_callback = original_callback
+                    
+                    if handled:
+                        print(f"[Redis] ✅ Custom command handled")
+                        return
+                except Exception as e:
+                    print(f"[Redis] ⚠️ Custom command error: {e}")
+            
+            # Handle slot commands
+            if hasattr(self.bot, 'slot_call_tracker') and self.bot.slot_call_tracker and (content_stripped.startswith("!call") or content_stripped.startswith("!sr")):
+                # Check blacklist
+                is_blacklisted = False
+                with engine.begin() as check_conn:
+                    result = check_conn.execute(text("""
+                        SELECT 1 FROM slot_call_blacklist 
+                        WHERE kick_username = :username AND discord_server_id = :guild_id
+                    """), {"username": username_lower, "guild_id": guild_id}).fetchone()
+                    is_blacklisted = result is not None
+                
+                if not is_blacklisted:
+                    slot_call = content_stripped[5:].strip()[:200] if content_stripped.startswith("!call") else content_stripped[3:].strip()[:200]
+                    
+                    if slot_call:
+                        original_guild_id = getattr(self.bot.slot_call_tracker, 'discord_server_id', None)
+                        self.bot.slot_call_tracker.discord_server_id = guild_id
+                        
+                        try:
+                            await self.bot.slot_call_tracker.handle_slot_call(username, slot_call)
+                            print(f"[Redis] ✅ Slot call processed")
+                        finally:
+                            if original_guild_id:
+                                self.bot.slot_call_tracker.discord_server_id = original_guild_id
+                    else:
+                        await send_kick_message(f"@{username} Please specify a slot!", guild_id=guild_id)
+            
+            # Handle !raffle
+            elif content_stripped.lower() == "!raffle":
+                await send_kick_message(
+                    "Do you want to win a $100 super buy on Sweet Bonanza 1000? "
+                    "All you gotta do is join my discord, verify with lelebot and follow the instructions -> "
+                    "https://discord.gg/k7CXJtfrPY",
+                    guild_id=guild_id
+                )
+                print(f"[Redis] ✅ Raffle message sent")
+            
+            # Handle !gtb
+            elif content_stripped.lower().startswith("!gtb"):
+                if hasattr(self.bot, 'gtb_manager'):
+                    parts = content_stripped.split(maxsplit=1)
+                    if len(parts) == 2:
+                        amount = parse_amount(parts[1])
+                        if amount is not None:
+                            success, message = self.bot.gtb_manager.add_guess(username, amount)
+                            response = f"@{username} {message}" + (" Good luck! 🎰" if success else "")
+                            await send_kick_message(response, guild_id=guild_id)
+                        else:
+                            await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount>", guild_id=guild_id)
+                    else:
+                        await send_kick_message(f"@{username} Usage: !gtb <amount>", guild_id=guild_id)
+                    print(f"[Redis] ✅ GTB command processed")
+            
+        except Exception as e:
+            print(f"[Redis] ❌ Webhook event error: {e}")
+            import traceback
+            traceback.print_exc()
+
     async def handle_slot_requests_event(self, action, data):
         """Handle slot request events from dashboard"""
         print(f"📥 Slot Requests Event: {action}")
@@ -718,7 +835,7 @@ Congratulations! Please contact an admin to claim your prize! 🎊
             print("Redis subscriber not enabled, skipping...")
             return
 
-        # Subscribe to all dashboard channels
+        # Subscribe to all dashboard channels and bot_events for webhook messages
         await asyncio.to_thread(
             self.pubsub.subscribe,
             'dashboard:slot_requests',
@@ -728,7 +845,8 @@ Congratulations! Please contact an admin to claim your prize! 🎊
             'dashboard:raffle',
             'dashboard:commands',
             'dashboard:point_shop',
-            'dashboard:bot_settings'
+            'dashboard:bot_settings',
+            'bot_events'  # For webhook chat messages
         )
 
         print("🎧 Redis subscriber listening for dashboard events...")
@@ -762,6 +880,8 @@ Congratulations! Please contact an admin to claim your prize! 🎊
                             await self.handle_point_shop_event(action, data)
                         elif channel == 'dashboard:bot_settings':
                             await self.handle_bot_settings_event(action, data)
+                        elif channel == 'bot_events':
+                            await self.handle_webhook_event(payload)
 
                     except json.JSONDecodeError as e:
                         print(f"Failed to decode message: {e}")
@@ -786,7 +906,8 @@ Congratulations! Please contact an admin to claim your prize! 🎊
                         'dashboard:raffle',
                         'dashboard:commands',
                         'dashboard:point_shop',
-                        'dashboard:bot_settings'
+                        'dashboard:bot_settings',
+                        'bot_events'
                     )
 
 async def start_redis_subscriber(bot, send_message_callback=None):

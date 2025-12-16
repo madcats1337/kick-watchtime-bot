@@ -136,7 +136,7 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
 
     @webhook_handler.on("chat.message.sent")
     async def handle_chat_message(event_data):
-        """Handle chat messages from Kick webhooks with multiserver support"""
+        """Handle chat messages from Kick webhooks - forward to bot via Redis"""
         try:
             sender = event_data.get("sender", {})
             username = sender.get("username", "Unknown")
@@ -147,144 +147,41 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
             
             print(f"[Webhook] 💬 [{channel_slug}] {username}: {content}")
             
-            # Import dynamically to avoid circular imports
-            import sys
-            if 'bot' not in sys.modules:
-                print("[Webhook] ⚠️ Bot module not loaded yet, skipping command processing")
+            # Use Redis to forward the chat message to the bot process
+            import redis
+            import json
+            
+            redis_url = os.getenv('REDIS_URL')
+            if not redis_url:
+                print("[Webhook] ⚠️ REDIS_URL not set, cannot forward message to bot")
                 return
             
-            import bot as bot_module
-            from sqlalchemy import text
+            if '://' not in redis_url:
+                redis_url = f'redis://{redis_url}'
             
-            bot = bot_module.bot
-            send_kick_message = bot_module.send_kick_message
-            engine = bot_module.engine
-            
-            # Determine which Discord server this message is for based on Kick channel
-            guild_id = None
-            if engine and channel_slug:
-                try:
-                    with engine.connect() as conn:
-                        result = conn.execute(text("""
-                            SELECT discord_server_id FROM servers
-                            WHERE kick_channel = :channel_slug
-                            LIMIT 1
-                        """), {"channel_slug": channel_slug}).fetchone()
-                        
-                        if result:
-                            guild_id = result[0]
-                            print(f"[Webhook] 🎯 Matched channel '{channel_slug}' to guild_id: {guild_id}")
-                        else:
-                            print(f"[Webhook] ⚠️ No server found for channel '{channel_slug}'")
-                            return
-                except Exception as e:
-                    print(f"[Webhook] ❌ Error looking up guild_id: {e}")
-                    return
-            else:
-                print(f"[Webhook] ⚠️ No channel_slug in webhook event")
-                return
-            
-            content_stripped = content.strip()
-            username_lower = username.lower()
-            
-            # Check for custom commands first
-            if hasattr(bot, 'custom_commands_manager') and bot.custom_commands_manager:
-                try:
-                    async def send_message_with_guild(msg):
-                        return await send_kick_message(msg, guild_id=guild_id)
-                    
-                    # Set guild_id on manager for multiserver support
-                    original_guild_id = getattr(bot.custom_commands_manager, 'discord_server_id', None)
-                    bot.custom_commands_manager.discord_server_id = guild_id
-                    bot.custom_commands_manager.send_message_callback = send_message_with_guild
-                    
-                    try:
-                        handled = await bot.custom_commands_manager.handle_message(content, username)
-                        if handled:
-                            print(f"[Webhook] ✅ Custom command handled for guild {guild_id}")
-                            return
-                    finally:
-                        # Restore original guild_id
-                        if original_guild_id:
-                            bot.custom_commands_manager.discord_server_id = original_guild_id
-                except Exception as e:
-                    print(f"[Webhook] ⚠️ Error handling custom command: {e}")
-            
-            # Handle slot call commands (!call or !sr)
-            if hasattr(bot, 'slot_call_tracker') and bot.slot_call_tracker and (content_stripped.startswith("!call") or content_stripped.startswith("!sr")):
-                # Check if user is blacklisted
-                is_blacklisted = False
-                try:
-                    with engine.begin() as check_conn:
-                        blacklist_check = check_conn.execute(text("""
-                            SELECT 1 FROM slot_call_blacklist 
-                            WHERE kick_username = :username AND discord_server_id = :guild_id
-                        """), {"username": username_lower, "guild_id": guild_id}).fetchone()
-                        is_blacklisted = blacklist_check is not None
-                except Exception as e:
-                    print(f"[Webhook] Error checking blacklist: {e}")
+            try:
+                redis_client = redis.from_url(redis_url, decode_responses=True)
                 
-                if is_blacklisted:
-                    print(f"[Webhook] Blocked blacklisted user: {username}")
-                else:
-                    if content_stripped.startswith("!call"):
-                        slot_call = content_stripped[5:].strip()[:200]
-                    else:
-                        slot_call = content_stripped[3:].strip()[:200]
-                    
-                    if slot_call:
-                        # Temporarily set the guild_id on the tracker for multiserver support
-                        original_guild_id = getattr(bot.slot_call_tracker, 'discord_server_id', None)
-                        bot.slot_call_tracker.discord_server_id = guild_id
-                        
-                        try:
-                            await bot.slot_call_tracker.handle_slot_call(username, slot_call)
-                            print(f"[Webhook] ✅ Slot call processed for guild {guild_id}")
-                        finally:
-                            # Restore original guild_id
-                            if original_guild_id:
-                                bot.slot_call_tracker.discord_server_id = original_guild_id
-                    else:
-                        await send_kick_message(f"@{username} Please specify a slot!", guild_id=guild_id)
-            
-            # Handle !raffle command
-            elif content_stripped.lower() == "!raffle":
-                raffle_message = (
-                    "Do you want to win a $100 super buy on Sweet Bonanza 1000? "
-                    "All you gotta do is join my discord, verify with lelebot and follow the instructions -> "
-                    "https://discord.gg/k7CXJtfrPY"
-                )
-                await send_kick_message(raffle_message, guild_id=guild_id)
-                print(f"[Webhook] ✅ Raffle message sent")
-            
-            # Handle !gtb command
-            elif content_stripped.lower().startswith("!gtb"):
-                if hasattr(bot, 'gtb_manager'):
-                    gtb_parts = content_stripped.split(maxsplit=1)
-                    if len(gtb_parts) == 2:
-                        # Import parse_amount dynamically
-                        parse_amount = getattr(bot_module, 'parse_amount', None)
-                        if parse_amount:
-                            amount = parse_amount(gtb_parts[1])
-                            if amount is not None:
-                                success, message = bot.gtb_manager.add_guess(username, amount)
-                                if success:
-                                    response = f"@{username} {message} Good luck! 🎰"
-                                    await send_kick_message(response, guild_id=guild_id)
-                                else:
-                                    await send_kick_message(f"@{username} {message}", guild_id=guild_id)
-                            else:
-                                await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount>", guild_id=guild_id)
-                        else:
-                            await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount>", guild_id=guild_id)
-                    else:
-                        await send_kick_message(f"@{username} Usage: !gtb <amount>", guild_id=guild_id)
-                    print(f"[Webhook] ✅ GTB command processed")
-            
-            # Handle !clip command
-            elif content_stripped.lower().startswith("!clip"):
-                # TODO: Implement clip command via webhook
-                print(f"[Webhook] ℹ️ Clip command received (not yet implemented)")
+                # Publish chat message event to Redis for bot to process
+                event = {
+                    "type": "kick_chat_message",
+                    "data": {
+                        "channel_slug": channel_slug,
+                        "username": username,
+                        "content": content,
+                        "message_id": message_id,
+                        "sender": sender,
+                        "broadcaster": broadcaster
+                    }
+                }
+                
+                redis_client.publish("bot_events", json.dumps(event))
+                print(f"[Webhook] ✅ Forwarded chat message to bot via Redis")
+                
+            except Exception as e:
+                print(f"[Webhook] ❌ Redis error: {e}")
+                import traceback
+                traceback.print_exc()
             
         except Exception as e:
             print(f"[Webhook] ❌ Error handling chat message: {e}")
