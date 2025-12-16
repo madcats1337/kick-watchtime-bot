@@ -21,6 +21,8 @@ Usage:
 
 import os
 import hashlib
+import hmac
+import base64
 import json
 from datetime import datetime, timezone
 from typing import Callable, Dict, Any, Optional
@@ -83,18 +85,26 @@ def verify_kick_signature(request) -> bool:
         print("[Webhook] ❌ Missing required headers for signature verification")
         return False
 
-    # Verify signature
+    # Verify signature using HMAC-SHA256
+    # Message format: {message_id}.{timestamp}.{body}
     message = f"{message_id}.{timestamp}.{body.decode()}"
-    expected = hashlib.sha256(
-        (WEBHOOK_SECRET + message).encode()
-    ).hexdigest()
+    
+    # Compute HMAC-SHA256 and encode as base64
+    expected_signature = base64.b64encode(
+        hmac.new(
+            WEBHOOK_SECRET.encode(),
+            message.encode(),
+            hashlib.sha256
+        ).digest()
+    ).decode()
 
-    is_valid = signature == expected
+    is_valid = hmac.compare_digest(signature, expected_signature)
 
     if not is_valid:
         print(f"[Webhook] ❌ Invalid signature")
-        print(f"  Expected: {expected}")
+        print(f"  Expected: {expected_signature}")
         print(f"  Received: {signature}")
+        print(f"  Message: {message[:100]}...")
 
     return is_valid
 
