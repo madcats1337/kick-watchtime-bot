@@ -177,7 +177,7 @@ class RedisSubscriber:
                             print(f"[Redis] ✅ Slot call processed")
                         else:
                             await send_kick_message(f"@{username} Please specify a slot!", guild_id=guild_id)
-finally:
+                finally:
                     if original_guild_id:
                         self.bot.slot_call_tracker.discord_server_id = original_guild_id
             
