@@ -277,7 +277,7 @@ async def get_kick_api():
 async def send_kick_message(message: str, guild_id: int = None) -> bool:
     """
     Send a message to Kick chat using OAuth token from database.
-    Automatically handles token refresh and multiserver routing.
+    Uses official kickpython library for reliable message sending.
     
     Args:
         message: The message to send
@@ -286,7 +286,7 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
     Returns:
         True if message sent successfully, False otherwise
     """
-    from core.kick_official_api import KickOfficialAPI
+    from kickpython import KickAPI
     from utils.kick_oauth import get_kick_token_for_server
     
     try:
@@ -307,8 +307,8 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
         refresh_token = token_data.get('refresh_token')
         kick_username = token_data.get('kick_username', 'unknown')
         
-        # Get broadcaster user ID from bot_settings
-        broadcaster_user_id = None
+        # Get channel ID (broadcaster user ID) from bot_settings
+        channel_id = None
         if guild_id:
             with engine.connect() as conn:
                 result = conn.execute(text("""
@@ -319,15 +319,39 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
                 """), {"guild_id": guild_id}).fetchone()
                 
                 if result and result[0]:
-                    broadcaster_user_id = result[0]
+                    channel_id = result[0]
         
-        if not broadcaster_user_id:
-            print(f"[{guild_name}] ⚠️ Broadcaster user ID not configured - configure in Dashboard → Profile Settings")
+        if not channel_id:
+            print(f"[{guild_name}] ⚠️ Channel ID not configured - configure in Dashboard → Profile Settings")
             return False
         
-        # Create Kick API client with token
-        kick_api = KickOfficialAPI(
+        # Create KickAPI client with existing tokens
+        kick_api = KickAPI(
             client_id=KICK_CLIENT_ID,
+            client_secret=KICK_CLIENT_SECRET,
+            redirect_uri=f"{OAUTH_CALLBACK_URL}/oauth/kick/callback"
+        )
+        
+        # Manually set the tokens (bypassing OAuth flow since we already have them)
+        kick_api.access_token = access_token
+        kick_api.refresh_token = refresh_token
+        kick_api.is_authenticated = True
+        
+        print(f"[{guild_name}] 📤 Sending message to Kick channel {channel_id}...")
+        
+        # Use official kickpython library to send message
+        await kick_api.post_chat(
+            channel_id=channel_id,
+            content=message
+        )
+        
+        print(f"[{guild_name}] ✅ Message sent successfully to Kick")
+        return True
+        
+    except Exception as e:
+        error_msg = str(e)
+        print(f"[{guild_name}] ❌ Failed to send message: {e}")
+        return False
             client_secret=KICK_CLIENT_SECRET,
             access_token=access_token,
             refresh_token=refresh_token
