@@ -1240,7 +1240,6 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
             if KICK_CHATROOM_ID or chatroom_id_from_settings:
                 chatroom_id = KICK_CHATROOM_ID or chatroom_id_from_settings
                 kick_chatroom_ids[guild_id] = chatroom_id  # Store per-guild
-                kick_chatroom_id_global = chatroom_id  # Legacy global
                 print(f"[Kick][Guild {guild_id} - {channel_to_use}] Using configured chatroom ID: {chatroom_id}")
 
                 # Still try to fetch channel_id for subscription events
@@ -1297,6 +1296,9 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                     print(f"[Kick] ⚠️ Error fetching channel ID: {e}")
             else:
                 # Fetch full channel data to get both chatroom_id and channel_id
+                chatroom_id = None
+                channel_id = None
+                
                 try:
                     # Try official API first with OAuth token (if available)
                     access_token = None
@@ -1328,12 +1330,16 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                         channel_data = channels[0]
                                         channel_id = str(channel_data.get('id', ''))
                                         # Try to extract chatroom ID from official API
-                                        if 'chatroom' in channel_data:
+                                        if 'chatroom' in channel_data and channel_data['chatroom']:
                                             chatroom_id = str(channel_data['chatroom'].get('id', ''))
-                                        elif 'chatroom_id' in channel_data:
+                                        elif 'chatroom_id' in channel_data and channel_data.get('chatroom_id'):
                                             chatroom_id = str(channel_data.get('chatroom_id', ''))
-                                        kick_chatroom_id_global = chatroom_id
-                                        print(f"[Kick] ✅ Official API - Found chatroom ID: {chatroom_id}, channel ID: {channel_id}")
+                                        
+                                        if chatroom_id:
+                                            kick_chatroom_ids[guild_id] = chatroom_id
+                                            print(f"[Kick] ✅ Official API - Found chatroom ID: {chatroom_id}, channel ID: {channel_id}")
+                                        else:
+                                            print(f"[Kick] ⚠️ Official API - channel ID: {channel_id}, but no chatroom ID in response")
                                     else:
                                         print(f"[Kick] ⚠️ No channels found in official API response")
                                 else:
@@ -1349,7 +1355,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                     data = await response.json()
                                     chatroom_id = str(data.get('chatroom', {}).get('id'))
                                     channel_id = str(data.get('id'))  # Channel ID for subscription events
-                                    kick_chatroom_id_global = chatroom_id
+                                    kick_chatroom_ids[guild_id] = chatroom_id
                                     print(f"[Kick] ✅ Found chatroom ID: {chatroom_id}, channel ID: {channel_id}")
                                 elif response.status == 403:
                                     print(f"[Kick] ❌ Cloudflare blocked request (403). SOLUTION:")
