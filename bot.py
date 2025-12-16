@@ -5984,12 +5984,21 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
     """Post or update the point shop using Components V2 with grid mosaic layout"""
 
     try:
-        # If guild_id not provided, use first guild as fallback
-        if not guild_id and bot.guilds:
-            guild_id = bot.guilds[0].id
-        
-        # If channel_id not provided, get from settings
-        if not channel_id:
+        # If channel_id is provided, get the channel and derive guild_id from it
+        if channel_id:
+            channel = bot.get_channel(channel_id)
+            if not channel:
+                print(f"[Point Shop] Channel {channel_id} not found")
+                return False
+            # Get guild_id from channel if not provided
+            if not guild_id:
+                guild_id = channel.guild.id
+        else:
+            # No channel_id provided, need to look it up using guild_id
+            if not guild_id and bot.guilds:
+                guild_id = bot.guilds[0].id
+            
+            # Get channel_id from settings
             with engine.connect() as conn:
                 result = conn.execute(text("""
                     SELECT value FROM point_settings 
@@ -6001,15 +6010,11 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                     return False
 
                 channel_id = int(result[0])
-
-        channel = bot.get_channel(channel_id)
-        if not channel:
-            print(f"[Point Shop] Channel {channel_id} not found")
-            return False
-        
-        # Get guild_id from channel if not provided
-        if not guild_id:
-            guild_id = channel.guild.id
+            
+            channel = bot.get_channel(channel_id)
+            if not channel:
+                print(f"[Point Shop] Channel {channel_id} not found")
+                return False
 
         # Get active shop items
         with engine.connect() as conn:
