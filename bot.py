@@ -382,13 +382,31 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
                 except Exception as refresh_error:
                     print(f"[{guild_name}] ❌ Token refresh failed: {refresh_error}")
                     
-                    # Get dashboard URL from environment
-                    dashboard_url = os.getenv("DASHBOARD_URL", "https://lelebot.xyz")
+                    # Get dashboard URL - check database first, then environment
+                    dashboard_url = None
+                    if guild_id:
+                        with engine.connect() as conn:
+                            result = conn.execute(text("""
+                                SELECT dashboard_url FROM servers 
+                                WHERE discord_server_id = :guild_id
+                                LIMIT 1
+                            """), {"guild_id": guild_id}).fetchone()
+                            
+                            if result and result[0]:
+                                dashboard_url = result[0]
+                    
+                    # Fallback to environment variable
+                    if not dashboard_url:
+                        dashboard_url = os.getenv("DASHBOARD_URL", "https://lelebot.xyz")
+                    
                     if not dashboard_url.startswith(('http://', 'https://')):
                         dashboard_url = f"https://{dashboard_url}"
                     
+                    # Include server_id in URL for multiserver support
+                    reauth_url = f"{dashboard_url}/settings/profile?server_id={guild_id}" if guild_id else f"{dashboard_url}/settings/profile"
+                    
                     print(f"[{guild_name}] 💡 OAuth token refresh failed. Owner of {kick_username} account must re-authorize:")
-                    print(f"[{guild_name}]    {dashboard_url}/settings/profile")
+                    print(f"[{guild_name}]    {reauth_url}")
                     print(f"[{guild_name}]    Click 'Sync Kick Channel' to reconnect")
                     return False
             else:
