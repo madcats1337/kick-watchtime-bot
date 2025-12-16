@@ -2783,7 +2783,7 @@ async def cmd_watchtime(ctx, kick_username: str = None):
 
             if not link:
                 await ctx.send(
-                    "❌ You haven't linked your Kick account yet. Visit #✅〡kick-verification and follow the instructions."
+                    "❌ You haven't linked your Kick account yet."
                 )
                 return
 
