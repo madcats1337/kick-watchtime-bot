@@ -133,8 +133,10 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
             username = sender.get("username", "Unknown")
             content = event_data.get("content", "")
             message_id = event_data.get("message_id", "")
+            broadcaster = event_data.get("broadcaster", {})
+            channel_slug = broadcaster.get("slug", "")
             
-            print(f"[Webhook] 💬 Chat: {username}: {content}")
+            print(f"[Webhook] 💬 [{channel_slug}] {username}: {content}")
             
             # Import dynamically to avoid circular imports
             import sys
@@ -149,9 +151,29 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
             send_kick_message = bot_module.send_kick_message
             engine = bot_module.engine
             
-            # Get guild_id from bot settings - need to determine which server this message is for
-            # For now, use maikelele's server (guild_id 914986636629143562)
-            guild_id = 914986636629143562  # TODO: Determine correct guild from broadcaster info
+            # Determine which Discord server this message is for based on Kick channel
+            guild_id = None
+            if engine and channel_slug:
+                try:
+                    with engine.connect() as conn:
+                        result = conn.execute(text("""
+                            SELECT discord_server_id FROM servers
+                            WHERE kick_channel = :channel_slug
+                            LIMIT 1
+                        """), {"channel_slug": channel_slug}).fetchone()
+                        
+                        if result:
+                            guild_id = result[0]
+                            print(f"[Webhook] 🎯 Matched channel '{channel_slug}' to guild_id: {guild_id}")
+                        else:
+                            print(f"[Webhook] ⚠️ No server found for channel '{channel_slug}'")
+                            return
+                except Exception as e:
+                    print(f"[Webhook] ❌ Error looking up guild_id: {e}")
+                    return
+            else:
+                print(f"[Webhook] ⚠️ No channel_slug in webhook event")
+                return
             
             content_stripped = content.strip()
             username_lower = username.lower()
@@ -162,11 +184,20 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
                     async def send_message_with_guild(msg):
                         return await send_kick_message(msg, guild_id=guild_id)
                     
+                    # Set guild_id on manager for multiserver support
+                    original_guild_id = getattr(bot.custom_commands_manager, 'discord_server_id', None)
+                    bot.custom_commands_manager.discord_server_id = guild_id
                     bot.custom_commands_manager.send_message_callback = send_message_with_guild
-                    handled = await bot.custom_commands_manager.handle_message(content, username)
-                    if handled:
-                        print(f"[Webhook] ✅ Custom command handled")
-                        return
+                    
+                    try:
+                        handled = await bot.custom_commands_manager.handle_message(content, username)
+                        if handled:
+                            print(f"[Webhook] ✅ Custom command handled for guild {guild_id}")
+                            return
+                    finally:
+                        # Restore original guild_id
+                        if original_guild_id:
+                            bot.custom_commands_manager.discord_server_id = original_guild_id
                 except Exception as e:
                     print(f"[Webhook] ⚠️ Error handling custom command: {e}")
             
@@ -193,8 +224,17 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
                         slot_call = content_stripped[3:].strip()[:200]
                     
                     if slot_call:
-                        await bot.slot_call_tracker.handle_slot_call(username, slot_call)
-                        print(f"[Webhook] ✅ Slot call processed")
+                        # Temporarily set the guild_id on the tracker for multiserver support
+                        original_guild_id = getattr(bot.slot_call_tracker, 'discord_server_id', None)
+                        bot.slot_call_tracker.discord_server_id = guild_id
+                        
+                        try:
+                            await bot.slot_call_tracker.handle_slot_call(username, slot_call)
+                            print(f"[Webhook] ✅ Slot call processed for guild {guild_id}")
+                        finally:
+                            # Restore original guild_id
+                            if original_guild_id:
+                                bot.slot_call_tracker.discord_server_id = original_guild_id
                     else:
                         await send_kick_message(f"@{username} Please specify a slot!", guild_id=guild_id)
             
