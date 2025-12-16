@@ -100,15 +100,18 @@ Use `!leaderboard` to see top participants!
         try:
             if limit < 1 or limit > 50:
                 limit = 10
+            
+            managers = self._get_guild_managers(ctx)
+            ticket_manager = managers['ticket_manager']
 
-            leaderboard = self.ticket_manager.get_leaderboard(limit=limit)
+            leaderboard = ticket_manager.get_leaderboard(limit=limit)
 
             if not leaderboard:
                 await ctx.send("❌ No raffle participants yet!")
                 return
 
             # Get period stats
-            stats = self.ticket_manager.get_period_stats()
+            stats = ticket_manager.get_period_stats()
 
             response = f"🏆 **Raffle Leaderboard** (Period #{stats['period_id']})\n\n"
             response += f"**Total Tickets**: {stats['total_tickets']:,}\n"
@@ -148,8 +151,12 @@ Use `!leaderboard` to see top participants!
         """
         try:
             from datetime import datetime
+            
+            managers = self._get_guild_managers(ctx)
+            ticket_manager = managers['ticket_manager']
+            raffle_draw = managers['raffle_draw']
 
-            stats = self.ticket_manager.get_period_stats()
+            stats = ticket_manager.get_period_stats()
 
             if not stats:
                 await ctx.send("❌ No active raffle period!")
@@ -191,7 +198,7 @@ Get ready to participate when the period starts!
             else:
                 # Period is active
                 # Get draw history
-                history = self.raffle_draw.get_draw_history(limit=1)
+                history = raffle_draw.get_draw_history(limit=1)
                 last_winner = history[0] if history else None
 
                 # Check if auto-leaderboard is configured (from database settings)
@@ -261,12 +268,16 @@ Get ready to participate when the period starts!
                 return
 
             discord_id = ctx.author.id
+            guild_id = ctx.guild.id if ctx.guild else None
+            
+            managers = self._get_guild_managers(ctx)
+            shuffle_tracker = managers['shuffle_tracker']
 
             # Get Kick name from links table
             with self.engine.begin() as conn:
                 result = conn.execute(text("""
-                    SELECT kick_name FROM links WHERE discord_id = :discord_id
-                """), {'discord_id': discord_id})
+                    SELECT kick_name FROM links WHERE discord_id = :discord_id AND discord_server_id = :guild_id
+                """), {'discord_id': discord_id, 'guild_id': guild_id})
 
                 row = result.fetchone()
                 if not row:
@@ -277,7 +288,7 @@ Get ready to participate when the period starts!
                 kick_name = row[0]
 
             # Attempt to link
-            result = self.shuffle_tracker.link_shuffle_account(
+            result = shuffle_tracker.link_shuffle_account(
                 shuffle_username=shuffle_username,
                 kick_name=kick_name,
                 discord_id=discord_id,
@@ -325,14 +336,18 @@ Get ready to participate when the period starts!
         Example: !verifyshuffle @John CryptoKing420
         """
         try:
+            guild_id = ctx.guild.id
+            managers = self._get_guild_managers(ctx)
+            ticket_manager = managers['ticket_manager']
+            
             discord_id = user.id
             admin_id = ctx.author.id
 
             with self.engine.begin() as conn:
                 # Get kick name from links table
                 link_result = conn.execute(text("""
-                    SELECT kick_name FROM links WHERE discord_id = :discord_id
-                """), {'discord_id': discord_id})
+                    SELECT kick_name FROM links WHERE discord_id = :discord_id AND discord_server_id = :guild_id
+                """), {'discord_id': discord_id, 'guild_id': guild_id})
 
                 link_row = link_result.fetchone()
                 if not link_row:
@@ -394,8 +409,8 @@ Get ready to participate when the period starts!
 
                 # Get current period info
                 period_result = conn.execute(text("""
-                    SELECT id, start_date FROM raffle_periods WHERE status = 'active'
-                """))
+                    SELECT id, start_date FROM raffle_periods WHERE status = 'active' AND discord_server_id = :guild_id
+                """), {'guild_id': guild_id})
                 period_row = period_result.fetchone()
 
                 if not period_row:
@@ -430,7 +445,7 @@ Get ready to participate when the period starts!
 
                         if tickets_awarded > 0:
                             # Award the tickets
-                            success = self.ticket_manager.award_tickets(
+                            success = ticket_manager.award_tickets(
                                 discord_id=discord_id,
                                 kick_name=kick_name,
                                 tickets=tickets_awarded,
@@ -519,6 +534,10 @@ Get ready to participate when the period starts!
         Example: !rafflegive @John 100 Event participation bonus
         """
         try:
+            guild_id = ctx.guild.id
+            managers = self._get_guild_managers(ctx)
+            ticket_manager = managers['ticket_manager']
+            
             if tickets <= 0:
                 await ctx.send(f"❌ Ticket amount must be positive!")
                 return
@@ -528,8 +547,8 @@ Get ready to participate when the period starts!
             # Get kick name
             with self.engine.begin() as conn:
                 result = conn.execute(text("""
-                    SELECT kick_name FROM links WHERE discord_id = :discord_id
-                """), {'discord_id': discord_id})
+                    SELECT kick_name FROM links WHERE discord_id = :discord_id AND discord_server_id = :guild_id
+                """), {'discord_id': discord_id, 'guild_id': guild_id})
 
                 row = result.fetchone()
                 if not row:
@@ -539,7 +558,7 @@ Get ready to participate when the period starts!
                 kick_name = row[0]
 
             # Award tickets
-            success = self.ticket_manager.award_tickets(
+            success = ticket_manager.award_tickets(
                 discord_id=discord_id,
                 kick_name=kick_name,
                 tickets=tickets,
@@ -569,6 +588,10 @@ Get ready to participate when the period starts!
         Example: !raffleremove @John 50 Rule violation
         """
         try:
+            guild_id = ctx.guild.id
+            managers = self._get_guild_managers(ctx)
+            ticket_manager = managers['ticket_manager']
+            
             if tickets <= 0:
                 await ctx.send(f"❌ Ticket amount must be positive!")
                 return
@@ -578,8 +601,8 @@ Get ready to participate when the period starts!
             # Get kick name
             with self.engine.begin() as conn:
                 result = conn.execute(text("""
-                    SELECT kick_name FROM links WHERE discord_id = :discord_id
-                """), {'discord_id': discord_id})
+                    SELECT kick_name FROM links WHERE discord_id = :discord_id AND discord_server_id = :guild_id
+                """), {'discord_id': discord_id, 'guild_id': guild_id})
 
                 row = result.fetchone()
                 if not row:
@@ -589,7 +612,7 @@ Get ready to participate when the period starts!
                 kick_name = row[0]
 
             # Remove tickets
-            success = self.ticket_manager.remove_tickets(
+            success = ticket_manager.remove_tickets(
                 discord_id=discord_id,
                 kick_name=kick_name,
                 tickets=tickets,
@@ -618,10 +641,14 @@ Get ready to participate when the period starts!
         Example: !raffledraw $500 Cash Prize
         """
         try:
+            managers = self._get_guild_managers(ctx)
+            ticket_manager = managers['ticket_manager']
+            raffle_draw = managers['raffle_draw']
+            
             admin_id = ctx.author.id
 
             # Get current period stats
-            stats = self.ticket_manager.get_period_stats()
+            stats = ticket_manager.get_period_stats()
 
             if not stats or stats['total_tickets'] == 0:
                 await ctx.send(f"❌ Cannot draw winner: No tickets in current raffle period!")
@@ -646,7 +673,7 @@ Get ready to participate when the period starts!
                          f"Prize: {prize_description}")
 
             # Draw winner
-            result = self.raffle_draw.draw_winner(
+            result = raffle_draw.draw_winner(
                 period_id=stats['period_id'],
                 prize_description=prize_description,
                 drawn_by_discord_id=admin_id
@@ -661,7 +688,7 @@ Get ready to participate when the period starts!
                     mention = f"Discord ID: {result['winner_discord_id']}"
 
                 # Get full ticket breakdown
-                winner_tickets = self.ticket_manager.get_user_tickets(result['winner_discord_id'])
+                winner_tickets = ticket_manager.get_user_tickets(result['winner_discord_id'])
 
                 await ctx.send(f"""
 🎉 **RAFFLE WINNER DRAWN!** 🎉
@@ -699,18 +726,22 @@ Congratulations! 🎊
         Usage: !rafflestats [@user]
         """
         try:
+            managers = self._get_guild_managers(ctx)
+            ticket_manager = managers['ticket_manager']
+            raffle_draw = managers['raffle_draw']
+            
             if user:
                 # Show user-specific stats
                 discord_id = user.id
-                tickets = self.ticket_manager.get_user_tickets(discord_id)
+                tickets = ticket_manager.get_user_tickets(discord_id)
 
                 if not tickets:
                     await ctx.send(f"❌ {user.mention} has no raffle tickets!")
                     return
 
                 # Get rank
-                rank = self.ticket_manager.get_user_rank(discord_id)
-                stats = self.ticket_manager.get_period_stats()
+                rank = ticket_manager.get_user_rank(discord_id)
+                stats = ticket_manager.get_period_stats()
 
                 # Get detailed breakdown from tables
                 with self.engine.begin() as conn:
@@ -743,7 +774,7 @@ Congratulations! 🎊
                     total_wager = shuffle_row[0] if shuffle_row else 0
 
                 # Get win probability
-                win_prob = self.raffle_draw.get_user_win_probability(discord_id, stats['period_id'])
+                win_prob = raffle_draw.get_user_win_probability(discord_id, stats['period_id'])
                 win_prob_text = f"{win_prob['probability_percent']:.2f}%" if win_prob else "N/A"
 
                 response = f"""
@@ -770,7 +801,7 @@ Congratulations! 🎊
 
             else:
                 # Show overall stats
-                stats = self.ticket_manager.get_period_stats()
+                stats = ticket_manager.get_period_stats()
 
                 response = f"""
 📊 **Overall Raffle Statistics**
@@ -807,15 +838,17 @@ Use `!rafflestats @user` to see individual stats
         Usage: !raffleend
         """
         try:
+            guild_id = ctx.guild.id
+            
             with self.engine.begin() as conn:
                 # Get current period
                 result = conn.execute(text("""
                     SELECT id, start_date, end_date, status
                     FROM raffle_periods
-                    WHERE status = 'active'
+                    WHERE status = 'active' AND discord_server_id = :guild_id
                     ORDER BY start_date DESC
                     LIMIT 1
-                """))
+                """), {'guild_id': guild_id})
                 period = result.fetchone()
 
                 if not period:
@@ -846,6 +879,7 @@ Use `!rafflestats @user` to see individual stats
         If no dates provided, uses current month (1st to last day)
         """
         try:
+            guild_id = ctx.guild.id
             from datetime import datetime
             from dateutil.relativedelta import relativedelta
 
@@ -853,9 +887,9 @@ Use `!rafflestats @user` to see individual stats
             with self.engine.begin() as conn:
                 result = conn.execute(text("""
                     SELECT id FROM raffle_periods
-                    WHERE status = 'active'
+                    WHERE status = 'active' AND discord_server_id = :guild_id
                     LIMIT 1
-                """))
+                """), {'guild_id': guild_id})
                 if result.fetchone():
                     await ctx.send("❌ There's already an active raffle period! Use `!raffleend` first.")
                     return
@@ -874,10 +908,10 @@ Use `!rafflestats @user` to see individual stats
 
                 # Create new period
                 result = conn.execute(text("""
-                    INSERT INTO raffle_periods (start_date, end_date, status)
-                    VALUES (:start, :end, 'active')
+                    INSERT INTO raffle_periods (start_date, end_date, status, discord_server_id)
+                    VALUES (:start, :end, 'active', :guild_id)
                     RETURNING id
-                """), {'start': start, 'end': end})
+                """), {'start': start, 'end': end, 'guild_id': guild_id})
                 period_id = result.fetchone()[0]
 
                 await ctx.send(f"✅ New raffle period #{period_id} started!\n"
@@ -896,6 +930,7 @@ Use `!rafflestats @user` to see individual stats
         Usage: !rafflerestart
         """
         try:
+            guild_id = ctx.guild.id
             from datetime import datetime
             from dateutil.relativedelta import relativedelta
 
@@ -904,10 +939,10 @@ Use `!rafflestats @user` to see individual stats
                 result = conn.execute(text("""
                     SELECT id, total_tickets
                     FROM raffle_periods
-                    WHERE status = 'active'
+                    WHERE status = 'active' AND discord_server_id = :guild_id
                     ORDER BY start_date DESC
                     LIMIT 1
-                """))
+                """), {'guild_id': guild_id})
                 current_period = result.fetchone()
 
                 if current_period:
@@ -929,10 +964,10 @@ Use `!rafflestats @user` to see individual stats
                 end = (start + relativedelta(months=1)) - relativedelta(seconds=1)
 
                 result = conn.execute(text("""
-                    INSERT INTO raffle_periods (start_date, end_date, status)
-                    VALUES (:start, :end, 'active')
+                    INSERT INTO raffle_periods (start_date, end_date, status, discord_server_id)
+                    VALUES (:start, :end, 'active', :guild_id)
                     RETURNING id
-                """), {'start': start, 'end': end})
+                """), {'start': start, 'end': end, 'guild_id': guild_id})
                 new_period_id = result.fetchone()[0]
 
                 await ctx.send(f"✅ Raffle reset complete!\n\n"
@@ -953,6 +988,7 @@ Use `!rafflestats @user` to see individual stats
         Example: !rafflesetdate 2025-11-01 2025-11-30
         """
         try:
+            guild_id = ctx.guild.id
             from datetime import datetime
 
             # Parse dates
@@ -971,10 +1007,10 @@ Use `!rafflestats @user` to see individual stats
                 # Get current active period
                 result = conn.execute(text("""
                     SELECT id FROM raffle_periods
-                    WHERE status = 'active'
+                    WHERE status = 'active' AND discord_server_id = :guild_id
                     ORDER BY start_date DESC
                     LIMIT 1
-                """))
+                """), {'guild_id': guild_id})
                 period = result.fetchone()
 
                 if not period:
@@ -1003,6 +1039,7 @@ Use `!rafflestats @user` to see individual stats
         Usage: !shuffledebug
         """
         try:
+            guild_id = ctx.guild.id
             await ctx.send("🔍 Fetching Shuffle affiliate data...")
 
             # Fetch raw data
@@ -1053,10 +1090,10 @@ Use `!rafflestats @user` to see individual stats
                             SELECT shuffle_username, total_wager_usd, last_known_wager,
                                    tickets_awarded, kick_name, discord_id
                             FROM raffle_shuffle_wagers
-                            WHERE period_id = (SELECT id FROM raffle_periods WHERE status = 'active')
+                            WHERE period_id = (SELECT id FROM raffle_periods WHERE status = 'active' AND discord_server_id = :guild_id)
                             ORDER BY total_wager_usd DESC
                             LIMIT 5
-                        """))
+                        """), {'guild_id': guild_id})
 
                         rows = result.fetchall()
                         if rows:
@@ -1081,16 +1118,18 @@ Use `!rafflestats @user` to see individual stats
         Usage: !shuffleunlinked [limit]
         """
         try:
+            guild_id = ctx.guild.id
+            
             with self.engine.begin() as conn:
                 result = conn.execute(text("""
                     SELECT shuffle_username, total_wager_usd, last_checked
                     FROM raffle_shuffle_wagers
-                    WHERE period_id = (SELECT id FROM raffle_periods WHERE status = 'active')
+                    WHERE period_id = (SELECT id FROM raffle_periods WHERE status = 'active' AND discord_server_id = :guild_id)
                       AND (discord_id IS NULL OR kick_name IS NULL)
                       AND total_wager_usd > 0
                     ORDER BY total_wager_usd DESC
                     LIMIT :limit
-                """), {'limit': limit})
+                """), {'limit': limit, 'guild_id': guild_id})
 
                 rows = result.fetchall()
 
@@ -1138,12 +1177,13 @@ Use `!rafflestats @user` to see individual stats
     @commands.has_permissions(administrator=True)
     async def clear_all_tickets(self, ctx):
         """
-        [ADMIN] Manually clear ALL tickets from the database
+        [ADMIN] Manually clear ALL tickets from the database for this guild
         Usage: !rafflecleartickets
 
-        WARNING: This will delete all tickets, watchtime conversions, gifted subs, and shuffle wagers!
+        WARNING: This will delete all tickets, watchtime conversions, gifted subs, and shuffle wagers for this guild!
         """
-        await ctx.send("⚠️ **WARNING:** This will DELETE ALL raffle tickets and history!\nType `CONFIRM DELETE` to proceed.")
+        guild_id = ctx.guild.id
+        await ctx.send("⚠️ **WARNING:** This will DELETE ALL raffle tickets and history for this server!\nType `CONFIRM DELETE` to proceed.")
 
         def check(m):
             return m.author == ctx.author and m.channel == ctx.channel
@@ -1155,12 +1195,22 @@ Use `!rafflestats @user` to see individual stats
                 await ctx.send("❌ Cancelled. Tickets were NOT deleted.")
                 return
 
-            # Delete everything
+            # Delete everything for this guild's active period
             with self.engine.begin() as conn:
-                deleted_tickets = conn.execute(text("DELETE FROM raffle_tickets")).rowcount
-                deleted_watchtime = conn.execute(text("DELETE FROM raffle_watchtime_converted")).rowcount
-                deleted_subs = conn.execute(text("DELETE FROM raffle_gifted_subs")).rowcount
-                deleted_wagers = conn.execute(text("DELETE FROM raffle_shuffle_wagers")).rowcount
+                # Get guild's active period
+                period_result = conn.execute(text("""
+                    SELECT id FROM raffle_periods WHERE status = 'active' AND discord_server_id = :guild_id
+                """), {'guild_id': guild_id})
+                period = period_result.fetchone()
+                
+                if period:
+                    period_id = period[0]
+                    deleted_tickets = conn.execute(text("DELETE FROM raffle_tickets WHERE period_id = :period_id"), {'period_id': period_id}).rowcount
+                    deleted_watchtime = conn.execute(text("DELETE FROM raffle_watchtime_converted WHERE period_id = :period_id"), {'period_id': period_id}).rowcount
+                    deleted_subs = conn.execute(text("DELETE FROM raffle_gifted_subs WHERE period_id = :period_id"), {'period_id': period_id}).rowcount
+                    deleted_wagers = conn.execute(text("DELETE FROM raffle_shuffle_wagers WHERE period_id = :period_id"), {'period_id': period_id}).rowcount
+                else:
+                    deleted_tickets = deleted_watchtime = deleted_subs = deleted_wagers = 0
 
             await ctx.send(
                 f"✅ **All tickets cleared!**\n"
@@ -1187,25 +1237,28 @@ Use `!rafflestats @user` to see individual stats
         This marks all existing watchtime as "already converted" to prevent re-awarding
         """
         try:
+            guild_id = ctx.guild.id
             from sqlalchemy import text
-            from .database import get_current_period
 
-            # Get active period
-            current_period = get_current_period(self.engine)
-            if not current_period:
-                await ctx.send("❌ No active raffle period found!")
-                return
-
-            period_id = current_period['id']
-
+            # Get active period for this guild
             with self.engine.begin() as conn:
+                period_result = conn.execute(text("""
+                    SELECT id FROM raffle_periods WHERE status = 'active' AND discord_server_id = :guild_id
+                """), {'guild_id': guild_id})
+                period_row = period_result.fetchone()
+                
+                if not period_row:
+                    await ctx.send("❌ No active raffle period found for this server!")
+                    return
+                    
+                period_id = period_row[0]
                 # Step 1: Get all users' current watchtime BEFORE resetting
                 watchtime_snapshot = conn.execute(text("""
                     SELECT w.username, w.minutes
                     FROM watchtime w
                     JOIN links l ON l.kick_name = w.username
-                    WHERE w.minutes > 0
-                """)).fetchall()
+                    WHERE w.minutes > 0 AND l.discord_server_id = :guild_id
+                """), {'guild_id': guild_id}).fetchall()
 
                 # Step 2: Reset ONLY watchtime_tickets to 0 (keep wager and gifted sub tickets!)
                 reset_count = conn.execute(text("""
@@ -1272,18 +1325,24 @@ Use `!rafflestats @user` to see individual stats
         Use this if gifted sub tickets were accidentally deleted
         """
         try:
+            guild_id = ctx.guild.id
             from sqlalchemy import text
-            from .database import get_current_period
-            from .tickets import TicketManager
 
-            # Get active period
-            current_period = get_current_period(self.engine)
-            if not current_period:
-                await ctx.send("❌ No active raffle period found!")
-                return
-
-            period_id = current_period['id']
-            tm = TicketManager(self.engine)
+            # Get active period for this guild
+            with self.engine.begin() as conn:
+                period_result = conn.execute(text("""
+                    SELECT id FROM raffle_periods WHERE status = 'active' AND discord_server_id = :guild_id
+                """), {'guild_id': guild_id})
+                period_row = period_result.fetchone()
+                
+                if not period_row:
+                    await ctx.send("❌ No active raffle period found for this server!")
+                    return
+                    
+                period_id = period_row[0]
+            
+            managers = self._get_guild_managers(ctx)
+            ticket_manager = managers['ticket_manager']
 
             with self.engine.begin() as conn:
                 # Get all gifted subs for this period
@@ -1310,7 +1369,7 @@ Use `!rafflestats @user` to see individual stats
                 for kick_name, discord_id, sub_count, tickets in subs:
                     if discord_id:
                         # Re-award the tickets
-                        success = tm.award_tickets(
+                        success = ticket_manager.award_tickets(
                             discord_id=discord_id,
                             kick_name=kick_name,
                             tickets=tickets,
@@ -1347,16 +1406,21 @@ Use `!rafflestats @user` to see individual stats
         Shows row counts and sample data to verify table states
         """
         try:
+            guild_id = ctx.guild.id
             from sqlalchemy import text
-            from .database import get_current_period
 
-            # Get active period
-            current_period = get_current_period(self.engine)
-            if not current_period:
-                await ctx.send("❌ No active raffle period found!")
-                return
-
-            period_id = current_period['id']
+            # Get active period for this guild
+            with self.engine.begin() as conn:
+                period_result = conn.execute(text("""
+                    SELECT id FROM raffle_periods WHERE status = 'active' AND discord_server_id = :guild_id
+                """), {'guild_id': guild_id})
+                period_row = period_result.fetchone()
+                
+                if not period_row:
+                    await ctx.send("❌ No active raffle period found for this server!")
+                    return
+                    
+                period_id = period_row[0]
 
             output = [f"**📊 Raffle Database Check (Period #{period_id})**\n"]
 
@@ -1429,18 +1493,21 @@ Use `!rafflestats @user` to see individual stats
         Usage: !raffleclearwatchtime
         """
         try:
+            guild_id = ctx.guild.id
             from sqlalchemy import text
-            from .database import get_current_period
 
-            # Get active period
-            current_period = get_current_period(self.engine)
-            if not current_period:
-                await ctx.send("❌ No active raffle period found!")
-                return
-
-            period_id = current_period['id']
-
+            # Get active period for this guild
             with self.engine.begin() as conn:
+                period_result = conn.execute(text("""
+                    SELECT id FROM raffle_periods WHERE status = 'active' AND discord_server_id = :guild_id
+                """), {'guild_id': guild_id})
+                period_row = period_result.fetchone()
+                
+                if not period_row:
+                    await ctx.send("❌ No active raffle period found for this server!")
+                    return
+                    
+                period_id = period_row[0]
                 # Get current state
                 current_state = conn.execute(text("""
                     SELECT
@@ -1562,15 +1629,21 @@ Use `!rafflestats @user` to see individual stats
         Shows watchtime vs converted amounts for users
         """
         try:
+            guild_id = ctx.guild.id
             from sqlalchemy import text
-            from .database import get_current_period
 
-            current_period = get_current_period(self.engine)
-            if not current_period:
-                await ctx.send("❌ No active raffle period!")
-                return
-
-            period_id = current_period['id']
+            # Get active period for this guild
+            with self.engine.begin() as conn:
+                period_result = conn.execute(text("""
+                    SELECT id FROM raffle_periods WHERE status = 'active' AND discord_server_id = :guild_id
+                """), {'guild_id': guild_id})
+                period_row = period_result.fetchone()
+                
+                if not period_row:
+                    await ctx.send("❌ No active raffle period for this server!")
+                    return
+                    
+                period_id = period_row[0]
 
             with self.engine.begin() as conn:
                 if kick_name:
@@ -1584,13 +1657,14 @@ Use `!rafflestats @user` to see individual stats
                         FROM watchtime w
                         LEFT JOIN raffle_watchtime_converted c
                             ON c.kick_name = w.username AND c.period_id = :period_id
-                        LEFT JOIN links l ON l.kick_name = w.username
+                        LEFT JOIN links l ON l.kick_name = w.username AND l.discord_server_id = :guild_id
                         WHERE w.username = :kick_name
                         GROUP BY w.username, w.minutes, l.discord_id
                     """
                     result = conn.execute(text(query), {
                         'period_id': period_id,
-                        'kick_name': kick_name
+                        'kick_name': kick_name,
+                        'guild_id': guild_id
                     }).fetchone()
 
                     if not result:
@@ -1630,13 +1704,13 @@ Use `!rafflestats @user` to see individual stats
                         FROM watchtime w
                         LEFT JOIN raffle_watchtime_converted c
                             ON c.kick_name = w.username AND c.period_id = :period_id
-                        LEFT JOIN links l ON l.kick_name = w.username
+                        LEFT JOIN links l ON l.kick_name = w.username AND l.discord_server_id = :guild_id
                         WHERE w.minutes > 0
                         GROUP BY w.username, w.minutes, l.discord_id
                         ORDER BY w.minutes DESC
                         LIMIT 10
                     """
-                    results = conn.execute(text(query), {'period_id': period_id}).fetchall()
+                    results = conn.execute(text(query), {'period_id': period_id, 'guild_id': guild_id}).fetchall()
 
                     if not results:
                         await ctx.send("📭 No users with watchtime found")
@@ -1666,15 +1740,21 @@ Use `!rafflestats @user` to see individual stats
         Use this at the START of a raffle period to only award tickets for NEW watchtime
         """
         try:
+            guild_id = ctx.guild.id
             from sqlalchemy import text
-            from .database import get_current_period
 
-            current_period = get_current_period(self.engine)
-            if not current_period:
-                await ctx.send("❌ No active raffle period!")
-                return
-
-            period_id = current_period['id']
+            # Get active period for this guild
+            with self.engine.begin() as conn:
+                period_result = conn.execute(text("""
+                    SELECT id FROM raffle_periods WHERE status = 'active' AND discord_server_id = :guild_id
+                """), {'guild_id': guild_id})
+                period_row = period_result.fetchone()
+                
+                if not period_row:
+                    await ctx.send("❌ No active raffle period for this server!")
+                    return
+                    
+                period_id = period_row[0]
 
             with self.engine.begin() as conn:
                 # Get all users' current watchtime
@@ -1682,8 +1762,8 @@ Use `!rafflestats @user` to see individual stats
                     SELECT w.username, w.minutes
                     FROM watchtime w
                     JOIN links l ON l.kick_name = w.username
-                    WHERE w.minutes > 0
-                """)).fetchall()
+                    WHERE w.minutes > 0 AND l.discord_server_id = :guild_id
+                """), {'guild_id': guild_id}).fetchall()
 
                 # Delete old conversion tracking
                 deleted = conn.execute(text("""
