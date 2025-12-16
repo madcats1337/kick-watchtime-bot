@@ -6053,7 +6053,8 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                 FROM point_shop_items
                 WHERE is_active = TRUE AND discord_server_id = :guild_id
                 ORDER BY price ASC
-            """), {"guild_id": guild_id}t(f"[Point Shop] Found {len(items)} items")
+            """), {"guild_id": guild_id}).fetchall()
+            print(f"[Point Shop] Found {len(items)} items")
 
             # Get existing message ID
             existing_msg_result = conn.execute(text("""
