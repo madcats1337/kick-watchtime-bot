@@ -3990,7 +3990,7 @@ async def health_check(ctx):
         if KICK_CHATROOM_ID:
             checks.append(f"✅ **Kick Chatroom ID**: Configured ({KICK_CHATROOM_ID})")
         else:
-            chatroom_id = await asyncio.to_thread(fetch_chatroom_id, KICK_CHANNEL)
+            chatroom_id = await fetch_chatroom_id(KICK_CHANNEL)
             if chatroom_id:
                 checks.append(f"✅ **Kick API**: Accessible (ID: {chatroom_id})")
             else:
