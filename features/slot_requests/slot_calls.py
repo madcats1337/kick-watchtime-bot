@@ -318,6 +318,7 @@ class SlotCallTracker:
                         logger.warning(f"[LIMIT CHECK] BLOCKING {kick_username}: {total_requests} >= {self.max_requests_per_user}")
                         if self.kick_send_callback:
                             try:
+                                print(f"[SLOT TRACKER DEBUG] discord_server_id = {self.discord_server_id}")
                                 await self.kick_send_callback(
                                     f"@{kick_username} You have reached the maximum of {self.max_requests_per_user} slot request(s). "
                                     f"Please wait for the current hunt to complete.",
