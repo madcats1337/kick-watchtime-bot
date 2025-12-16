@@ -125,8 +125,27 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
     # Create event handler (can be customized later)
     webhook_handler = WebhookEventHandler()
 
+    @webhook_handler.on("chat.message.sent")
+    async def handle_chat_message(event_data):
+        """Handle chat messages from Kick webhooks"""
+        try:
+            sender = event_data.get("sender", {})
+            username = sender.get("username", "Unknown")
+            content = event_data.get("content", "")
+            message_id = event_data.get("message_id", "")
+            
+            print(f"[Webhook] 💬 Chat: {username}: {content}")
+            
+            # TODO: Process commands here (!call, !sr, !raffle, etc.)
+            # For now, just log it
+            
+        except Exception as e:
+            print(f"[Webhook] ❌ Error handling chat message: {e}")
+            import traceback
+            traceback.print_exc()
+
     @webhook_handler.set_default_handler
-    def default_webhook_handler(event_data):
+    async def default_webhook_handler(event_data):
         """Default handler logs all events"""
         import json
         print(f"[Webhook] Received event data: {json.dumps(event_data, indent=2, default=str)}")

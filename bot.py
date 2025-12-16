@@ -1069,7 +1069,7 @@ async def refresh_kick_oauth_token() -> bool:
         traceback.print_exc()
         return False
 
-async def send_kick_message(message: str, retry_count: int = 0) -> bool:
+async def send_kick_message(message: str, retry_count: int = 0, guild_id: int = None) -> bool:
     """
     Send a message to Kick chat using official Chat API with OAuth access token.
     Automatically refreshes token on 401 errors.
@@ -1080,25 +1080,38 @@ async def send_kick_message(message: str, retry_count: int = 0) -> bool:
     Args:
         message: The message to send
         retry_count: Internal counter to prevent infinite retry loops
+        guild_id: Discord guild ID to get the correct OAuth token for
 
     Returns:
         True if successful, False otherwise
     """
-    # Try to load access token from database first
+    # Try to load access token from database first (from kick_oauth_tokens)
     access_token = None
-    if engine:
+    if engine and guild_id:
         try:
             with engine.connect() as conn:
+                # First try kick_oauth_tokens (per-guild tokens linked via dashboard)
                 result = conn.execute(text("""
-                    SELECT access_token FROM bot_tokens
-                    WHERE bot_username = 'maikelele'
-                    ORDER BY created_at DESC LIMIT 1
-                """)).fetchone()
+                    SELECT kot.access_token, kot.kick_username
+                    FROM kick_oauth_tokens kot
+                    JOIN servers s ON s.discord_server_id = :guild_id
+                    WHERE kot.kick_username = s.kick_channel
+                    ORDER BY kot.created_at DESC LIMIT 1
+                """), {"guild_id": guild_id}).fetchone()
+                
+                if not result or not result[0]:
+                    # Fallback to bot_tokens table (legacy)
+                    result = conn.execute(text("""
+                        SELECT access_token FROM bot_tokens
+                        WHERE bot_username = 'maikelele'
+                        ORDER BY created_at DESC LIMIT 1
+                    """)).fetchone()
+                
                 if result and result[0]:
                     access_token = result[0]
-                    print(f"[Kick] ✅ Loaded OAuth token from database: {access_token[:20]}...")
+                    print(f"[Kick][Guild {guild_id}] ✅ Loaded OAuth token from database: {access_token[:20]}...")
         except Exception as e:
-            print(f"[Kick] ⚠️ Could not load token from database: {e}")
+            print(f"[Kick][Guild {guild_id}] ⚠️ Could not load token from database: {e}")
 
     # Fall back to environment variable
     if not access_token:
@@ -1392,6 +1405,16 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                         try:
                             data = json.loads(msg)
                             event_type = data.get("event")
+                            
+                            # DEBUG: Log ALL events to see what's coming through
+                            if event_type not in ["pusher:ping", "pusher:pong"]:
+                                print(f"[KICK EVENT DEBUG] Type: {event_type}, Channel: {data.get('channel', 'N/A')}")
+                                if data.get('data'):
+                                    try:
+                                        event_data = json.loads(data.get('data', '{}'))
+                                        print(f"[KICK EVENT DEBUG] Data keys: {list(event_data.keys())[:5]}")  # Show first 5 keys
+                                    except:
+                                        print(f"[KICK EVENT DEBUG] Raw data (first 100 chars): {str(data.get('data'))[:100]}")
 
                             # DEBUG: Log ALL event types (except ping/pong and chat) to catch subscription events
                             if event_type and event_type not in ["pusher:ping", "pusher:pong", "App\\Events\\ChatMessageEvent"]:
@@ -1437,6 +1460,12 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                     # Check for custom commands first (they get priority)
                                     if hasattr(bot, 'custom_commands_manager') and bot.custom_commands_manager:
                                         try:
+                                            # Create a wrapper that includes guild_id
+                                            async def send_message_with_guild(msg):
+                                                return await send_kick_message(msg, guild_id=guild_id)
+                                            
+                                            # Temporarily set the callback with guild context
+                                            bot.custom_commands_manager.send_message_callback = send_message_with_guild
                                             handled = await bot.custom_commands_manager.handle_message(content_text, username)
                                             if handled:
                                                 continue  # Command was handled, skip other processing
@@ -1477,7 +1506,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                             else:
                                                 # Send usage message when no content is provided (only to non-blacklisted users)
                                                 try:
-                                                    await send_kick_message(f"@{username} Please specify a slot!")
+                                                    await send_kick_message(f"@{username} Please specify a slot!", guild_id=guild_id)
                                                     print(f"[Slot Call] Sent usage instructions to {username}")
                                                 except Exception as e:
                                                     print(f"Failed to send usage message to {username}: {e}")
@@ -1490,7 +1519,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                             "https://discord.gg/k7CXJtfrPY"
                                         )
                                         # Send message to Kick chat using the API
-                                        await send_kick_message(raffle_message)
+                                        await send_kick_message(raffle_message, guild_id=guild_id)
 
                                     # Handle !gtb (Guess the Balance) command
                                     if content_stripped.lower().startswith("!gtb"):
@@ -1504,16 +1533,16 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                 if success:
                                                     # Send confirmation to Kick chat
                                                     response = f"@{username} {message} Good luck! 🎰"
-                                                    await send_kick_message(response)
+                                                    await send_kick_message(response, guild_id=guild_id)
                                                     print(f"[GTB] {username} guessed ${amount:,.2f}")
                                                 else:
                                                     # Send error message to Kick chat
-                                                    await send_kick_message(f"@{username} {message}")
+                                                    await send_kick_message(f"@{username} {message}", guild_id=guild_id)
                                                     print(f"[GTB] Failed guess from {username}: {message}")
                                             else:
-                                                await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount> (e.g., !gtb 1234.56)")
+                                                await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount> (e.g., !gtb 1234.56)", guild_id=guild_id)
                                         else:
-                                            await send_kick_message(f"@{username} Usage: !gtb <amount> (e.g., !gtb 1234.56)")
+                                            await send_kick_message(f"@{username} Usage: !gtb <amount> (e.g., !gtb 1234.56)", guild_id=guild_id)
 
                                     # Handle !clip command - Create a clip of the livestream
                                     if content_stripped.lower().startswith("!clip"):
@@ -6024,8 +6053,7 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                 FROM point_shop_items
                 WHERE is_active = TRUE AND discord_server_id = :guild_id
                 ORDER BY price ASC
-            """), {"guild_id": guild_id}).fetchall()
-            print(f"[Point Shop] Found {len(items)} items")
+            """), {"guild_id": guild_id}t(f"[Point Shop] Found {len(items)} items")
 
             # Get existing message ID
             existing_msg_result = conn.execute(text("""
@@ -6116,21 +6144,59 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
 
                 # Store all three message IDs - critical operation
                 with engine.begin() as conn:
-                    conn.execute(text("""
-                        INSERT INTO point_settings (key, value, discord_server_id, updated_at)
-                        VALUES ('shop_message_id', :m, :guild_id, CURRENT_TIMESTAMP)
-                        ON CONFLICT (key, discord_server_id) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
-                    """), {"m": str(message.id), "guild_id": guild_id})
-                    conn.execute(text("""
-                        INSERT INTO point_settings (key, value, discord_server_id, updated_at)
-                        VALUES ('shop_interactive_id', :m, :guild_id, CURRENT_TIMESTAMP)
-                        ON CONFLICT (key, discord_server_id) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
-                    """), {"m": str(interactive_msg.id), "guild_id": guild_id})
-                    conn.execute(text("""
-                        INSERT INTO point_settings (key, value, discord_server_id, updated_at)
-                        VALUES ('shop_footer_id', :m, :guild_id, CURRENT_TIMESTAMP)
-                        ON CONFLICT (key, discord_server_id) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
-                    """), {"m": str(footer_msg.id), "guild_id": guild_id})
+                    # Check and update shop_message_id
+                    existing = conn.execute(text("""
+                        SELECT key FROM point_settings 
+                        WHERE key = 'shop_message_id' AND discord_server_id = :guild_id
+                    """), {"guild_id": guild_id}).fetchone()
+                    
+                    if existing:
+                        conn.execute(text("""
+                            UPDATE point_settings 
+                            SET value = :m, updated_at = CURRENT_TIMESTAMP
+                            WHERE key = 'shop_message_id' AND discord_server_id = :guild_id
+                        """), {"m": str(message.id), "guild_id": guild_id})
+                    else:
+                        conn.execute(text("""
+                            INSERT INTO point_settings (key, value, discord_server_id, updated_at)
+                            VALUES ('shop_message_id', :m, :guild_id, CURRENT_TIMESTAMP)
+                        """), {"m": str(message.id), "guild_id": guild_id})
+                    
+                    # Check and update shop_interactive_id
+                    existing = conn.execute(text("""
+                        SELECT key FROM point_settings 
+                        WHERE key = 'shop_interactive_id' AND discord_server_id = :guild_id
+                    """), {"guild_id": guild_id}).fetchone()
+                    
+                    if existing:
+                        conn.execute(text("""
+                            UPDATE point_settings 
+                            SET value = :m, updated_at = CURRENT_TIMESTAMP
+                            WHERE key = 'shop_interactive_id' AND discord_server_id = :guild_id
+                        """), {"m": str(interactive_msg.id), "guild_id": guild_id})
+                    else:
+                        conn.execute(text("""
+                            INSERT INTO point_settings (key, value, discord_server_id, updated_at)
+                            VALUES ('shop_interactive_id', :m, :guild_id, CURRENT_TIMESTAMP)
+                        """), {"m": str(interactive_msg.id), "guild_id": guild_id})
+                    
+                    # Check and update shop_footer_id
+                    existing = conn.execute(text("""
+                        SELECT key FROM point_settings 
+                        WHERE key = 'shop_footer_id' AND discord_server_id = :guild_id
+                    """), {"guild_id": guild_id}).fetchone()
+                    
+                    if existing:
+                        conn.execute(text("""
+                            UPDATE point_settings 
+                            SET value = :m, updated_at = CURRENT_TIMESTAMP
+                            WHERE key = 'shop_footer_id' AND discord_server_id = :guild_id
+                        """), {"m": str(footer_msg.id), "guild_id": guild_id})
+                    else:
+                        conn.execute(text("""
+                            INSERT INTO point_settings (key, value, discord_server_id, updated_at)
+                            VALUES ('shop_footer_id', :m, :guild_id, CURRENT_TIMESTAMP)
+                        """), {"m": str(footer_msg.id), "guild_id": guild_id})
 
                 print(f"[Point Shop] Posted Components V2 mosaic shop to channel {channel_id}")
                 return True
