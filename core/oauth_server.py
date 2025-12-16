@@ -127,7 +127,7 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
 
     @webhook_handler.on("chat.message.sent")
     async def handle_chat_message(event_data):
-        """Handle chat messages from Kick webhooks"""
+        """Handle chat messages from Kick webhooks with multiserver support"""
         try:
             sender = event_data.get("sender", {})
             username = sender.get("username", "Unknown")
