@@ -329,7 +329,7 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
         kick_api = KickAPI(
             client_id=KICK_CLIENT_ID,
             client_secret=KICK_CLIENT_SECRET,
-            redirect_uri=f"{OAUTH_CALLBACK_URL}/oauth/kick/callback"
+            redirect_uri=f"{OAUTH_BASE_URL}/oauth/kick/callback"
         )
         
         # Manually set the tokens (bypassing OAuth flow since we already have them)
