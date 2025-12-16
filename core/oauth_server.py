@@ -136,9 +136,18 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
             
             print(f"[Webhook] 💬 Chat: {username}: {content}")
             
-            # Import here to avoid circular imports
-            from bot import bot, send_kick_message, engine
+            # Import dynamically to avoid circular imports
+            import sys
+            if 'bot' not in sys.modules:
+                print("[Webhook] ⚠️ Bot module not loaded yet, skipping command processing")
+                return
+            
+            import bot as bot_module
             from sqlalchemy import text
+            
+            bot = bot_module.bot
+            send_kick_message = bot_module.send_kick_message
+            engine = bot_module.engine
             
             # Get guild_id from bot settings - need to determine which server this message is for
             # For now, use maikelele's server (guild_id 914986636629143562)
@@ -204,15 +213,19 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
                 if hasattr(bot, 'gtb_manager'):
                     gtb_parts = content_stripped.split(maxsplit=1)
                     if len(gtb_parts) == 2:
-                        from bot import parse_amount
-                        amount = parse_amount(gtb_parts[1])
-                        if amount is not None:
-                            success, message = bot.gtb_manager.add_guess(username, amount)
-                            if success:
-                                response = f"@{username} {message} Good luck! 🎰"
-                                await send_kick_message(response, guild_id=guild_id)
+                        # Import parse_amount dynamically
+                        parse_amount = getattr(bot_module, 'parse_amount', None)
+                        if parse_amount:
+                            amount = parse_amount(gtb_parts[1])
+                            if amount is not None:
+                                success, message = bot.gtb_manager.add_guess(username, amount)
+                                if success:
+                                    response = f"@{username} {message} Good luck! 🎰"
+                                    await send_kick_message(response, guild_id=guild_id)
+                                else:
+                                    await send_kick_message(f"@{username} {message}", guild_id=guild_id)
                             else:
-                                await send_kick_message(f"@{username} {message}", guild_id=guild_id)
+                                await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount>", guild_id=guild_id)
                         else:
                             await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount>", guild_id=guild_id)
                     else:
