@@ -13,18 +13,34 @@ def get_kick_token_for_server(engine, discord_server_id):
         discord_server_id: Discord server/guild ID (as string)
         
     Returns:
-        dict with 'access_token' and 'refresh_token', or None if not found
+        dict with 'access_token', 'refresh_token', etc., or None if not found
     """
     try:
         with engine.connect() as conn:
+            # First, get the configured kick_channel (streamer username) for this server
             result = conn.execute(
                 text("""
-                    SELECT access_token, refresh_token, expires_at, kick_username, kick_user_id
-                    FROM kick_oauth_tokens
-                    WHERE discord_server_id = :server_id
-                    LIMIT 1
+                    SELECT value FROM bot_settings 
+                    WHERE key = 'kick_channel' AND discord_server_id = :server_id
                 """),
                 {"server_id": str(discord_server_id)}
+            )
+            row = result.fetchone()
+            
+            if not row or not row[0]:
+                return None
+            
+            kick_channel = row[0].lower()
+            
+            # Now fetch the OAuth token for that Kick username
+            result = conn.execute(
+                text("""
+                    SELECT access_token, refresh_token, expires_at, kick_username
+                    FROM kick_oauth_tokens
+                    WHERE LOWER(kick_username) = :kick_username
+                    LIMIT 1
+                """),
+                {"kick_username": kick_channel}
             )
             row = result.fetchone()
             
@@ -33,8 +49,7 @@ def get_kick_token_for_server(engine, discord_server_id):
                     'access_token': row[0],
                     'refresh_token': row[1],
                     'expires_at': row[2],
-                    'kick_username': row[3],
-                    'kick_user_id': row[4]
+                    'kick_username': row[3]
                 }
             return None
             
