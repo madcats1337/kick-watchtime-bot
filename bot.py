@@ -5984,12 +5984,17 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
     """Post or update the point shop using Components V2 with grid mosaic layout"""
 
     try:
+        # If guild_id not provided, use first guild as fallback
+        if not guild_id and bot.guilds:
+            guild_id = bot.guilds[0].id
+        
         # If channel_id not provided, get from settings
         if not channel_id:
             with engine.connect() as conn:
                 result = conn.execute(text("""
-                    SELECT value FROM point_settings WHERE key = 'shop_channel_id'
-                """)).fetchone()
+                    SELECT value FROM point_settings 
+                    WHERE key = 'shop_channel_id' AND discord_server_id = :guild_id
+                """), {"guild_id": guild_id}).fetchone()
 
                 if not result:
                     print("[Point Shop] No shop channel configured")
@@ -6001,32 +6006,39 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
         if not channel:
             print(f"[Point Shop] Channel {channel_id} not found")
             return False
+        
+        # Get guild_id from channel if not provided
+        if not guild_id:
+            guild_id = channel.guild.id
 
         # Get active shop items
         with engine.connect() as conn:
             items = conn.execute(text("""
                 SELECT id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer
                 FROM point_shop_items
-                WHERE is_active = TRUE
+                WHERE is_active = TRUE AND discord_server_id = :guild_id
                 ORDER BY price ASC
-            """)).fetchall()
+            """), {"guild_id": guild_id}).fetchall()
 
             # Get existing message ID
             existing_msg_result = conn.execute(text("""
-                SELECT value FROM point_settings WHERE key = 'shop_message_id'
-            """)).fetchone()
+                SELECT value FROM point_settings 
+                WHERE key = 'shop_message_id' AND discord_server_id = :guild_id
+            """), {"guild_id": guild_id}).fetchone()
             existing_message_id = int(existing_msg_result[0]) if existing_msg_result else None
 
             # Get existing interactive message ID
             existing_interactive_result = conn.execute(text("""
-                SELECT value FROM point_settings WHERE key = 'shop_interactive_id'
-            """)).fetchone()
+                SELECT value FROM point_settings 
+                WHERE key = 'shop_interactive_id' AND discord_server_id = :guild_id
+            """), {"guild_id": guild_id}).fetchone()
             existing_interactive_id = int(existing_interactive_result[0]) if existing_interactive_result else None
 
             # Get existing footer message ID
             existing_footer_result = conn.execute(text("""
-                SELECT value FROM point_settings WHERE key = 'shop_footer_id'
-            """)).fetchone()
+                SELECT value FROM point_settings 
+                WHERE key = 'shop_footer_id' AND discord_server_id = :guild_id
+            """), {"guild_id": guild_id}).fetchone()
             existing_footer_id = int(existing_footer_result[0]) if existing_footer_result else None
 
         # Delete existing messages if updating
@@ -6098,20 +6110,20 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                 # Store all three message IDs - critical operation
                 with engine.begin() as conn:
                     conn.execute(text("""
-                        INSERT INTO point_settings (key, value, updated_at)
-                        VALUES ('shop_message_id', :m, CURRENT_TIMESTAMP)
-                        ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
-                    """), {"m": str(message.id)})
+                        INSERT INTO point_settings (key, value, discord_server_id, updated_at)
+                        VALUES ('shop_message_id', :m, :guild_id, CURRENT_TIMESTAMP)
+                        ON CONFLICT (key, discord_server_id) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
+                    """), {"m": str(message.id), "guild_id": guild_id})
                     conn.execute(text("""
-                        INSERT INTO point_settings (key, value, updated_at)
-                        VALUES ('shop_interactive_id', :m, CURRENT_TIMESTAMP)
-                        ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
-                    """), {"m": str(interactive_msg.id)})
+                        INSERT INTO point_settings (key, value, discord_server_id, updated_at)
+                        VALUES ('shop_interactive_id', :m, :guild_id, CURRENT_TIMESTAMP)
+                        ON CONFLICT (key, discord_server_id) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
+                    """), {"m": str(interactive_msg.id), "guild_id": guild_id})
                     conn.execute(text("""
-                        INSERT INTO point_settings (key, value, updated_at)
-                        VALUES ('shop_footer_id', :m, CURRENT_TIMESTAMP)
-                        ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
-                    """), {"m": str(footer_msg.id)})
+                        INSERT INTO point_settings (key, value, discord_server_id, updated_at)
+                        VALUES ('shop_footer_id', :m, :guild_id, CURRENT_TIMESTAMP)
+                        ON CONFLICT (key, discord_server_id) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
+                    """), {"m": str(footer_msg.id), "guild_id": guild_id})
 
                 print(f"[Point Shop] Posted Components V2 mosaic shop to channel {channel_id}")
                 return True
@@ -6139,10 +6151,10 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
 
             with engine.begin() as conn:
                 conn.execute(text("""
-                    INSERT INTO point_settings (key, value, updated_at)
-                    VALUES ('shop_message_id', :m, CURRENT_TIMESTAMP)
-                    ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
-                """), {"m": str(message.id)})
+                    INSERT INTO point_settings (key, value, discord_server_id, updated_at)
+                    VALUES ('shop_message_id', :m, :guild_id, CURRENT_TIMESTAMP)
+                    ON CONFLICT (key, discord_server_id) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
+                """), {"m": str(message.id), "guild_id": guild_id})
             return True
 
         # Create mosaic image for legacy mode
@@ -6183,14 +6195,14 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
         # Store the message ID for future updates (legacy mode has interactive in same message)
         with engine.begin() as conn:
             conn.execute(text("""
-                INSERT INTO point_settings (key, value, updated_at)
-                VALUES ('shop_message_id', :m, CURRENT_TIMESTAMP)
-                ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
-            """), {"m": str(message.id)})
+                INSERT INTO point_settings (key, value, discord_server_id, updated_at)
+                VALUES ('shop_message_id', :m, :guild_id, CURRENT_TIMESTAMP)
+                ON CONFLICT (key, discord_server_id) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
+            """), {"m": str(message.id), "guild_id": guild_id})
             # Clear interactive ID since legacy mode includes it in same message
             conn.execute(text("""
-                DELETE FROM point_settings WHERE key = 'shop_interactive_id'
-            """))
+                DELETE FROM point_settings WHERE key = 'shop_interactive_id' AND discord_server_id = :guild_id
+            """), {"guild_id": guild_id})
 
         print(f"[Point Shop] Posted shop to channel {channel_id}")
         return True
@@ -6292,10 +6304,10 @@ async def cmd_post_shop(ctx, channel: discord.TextChannel = None):
     # Save channel setting
     with engine.begin() as conn:
         conn.execute(text("""
-            INSERT INTO point_settings (key, value, updated_at)
-            VALUES ('shop_channel_id', :c, CURRENT_TIMESTAMP)
-            ON CONFLICT (key) DO UPDATE SET value = :c, updated_at = CURRENT_TIMESTAMP
-        """), {"c": str(target_channel.id)})
+            INSERT INTO point_settings (key, value, discord_server_id, updated_at)
+            VALUES ('shop_channel_id', :c, :guild_id, CURRENT_TIMESTAMP)
+            ON CONFLICT (key, discord_server_id) DO UPDATE SET value = :c, updated_at = CURRENT_TIMESTAMP
+        """), {"c": str(target_channel.id), "guild_id": ctx.guild.id})
 
     success = await post_point_shop_to_discord(bot, ctx.guild.id, target_channel.id)
 
