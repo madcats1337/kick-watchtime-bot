@@ -2608,8 +2608,8 @@ async def cmd_link(ctx):
     # Check if already linked
     with engine.connect() as conn:
         existing = conn.execute(text(
-            "SELECT kick_name FROM links WHERE discord_id = :d"
-        ), {"d": discord_id}).fetchone()
+            "SELECT kick_name FROM links WHERE discord_id = :d AND discord_server_id = :g"
+        ), {"d": discord_id, "g": guild_id}).fetchone()
 
         if existing:
             await ctx.send(
@@ -2871,24 +2871,24 @@ async def toggle_tracking(ctx, action: str = None, subaction: str = None):
             # Save to database
             with engine.begin() as conn:
                 conn.execute(text("""
-                    INSERT INTO bot_settings (key, value, updated_at)
-                    VALUES ('tracking_force_override', 'true', CURRENT_TIMESTAMP)
-                    ON CONFLICT (key) DO UPDATE SET
+                    INSERT INTO bot_settings (key, value, discord_server_id, updated_at)
+                    VALUES ('tracking_force_override', 'true', :guild_id, CURRENT_TIMESTAMP)
+                    ON CONFLICT (key, discord_server_id) DO UPDATE SET
                         value = 'true',
                         updated_at = CURRENT_TIMESTAMP
-                """))
+                """), {"guild_id": ctx.guild.id})
             await ctx.send("🔒 **Watchtime FORCE override ENABLED**\nWatchtime updates will run regardless of live-detection checks.")
         elif subaction.lower() == "off":
             tracking_force_override = False
             # Save to database
             with engine.begin() as conn:
                 conn.execute(text("""
-                    INSERT INTO bot_settings (key, value, updated_at)
-                    VALUES ('tracking_force_override', 'false', CURRENT_TIMESTAMP)
-                    ON CONFLICT (key) DO UPDATE SET
+                    INSERT INTO bot_settings (key, value, discord_server_id, updated_at)
+                    VALUES ('tracking_force_override', 'false', :guild_id, CURRENT_TIMESTAMP)
+                    ON CONFLICT (key, discord_server_id) DO UPDATE SET
                         value = 'false',
                         updated_at = CURRENT_TIMESTAMP
-                """))
+                """), {"guild_id": ctx.guild.id})
             await ctx.send("🔓 **Watchtime FORCE override DISABLED**\nLive-detection checks will be enforced again.")
         else:
             await ctx.send("❌ Invalid force option. Use: `!tracking force on` or `!tracking force off` or `!tracking force status`")
@@ -3020,8 +3020,8 @@ async def slot_call_blacklist(ctx, action: str = None, kick_username: str = None
         with engine.begin() as conn:
             # Check if already blacklisted
             existing = conn.execute(text("""
-                SELECT 1 FROM slot_call_blacklist WHERE kick_username = :username
-            """), {"username": kick_username_lower}).fetchone()
+                SELECT 1 FROM slot_call_blacklist WHERE kick_username = :username AND discord_server_id = :guild_id
+            """), {"username": kick_username_lower, "guild_id": ctx.guild.id}).fetchone()
 
             if existing:
                 await ctx.send(f"⚠️ User `{kick_username}` is already blacklisted.")
@@ -3029,12 +3029,13 @@ async def slot_call_blacklist(ctx, action: str = None, kick_username: str = None
 
             # Add to blacklist
             conn.execute(text("""
-                INSERT INTO slot_call_blacklist (kick_username, reason, blacklisted_by)
-                VALUES (:username, :reason, :admin_id)
+                INSERT INTO slot_call_blacklist (kick_username, reason, blacklisted_by, discord_server_id)
+                VALUES (:username, :reason, :admin_id, :guild_id)
             """), {
                 "username": kick_username_lower,
                 "reason": reason or "No reason provided",
-                "admin_id": ctx.author.id
+                "admin_id": ctx.author.id,
+                "guild_id": ctx.guild.id
             })
 
         await ctx.send(
@@ -3053,8 +3054,8 @@ async def slot_call_blacklist(ctx, action: str = None, kick_username: str = None
 
         with engine.begin() as conn:
             result = conn.execute(text("""
-                DELETE FROM slot_call_blacklist WHERE kick_username = :username
-            """), {"username": kick_username_lower})
+                DELETE FROM slot_call_blacklist WHERE kick_username = :username AND discord_server_id = :guild_id
+            """), {"username": kick_username_lower, "guild_id": ctx.guild.id})
 
             if result.rowcount == 0:
                 await ctx.send(f"⚠️ User `{kick_username}` is not blacklisted.")
@@ -3067,8 +3068,9 @@ async def slot_call_blacklist(ctx, action: str = None, kick_username: str = None
             results = conn.execute(text("""
                 SELECT kick_username, reason, created_at
                 FROM slot_call_blacklist
+                WHERE discord_server_id = :guild_id
                 ORDER BY created_at DESC
-            """)).fetchall()
+            """), {"guild_id": ctx.guild.id}).fetchall()
 
             if not results:
                 await ctx.send("📋 No users are currently blacklisted from !call/!sr commands.")
@@ -3103,8 +3105,8 @@ async def slot_call_blacklist(ctx, action: str = None, kick_username: str = None
             result = conn.execute(text("""
                 SELECT reason, blacklisted_by, created_at
                 FROM slot_call_blacklist
-                WHERE kick_username = :username
-            """), {"username": kick_username_lower}).fetchone()
+                WHERE kick_username = :username AND discord_server_id = :guild_id
+            """), {"username": kick_username_lower, "guild_id": ctx.guild.id}).fetchone()
 
             if not result:
                 await ctx.send(f"✅ User `{kick_username}` is **NOT** blacklisted.")
@@ -3566,8 +3568,8 @@ async def check_watchtime_conversion(ctx, kick_username: str = None):
             with engine.connect() as conn:
                 result = conn.execute(text("""
                     SELECT kick_name FROM links
-                    WHERE discord_id = :discord_id
-                """), {'discord_id': ctx.author.id})
+                    WHERE discord_id = :discord_id AND discord_server_id = :guild_id
+                """), {'discord_id': ctx.author.id, 'guild_id': ctx.guild.id})
                 row = result.fetchone()
                 if row:
                     kick_username = row[0]
