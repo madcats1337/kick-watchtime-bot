@@ -267,7 +267,7 @@ class SlotCallTracker:
             # Send "slot requests not open" message to Kick chat
             if self.kick_send_callback:
                 try:
-                    await self.kick_send_callback(f"@{kick_username} Slot requests are not open at the moment.")
+                    await self.kick_send_callback(f"@{kick_username} Slot requests are not open at the moment.", guild_id=self.discord_server_id)
                     logger.info(f"Sent 'slot requests not open' message to {kick_username}")
                 except Exception as e:
                     logger.error(f"Failed to send disabled message to Kick: {e}")
@@ -320,7 +320,8 @@ class SlotCallTracker:
                             try:
                                 await self.kick_send_callback(
                                     f"@{kick_username} You have reached the maximum of {self.max_requests_per_user} slot request(s). "
-                                    f"Please wait for the current hunt to complete."
+                                    f"Please wait for the current hunt to complete.",
+                                    guild_id=self.discord_server_id
                                 )
                                 logger.info(f"User {kick_username} blocked: {total_requests}/{self.max_requests_per_user} total requests")
                             except Exception as e:
