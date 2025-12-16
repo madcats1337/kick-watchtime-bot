@@ -56,11 +56,11 @@ KICK_USER_INFO_URL = f"{KICK_OAUTH_SERVER}/oauth/userinfo"
 # API endpoints
 KICK_USERS_URL = f"{KICK_API_PUBLIC}/users"
 KICK_CHANNELS_URL = f"{KICK_API_PUBLIC}/channels"
-KICK_CHAT_URL = f"{KICK_API_PUBLIC}/chat"
 KICK_CATEGORIES_URL = f"{KICK_API_PUBLIC}/categories"
 KICK_WEBHOOKS_URL = f"{KICK_API_PUBLIC}/events/subscriptions"
 KICK_MODERATION_URL = f"{KICK_API_PUBLIC}/channels/{{broadcaster_user_id}}/moderation"
 KICK_KICKS_LEADERBOARD = f"{KICK_API_PUBLIC}/channels/{{broadcaster_user_id}}/kicks/leaderboard"
+KICK_CHAT_URL = f"{KICK_API_PUBLIC}/channels/{{broadcaster_user_id}}/chat"
 
 # Available OAuth scopes
 OAUTH_SCOPES = [
@@ -468,32 +468,49 @@ class KickOfficialAPI:
         Send a chat message to a channel.
         Requires: chat:write scope
 
-        If type="bot" and no broadcaster_user_id specified, message goes to
-        the channel attached to the OAuth application.
-
         Args:
             content: Message content (max 500 chars)
-            broadcaster_user_id: Target channel's broadcaster ID (optional)
+            broadcaster_user_id: Target channel's broadcaster ID (required)
             reply_to_message_id: Message ID to reply to (optional)
 
         Returns:
             Message data including message_id
         """
+        if not broadcaster_user_id:
+            raise ValueError("broadcaster_user_id is required for sending chat messages")
+        
         payload = {
             "content": content,
             "type": "bot",
         }
-
-        if broadcaster_user_id:
-            payload["broadcaster_user_id"] = broadcaster_user_id
 
         if reply_to_message_id:
             payload["reply_to_original_message"] = {
                 "original_message_id": reply_to_message_id
             }
 
+        # Format URL with broadcaster_user_id
+        url = KICK_CHAT_URL.format(broadcaster_user_id=broadcaster_user_id)
+        
+        print(f"[Kick API] 📤 Sending chat message:")
+        print(f"[Kick API]   URL: {url}")
+        print(f"[Kick API]   Payload: {payload}")
+        print(f"[Kick API]   Content length: {len(content)}")
+        print(f"[Kick API]   Broadcaster ID: {broadcaster_user_id}")
+        
         headers = {"Content-Type": "application/json"}
-        return await self._post(KICK_CHAT_URL, json=payload, headers=headers)
+        try:
+            result = await self._post(url, json=payload, headers=headers)
+            print(f"[Kick API] ✅ Chat message sent successfully")
+            return result
+        except Exception as e:
+            print(f"[Kick API] ❌ Error sending chat message: {e}")
+            print(f"[Kick API]   Error type: {type(e).__name__}")
+            if hasattr(e, 'status'):
+                print(f"[Kick API]   Status: {e.status}")
+            if hasattr(e, 'message'):
+                print(f"[Kick API]   Message: {e.message}")
+            raise
 
     # -------------------------
     # Categories API
