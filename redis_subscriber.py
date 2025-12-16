@@ -160,6 +160,7 @@ class RedisSubscriber:
             if hasattr(self.bot, 'slot_call_tracker') and self.bot.slot_call_tracker and (content_stripped.startswith("!call") or content_stripped.startswith("!sr")):
                 # Set guild context for slot tracker
                 original_guild_id = getattr(self.bot.slot_call_tracker, 'discord_server_id', None)
+                print(f"[REDIS DEBUG] Setting slot_call_tracker.discord_server_id to: {guild_id}")
                 self.bot.slot_call_tracker.discord_server_id = guild_id
                 
                 try:
