@@ -16,6 +16,7 @@ def get_kick_token_for_server(engine, discord_server_id):
         dict with 'access_token', 'refresh_token', etc., or None if not found
     """
     if not discord_server_id:
+        print(f"[Kick OAuth] No discord_server_id provided")
         return None
         
     try:
@@ -31,9 +32,11 @@ def get_kick_token_for_server(engine, discord_server_id):
             row = result.fetchone()
             
             if not row or not row[0]:
+                print(f"[Kick OAuth] No kick_channel found for server {discord_server_id}")
                 return None
             
             kick_channel = row[0].lower()
+            print(f"[Kick OAuth] Looking for token for kick_channel: {kick_channel}")
             
             # Now fetch the OAuth token for that Kick username
             result = conn.execute(
@@ -48,12 +51,15 @@ def get_kick_token_for_server(engine, discord_server_id):
             row = result.fetchone()
             
             if row:
+                print(f"[Kick OAuth] Found token for {row[3]}")
                 return {
                     'access_token': row[0],
                     'refresh_token': row[1],
                     'expires_at': row[2],
                     'kick_username': row[3]
                 }
+            
+            print(f"[Kick OAuth] No token found for username: {kick_channel}")
             return None
             
     except Exception as e:
