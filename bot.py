@@ -6095,26 +6095,23 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                 # Mark as successful after messages are sent
                 v2_success = True
 
-                # Store all three message IDs
-                try:
-                    with engine.begin() as conn:
-                        conn.execute(text("""
-                            INSERT INTO point_settings (key, value, updated_at)
-                            VALUES ('shop_message_id', :m, CURRENT_TIMESTAMP)
-                            ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
-                        """), {"m": str(message.id)})
-                        conn.execute(text("""
-                            INSERT INTO point_settings (key, value, updated_at)
-                            VALUES ('shop_interactive_id', :m, CURRENT_TIMESTAMP)
-                            ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
-                        """), {"m": str(interactive_msg.id)})
-                        conn.execute(text("""
-                            INSERT INTO point_settings (key, value, updated_at)
-                            VALUES ('shop_footer_id', :m, CURRENT_TIMESTAMP)
-                            ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
-                        """), {"m": str(footer_msg.id)})
-                except Exception as db_error:
-                    print(f"[Point Shop] Warning: Failed to save message IDs: {db_error}")
+                # Store all three message IDs - critical operation
+                with engine.begin() as conn:
+                    conn.execute(text("""
+                        INSERT INTO point_settings (key, value, updated_at)
+                        VALUES ('shop_message_id', :m, CURRENT_TIMESTAMP)
+                        ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
+                    """), {"m": str(message.id)})
+                    conn.execute(text("""
+                        INSERT INTO point_settings (key, value, updated_at)
+                        VALUES ('shop_interactive_id', :m, CURRENT_TIMESTAMP)
+                        ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
+                    """), {"m": str(interactive_msg.id)})
+                    conn.execute(text("""
+                        INSERT INTO point_settings (key, value, updated_at)
+                        VALUES ('shop_footer_id', :m, CURRENT_TIMESTAMP)
+                        ON CONFLICT (key) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
+                    """), {"m": str(footer_msg.id)})
 
                 print(f"[Point Shop] Posted Components V2 mosaic shop to channel {channel_id}")
                 return True
