@@ -307,18 +307,22 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
         refresh_token = token_data.get('refresh_token')
         kick_username = token_data.get('kick_username', 'unknown')
         
-        # Get broadcaster user ID from database
-        with engine.connect() as conn:
-            result = conn.execute(text("""
-                SELECT broadcaster_user_id FROM servers 
-                WHERE discord_server_id = :guild_id
-                LIMIT 1
-            """), {"guild_id": guild_id}).fetchone()
-            
-            broadcaster_user_id = result[0] if result and result[0] else None
+        # Get broadcaster user ID from bot_settings
+        broadcaster_user_id = None
+        if guild_id:
+            with engine.connect() as conn:
+                result = conn.execute(text("""
+                    SELECT value FROM bot_settings 
+                    WHERE key = 'kick_broadcaster_user_id' 
+                    AND discord_server_id = :guild_id
+                    LIMIT 1
+                """), {"guild_id": guild_id}).fetchone()
+                
+                if result and result[0]:
+                    broadcaster_user_id = result[0]
         
         if not broadcaster_user_id:
-            print(f"[{guild_name}] ⚠️ Broadcaster user ID not found for server")
+            print(f"[{guild_name}] ⚠️ Broadcaster user ID not configured - configure in Dashboard → Profile Settings")
             return False
         
         # Create Kick API client with token
