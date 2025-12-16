@@ -65,27 +65,62 @@ class RedisSubscriber:
             username = data.get('username', '')
             content = data.get('content', '')
             
-            print(f"[Redis] 💬 [{channel_slug}] {username}: {content}")
-            
             # Import bot utilities
-            from bot import send_kick_message, engine, parse_amount
+            from bot import send_kick_message, engine, parse_amount, active_viewers_by_guild, last_chat_activity_by_guild, recent_chatters_by_guild, bot
             from sqlalchemy import text
+            from datetime import datetime, timezone
             
-            # Lookup guild_id from channel_slug
-            guild_id = None
-            with engine.connect() as conn:
-                result = conn.execute(text("""
-                    SELECT discord_server_id FROM servers
-                    WHERE kick_channel = :channel_slug
-                    LIMIT 1
-                """), {"channel_slug": channel_slug}).fetchone()
+            # Use guild_id from webhook routing (already looked up in kick_webhooks.py)
+            guild_id = data.get('_server_id')
+            
+            # Get guild name for logging
+            guild_name = "Unknown"
+            if guild_id:
+                guild = bot.get_guild(guild_id)
+                guild_name = guild.name if guild else str(guild_id)
+            
+            if not guild_id:
+                # Fallback: Lookup guild_id from channel_slug (shouldn't happen with webhooks)
+                with engine.connect() as conn:
+                    result = conn.execute(text("""
+                        SELECT discord_server_id FROM servers
+                        WHERE kick_channel = :channel_slug
+                        LIMIT 1
+                    """), {"channel_slug": channel_slug}).fetchone()
+                    
+                    if result:
+                        guild_id = result[0]
+                        guild = bot.get_guild(guild_id)
+                        guild_name = guild.name if guild else str(guild_id)
+                        print(f"[{guild_name}] 🎯 Webhook: Matched via channel lookup")
+                    else:
+                        print(f"[Webhook] ⚠️ No server found for channel: {channel_slug}")
+                        return
+            
+            print(f"[{guild_name}] 💬 Webhook: {username}: {content}")
+            
+            # ✅ UPDATE ACTIVE VIEWERS FOR WATCHTIME TRACKING
+            if username:
+                now = datetime.now(timezone.utc)
+                username_lower = username.lower()
                 
-                if result:
-                    guild_id = result[0]
-                    print(f"[Redis] 🎯 Matched to guild: {guild_id}")
-                else:
-                    print(f"[Redis] ⚠️ No server found for channel: {channel_slug}")
-                    return
+                # Update last chat activity for this guild
+                last_chat_activity_by_guild[guild_id] = now
+                
+                # Track per-guild active viewers
+                guild_active_viewers = active_viewers_by_guild.get(guild_id, {})
+                is_new_viewer = username_lower not in guild_active_viewers
+                guild_active_viewers[username_lower] = now
+                active_viewers_by_guild[guild_id] = guild_active_viewers
+                
+                # Track per-guild recent chatters for stream-live detection
+                guild_recent_chatters = recent_chatters_by_guild.get(guild_id, {})
+                guild_recent_chatters[username_lower] = now
+                recent_chatters_by_guild[guild_id] = guild_recent_chatters
+                
+                print(f"[{guild_name}] ✅ Webhook: Updated active viewers: {username_lower} (total: {len(guild_active_viewers)})")
+                if is_new_viewer:
+                    print(f"[{guild_name}] 🆕 Webhook: New viewer tracked: {username_lower}")
             
             content_stripped = content.strip()
             username_lower = username.lower()
@@ -114,30 +149,37 @@ class RedisSubscriber:
             
             # Handle slot commands
             if hasattr(self.bot, 'slot_call_tracker') and self.bot.slot_call_tracker and (content_stripped.startswith("!call") or content_stripped.startswith("!sr")):
-                # Check blacklist
-                is_blacklisted = False
-                with engine.begin() as check_conn:
-                    result = check_conn.execute(text("""
-                        SELECT 1 FROM slot_call_blacklist 
-                        WHERE kick_username = :username AND discord_server_id = :guild_id
-                    """), {"username": username_lower, "guild_id": guild_id}).fetchone()
-                    is_blacklisted = result is not None
+                # Set guild context for slot tracker
+                original_guild_id = getattr(self.bot.slot_call_tracker, 'discord_server_id', None)
+                self.bot.slot_call_tracker.discord_server_id = guild_id
                 
-                if not is_blacklisted:
-                    slot_call = content_stripped[5:].strip()[:200] if content_stripped.startswith("!call") else content_stripped[3:].strip()[:200]
+                try:
+                    # Check if slot requests are enabled for this guild
+                    if not self.bot.slot_call_tracker.is_enabled():
+                        await send_kick_message(f"@{username} Slot requests are not open at the moment.", guild_id=guild_id)
+                        print(f"[Redis] ❌ Slot requests disabled - rejected {username}'s request")
+                        return
                     
-                    if slot_call:
-                        original_guild_id = getattr(self.bot.slot_call_tracker, 'discord_server_id', None)
-                        self.bot.slot_call_tracker.discord_server_id = guild_id
+                    # Check blacklist
+                    is_blacklisted = False
+                    with engine.begin() as check_conn:
+                        result = check_conn.execute(text("""
+                            SELECT 1 FROM slot_call_blacklist 
+                            WHERE kick_username = :username AND discord_server_id = :guild_id
+                        """), {"username": username_lower, "guild_id": guild_id}).fetchone()
+                        is_blacklisted = result is not None
+                    
+                    if not is_blacklisted:
+                        slot_call = content_stripped[5:].strip()[:200] if content_stripped.startswith("!call") else content_stripped[3:].strip()[:200]
                         
-                        try:
+                        if slot_call:
                             await self.bot.slot_call_tracker.handle_slot_call(username, slot_call)
                             print(f"[Redis] ✅ Slot call processed")
-                        finally:
-                            if original_guild_id:
-                                self.bot.slot_call_tracker.discord_server_id = original_guild_id
-                    else:
-                        await send_kick_message(f"@{username} Please specify a slot!", guild_id=guild_id)
+                        else:
+                            await send_kick_message(f"@{username} Please specify a slot!", guild_id=guild_id)
+finally:
+                    if original_guild_id:
+                        self.bot.slot_call_tracker.discord_server_id = original_guild_id
             
             # Handle !raffle
             elif content_stripped.lower() == "!raffle":
@@ -151,19 +193,32 @@ class RedisSubscriber:
             
             # Handle !gtb
             elif content_stripped.lower().startswith("!gtb"):
-                if hasattr(self.bot, 'gtb_manager'):
-                    parts = content_stripped.split(maxsplit=1)
-                    if len(parts) == 2:
-                        amount = parse_amount(parts[1])
-                        if amount is not None:
-                            success, message = self.bot.gtb_manager.add_guess(username, amount)
-                            response = f"@{username} {message}" + (" Good luck! 🎰" if success else "")
-                            await send_kick_message(response, guild_id=guild_id)
+                if hasattr(self.bot, 'gtb_manager') and hasattr(self.bot, 'slot_call_tracker'):
+                    # Check if slot requests are enabled (GTB is part of slot system)
+                    original_guild_id = getattr(self.bot.slot_call_tracker, 'discord_server_id', None)
+                    self.bot.slot_call_tracker.discord_server_id = guild_id
+                    
+                    try:
+                        if not self.bot.slot_call_tracker.is_enabled():
+                            await send_kick_message(f"@{username} Slot requests are not open at the moment.", guild_id=guild_id)
+                            print(f"[Redis] ❌ GTB disabled - rejected {username}'s guess")
+                            return
+                        
+                        parts = content_stripped.split(maxsplit=1)
+                        if len(parts) == 2:
+                            amount = parse_amount(parts[1])
+                            if amount is not None:
+                                success, message = self.bot.gtb_manager.add_guess(username, amount)
+                                response = f"@{username} {message}" + (" Good luck! 🎰" if success else "")
+                                await send_kick_message(response, guild_id=guild_id)
+                            else:
+                                await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount>", guild_id=guild_id)
                         else:
-                            await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount>", guild_id=guild_id)
-                    else:
-                        await send_kick_message(f"@{username} Usage: !gtb <amount>", guild_id=guild_id)
-                    print(f"[Redis] ✅ GTB command processed")
+                            await send_kick_message(f"@{username} Usage: !gtb <amount>", guild_id=guild_id)
+                        print(f"[Redis] ✅ GTB command processed")
+                    finally:
+                        if original_guild_id:
+                            self.bot.slot_call_tracker.discord_server_id = original_guild_id
             
         except Exception as e:
             print(f"[Redis] ❌ Webhook event error: {e}")

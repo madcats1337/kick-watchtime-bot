@@ -145,6 +145,10 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
             broadcaster = event_data.get("broadcaster", {})
             channel_slug = broadcaster.get("slug", "")
             
+            # Get server context added by webhook routing
+            server_id = event_data.get("_server_id")
+            broadcaster_user_id = event_data.get("_broadcaster_user_id")
+            
             print(f"[Webhook] 💬 [{channel_slug}] {username}: {content}")
             
             # Use Redis to forward the chat message to the bot process
@@ -171,7 +175,9 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
                         "content": content,
                         "message_id": message_id,
                         "sender": sender,
-                        "broadcaster": broadcaster
+                        "broadcaster": broadcaster,
+                        "_server_id": server_id,  # Include server routing info
+                        "_broadcaster_user_id": broadcaster_user_id
                     }
                 }
                 
@@ -190,12 +196,23 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
 
     @webhook_handler.set_default_handler
     async def default_webhook_handler(event_data):
-        """Default handler logs all events"""
+        """Default handler logs all events for debugging new webhook types"""
         import json
-        print(f"[Webhook] Received event data: {json.dumps(event_data, indent=2, default=str)}")
+        event_type = event_data.get('_event_type', 'unknown')
+        print(f"[Webhook] 📩 Unhandled event type: {event_type}")
+        print(f"[Webhook] Event data: {json.dumps(event_data, indent=2, default=str)[:500]}")
+        
+        # TODO: Add handlers for additional webhook events when Kick supports them:
+        # - channel.subscription (regular subscriptions)
+        # - channel.subscription.gift (gifted subscriptions)  
+        # - channel.follow (new followers)
+        # - stream.online / stream.offline (stream status)
+        # For now, only chat.message.sent is supported by Kick's Events API
 
     register_webhook_routes(app, webhook_handler)
     print("[OAuth] ✅ Kick webhook routes registered")
+    print("[OAuth] 📝 Currently handling: chat.message.sent")
+    print("[OAuth] 📝 Future events (when Kick adds support): subscriptions, follows, stream status")
 else:
     print("[OAuth] ℹ️ Kick webhook routes not available")
 

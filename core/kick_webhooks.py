@@ -193,7 +193,7 @@ def handle_kick_webhook():
     print(f"[Webhook] 🔔 INCOMING REQUEST to /webhooks/kick")
     print(f"[Webhook] Headers: {dict(request.headers)}")
     
-    event_type = request.headers.get("Kick-Event-Subscription-Type", "unknown")
+    event_type = request.headers.get("Kick-Event-Type", "unknown")
     message_id = request.headers.get("Kick-Event-Message-Id", "")
     subscription_id = request.headers.get("Kick-Event-Subscription-Id", "")
 

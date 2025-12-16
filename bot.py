@@ -274,6 +274,139 @@ async def get_kick_api():
         await _kick_api.setup()
     return _kick_api
 
+async def send_kick_message(message: str, guild_id: int = None) -> bool:
+    """
+    Send a message to Kick chat using OAuth token from database.
+    Automatically handles token refresh and multiserver routing.
+    
+    Args:
+        message: The message to send
+        guild_id: Discord server ID (for multiserver support)
+        
+    Returns:
+        True if message sent successfully, False otherwise
+    """
+    from core.kick_official_api import KickOfficialAPI
+    from utils.kick_oauth import get_kick_token_for_server
+    
+    try:
+        # Get guild name for logging
+        guild_name = "Unknown"
+        if guild_id:
+            guild = bot.get_guild(guild_id)
+            guild_name = guild.name if guild else str(guild_id)
+        
+        # Get OAuth token from database for this server
+        token_data = get_kick_token_for_server(engine, guild_id)
+        
+        if not token_data or not token_data.get('access_token'):
+            print(f"[{guild_name}] ⚠️ No OAuth token available for Kick messages")
+            return False
+        
+        access_token = token_data['access_token']
+        refresh_token = token_data.get('refresh_token')
+        kick_username = token_data.get('kick_username', 'unknown')
+        
+        # Get broadcaster user ID from database
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT broadcaster_user_id FROM servers 
+                WHERE discord_server_id = :guild_id
+                LIMIT 1
+            """), {"guild_id": guild_id}).fetchone()
+            
+            broadcaster_user_id = result[0] if result and result[0] else None
+        
+        if not broadcaster_user_id:
+            print(f"[{guild_name}] ⚠️ Broadcaster user ID not found for server")
+            return False
+        
+        # Create Kick API client with token
+        kick_api = KickOfficialAPI(
+            client_id=KICK_CLIENT_ID,
+            client_secret=KICK_CLIENT_SECRET,
+            access_token=access_token,
+            refresh_token=refresh_token
+        )
+        
+        print(f"[{guild_name}] 📤 Sending message to Kick...")
+        
+        try:
+            # Send the message
+            response = await kick_api.send_chat_message(
+                content=message,
+                broadcaster_user_id=broadcaster_user_id
+            )
+            
+            print(f"[{guild_name}] ✅ Message sent successfully")
+            return True
+            
+        except Exception as e:
+            error_msg = str(e)
+            
+            # Check if it's a 401 (unauthorized) error
+            if "401" in error_msg or "Unauthorized" in error_msg:
+                print(f"[{guild_name}] ⚠️ Token expired, attempting refresh...")
+                
+                # Try to refresh the token
+                try:
+                    new_tokens = await kick_api.refresh_tokens()
+                    
+                    # Update token in database
+                    with engine.begin() as conn:
+                        conn.execute(text("""
+                            UPDATE kick_oauth_tokens
+                            SET access_token = :access_token,
+                                refresh_token = :refresh_token,
+                                expires_at = :expires_at,
+                                updated_at = CURRENT_TIMESTAMP
+                            WHERE LOWER(kick_username) = :kick_username
+                        """), {
+                            "access_token": new_tokens.access_token,
+                            "refresh_token": new_tokens.refresh_token,
+                            "expires_at": new_tokens.created_at + timedelta(seconds=new_tokens.expires_in),
+                            "kick_username": kick_username.lower()
+                        })
+                    
+                    print(f"[{guild_name}] ✅ Token refreshed successfully (expires in {new_tokens.expires_in}s)")
+                    
+                    # Retry with new token
+                    response = await kick_api.send_chat_message(
+                        content=message,
+                        broadcaster_user_id=broadcaster_user_id
+                    )
+                    
+                    print(f"[{guild_name}] ✅ Message sent after token refresh")
+                    return True
+                    
+                except Exception as refresh_error:
+                    print(f"[{guild_name}] ❌ Token refresh failed: {refresh_error}")
+                    
+                    # Get dashboard URL from environment
+                    dashboard_url = os.getenv("DASHBOARD_URL", "https://lelebot.xyz")
+                    if not dashboard_url.startswith(('http://', 'https://')):
+                        dashboard_url = f"https://{dashboard_url}"
+                    
+                    print(f"[{guild_name}] 💡 OAuth token refresh failed. Owner of {kick_username} account must re-authorize:")
+                    print(f"[{guild_name}]    {dashboard_url}/settings/profile")
+                    print(f"[{guild_name}]    Click 'Sync Kick Channel' to reconnect")
+                    return False
+            else:
+                print(f"[{guild_name}] ❌ Failed to send message: {e}")
+                return False
+                
+    except Exception as e:
+        if guild_name:
+            print(f"[{guild_name}] ❌ Error in send_kick_message: {e}")
+        else:
+            print(f"❌ Error in send_kick_message: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+    finally:
+        if 'kick_api' in locals():
+            await kick_api.close()
+
 # -------------------------
 # -------------------------
 # Database setup and utilities
@@ -1109,9 +1242,9 @@ async def send_kick_message(message: str, retry_count: int = 0, guild_id: int = 
                 
                 if result and result[0]:
                     access_token = result[0]
-                    print(f"[Kick][Guild {guild_id}] ✅ Loaded OAuth token from database: {access_token[:20]}...")
+                    print(f"[{guild_name}] ✅ Pusher: Loaded OAuth token from database: {access_token[:20]}...")
         except Exception as e:
-            print(f"[Kick][Guild {guild_id}] ⚠️ Could not load token from database: {e}")
+            print(f"[{guild_name}] ⚠️ Pusher: Could not load token from database: {e}")
 
     # Fall back to environment variable
     if not access_token:
@@ -1197,8 +1330,12 @@ BROWSER_HEADERS = {
 }
 
 async def kick_chat_loop(channel_name: str, guild_id: int):
-    """Connect to Kick's Pusher WebSocket and listen for chat messages for a specific guild."""
+    """Connect to Kick's Pusher WebSocket for subscription events (webhooks handle chat)."""
     global kick_chatroom_id_global
+    
+    # Get guild name for logging
+    guild = bot.get_guild(guild_id)
+    guild_name = guild.name if guild else str(guild_id)
     
     # Initialize per-guild tracking dictionaries if they don't exist
     if guild_id not in active_viewers_by_guild:
@@ -1223,7 +1360,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
             # Check if channel has been updated in settings (allow hot-reload on reconnect)
             new_channel = guild_settings.kick_channel
             if new_channel and new_channel != current_channel:
-                print(f"[Kick][Guild {guild_id}] 🔄 Channel changed from '{current_channel}' to '{new_channel}'")
+                print(f"[{guild_name}] 🔄 Pusher: Channel changed from '{current_channel}' to '{new_channel}'")
                 current_channel = new_channel
 
             # Use current_channel instead of the original channel_name
@@ -1240,7 +1377,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
             if KICK_CHATROOM_ID or chatroom_id_from_settings:
                 chatroom_id = KICK_CHATROOM_ID or chatroom_id_from_settings
                 kick_chatroom_ids[guild_id] = chatroom_id  # Store per-guild
-                print(f"[Kick][Guild {guild_id} - {channel_to_use}] Using configured chatroom ID: {chatroom_id}")
+                print(f"[{guild_name}] Pusher: Using configured chatroom ID: {chatroom_id}")
 
                 # Still try to fetch channel_id for subscription events
                 try:
@@ -1375,12 +1512,12 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
             
             # Check if chatroom_id has changed (hot-reload support)
             if current_chatroom_id and chatroom_id != current_chatroom_id:
-                print(f"[Kick][Guild {guild_id}] 🔄 Chatroom ID changed from {current_chatroom_id} to {chatroom_id} for THIS GUILD ONLY - reconnecting...")
+                print(f"[{guild_name}] 🔄 Pusher: Chatroom ID changed from {current_chatroom_id} to {chatroom_id} - reconnecting...")
             
             # Store current chatroom_id for change detection
             current_chatroom_id = chatroom_id
 
-            print(f"[Kick][Guild {guild_id}] Connecting to chatroom {chatroom_id} for channel {channel_to_use}...")
+            print(f"[{guild_name}] Pusher: Connecting to chatroom {chatroom_id} for channel {channel_to_use}...")
 
             # Build WebSocket URL matching successful connection pattern
             ws_url = (
@@ -1456,7 +1593,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
 
                                 # Initialize last_chat_activity to assume stream is live when we connect
                 last_chat_activity_by_guild[guild_id] = datetime.now(timezone.utc)
-                print(f"[Kick][Guild {guild_id}] Initialized chat activity tracking")
+                print(f"[{guild_name}] Pusher: Initialized chat activity tracking")
 
                 # Listen for messages
                 last_settings_check = datetime.now(timezone.utc)
@@ -1506,35 +1643,27 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                 continue
 
                             # Handle chat message
+                            # NOTE: In dual mode, webhooks handle chat messages for watchtime/commands
+                            # Pusher only needed for subscription events (not available as webhooks)
+                            # We skip chat processing here to avoid duplicate handling
                             if event_type == "App\\Events\\ChatMessageEvent":
-                                now = datetime.now(timezone.utc)
-                                last_chat_activity_by_guild[guild_id] = now  # Update stream activity for this guild
-
+                                # Skip chat messages in dual mode - webhooks handle these
+                                # Only process for subscription-related chat events
                                 event_data = json.loads(data.get("data", "{}"))
-                                sender = event_data.get("sender", {})
-                                username = sender.get("username")
-
-                                if username:
-                                    username_lower = username.lower()
-                                    # Track per-guild active viewers
-                                    guild_active_viewers = active_viewers_by_guild.get(guild_id, {})
-                                    is_new_viewer = username_lower not in guild_active_viewers
-                                    guild_active_viewers[username_lower] = now
-                                    active_viewers_by_guild[guild_id] = guild_active_viewers
-                                    
-                                    # Track per-guild recent chatters for stream-live detection
-                                    guild_recent_chatters = recent_chatters_by_guild.get(guild_id, {})
-                                    guild_recent_chatters[username_lower] = now
-                                    recent_chatters_by_guild[guild_id] = guild_recent_chatters
-                                    
-                                    # Also update legacy global tracking (for backward compatibility)
-                                    active_viewers[username_lower] = now
-                                    recent_chatters[username_lower] = now
-                                    
-                                    content_text = event_data.get("content", "")
-                                    print(f"[Kick][Guild {guild_id}] {username}: {content_text}")
-                                    if watchtime_debug_enabled and is_new_viewer:
-                                        print(f"[Watchtime Debug][Guild {guild_id}] New viewer: {username_lower} (total: {len(guild_active_viewers)})")
+                                message_type = event_data.get("type")
+                                
+                                # Check if this is a subscription-related message (not regular chat)
+                                is_sub_message = (
+                                    message_type and (
+                                        "gift" in str(message_type).lower() or
+                                        "subscription" in str(message_type).lower() or
+                                        "sub" in str(message_type).lower()
+                                    )
+                                )
+                                
+                                if not is_sub_message:
+                                    # Regular chat message - skip (webhooks handle this)
+                                    continue
 
                                     # Check for custom commands first (they get priority)
                                     if hasattr(bot, 'custom_commands_manager') and bot.custom_commands_manager:
@@ -1823,29 +1952,29 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                 )
 
                                 if is_subscription:
-                                    print(f"[SUB DEBUG] Detected subscription! Type: {message_type}")
-                                    print(f"[SUB DEBUG] Event data: {json.dumps(event_data, indent=2)[:800]}")
+                                    print(f"[{guild_name}] 🎁 Pusher: Subscription detected! Type: {message_type}")
+                                    print(f"[{guild_name}] Event data: {json.dumps(event_data, indent=2)[:800]}")
                                 else:
-                                    print(f"[SUB DEBUG] NOT detected as subscription. message_type: {message_type}")
+                                    print(f"[{guild_name}] Pusher: NOT a subscription. message_type: {message_type}")
 
                                 if is_subscription and gifted_sub_tracker:
-                                    print(f"[SUB HANDLER] Processing subscription with gifted_sub_tracker")
+                                    print(f"[{guild_name}] 🎁 Processing subscription with raffle tracker")
                                     # Handle any subscription event (gifted or regular)
                                     result = await gifted_sub_tracker.handle_gifted_sub_event(event_data)
-                                    print(f"[SUB HANDLER] Result: {result}")
+                                    print(f"[{guild_name}] Raffle result: {result}")
 
                                     if result['status'] == 'success':
                                         sub_type = "gifted" if result.get('gift_count', 1) > 1 else "subscribed"
-                                        print(f"[Raffle] 🎁 {result['gifter']} {sub_type} → +{result['tickets_awarded']} tickets")
+                                        print(f"[{guild_name}] 🎁 {result['gifter']} {sub_type} → +{result['tickets_awarded']} tickets")
                                     elif result['status'] == 'not_linked':
-                                        print(f"[Raffle] 🎁 {result['kick_name']} subscribed but account not linked")
+                                        print(f"[{guild_name}] 🎁 {result['kick_name']} subscribed but account not linked")
                                     elif result['status'] == 'duplicate':
                                         # Already processed, silent skip
                                         pass
                                     else:
-                                        print(f"[Raffle] ⚠️ Failed to process gifted sub: {result}")
+                                        print(f"[{guild_name}] ⚠️ Failed to process gifted sub: {result}")
                                 elif is_subscription and not gifted_sub_tracker:
-                                    print(f"[SUB HANDLER] ⚠️ Subscription detected but gifted_sub_tracker is None!")
+                                    print(f"[{guild_name}] ⚠️ Subscription detected but raffle tracker is None!")
 
                         except json.JSONDecodeError:
                             pass
@@ -2005,66 +2134,52 @@ async def update_watchtime_task():
             return
 
         now = datetime.now(timezone.utc)
-
-        # 🔒 SECURITY: Multi-factor stream-live detection
-        # Require multiple unique chatters to prevent single-user farming
-        if not tracking_force_override:
-            if last_chat_activity is None:
-                print("[Security] No chat activity detected yet - skipping watchtime update")
-                return
-
-            # Check 1: Recent chat activity (within last 10 minutes)
-            time_since_last_chat = (now - last_chat_activity).total_seconds() / 60
-            if time_since_last_chat > CHAT_ACTIVITY_WINDOW_MINUTES:
-                print(f"[Security] No chat activity for {time_since_last_chat:.1f} minutes - stream likely offline")
-                return
-
-            # Check 2: Count unique chatters in the recent window
-            chat_cutoff = now - timedelta(minutes=CHAT_ACTIVITY_WINDOW_MINUTES)
-            active_chatters = {
-                username: timestamp
-                for username, timestamp in recent_chatters.items()
-                if timestamp >= chat_cutoff
-            }
-
-            unique_chatter_count = len(active_chatters)
-
-            if unique_chatter_count < MIN_UNIQUE_CHATTERS:
-                print(f"[Security] Only {unique_chatter_count} unique chatter(s) in last {CHAT_ACTIVITY_WINDOW_MINUTES} min (need {MIN_UNIQUE_CHATTERS})")
-                print("[Security] Stream might be offline or being farmed - skipping watchtime update")
-                print("[Security] Tip: Use '!tracking force on' to override if stream has low chat activity")
-                return
-
-            print(f"[Security] ✅ Stream appears live: {unique_chatter_count} unique chatters in last {CHAT_ACTIVITY_WINDOW_MINUTES} min")
-        else:
-            print("[Security] Force override enabled - skipping multi-factor live detection")
-
-        cutoff = now - timedelta(minutes=5)
-
-        # Get active viewers who were seen recently
-        active_users = {
-            user: last_seen
-            for user, last_seen in list(active_viewers.items())
-            if last_seen and last_seen >= cutoff
-        }
-
-        if watchtime_debug_enabled:
-            print(f"[Watchtime Debug] Total tracked viewers: {len(active_viewers)}, Active in last 5min: {len(active_users)}")
-
-        if not active_users:
-            if watchtime_debug_enabled:
-                print("[Watchtime Debug] No active users found to update (users must chat to be tracked)")
-            return  # No active users to update
-
-        if watchtime_debug_enabled:
-            print(f"[Watchtime Debug] Updating watchtime for {len(active_users)} active user(s): {list(active_users.keys())}")
-
-        # Calculate minutes to add
         minutes_to_add = WATCH_INTERVAL_SECONDS / 60
 
         # Multiserver: Process each guild independently
         for guild in bot.guilds:
             server_id = guild.id
+            
+            # 🔒 SECURITY: Per-guild multi-factor stream-live detection
+            if not tracking_force_override:
+                # Check last chat activity for THIS GUILD
+                guild_last_activity = last_chat_activity_by_guild.get(server_id)
+                if guild_last_activity is None:
+                    if watchtime_debug_enabled:
+                        print(f"[Security][Guild {guild.name}] No chat activity detected yet - skipping")
+                    continue
+
+                # Check 1: Recent chat activity (within last 10 minutes)
+                time_since_last_chat = (now - guild_last_activity).total_seconds() / 60
+                if time_since_last_chat > CHAT_ACTIVITY_WINDOW_MINUTES:
+                    if watchtime_debug_enabled:
+                        print(f"[Security][Guild {guild.name}] No chat activity for {time_since_last_chat:.1f} minutes - stream likely offline")
+                    continue
+
+                # Check 2: Count unique chatters in the recent window FOR THIS GUILD
+                chat_cutoff = now - timedelta(minutes=CHAT_ACTIVITY_WINDOW_MINUTES)
+                guild_recent_chatters = recent_chatters_by_guild.get(server_id, {})
+                active_chatters = {
+                    username: timestamp
+                    for username, timestamp in guild_recent_chatters.items()
+                    if timestamp >= chat_cutoff
+                }
+
+                unique_chatter_count = len(active_chatters)
+
+                if unique_chatter_count < MIN_UNIQUE_CHATTERS:
+                    if watchtime_debug_enabled:
+                        print(f"[Security][Guild {guild.name}] Only {unique_chatter_count} unique chatter(s) in last {CHAT_ACTIVITY_WINDOW_MINUTES} min (need {MIN_UNIQUE_CHATTERS})")
+                        print(f"[Security][Guild {guild.name}] Stream might be offline or being farmed - skipping watchtime update")
+                        print(f"[Security][Guild {guild.name}] Tip: Use '!tracking force on' to override if stream has low chat activity")
+                    continue
+
+                if watchtime_debug_enabled:
+                    print(f"[Security][Guild {guild.name}] ✅ Stream appears live: {unique_chatter_count} unique chatters in last {CHAT_ACTIVITY_WINDOW_MINUTES} min")
+            else:
+                if watchtime_debug_enabled:
+                    print(f"[Security][Guild {guild.name}] Force override enabled - skipping multi-factor live detection")
+
             # Get active viewers for this guild
             guild_active_viewers = active_viewers_by_guild.get(server_id, {})
             
@@ -4659,19 +4774,33 @@ async def on_ready():
         print(f"⚠️ Error during startup: {e}")
 
     # Start Kick chat listeners for all guilds with configured Kick channels
-    for guild in bot.guilds:
-        try:
-            guild_settings = get_guild_settings(guild.id)
-            kick_channel = guild_settings.kick_channel
-            
-            if kick_channel and kick_channel.strip():
-                bot.loop.create_task(kick_chat_loop(kick_channel, guild.id))
-                print(f"✅ Kick chat listener started for guild {guild.name} ({guild.id}) → {kick_channel}")
-            else:
-                print(f"⚠️ No Kick channel configured for guild {guild.name} ({guild.id})")
-                print(f"   Configure it in Dashboard → Profile Settings")
-        except Exception as e:
-            print(f"⚠️ Failed to start Kick listener for guild {guild.id}: {e}")
+    # DUAL MODE: Webhooks for chat + Pusher for subscription events
+    # Webhooks handle: chat messages, commands, watchtime
+    # Pusher handles: gifted subs, subscriptions (not available as webhooks yet)
+    use_dual_mode = os.getenv('USE_DUAL_MODE', 'true').lower() == 'true'
+    
+    if use_dual_mode:
+        print(f"✅ Running in DUAL MODE: Webhooks + Pusher")
+        print(f"   • Webhooks: chat.message.sent (registered via OAuth)")
+        print(f"   • Pusher: subscription events (no webhook support yet)")
+        
+        for guild in bot.guilds:
+            try:
+                guild_settings = get_guild_settings(guild.id)
+                kick_channel = guild_settings.kick_channel
+                
+                if kick_channel and kick_channel.strip():
+                    bot.loop.create_task(kick_chat_loop(kick_channel, guild.id))
+                    print(f"✅ [{guild.name}] Pusher listener started for subscription events → {kick_channel}")
+                else:
+                    print(f"⚠️ [{guild.name}] No Kick channel configured")
+                    print(f"   Configure it in Dashboard → Profile Settings")
+            except Exception as e:
+                print(f"⚠️ [{guild.name}] Failed to start Pusher listener: {e}")
+    else:
+        print(f"✅ Using webhooks only (Pusher disabled)")
+        print(f"   ⚠️ WARNING: Gifted sub raffle tracking will not work!")
+        print(f"   Set USE_DUAL_MODE=true to enable Pusher for subscription events")
 
 async def handle_timer_panel_reaction(payload):
     """Handle reactions on timer panel messages."""
