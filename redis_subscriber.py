@@ -42,11 +42,20 @@ class RedisSubscriber:
         else:
             print("⚠️  REDIS_URL not set, dashboard events will not be received")
 
-    async def announce_in_chat(self, message):
-        """Send a message to Kick chat using the callback function"""
+    async def announce_in_chat(self, message, guild_id=None):
+        """Send a message to Kick chat using the callback function
+        
+        Args:
+            message: Message to send
+            guild_id: Discord server ID (if None, uses first available guild)
+        """
         if self.send_message_callback:
             try:
-                await self.send_message_callback(message)
+                # If no guild_id provided, try to get from bot's first guild
+                if guild_id is None and hasattr(self.bot, 'guilds') and self.bot.guilds:
+                    guild_id = self.bot.guilds[0].id
+                
+                await self.send_message_callback(message, guild_id=guild_id)
                 print(f"💬 Sent to Kick chat: {message}")
             except Exception as e:
                 print(f"⚠️ Failed to send Kick message: {e}")
@@ -228,14 +237,17 @@ class RedisSubscriber:
     async def handle_slot_requests_event(self, action, data):
         """Handle slot request events from dashboard"""
         print(f"📥 Slot Requests Event: {action}")
+        
+        # Extract discord_server_id from event data
+        guild_id = data.get('discord_server_id')
 
         if action == 'toggle':
             enabled = data.get('enabled')
             # Announce in Kick chat
             if enabled:
-                await self.announce_in_chat("✅ Slot requests are now ENABLED! Use !call <slot_name> or !sr <slot_name>")
+                await self.announce_in_chat("✅ Slot requests are now ENABLED! Use !call <slot_name> or !sr <slot_name>", guild_id=guild_id)
             else:
-                await self.announce_in_chat("❌ Slot requests have been DISABLED")
+                await self.announce_in_chat("❌ Slot requests have been DISABLED", guild_id=guild_id)
 
             # Post update to Discord slot calls channel if available
             if hasattr(self.bot, 'slot_calls_channel_id') and self.bot.slot_calls_channel_id:
@@ -271,8 +283,9 @@ class RedisSubscriber:
             slot_id = data.get('id')
             slot_call = data.get('slot_call')
             username = data.get('username')
+            guild_id = data.get('discord_server_id')
             # Announce the picked slot in Kick chat
-            await self.announce_in_chat(f"🎰 PICKED: {slot_call} (requested by {username})")
+            await self.announce_in_chat(f"🎰 PICKED: {slot_call} (requested by {username})", guild_id=guild_id)
 
             # Post to Discord
             if hasattr(self.bot, 'slot_calls_channel_id') and self.bot.slot_calls_channel_id:
@@ -305,13 +318,14 @@ class RedisSubscriber:
             username = data.get('username')
             reward_type = data.get('reward_type')
             reward_amount = data.get('reward_amount')
+            guild_id = data.get('discord_server_id')
 
             # Format reward type for display
             reward_type_display = 'Bonus Buy' if reward_type == 'bonus_buy' else reward_type.capitalize()
 
             # Announce the picked slot WITH reward in Kick chat
             amount = float(reward_amount)
-            await self.announce_in_chat(f"🎰 PICKED: {slot_call} (requested by {username}) 💰 WON ${amount:.2f} {reward_type_display}!")
+            await self.announce_in_chat(f"🎰 PICKED: {slot_call} (requested by {username}) 💰 WON ${amount:.2f} {reward_type_display}!", guild_id=guild_id)
 
             # Post to Discord
             if hasattr(self.bot, 'slot_calls_channel_id') and self.bot.slot_calls_channel_id:
@@ -393,12 +407,15 @@ class RedisSubscriber:
     async def handle_gtb_event(self, action, data):
         """Handle Guess the Balance events from dashboard"""
         print(f"📥 GTB Event: {action}")
+        
+        # Extract discord_server_id from event data
+        guild_id = data.get('discord_server_id')
 
         if action == 'open':
             session_id = data.get('session_id')
             opened_by = data.get('opened_by')
             # Announce in Kick chat
-            await self.announce_in_chat(f"💰 Guess the Balance session #{session_id} is now OPEN! Use !gtb <amount> to guess!")
+            await self.announce_in_chat(f"💰 Guess the Balance session #{session_id} is now OPEN! Use !gtb <amount> to guess!", guild_id=guild_id)
 
             # Post to Discord GTB channel if available
             if hasattr(self.bot, 'gtb_channel_id') and self.bot.gtb_channel_id:
@@ -423,7 +440,7 @@ class RedisSubscriber:
         elif action == 'close':
             session_id = data.get('session_id')
             # Announce in Kick chat
-            await self.announce_in_chat(f"🔒 Guess the Balance session #{session_id} is now CLOSED! No more guesses allowed.")
+            await self.announce_in_chat(f"🔒 Guess the Balance session #{session_id} is now CLOSED! No more guesses allowed.", guild_id=guild_id)
 
             # Post to Discord
             if hasattr(self.bot, 'gtb_channel_id') and self.bot.gtb_channel_id:
@@ -451,7 +468,7 @@ class RedisSubscriber:
             winners = data.get('winners', [])  # Get winners from dashboard
 
             # Announce result in Kick chat
-            await self.announce_in_chat(f"🎉 GTB Result: ${result_amount:,.2f}! Calculating winners...")
+            await self.announce_in_chat(f"🎉 GTB Result: ${result_amount:,.2f}! Calculating winners...", guild_id=guild_id)
 
             # If winners were provided by dashboard, use them
             if winners and len(winners) > 0:
@@ -469,7 +486,7 @@ class RedisSubscriber:
                 # Announce all winners in one message
                 winner_text = f"🏆 Winners: " + " | ".join(winner_messages)
                 print(f"📢 Announcing winners in Kick chat: {winner_text}")
-                await self.announce_in_chat(winner_text)
+                await self.announce_in_chat(winner_text, guild_id=guild_id)
                 print(f"✅ Announced {len(winners)} GTB winners in Kick chat")
             else:
                 # Fallback: Calculate winners using GTB manager if available
@@ -494,7 +511,7 @@ class RedisSubscriber:
                             # Announce all winners in one message
                             winner_text = f"🏆 Winners: " + " | ".join(winner_messages)
                             print(f"📢 Announcing winners in Kick chat: {winner_text}")
-                            await self.announce_in_chat(winner_text)
+                            await self.announce_in_chat(winner_text, guild_id=guild_id)
                             print(f"✅ Announced {len(calculated_winners)} GTB winners in Kick chat")
                         else:
                             print(f"⚠️ GTB result set but no winners - success: {success}, message: {message}, winner count: {len(calculated_winners) if calculated_winners else 0}")
