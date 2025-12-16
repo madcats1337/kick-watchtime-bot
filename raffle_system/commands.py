@@ -29,7 +29,7 @@ class RaffleCommands(commands.Cog):
         guild_id = ctx.guild.id if ctx.guild else None
         return {
             'ticket_manager': TicketManager(self.engine, server_id=guild_id),
-            'raffle_draw': RaffleDraw(self.engine, server_id=guild_id),
+            'raffle_draw': RaffleDraw(self.engine),  # RaffleDraw doesn't need server_id, uses period_id
             'shuffle_tracker': ShuffleWagerTracker(self.engine, server_id=guild_id)
         }
 
