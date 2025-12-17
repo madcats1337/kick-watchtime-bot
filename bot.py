@@ -1108,48 +1108,6 @@ def get_guild_settings(guild_id: int) -> BotSettingsManager:
 # All features must use get_guild_settings(guild.id) to access per-guild configuration
 print("✅ Multiserver bot ready - configure each guild in Dashboard → Profile Settings")
 
-# -------------------------
-# Bot lifecycle: start Kick chat listeners
-# -------------------------
-
-@bot.event
-async def on_ready():
-    try:
-        print(f"🤝 Logged in to Discord as {bot.user}")
-        print("🔌 Starting Pusher WebSocket for direct chat message reading (no webhooks)...")
-        
-        # Start Pusher WebSocket loop for each guild to read messages directly
-        for guild in bot.guilds:
-            # Get kick channel from settings
-            kick_channel = None
-            try:
-                with engine.connect() as conn:
-                    row = conn.execute(text("""
-                        SELECT value FROM bot_settings
-                        WHERE key = 'kick_channel' AND discord_server_id = :gid
-                        LIMIT 1
-                    """), {"gid": guild.id}).fetchone()
-                    if row and row[0]:
-                        kick_channel = row[0]
-            except Exception as e:
-                print(f"[{guild.name}] ⚠️ Error loading kick_channel: {e}")
-            
-            if kick_channel:
-                # Start WebSocket loop for this guild
-                asyncio.create_task(kick_chat_loop(kick_channel, guild.id))
-                print(f"[{guild.name}] ✅ Started Pusher WebSocket for channel: {kick_channel}")
-            else:
-                print(f"[{guild.name}] ⚠️ No kick_channel configured - skipping WebSocket")
-        
-        # Also ensure chatroom_id is cached (used by send_kick_message if needed)
-        for guild in bot.guilds:
-            asyncio.create_task(ensure_chatroom_id(guild.id, guild.name))
-            
-    except Exception as e:
-        print(f"❌ on_ready initialization error: {e}")
-        import traceback
-        traceback.print_exc()
-
 
 async def ensure_chatroom_id(guild_id: int, guild_name: str) -> None:
     """Ensure chatroom_id exists in DB for this guild; resolve via kickpython-backed core API if missing."""
@@ -1211,6 +1169,48 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # Store settings manager on bot for access throughout
 bot.settings_manager = bot_settings
+
+# -------------------------
+# Bot lifecycle: start Kick chat listeners
+# -------------------------
+
+@bot.event
+async def on_ready():
+    try:
+        print(f"🤝 Logged in to Discord as {bot.user}")
+        print("🔌 Starting Pusher WebSocket for direct chat message reading (no webhooks)...")
+        
+        # Start Pusher WebSocket loop for each guild to read messages directly
+        for guild in bot.guilds:
+            # Get kick channel from settings
+            kick_channel = None
+            try:
+                with engine.connect() as conn:
+                    row = conn.execute(text("""
+                        SELECT value FROM bot_settings
+                        WHERE key = 'kick_channel' AND discord_server_id = :gid
+                        LIMIT 1
+                    """), {"gid": guild.id}).fetchone()
+                    if row and row[0]:
+                        kick_channel = row[0]
+            except Exception as e:
+                print(f"[{guild.name}] ⚠️ Error loading kick_channel: {e}")
+            
+            if kick_channel:
+                # Start WebSocket loop for this guild
+                asyncio.create_task(kick_chat_loop(kick_channel, guild.id))
+                print(f"[{guild.name}] ✅ Started Pusher WebSocket for channel: {kick_channel}")
+            else:
+                print(f"[{guild.name}] ⚠️ No kick_channel configured - skipping WebSocket")
+        
+        # Also ensure chatroom_id is cached (used by send_kick_message if needed)
+        for guild in bot.guilds:
+            asyncio.create_task(ensure_chatroom_id(guild.id, guild.name))
+            
+    except Exception as e:
+        print(f"❌ on_ready initialization error: {e}")
+        import traceback
+        traceback.print_exc()
 
 # Multiserver tracking - per-guild dictionaries
 # active_viewers_by_guild[guild_id][username] = last_seen_time
