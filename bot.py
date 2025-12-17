@@ -277,7 +277,7 @@ async def get_kick_api():
 async def send_kick_message(message: str, guild_id: int = None) -> bool:
     """
     Send a message to Kick chat using OAuth token from database.
-    Uses official kickpython library for reliable message sending.
+    Uses direct API call with user type for multiserver support.
     
     Args:
         message: The message to send
@@ -286,7 +286,7 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
     Returns:
         True if message sent successfully, False otherwise
     """
-    from kickpython import KickAPI
+    import aiohttp
     from utils.kick_oauth import get_kick_token_for_server
     
     try:
@@ -304,8 +304,6 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
             return False
         
         access_token = token_data['access_token']
-        refresh_token = token_data.get('refresh_token')
-        kick_username = token_data.get('kick_username', 'unknown')
         
         # Get channel ID (broadcaster user ID) from bot_settings
         channel_id = None
@@ -325,31 +323,32 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
             print(f"[{guild_name}] ⚠️ Channel ID not configured - configure in Dashboard → Profile Settings")
             return False
         
-        # Create KickAPI client with existing tokens
-        kick_api = KickAPI(
-            client_id=KICK_CLIENT_ID,
-            client_secret=KICK_CLIENT_SECRET,
-            redirect_uri=f"{OAUTH_BASE_URL}/oauth/kick/callback"
-        )
-        
-        # Manually set the tokens (bypassing OAuth flow since we already have them)
-        kick_api.access_token = access_token
-        kick_api.refresh_token = refresh_token
-        kick_api.is_authenticated = True
+        # Send message using official Kick API
+        url = "https://api.kick.com/public/v1/chat"
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
+        payload = {
+            "content": message,
+            "type": "user",
+            "broadcaster_user_id": int(channel_id)
+        }
         
         print(f"[{guild_name}] 📤 Sending message to Kick channel {channel_id}...")
         
-        # Use official kickpython library to send message
-        await kick_api.post_chat(
-            channel_id=channel_id,
-            content=message
-        )
-        
-        print(f"[{guild_name}] ✅ Message sent successfully to Kick")
-        return True
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, headers=headers) as response:
+                if response.status == 200:
+                    print(f"[{guild_name}] ✅ Message sent successfully to Kick")
+                    return True
+                else:
+                    response_text = await response.text()
+                    print(f"[{guild_name}] ❌ Failed to send message: {response.status} - {response_text}")
+                    return False
         
     except Exception as e:
-        error_msg = str(e)
         print(f"[{guild_name}] ❌ Failed to send message: {e}")
         return False
 
