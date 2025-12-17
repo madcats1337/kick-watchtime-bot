@@ -5441,8 +5441,8 @@ class PointShopConfirmView(discord.ui.View):
                 item = conn.execute(text("""
                     SELECT id, name, price, stock, is_active
                     FROM point_shop_items
-                    WHERE id = :id
-                """), {"id": self.item_id}).fetchone()
+                    WHERE id = :id AND discord_server_id = :guild_id
+                """), {"id": self.item_id, "guild_id": self.guild_id}).fetchone()
 
                 if not item:
                     await interaction.response.edit_message(content="❌ This item no longer exists.", view=None)
@@ -5487,8 +5487,8 @@ class PointShopConfirmView(discord.ui.View):
                         UPDATE point_shop_items
                         SET stock = stock - 1,
                             updated_at = CURRENT_TIMESTAMP
-                        WHERE id = :id
-                    """), {"id": item_id})
+                        WHERE id = :id AND discord_server_id = :guild_id
+                    """), {"id": item_id, "guild_id": self.guild_id})
 
                 # Record the sale with note and requirement input
                 conn.execute(text("""
