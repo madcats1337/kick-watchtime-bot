@@ -848,12 +848,16 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
             return False
         
         if not access_token:
-            print(f"[{guild_name}] ⚠️ No OAuth token available - set KICK_BOT_USER_TOKEN or link Kick account in dashboard")
+            print(f"[{guild_name}] ⚠️ No OAuth token available - set KICK_CLIENT_ID/SECRET or link Kick account in dashboard")
             return False
         
         # Send via Official API
         from core.kick_official_api import KickOfficialAPI
-        api = KickOfficialAPI(access_token=access_token)
+        
+        # Initialize API with ONLY access_token (no client credentials)
+        # Client Credentials tokens don't have refresh tokens - they're application tokens
+        api = KickOfficialAPI()
+        api.access_token = access_token
         
         await api.send_chat_message(
             content=message,
