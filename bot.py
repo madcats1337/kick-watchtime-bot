@@ -420,30 +420,30 @@ class KickWebSocketManager:
             if not await self.ensure_connection(guild_id, guild_name):
                 return False
             
-            # Get channel ID for the API call
-            channel_id = None
+            # Get chatroom ID (NOT broadcaster_user_id) for the API call
+            chatroom_id = None
             with engine.connect() as conn:
                 result = conn.execute(text("""
                     SELECT value FROM bot_settings 
-                    WHERE key = 'kick_broadcaster_user_id' 
+                    WHERE key = 'kick_chatroom_id' 
                     AND discord_server_id = :guild_id
                     LIMIT 1
                 """), {"guild_id": guild_id}).fetchone()
                 
                 if result and result[0]:
                     try:
-                        channel_id = int(result[0])
+                        chatroom_id = int(result[0])
                     except (ValueError, TypeError):
-                        print(f"[{guild_name}] ⚠️ Invalid channel_id format")
+                        print(f"[{guild_name}] ⚠️ Invalid chatroom_id format")
                         return False
             
-            if not channel_id:
-                print(f"[{guild_name}] ⚠️ Channel ID not configured")
+            if not chatroom_id:
+                print(f"[{guild_name}] ⚠️ Chatroom ID not configured")
                 return False
             
             # Add to queue
-            await self.message_queues[guild_id].put((message, channel_id))
-            print(f"[{guild_name}] 📤 Queued message for websocket")
+            await self.message_queues[guild_id].put((message, chatroom_id))
+            print(f"[{guild_name}] 📤 Queued message for websocket (chatroom: {chatroom_id})")
             return True
             
         except Exception as e:
