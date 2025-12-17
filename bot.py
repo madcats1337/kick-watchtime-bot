@@ -434,7 +434,7 @@ class KickWebSocketManager:
                 # PRIORITY 2: Per-guild bot token from bot_settings table
                 # PRIORITY 3: Client Credentials (app-level, may not have chat:write scope)
                 # PRIORITY 4: Fall back to streamer's OAuth token (per-guild)
-                if not api.access_token:
+                if not hasattr(api, 'access_token') or not api.access_token:
                     try:
                         bot_kick_token = None
                         
