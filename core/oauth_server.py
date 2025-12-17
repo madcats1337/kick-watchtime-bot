@@ -1065,8 +1065,13 @@ def auth_kick_callback():
 
 def handle_bot_authorization_callback(code, code_verifier, state):
     """Handle bot authorization callback."""
+    print(f"🤖 [BOT AUTH] Starting bot authorization callback handler", flush=True)
+    print(f"🤖 [BOT AUTH] Code: {sanitize_for_logs(code, 'code')}", flush=True)
+    print(f"🤖 [BOT AUTH] State: {sanitize_for_logs(state, 'state')}", flush=True)
+    
     try:
         # Ensure bot_tokens table exists with expires_at column
+        print(f"🤖 [BOT AUTH] Creating bot_tokens table if not exists...", flush=True)
         with engine.begin() as conn:
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS bot_tokens (
@@ -1077,38 +1082,45 @@ def handle_bot_authorization_callback(code, code_verifier, state):
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """))
+        print(f"🤖 [BOT AUTH] Table created/verified", flush=True)
 
         # Exchange code for access token
-        print(f"🔄 Exchanging code for bot token...", flush=True)
+        print(f"🤖 [BOT AUTH] Exchanging code for token...", flush=True)
         token_data = exchange_code_for_token(code, code_verifier=code_verifier)
+        print(f"🤖 [BOT AUTH] Token exchange complete. Keys: {list(token_data.keys())}", flush=True)
+        
         access_token = token_data.get('access_token')
         expires_in = token_data.get('expires_in', 3600)  # Default to 1 hour if not provided
 
         if not access_token:
-            print(f"❌ No access token in response: {list(token_data.keys())}", flush=True)
+            print(f"❌ [BOT AUTH] No access token in response: {list(token_data.keys())}", flush=True)
             return render_error("Failed to obtain access token from Kick")
 
-        print(f"✅ Got bot access token (expires in {expires_in} seconds)", flush=True)
+        print(f"✅ [BOT AUTH] Got bot access token (expires in {expires_in} seconds)", flush=True)
+        print(f"✅ [BOT AUTH] Token preview: {sanitize_for_logs(access_token, 'token')}", flush=True)
 
         # Get bot user info
         try:
             kick_user = get_kick_user_info(access_token)
-            kick_username = kick_user.get('username', 'Unknown')
+            kick_username = kick_user.get('username', 'lelebot')
             print(f"🤖 Bot username: {kick_username}", flush=True)
         except Exception as e:
-            print(f"⚠️ Could not get bot user info: {e}", flush=True)
-            kick_username = "Unknown"
+            print(f"⚠️ Could not get bot user info: {e}, using default: lelebot", flush=True)
+            kick_username = "lelebot"
 
         # Store token in database with expiration time
-        # Calculate expiration time in Python (works with both SQLite and PostgreSQL)
-        from datetime import datetime, timedelta, timezone
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+        
+        print(f"🤖 [BOT AUTH] Storing token in database...", flush=True)
+        print(f"🤖 [BOT AUTH] Username: {kick_username}", flush=True)
+        print(f"🤖 [BOT AUTH] Expires at: {expires_at}", flush=True)
 
         with engine.begin() as conn:
+            print(f"🤖 [BOT AUTH] Deleting old token for {kick_username}...", flush=True)
             conn.execute(text("""
                 DELETE FROM bot_tokens WHERE bot_username = :username
             """), {"username": kick_username})
 
+            print(f"🤖 [BOT AUTH] Inserting new token...", flush=True)
             conn.execute(text("""
                 INSERT INTO bot_tokens (bot_username, access_token, refresh_token, expires_at, created_at)
                 VALUES (:username, :access_token, :refresh_token, :expires_at, CURRENT_TIMESTAMP)
@@ -1120,6 +1132,10 @@ def handle_bot_authorization_callback(code, code_verifier, state):
             })
 
             # Clean up state
+            print(f"🤖 [BOT AUTH] Cleaning up state...", flush=True)
+            conn.execute(text("DELETE FROM oauth_states WHERE state = :state"), {"state": state})
+
+            print(f"✅ [BOT AUTH] Bot token stored successfully in database!
             conn.execute(text("DELETE FROM oauth_states WHERE state = :state"), {"state": state})
 
             print(f"✅ Bot token stored securely", flush=True)
