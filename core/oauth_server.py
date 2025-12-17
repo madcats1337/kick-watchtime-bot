@@ -1108,6 +1108,10 @@ def handle_bot_authorization_callback(code, code_verifier, state):
             print(f"⚠️ Could not get bot user info: {e}, using default: lelebot", flush=True)
             kick_username = "lelebot"
 
+        # Calculate expiration time
+        from datetime import datetime, timedelta
+        expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+
         # Store token in database with expiration time
         
         print(f"🤖 [BOT AUTH] Storing token in database...", flush=True)
