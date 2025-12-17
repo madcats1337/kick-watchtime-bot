@@ -276,9 +276,8 @@ async def get_kick_api():
 
 async def send_kick_message(message: str, guild_id: int = None) -> bool:
     """
-    Send a message to Kick chat using OAuth token from database.
-    Uses direct API call with user type for multiserver support.
-    Automatically refreshes expired tokens.
+    Send a message to Kick chat as the bot account.
+    Uses bot token (client credentials) to send messages as LELEBOT.
     
     Args:
         message: The message to send
@@ -288,7 +287,6 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
         True if message sent successfully, False otherwise
     """
     import aiohttp
-    from utils.kick_oauth import get_kick_token_for_server
     
     try:
         # Get guild name for logging
@@ -297,16 +295,11 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
             guild = bot.get_guild(guild_id)
             guild_name = guild.name if guild else str(guild_id)
         
-        # Get OAuth token from database for this server
-        token_data = get_kick_token_for_server(engine, guild_id)
-        
-        if not token_data or not token_data.get('access_token'):
-            print(f"[{guild_name}] ⚠️ No OAuth token available for Kick messages")
+        # Get bot token using client credentials
+        bot_token = await get_kick_bot_token()
+        if not bot_token:
+            print(f"[{guild_name}] ⚠️ Failed to get bot token")
             return False
-        
-        access_token = token_data['access_token']
-        refresh_token = token_data.get('refresh_token')
-        kick_username = token_data.get('kick_username')
         
         # Get channel ID (broadcaster user ID) from bot_settings
         channel_id = None
@@ -326,78 +319,26 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
             print(f"[{guild_name}] ⚠️ Channel ID not configured - configure in Dashboard → Profile Settings")
             return False
         
-        # Send message using official Kick API
+        # Send message using bot token
         url = "https://api.kick.com/public/v1/chat"
         headers = {
-            "Authorization": f"Bearer {access_token}",
+            "Authorization": f"Bearer {bot_token}",
             "Content-Type": "application/json",
             "Accept": "application/json"
         }
         payload = {
             "content": message,
-            "type": "user",
+            "type": "bot",
             "broadcaster_user_id": int(channel_id)
         }
         
-        print(f"[{guild_name}] 📤 Sending message to Kick channel {channel_id}...")
+        print(f"[{guild_name}] 📤 Sending message as bot to Kick channel {channel_id}...")
         
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, headers=headers) as response:
                 if response.status == 200:
-                    print(f"[{guild_name}] ✅ Message sent successfully to Kick")
+                    print(f"[{guild_name}] ✅ Message sent successfully to Kick as bot")
                     return True
-                elif response.status == 401 and refresh_token:
-                    # Token expired, try to refresh
-                    print(f"[{guild_name}] ⚠️ Token expired, attempting refresh...")
-                    
-                    # Refresh the token
-                    token_url = "https://id.kick.com/oauth/token"
-                    token_data = {
-                        "grant_type": "refresh_token",
-                        "client_id": KICK_CLIENT_ID,
-                        "client_secret": KICK_CLIENT_SECRET,
-                        "refresh_token": refresh_token
-                    }
-                    
-                    async with session.post(token_url, data=token_data) as token_response:
-                        if token_response.status == 200:
-                            new_tokens = await token_response.json()
-                            new_access_token = new_tokens['access_token']
-                            new_refresh_token = new_tokens.get('refresh_token', refresh_token)
-                            expires_in = new_tokens.get('expires_in', 3600)
-                            
-                            # Update token in database
-                            from datetime import datetime, timedelta
-                            with engine.begin() as conn:
-                                conn.execute(text("""
-                                    UPDATE kick_oauth_tokens
-                                    SET access_token = :access_token,
-                                        refresh_token = :refresh_token,
-                                        expires_at = :expires_at,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE LOWER(kick_username) = :kick_username
-                                """), {
-                                    "access_token": new_access_token,
-                                    "refresh_token": new_refresh_token,
-                                    "expires_at": datetime.utcnow() + timedelta(seconds=expires_in),
-                                    "kick_username": kick_username.lower()
-                                })
-                            
-                            print(f"[{guild_name}] ✅ Token refreshed, retrying message...")
-                            
-                            # Retry with new token
-                            headers["Authorization"] = f"Bearer {new_access_token}"
-                            async with session.post(url, json=payload, headers=headers) as retry_response:
-                                if retry_response.status == 200:
-                                    print(f"[{guild_name}] ✅ Message sent successfully after token refresh")
-                                    return True
-                                else:
-                                    retry_text = await retry_response.text()
-                                    print(f"[{guild_name}] ❌ Failed after refresh: {retry_response.status} - {retry_text}")
-                                    return False
-                        else:
-                            print(f"[{guild_name}] ❌ Token refresh failed: {token_response.status}")
-                            return False
                 else:
                     response_text = await response.text()
                     print(f"[{guild_name}] ❌ Failed to send message: {response.status} - {response_text}")
