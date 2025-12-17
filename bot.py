@@ -359,29 +359,40 @@ class KickWebSocketManager:
         """Maintain websocket connection and process message queue"""
         try:
             # Connect to chatroom
+            print(f"[{guild_name}] 🔌 Starting websocket connection task...")
             await api.connect_to_chatroom(kick_username)
+            print(f"[{guild_name}] ✅ Websocket connected, starting message loop...")
             
             # Process messages from queue
             while True:
                 try:
-                    # Wait for message from queue
+                    print(f"[{guild_name}] ⏳ Waiting for messages in queue...")
+                    # Wait for message from queue with shorter timeout for testing
                     message, channel_id = await asyncio.wait_for(
                         self.message_queues[guild_id].get(),
-                        timeout=30.0
+                        timeout=5.0
                     )
                     
+                    print(f"[{guild_name}] 📨 Got message from queue: {message[:50]}... to channel {channel_id}")
+                    
                     # Send via kickpython
+                    print(f"[{guild_name}] 📤 Calling api.post_chat...")
                     await api.post_chat(channel_id=channel_id, content=message)
                     print(f"[{guild_name}] ✅ Sent via websocket: {message[:50]}...")
                     
                 except asyncio.TimeoutError:
                     # Keep connection alive with periodic checks
+                    print(f"[{guild_name}] 💓 Keepalive - queue empty")
                     continue
                 except Exception as e:
                     print(f"[{guild_name}] ❌ Error sending message: {e}")
+                    import traceback
+                    traceback.print_exc()
                     
         except Exception as e:
             print(f"[{guild_name}] ❌ Websocket connection lost: {e}")
+            import traceback
+            traceback.print_exc()
             # Clean up
             if guild_id in self.connections:
                 del self.connections[guild_id]
