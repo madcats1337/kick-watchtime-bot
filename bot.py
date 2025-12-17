@@ -387,9 +387,6 @@ class KickWebSocketManager:
     async def _maintain_connection(self, guild_id: int, guild_name: str, api, kick_username: str):
         """Maintain websocket connection and process message queue"""
         try:
-            # Use bot token from environment (for reading/sending messages)
-            bot_token = KICK_BOT_USER_TOKEN
-            
             print(f"[{guild_name}] 🔌 Starting message sender task in background...")
             
             # Start the message sender as a separate task
@@ -397,15 +394,12 @@ class KickWebSocketManager:
                 self._message_sender(guild_id, guild_name, api)
             )
             
-            # Set access_token NOW (after API init but before connecting)
-            # This is used for authenticating WebSocket to READ/SEND messages
-            # kickpython will fetch chatroom_id using public API (no auth), then use token for WS auth
-            if bot_token:
-                api.access_token = bot_token
-                print(f"[{guild_name}] 🔑 Set bot token for WebSocket authentication")
+            # DON'T set access_token before connecting!
+            # kickpython will fetch chatroom_id using PUBLIC API: /api/v2/channels/{channel}/chatroom
+            # We only need token for SENDING messages (done in post_chat method)
             
             # Now connect to chatroom (this will block)
-            # kickpython will: 1) Fetch chatroom_id (public API, no auth) 2) Connect WS (with auth)
+            # kickpython will: 1) Fetch chatroom_id via PUBLIC API 2) Connect WS for reading
             print(f"[{guild_name}] 🔌 Connecting to websocket (blocking call)...")
             await api.connect_to_chatroom(kick_username)
             
@@ -438,6 +432,12 @@ class KickWebSocketManager:
                 )
                 
                 print(f"[{guild_name}] 📨 Got message from queue: {message[:50]}... to channel {channel_id}")
+                
+                # Set access_token NOW (only when sending)
+                bot_token = KICK_BOT_USER_TOKEN
+                if bot_token and not api.access_token:
+                    api.access_token = bot_token
+                    print(f"[{guild_name}] 🔑 Set bot token for sending message")
                 
                 # Send via kickpython (uses type="bot" by default)
                 print(f"[{guild_name}] 📤 Calling api.post_chat with BOT token...")
