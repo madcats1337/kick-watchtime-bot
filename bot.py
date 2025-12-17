@@ -286,15 +286,15 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
     Returns:
         True if message sent successfully, False otherwise
     """
+    # Get guild name for logging - MUST be defined before try block
+    guild_name = "Unknown"
+    if guild_id:
+        guild = bot.get_guild(guild_id)
+        guild_name = guild.name if guild else str(guild_id)
+    
     try:
         from kickpython import KickAPI
         from utils.kick_oauth import get_kick_token_for_server
-        
-        # Get guild name for logging
-        guild_name = "Unknown"
-        if guild_id:
-            guild = bot.get_guild(guild_id)
-            guild_name = guild.name if guild else str(guild_id)
         
         # Get OAuth token and channel ID from database
         token_data = get_kick_token_for_server(engine, guild_id)
