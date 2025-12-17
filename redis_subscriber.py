@@ -663,7 +663,9 @@ class RedisSubscriber:
     async def handle_point_shop_event(self, action, data):
         """Handle point shop events from dashboard"""
         guild_id = data.get('discord_server_id')
-        print(f"📥 Point Shop Event: {action} (guild_id={guild_id})")
+        guild = self.bot.get_guild(int(guild_id)) if guild_id else None
+        guild_name = guild.name if guild else "Unknown"
+        print(f"📥 Point Shop Event: {action} (guild={guild_name}, guild_id={guild_id})")
 
         if action == 'post_shop':
             channel_id = data.get('channel_id')
@@ -673,13 +675,13 @@ class RedisSubscriber:
                 from bot import post_point_shop_to_discord
                 success = await post_point_shop_to_discord(self.bot, channel_id=channel_id, update_existing=True)
                 if success:
-                    print("✅ Point shop posted to Discord")
+                    print(f"✅ Point shop posted to Discord (guild={guild_name})")
                 else:
-                    print("⚠️  Failed to post point shop")
+                    print(f"⚠️  Failed to post point shop (guild={guild_name})")
             except ImportError:
-                print("⚠️  post_point_shop_to_discord function not implemented yet")
+                print(f"⚠️  post_point_shop_to_discord function not implemented yet (guild={guild_name})")
             except Exception as e:
-                print(f"⚠️  Failed to post point shop: {e}")
+                print(f"⚠️  Failed to post point shop (guild={guild_name}): {e}")
                 import traceback
                 traceback.print_exc()
 
@@ -687,7 +689,7 @@ class RedisSubscriber:
             # Debounce: prevent duplicate syncs within 3 seconds
             current_time = time.time()
             if current_time - self.last_shop_sync < 3:
-                print(f"⏭️  Ignoring duplicate sync_shop (last sync {current_time - self.last_shop_sync:.1f}s ago)")
+                print(f"⏭️  Ignoring duplicate sync_shop for {guild_name} (last sync {current_time - self.last_shop_sync:.1f}s ago)")
                 return
             
             self.last_shop_sync = current_time
@@ -701,14 +703,14 @@ class RedisSubscriber:
                 from bot import post_point_shop_to_discord
                 success = await post_point_shop_to_discord(self.bot, guild_id=guild_id, update_existing=True)
                 if success:
-                    print(f"✅ Point shop force synced for guild {guild_id}")
+                    print(f"✅ Point shop force synced for {guild_name} (guild_id={guild_id})")
                 else:
-                    print(f"⚠️  Failed to sync point shop for guild {guild_id}")
+                    print(f"⚠️  Failed to sync point shop for {guild_name} (guild_id={guild_id})")
             except ImportError:
-                print(f"⚠️  post_point_shop_to_discord function not implemented yet (guild {guild_id})")
+                print(f"⚠️  post_point_shop_to_discord function not implemented yet (guild={guild_name}, guild_id={guild_id})")
                 print("💡 Tip: Implement this function in bot.py to auto-sync shop embeds to Discord")
             except Exception as e:
-                print(f"⚠️  Failed to sync point shop for guild {guild_id}: {e}")
+                print(f"⚠️  Failed to sync point shop for {guild_name} (guild_id={guild_id}): {e}")
                 import traceback
                 traceback.print_exc()
 
