@@ -773,7 +773,7 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
     
     try:
         # Check if kickpython connection exists for this guild
-        if guild_id not in bot.message_queues:
+        if guild_id not in kick_ws_manager.message_queues:
             print(f"[{guild_name}] ⚠️ No kickpython connection - use /kick_connect command")
             return False
         
@@ -794,7 +794,7 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
         
         # Queue message for kickpython to send
         print(f"[{guild_name}] 📨 Queueing message via kickpython: {message[:50]}...")
-        await bot.message_queues[guild_id].put((message, channel_id))
+        await kick_ws_manager.message_queues[guild_id].put((message, channel_id))
         print(f"[{guild_name}] ✅ Message queued")
         return True
         

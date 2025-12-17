@@ -199,7 +199,9 @@ def handle_kick_webhook():
         return jsonify({"error": "Invalid signature"}), 401
 
     try:
-        event_data = request.get_json()
+        event_data = request.get_json(force=True, silent=True)
+        if not event_data:
+            return jsonify({"error": "Empty payload"}), 400
         
         # Multiserver routing: Lookup which Discord server this subscription belongs to
         discord_server_id = None
