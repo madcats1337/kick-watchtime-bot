@@ -276,8 +276,8 @@ async def get_kick_api():
 
 async def send_kick_message(message: str, guild_id: int = None) -> bool:
     """
-    Send a message to Kick chat as the bot account.
-    Uses OAuth token from kick_oauth_tokens table (authorized by maikelele).
+    Send a message to Kick chat as the bot account (@lelebot).
+    Uses bot token from bot_settings table or KICK_BOT_USER_TOKEN env var.
     
     Args:
         message: The message to send
@@ -287,7 +287,6 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
         True if message sent successfully, False otherwise
     """
     import aiohttp
-    from utils.kick_oauth import get_kick_token_for_server
     
     try:
         # Get guild name for logging
@@ -296,19 +295,25 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
             guild = bot.get_guild(guild_id)
             guild_name = guild.name if guild else str(guild_id)
         
-        # Get OAuth token from database (maikelele's authorized token)
-        token_data = get_kick_token_for_server(engine, guild_id)
-        
-        if not token_data or not token_data.get('access_token'):
-            print(f"[{guild_name}] ⚠️ No OAuth token - maikelele needs to link account in dashboard")
-            return False
-        
-        bot_token = token_data['access_token']
+        # Get bot token from database or env var
+        bot_token = None
         channel_id = None
         
-        # Get channel ID for this guild
+        # Get settings for this guild
         with engine.connect() as conn:
             if guild_id:
+                # Get bot token from bot_settings
+                token_result = conn.execute(text("""
+                    SELECT value FROM bot_settings 
+                    WHERE key = 'kick_bot_token' 
+                    AND discord_server_id = :guild_id
+                    LIMIT 1
+                """), {"guild_id": guild_id}).fetchone()
+                
+                if token_result and token_result[0]:
+                    bot_token = token_result[0]
+                
+                # Get channel ID
                 channel_result = conn.execute(text("""
                     SELECT value FROM bot_settings 
                     WHERE key = 'kick_broadcaster_user_id' 
@@ -319,11 +324,19 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
                 if channel_result and channel_result[0]:
                     channel_id = channel_result[0]
         
+        # Fallback to environment variable if not in database
+        if not bot_token:
+            bot_token = os.getenv("KICK_BOT_USER_TOKEN")
+        
+        if not bot_token:
+            print(f"[{guild_name}] ⚠️ No bot token configured - set KICK_BOT_USER_TOKEN or configure in Dashboard")
+            return False
+        
         if not channel_id:
             print(f"[{guild_name}] ⚠️ Channel ID not configured - configure in Dashboard → Profile Settings")
             return False
         
-        # Send message using bot token
+        # Send message using bot token (@lelebot account)
         url = "https://api.kick.com/public/v1/chat"
         headers = {
             "Authorization": f"Bearer {bot_token}",
@@ -332,22 +345,22 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
         }
         payload = {
             "content": message,
-            "type": "bot",
+            "type": "message",
             "broadcaster_user_id": int(channel_id)
         }
         
-        print(f"[{guild_name}] 📤 Sending message as bot to Kick channel {channel_id}...")
+        print(f"[{guild_name}] 📤 Sending message to Kick channel {channel_id} as @lelebot...")
         
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, headers=headers) as response:
                 if response.status == 200:
-                    print(f"[{guild_name}] ✅ Message sent successfully to Kick as bot")
+                    print(f"[{guild_name}] ✅ Message sent successfully to Kick")
                     return True
                 else:
                     response_text = await response.text()
                     print(f"[{guild_name}] ❌ Failed to send message: {response.status} - {response_text}")
                     if response.status == 401:
-                        print(f"[{guild_name}] ⚠️ Bot token invalid or expired - update KICK_BOT_USER_TOKEN")
+                        print(f"[{guild_name}] ⚠️ Bot token invalid or expired - update KICK_BOT_USER_TOKEN or bot settings")
                     return False
         
     except Exception as e:
