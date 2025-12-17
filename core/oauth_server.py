@@ -120,15 +120,6 @@ def sanitize_for_logs(value, field_name=None):
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", secrets.token_hex(32))
 
-# Add request logging middleware
-@app.before_request
-def log_request():
-    if request.path.startswith('/webhooks'):
-        print(f"[Flask] 📨 Incoming {request.method} {request.path}")
-        print(f"[Flask] Headers: {dict(request.headers)}")
-        if request.data:
-            print(f"[Flask] Body length: {len(request.data)} bytes")
-
 # Register Kick webhook routes if available
 if HAS_KICK_OFFICIAL and register_webhook_routes:
     # Create event handler (can be customized later)

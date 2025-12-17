@@ -772,10 +772,14 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
         guild_name = guild.name if guild else str(guild_id)
     
     try:
-        # Check if kickpython connection exists for this guild
+        # Check if kickpython connection exists for this guild, auto-connect if not
         if guild_id not in kick_ws_manager.message_queues:
-            print(f"[{guild_name}] ⚠️ No kickpython connection - use /kick_connect command")
-            return False
+            print(f"[{guild_name}] 🔌 No kickpython connection - attempting auto-connect...")
+            success = await kick_ws_manager.ensure_connection(guild_id, guild_name)
+            if not success:
+                print(f"[{guild_name}] ❌ Failed to auto-connect kickpython")
+                return False
+            print(f"[{guild_name}] ✅ Auto-connected kickpython successfully")
         
         # Get broadcaster_user_id (channel_id for kickpython)
         with engine.connect() as conn:
