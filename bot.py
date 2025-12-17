@@ -308,6 +308,7 @@ class KickWebSocketManager:
             # Get channel username for websocket connection
             kick_username = None
             with engine.connect() as conn:
+                # Try bot_settings first
                 result = conn.execute(text("""
                     SELECT value FROM bot_settings 
                     WHERE key = 'kick_channel' 
@@ -319,7 +320,8 @@ class KickWebSocketManager:
                     kick_username = result[0]
             
             if not kick_username:
-                print(f"[{guild_name}] ⚠️ Kick channel username not configured")
+                print(f"[{guild_name}] ⚠️ Kick channel username not configured in dashboard")
+                print(f"[{guild_name}] 💡 Please set the Kick channel name in the dashboard Settings page")
                 return False
             
             # Initialize kickpython API WITHOUT any credentials for chatroom_id fetch
@@ -775,6 +777,7 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
         # Check if kickpython connection exists for this guild, auto-connect if not
         if guild_id not in kick_ws_manager.message_queues:
             print(f"[{guild_name}] 🔌 No kickpython connection - attempting auto-connect...")
+            print(f"[{guild_name}] 🔍 guild_id={guild_id}")
             success = await kick_ws_manager.ensure_connection(guild_id, guild_name)
             if not success:
                 print(f"[{guild_name}] ❌ Failed to auto-connect kickpython")

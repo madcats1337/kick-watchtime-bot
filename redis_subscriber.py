@@ -58,7 +58,7 @@ class RedisSubscriber:
                 await self.send_message_callback(message, guild_id=guild_id)
                 print(f"💬 Sent to Kick chat: {message}")
             except Exception as e:
-                print(f"⚠️ Failed to send Kick message: {e}")
+                print(f"ℹ️  Kick chat message not sent (configure Kick channel in dashboard): {message}")
         else:
             print(f"ℹ️  Kick chat disabled: {message}")
 
