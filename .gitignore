@@ -33,6 +33,12 @@ wheels/
 oauth_verifier.txt
 oauth_tokens.txt
 
+# Local test/debug scripts
+check_db.py
+fix_chatroom.py
+generate_oauth_token.py
+kick_chat_smoke_test.py
+
 # Database
 *.db
 *.sqlite
