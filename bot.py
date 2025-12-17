@@ -387,6 +387,9 @@ class KickWebSocketManager:
     async def _maintain_connection(self, guild_id: int, guild_name: str, api, kick_username: str):
         """Maintain websocket connection and process message queue"""
         try:
+            # Use bot token from environment (for reading/sending messages)
+            bot_token = KICK_BOT_USER_TOKEN
+            
             print(f"[{guild_name}] 🔌 Starting message sender task in background...")
             
             # Start the message sender as a separate task
@@ -394,7 +397,15 @@ class KickWebSocketManager:
                 self._message_sender(guild_id, guild_name, api)
             )
             
+            # Set access_token NOW (after API init but before connecting)
+            # This is used for authenticating WebSocket to READ/SEND messages
+            # kickpython will fetch chatroom_id using public API (no auth), then use token for WS auth
+            if bot_token:
+                api.access_token = bot_token
+                print(f"[{guild_name}] 🔑 Set bot token for WebSocket authentication")
+            
             # Now connect to chatroom (this will block)
+            # kickpython will: 1) Fetch chatroom_id (public API, no auth) 2) Connect WS (with auth)
             print(f"[{guild_name}] 🔌 Connecting to websocket (blocking call)...")
             await api.connect_to_chatroom(kick_username)
             
