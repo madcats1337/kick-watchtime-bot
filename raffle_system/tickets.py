@@ -111,12 +111,22 @@ class TicketManager:
                 return False
 
             with self.engine.begin() as conn:
+                # Get discord_server_id from the period
+                period_result = conn.execute(text("""
+                    SELECT discord_server_id FROM raffle_periods WHERE id = :period_id
+                """), {'period_id': period_id})
+                period_row = period_result.fetchone()
+                if not period_row:
+                    logger.error(f"Period {period_id} not found")
+                    return False
+                discord_server_id = period_row[0]
+
                 # Insert or update user's ticket balance
                 conn.execute(text(f"""
                     INSERT INTO raffle_tickets
-                        (period_id, discord_id, kick_name, {source_column}, total_tickets, last_updated)
+                        (period_id, discord_server_id, discord_id, kick_name, {source_column}, total_tickets, last_updated)
                     VALUES
-                        (:period_id, :discord_id, :kick_name, :tickets, :tickets, CURRENT_TIMESTAMP)
+                        (:period_id, :server_id, :discord_id, :kick_name, :tickets, :tickets, CURRENT_TIMESTAMP)
                     ON CONFLICT (period_id, discord_id)
                     DO UPDATE SET
                         {source_column} = raffle_tickets.{source_column} + :tickets,
@@ -124,6 +134,7 @@ class TicketManager:
                         last_updated = CURRENT_TIMESTAMP
                 """), {
                     'period_id': period_id,
+                    'server_id': discord_server_id,
                     'discord_id': discord_id,
                     'kick_name': kick_name,
                     'tickets': tickets
