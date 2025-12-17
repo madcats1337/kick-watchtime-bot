@@ -45,7 +45,8 @@ import aiohttp
 # -------------------------
 KICK_OAUTH_SERVER = "https://id.kick.com"
 KICK_API_SERVER = "https://api.kick.com"
-KICK_API_PUBLIC = f"{KICK_API_SERVER}/public/v1"
+KICK_API_PUBLIC_V1 = f"{KICK_API_SERVER}/public/v1"
+KICK_API_PUBLIC_V2 = f"{KICK_API_SERVER}/public/v2"
 
 # OAuth endpoints
 KICK_AUTHORIZE_URL = f"{KICK_OAUTH_SERVER}/oauth/authorize"
@@ -54,13 +55,13 @@ KICK_REVOKE_URL = f"{KICK_OAUTH_SERVER}/oauth/revoke"
 KICK_USER_INFO_URL = f"{KICK_OAUTH_SERVER}/oauth/userinfo"
 
 # API endpoints
-KICK_USERS_URL = f"{KICK_API_PUBLIC}/users"
-KICK_CHANNELS_URL = f"{KICK_API_PUBLIC}/channels"
-KICK_CHAT_URL = f"{KICK_API_PUBLIC}/chat"
-KICK_CATEGORIES_URL = f"{KICK_API_PUBLIC}/categories"
-KICK_WEBHOOKS_URL = f"{KICK_API_PUBLIC}/events/subscriptions"
-KICK_MODERATION_URL = f"{KICK_API_PUBLIC}/channels/{{broadcaster_user_id}}/moderation"
-KICK_KICKS_LEADERBOARD = f"{KICK_API_PUBLIC}/channels/{{broadcaster_user_id}}/kicks/leaderboard"
+KICK_USERS_URL = f"{KICK_API_PUBLIC_V1}/users"
+KICK_CHANNELS_URL = f"{KICK_API_PUBLIC_V1}/channels"
+KICK_CHAT_URL = f"{KICK_API_PUBLIC_V2}/chat"  # v2 endpoint for chat
+KICK_CATEGORIES_URL = f"{KICK_API_PUBLIC_V1}/categories"
+KICK_WEBHOOKS_URL = f"{KICK_API_PUBLIC_V1}/events/subscriptions"
+KICK_MODERATION_URL = f"{KICK_API_PUBLIC_V1}/channels/{{broadcaster_user_id}}/moderation"
+KICK_KICKS_LEADERBOARD = f"{KICK_API_PUBLIC_V1}/channels/{{broadcaster_user_id}}/kicks/leaderboard"
 
 # Available OAuth scopes
 OAUTH_SCOPES = [
