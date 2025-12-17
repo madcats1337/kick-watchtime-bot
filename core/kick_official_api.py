@@ -350,12 +350,16 @@ class KickOfficialAPI:
 
         async with session.request(method, url, headers=headers, **kwargs) as response:
             if response.status == 401:
-                # Try to refresh token and retry
-                await self.refresh_tokens()
-                headers["Authorization"] = f"Bearer {self.access_token}"
-                async with session.request(method, url, headers=headers, **kwargs) as retry_response:
-                    retry_response.raise_for_status()
-                    return await retry_response.json()
+                # Try to refresh token and retry (only if we have a refresh token)
+                if self.refresh_token:
+                    await self.refresh_tokens()
+                    headers["Authorization"] = f"Bearer {self.access_token}"
+                    async with session.request(method, url, headers=headers, **kwargs) as retry_response:
+                        retry_response.raise_for_status()
+                        return await retry_response.json()
+                else:
+                    # No refresh token (e.g., Client Credentials flow) - just raise the error
+                    response.raise_for_status()
 
             response.raise_for_status()
             return await response.json()
