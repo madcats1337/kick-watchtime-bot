@@ -1183,21 +1183,66 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
     except Exception as e:
         print(f"[{guild_name}] ⚠️ Error loading chatroom_id: {e}")
     
-    # Fetch chatroom_id if not in database
+    # Fetch chatroom_id if not in database using kickpython
     if not chatroom_id:
         try:
-            chatroom_id = await fetch_chatroom_id(channel_slug)
-            if chatroom_id:
-                with engine.begin() as conn:
-                    conn.execute(text("""
-                        INSERT INTO bot_settings (key, value, discord_server_id, updated_at)
-                        VALUES ('kick_chatroom_id', :cid, :guild_id, CURRENT_TIMESTAMP)
-                        ON CONFLICT (key, discord_server_id)
-                        DO UPDATE SET value = :cid, updated_at = CURRENT_TIMESTAMP
-                    """), {"cid": str(chatroom_id), "guild_id": guild_id})
-                print(f"[{guild_name}] 📦 Fetched and saved chatroom_id: {chatroom_id}")
+            print(f"[{guild_name}] 🔍 Fetching chatroom_id for channel: {channel_slug}")
+            
+            # Use kickpython to fetch chatroom_id
+            from kickpython import KickAPI as KickPyAPI
+            
+            access_token = os.getenv("KICK_BOT_USER_TOKEN") or os.getenv("KICK_USER_TOKEN")
+            client_id = os.getenv("KICK_CLIENT_ID")
+            client_secret = os.getenv("KICK_CLIENT_SECRET")
+            redirect_uri = os.getenv("OAUTH_BASE_URL")
+            if redirect_uri and not redirect_uri.startswith(("http://", "https://")):
+                redirect_uri = f"https://{redirect_uri}"
+            
+            api = KickPyAPI(
+                client_id=client_id,
+                client_secret=client_secret,
+                redirect_uri=f"{redirect_uri}/auth/kick/callback" if redirect_uri else None,
+            )
+            if access_token:
+                api.access_token = access_token
+            
+            # Start connection and wait for chatroom_id
+            task = asyncio.create_task(api.connect_to_chatroom(channel_slug))
+            try:
+                timeout = 10  # 10 second timeout
+                for _ in range(timeout * 5):  # check every 200ms
+                    await asyncio.sleep(0.2)
+                    if getattr(api, 'chatroom_id', None):
+                        chatroom_id = int(api.chatroom_id)
+                        print(f"[{guild_name}] ✅ kickpython resolved chatroom_id: {chatroom_id}")
+                        
+                        # Save to database
+                        with engine.begin() as conn:
+                            conn.execute(text("""
+                                INSERT INTO bot_settings (key, value, discord_server_id, updated_at)
+                                VALUES ('kick_chatroom_id', :cid, :guild_id, CURRENT_TIMESTAMP)
+                                ON CONFLICT (key, discord_server_id)
+                                DO UPDATE SET value = :cid, updated_at = CURRENT_TIMESTAMP
+                            """), {"cid": str(chatroom_id), "guild_id": guild_id})
+                        break
+            finally:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            
+            if not chatroom_id:
+                print(f"[{guild_name}] ❌ kickpython timeout - could not resolve chatroom_id")
+                return
+                
+        except ImportError:
+            print(f"[{guild_name}] ❌ kickpython not installed - install with: pip install kickpython")
+            return
         except Exception as e:
             print(f"[{guild_name}] ❌ Could not fetch chatroom_id: {e}")
+            import traceback
+            traceback.print_exc()
             return
     
     if not chatroom_id:
@@ -1206,7 +1251,9 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
     
     channel_name = f"chatrooms.{chatroom_id}.v2"
     print(f"[{guild_name}] 🔌 Connecting to Pusher WebSocket...")
-    print(f"[{guild_name}]    Channel: {channel_slug}, Chatroom ID: {chatroom_id}")
+    print(f"[{guild_name}]    Kick Channel: {channel_slug}")
+    print(f"[{guild_name}]    Chatroom ID: {chatroom_id}")
+    print(f"[{guild_name}]    Pusher Channel: {channel_name}")
     
     while True:
         try:
