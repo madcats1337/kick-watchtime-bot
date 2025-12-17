@@ -5031,9 +5031,9 @@ async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
     print(f"📺 Monitoring Kick channel: {KICK_CHANNEL}")
 
-    # START KICKPYTHON WEBSOCKET OR PUSHER
+    # START KICKPYTHON WEBSOCKET (for chat messages) + PUSHER (for subscriptions)
     if KICK_USE_KICKPYTHON_WS:
-        print("🔌 Starting kickpython WebSocket for direct chat message reading...")
+        print("🔌 Starting kickpython WebSocket for chat messages...")
         for guild in bot.guilds:
             kick_channel = None
             try:
@@ -5050,11 +5050,12 @@ async def on_ready():
             
             if kick_channel:
                 await kick_ws_manager.ensure_connection(guild.id, guild.name)
-                print(f"[{guild.name}] ✅ Started kickpython WebSocket for channel: {kick_channel}")
+                print(f"[{guild.name}] ✅ kickpython WebSocket started: {kick_channel}")
             else:
                 print(f"[{guild.name}] ⚠️ No kick_channel configured - skipping WebSocket")
-    else:
-        print("🔌 Starting Pusher WebSocket (OLD METHOD)...")
+        
+        # Also start Pusher for subscription events (Kick has no webhook support for subs yet)
+        print("🔌 Starting Pusher WebSocket for subscription events...")
         for guild in bot.guilds:
             kick_channel = None
             try:
@@ -5071,7 +5072,29 @@ async def on_ready():
             
             if kick_channel:
                 asyncio.create_task(kick_chat_loop(kick_channel, guild.id))
-                print(f"[{guild.name}] ✅ Started Pusher WebSocket for channel: {kick_channel}")
+                print(f"[{guild.name}] ✅ Pusher WebSocket started for subscriptions: {kick_channel}")
+            else:
+                print(f"[{guild.name}] ⚠️ No kick_channel configured - skipping Pusher")
+    else:
+        # LEGACY: Using Pusher only (handles both chat and subscriptions)
+        print("🔌 Starting Pusher WebSocket (LEGACY MODE - handles chat + subscriptions)...")
+        for guild in bot.guilds:
+            kick_channel = None
+            try:
+                with engine.connect() as conn:
+                    row = conn.execute(text("""
+                        SELECT value FROM bot_settings
+                        WHERE key = 'kick_channel' AND discord_server_id = :gid
+                        LIMIT 1
+                    """), {"gid": guild.id}).fetchone()
+                    if row and row[0]:
+                        kick_channel = row[0]
+            except Exception as e:
+                print(f"[{guild.name}] ⚠️ Error loading kick_channel: {e}")
+            
+            if kick_channel:
+                asyncio.create_task(kick_chat_loop(kick_channel, guild.id))
+                print(f"[{guild.name}] ✅ Pusher WebSocket started: {kick_channel}")
             else:
                 print(f"[{guild.name}] ⚠️ No kick_channel configured - skipping WebSocket")
 
