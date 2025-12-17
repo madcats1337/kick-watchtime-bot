@@ -59,7 +59,7 @@ class WatchtimeConverter:
             conversions = []
 
             with self.engine.begin() as conn:
-                # Get all users with watchtime and their Discord IDs from links table
+                # Get all users with watchtime and their Discord IDs from links table (per-guild)
                 # Use LOWER() for case-insensitive comparison
                 result = conn.execute(text("""
                     SELECT
@@ -68,8 +68,10 @@ class WatchtimeConverter:
                         l.discord_id
                     FROM watchtime w
                     JOIN links l ON LOWER(l.kick_name) = LOWER(w.username)
+                        AND l.discord_server_id = :server_id
                     WHERE w.minutes > 0
-                """))
+                        AND w.discord_server_id = :server_id
+                """), {"server_id": self.server_id})
 
                 users = list(result)
 

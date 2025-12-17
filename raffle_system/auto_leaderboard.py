@@ -17,10 +17,11 @@ logger = logging.getLogger(__name__)
 class AutoLeaderboard:
     """Manages auto-updating raffle leaderboard"""
 
-    def __init__(self, bot, engine, channel_id):
+    def __init__(self, bot, engine, channel_id, server_id=None):
         self.bot = bot
         self.engine = engine
         self.channel_id = channel_id
+        self.server_id = server_id  # Discord server ID for multiserver support
         self.message_id = None
         self.channel = None
 
@@ -142,7 +143,7 @@ class AutoLeaderboard:
                         color=discord.Color.blue()
                     )
 
-                # Get top 5 participants
+                # Get top 5 participants (per-guild)
                 result = conn.execute(text("""
                     SELECT
                         kick_name,
@@ -153,20 +154,22 @@ class AutoLeaderboard:
                         bonus_tickets
                     FROM raffle_tickets
                     WHERE period_id = :period_id
+                        AND discord_server_id = :server_id
                     ORDER BY total_tickets DESC
                     LIMIT 5
-                """), {'period_id': period_id})
+                """), {'period_id': period_id, 'server_id': self.server_id})
 
                 rows = result.fetchall()
 
-                # Get total stats
+                # Get total stats (per-guild)
                 stats_result = conn.execute(text("""
                     SELECT
                         COUNT(DISTINCT discord_id),
                         COALESCE(SUM(total_tickets), 0)
                     FROM raffle_tickets
                     WHERE period_id = :period_id
-                """), {'period_id': period_id})
+                        AND discord_server_id = :server_id
+                """), {'period_id': period_id, 'server_id': self.server_id})
 
                 stats_row = stats_result.fetchone()
                 total_participants = stats_row[0] or 0

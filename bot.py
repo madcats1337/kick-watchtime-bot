@@ -967,14 +967,23 @@ engine = create_engine(
 
 try:
     with engine.begin() as conn:
-        # Create watchtime table
+        # Create watchtime table (multiserver-aware)
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS watchtime (
-            username TEXT PRIMARY KEY,
+            username TEXT,
             minutes INTEGER DEFAULT 0,
-            last_active TIMESTAMP
+            last_active TIMESTAMP,
+            discord_server_id BIGINT,
+            PRIMARY KEY (username, discord_server_id)
         );
         """))
+        
+        # Migrate existing watchtime table if needed
+        try:
+            conn.execute(text("ALTER TABLE watchtime ADD COLUMN IF NOT EXISTS discord_server_id BIGINT"))
+        except Exception as e:
+            print(f"ℹ️ watchtime table migration (discord_server_id) note: {e}")
+        # Note: Backfill done in Admin-Dashboard migrations
 
         # Create links table (multi-server aware)
         # New columns:
