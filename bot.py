@@ -460,14 +460,37 @@ class KickWebSocketManager:
                 print(f"[{guild_name}] 📨 Got message from queue: {message[:50]}... to channel {channel_id}")
                 
                 # Token already set at startup - no need to reload every message
-                # Send via kickpython
-                print(f"[{guild_name}] 📤 Calling api.post_chat...")
-                print(f"[{guild_name}] 🔑 api.access_token is set: {hasattr(api, 'access_token') and api.access_token is not None}")
-                if hasattr(api, 'access_token'):
-                    print(f"[{guild_name}] 🔑 api.access_token value: {api.access_token[:30] if api.access_token else 'None'}...")
+                # Send via direct HTTP request instead of kickpython (kickpython doesn't send auth headers properly)
+                print(f"[{guild_name}] 📤 Sending message via direct HTTP POST...")
+                print(f"[{guild_name}] 🔑 Using token: {api.access_token[:30] if hasattr(api, 'access_token') and api.access_token else 'None'}...")
+                
                 try:
-                    await api.post_chat(channel_id=channel_id, content=message)
-                    print(f"[{guild_name}] ✅ Sent: {message[:50]}...")
+                    import aiohttp
+                    
+                    headers = {
+                        'Authorization': f'Bearer {api.access_token}',
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'LeleBot/1.0'
+                    }
+                    
+                    payload = {
+                        'content': message,
+                        'type': 'message'
+                    }
+                    
+                    url = f'https://api.kick.com/public/v1/chat/{channel_id}/messages'
+                    
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(url, headers=headers, json=payload, timeout=10) as resp:
+                            if resp.status in [200, 201]:
+                                print(f"[{guild_name}] ✅ Message sent successfully")
+                            else:
+                                error_text = await resp.text()
+                                print(f"[{guild_name}] ❌ HTTP {resp.status}: {error_text}")
+                                raise Exception(f"Failed to send message: HTTP {resp.status} - {error_text}")
+                    
+                except Exception as send_error:
                 except Exception as send_error:
                     # If sending fails with current token, try streamer OAuth as fallback
                     if "Unauthorized" in str(send_error) or "401" in str(send_error):
@@ -477,8 +500,28 @@ class KickWebSocketManager:
                         if token_data and token_data.get('access_token'):
                             api.access_token = token_data['access_token']
                             print(f"[{guild_name}] 🔄 Retrying with streamer token...")
-                            await api.post_chat(channel_id=channel_id, content=message)
-                            print(f"[{guild_name}] ✅ Sent via streamer token: {message[:50]}...")
+                            
+                            # Retry with fallback token
+                            import aiohttp
+                            headers = {
+                                'Authorization': f'Bearer {api.access_token}',
+                                'Accept': 'application/json',
+                                'Content-Type': 'application/json',
+                                'User-Agent': 'LeleBot/1.0'
+                            }
+                            payload = {
+                                'content': message,
+                                'type': 'message'
+                            }
+                            url = f'https://api.kick.com/public/v1/chat/{channel_id}/messages'
+                            
+                            async with aiohttp.ClientSession() as session:
+                                async with session.post(url, headers=headers, json=payload, timeout=10) as resp:
+                                    if resp.status in [200, 201]:
+                                        print(f"[{guild_name}] ✅ Sent via streamer token: {message[:50]}...")
+                                    else:
+                                        error_text = await resp.text()
+                                        raise Exception(f"Fallback failed: HTTP {resp.status} - {error_text}")
                         else:
                             raise send_error
                     else:
