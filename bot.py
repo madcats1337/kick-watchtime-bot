@@ -524,19 +524,30 @@ class KickWebSocketManager:
             # Basic log
             print(f"[{guild_name}] 💬 {username}: {content}")
 
-            # Update recent chatters tracking (per-guild)
+            # Update watchtime tracking (per-guild)
             now = datetime.now(timezone.utc)
+            username_lower = username.lower()
+            
             # Initialize dicts if missing
+            if 'active_viewers_by_guild' not in globals():
+                globals()['active_viewers_by_guild'] = {}
             if 'recent_chatters_by_guild' not in globals():
-                # Safety: should exist globally, but guard anyway
                 globals()['recent_chatters_by_guild'] = {}
             if 'last_chat_activity_by_guild' not in globals():
                 globals()['last_chat_activity_by_guild'] = {}
 
-            guild_chatters = recent_chatters_by_guild.get(guild_id) or {}
-            guild_chatters[username] = now
-            recent_chatters_by_guild[guild_id] = guild_chatters
+            # Update last chat activity
             last_chat_activity_by_guild[guild_id] = now
+            
+            # Update active viewers (for watchtime tracking)
+            guild_active_viewers = active_viewers_by_guild.get(guild_id, {})
+            guild_active_viewers[username_lower] = now
+            active_viewers_by_guild[guild_id] = guild_active_viewers
+            
+            # Update recent chatters (for stream-live detection)
+            guild_chatters = recent_chatters_by_guild.get(guild_id, {})
+            guild_chatters[username_lower] = now
+            recent_chatters_by_guild[guild_id] = guild_chatters
 
             # Publish to Redis for dashboard (optional)
             publish_redis_event(
