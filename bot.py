@@ -2049,28 +2049,101 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                 channel_id = None
                 
                 try:
-                    # Use public API v2 endpoint (no auth required, more reliable)
-                    # OAuth tokens can expire and cause 401 errors
-                    print(f"[Kick] 🔍 Fetching chatroom_id via public API for {channel_to_use}...")
+                    # Try Client Credentials OAuth first for channel_id (needed for subscription events on Pusher)
+                    # Subscription events require authenticated Pusher channels
+                    access_token = None
+                    
+                    # Try Client Credentials flow (KICK_CLIENT_ID + KICK_CLIENT_SECRET)
+                    if KICK_CLIENT_ID and KICK_CLIENT_SECRET:
+                        try:
+                            print(f"[Kick] 🔐 Fetching token via Client Credentials for channel lookup...")
+                            async with aiohttp.ClientSession() as session:
+                                payload = {
+                                    "grant_type": "client_credentials",
+                                    "client_id": KICK_CLIENT_ID,
+                                    "client_secret": KICK_CLIENT_SECRET
+                                }
+                                async with session.post(
+                                    "https://id.kick.com/oauth/token",
+                                    data=payload,
+                                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                                    timeout=aiohttp.ClientTimeout(total=10)
+                                ) as resp:
+                                    if resp.status == 200:
+                                        token_data = await resp.json()
+                                        access_token = token_data.get("access_token")
+                                        print(f"[Kick] ✅ Got Client Credentials token for channel lookup")
+                                    else:
+                                        print(f"[Kick] ⚠️ Client Credentials failed: HTTP {resp.status}")
+                        except Exception as e:
+                            print(f"[Kick] ⚠️ Could not get Client Credentials token: {e}")
+                    
+                    # Fallback: Try getting streamer's OAuth token from database
+                    if not access_token:
+                        try:
+                            from utils.kick_oauth import get_kick_token_for_server
+                            token_data = get_kick_token_for_server(engine, guild_id)
+                            if token_data:
+                                access_token = token_data.get('access_token')
+                                print(f"[Kick] Using streamer OAuth token for channel lookup")
+                        except Exception as e:
+                            print(f"[Kick] Could not get streamer OAuth token: {e}")
                     
                     async with aiohttp.ClientSession() as session:
                         headers = {
                             'User-Agent': random.choice(USER_AGENTS),
                             'Accept': 'application/json',
-                            'Referer': 'https://kick.com/'
                         }
                         
-                        # Use public v2 API endpoint (no authentication needed)
-                        url = f'https://kick.com/api/v2/channels/{channel_to_use}'
-                        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                            if response.status == 200:
-                                data = await response.json()
-                                chatroom_id = str(data.get('chatroom', {}).get('id'))
-                                channel_id = str(data.get('id'))  # Channel ID for subscription events
-                                kick_chatroom_ids[guild_id] = chatroom_id
-                                print(f"[Kick] ✅ Public API - Found chatroom ID: {chatroom_id}, channel ID: {channel_id}")
-                            elif response.status == 403:
-                                print(f"[Kick] ❌ Cloudflare blocked request (403). SOLUTION:")
+                        if access_token:
+                            # Use official authenticated API (required for subscription event channels)
+                            headers['Authorization'] = f'Bearer {access_token}'
+                            url = f'https://api.kick.com/public/v1/channels'
+                            params = {'slug': channel_to_use.lower()}
+                            async with session.get(url, headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                                if response.status == 200:
+                                    data = await response.json()
+                                    channels = data.get('data', [])
+                                    if channels:
+                                        channel_data = channels[0]
+                                        channel_id = str(channel_data.get('id', ''))
+                                        # Get chatroom ID from authenticated API
+                                        if 'chatroom' in channel_data and channel_data['chatroom']:
+                                            chatroom_id = str(channel_data['chatroom'].get('id', ''))
+                                        
+                                        if chatroom_id:
+                                            kick_chatroom_ids[guild_id] = chatroom_id
+                                            print(f"[Kick] ✅ Authenticated API - chatroom: {chatroom_id}, channel: {channel_id}")
+                                        else:
+                                            print(f"[Kick] ⚠️ Got channel ID {channel_id} but no chatroom ID")
+                                    else:
+                                        print(f"[Kick] ⚠️ No channels found in API response")
+                                elif response.status == 401:
+                                    print(f"[Kick] ⚠️ OAuth token expired (401), falling back to public API")
+                                    # Fall through to public API below
+                                    access_token = None
+                                else:
+                                    print(f"[Kick] ⚠️ Authenticated API failed: HTTP {response.status}")
+                        
+                        # Fallback to public API if no auth or auth failed
+                        if not access_token or not chatroom_id:
+                            print(f"[Kick] 🔍 Falling back to public API (subscription events may not work)")
+                            headers = {
+                                'User-Agent': random.choice(USER_AGENTS),
+                                'Accept': 'application/json',
+                                'Referer': 'https://kick.com/'
+                            }
+                            url = f'https://kick.com/api/v2/channels/{channel_to_use}'
+                            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                                if response.status == 200:
+                                    data = await response.json()
+                                    chatroom_id = str(data.get('chatroom', {}).get('id'))
+                                    channel_id = str(data.get('id'))
+                                    kick_chatroom_ids[guild_id] = chatroom_id
+                                    print(f"[Kick] ✅ Public API - chatroom: {chatroom_id}, channel: {channel_id}")
+                                    print(f"[Kick] ⚠️ Note: Subscription events may not work without authentication")
+                                elif response.status == 403:
+                                    print(f"[Kick] ❌ Cloudflare blocked request (403). SOLUTION:")
                                     print(f"[Kick]    1. Link Kick account in dashboard (provides OAuth token)")
                                     print(f"[Kick]    2. Or set KICK_CHATROOM_ID environment variable")
                                 else:
