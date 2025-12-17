@@ -329,7 +329,7 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
         }
         payload = {
             "content": message,
-            "type": "user",
+            "type": "bot",
             "broadcaster_user_id": int(channel_id)
         }
         
