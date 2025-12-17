@@ -294,11 +294,20 @@ class KickWebSocketManager:
             return True
         
         try:
-            # Get BOT token from environment variable
-            bot_token = KICK_BOT_USER_TOKEN
+            # Get BOT token from bot_tokens table
+            bot_token = None
+            with engine.connect() as conn:
+                result = conn.execute(text("""
+                    SELECT access_token FROM bot_tokens 
+                    WHERE bot_username = 'lelebot'
+                    LIMIT 1
+                """)).fetchone()
+                
+                if result and result[0]:
+                    bot_token = result[0]
             
             if not bot_token:
-                print(f"[{guild_name}] ⚠️ No KICK_BOT_USER_TOKEN environment variable set")
+                print(f"[{guild_name}] ⚠️ No bot token found - authorize at /bot/authorize")
                 return False
             
             # Get channel username for websocket connection
