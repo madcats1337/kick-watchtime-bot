@@ -433,17 +433,40 @@ class KickWebSocketManager:
                 
                 print(f"[{guild_name}] 📨 Got message from queue: {message[:50]}... to channel {channel_id}")
                 
-                # Set access_token NOW (only when sending) - per-server OAuth token
+                # Set access_token NOW (only when sending)
+                # PRIORITY 1: Use bot's own OAuth token (for @Lelebot account)
+                # PRIORITY 2: Fall back to streamer's OAuth token
                 if not api.access_token:
                     try:
-                        from utils.kick_oauth import get_kick_token_for_server
-                        token_data = get_kick_token_for_server(engine, guild_id)
-                        if token_data and token_data.get('access_token'):
-                            api.access_token = token_data['access_token']
-                            print(f"[{guild_name}] 🔑 Using OAuth token for {token_data.get('kick_username')}")
+                        bot_kick_token = None
+                        
+                        # Try to get bot's OAuth token from bot_settings
+                        with engine.connect() as conn:
+                            result = conn.execute(text("""
+                                SELECT value FROM bot_settings 
+                                WHERE key = 'kick_bot_oauth_token' 
+                                AND discord_server_id = :guild_id
+                                LIMIT 1
+                            """), {"guild_id": guild_id}).fetchone()
+                            
+                            if result and result[0]:
+                                bot_kick_token = result[0]
+                                print(f"[{guild_name}] 🔑 Using bot's Kick OAuth token (@Lelebot)")
+                        
+                        # Fallback to streamer's OAuth token if bot token not configured
+                        if not bot_kick_token:
+                            print(f"[{guild_name}] ⚠️ No bot OAuth token configured, using streamer's token")
+                            from utils.kick_oauth import get_kick_token_for_server
+                            token_data = get_kick_token_for_server(engine, guild_id)
+                            if token_data and token_data.get('access_token'):
+                                api.access_token = token_data['access_token']
+                                print(f"[{guild_name}] 🔑 Using OAuth token for streamer: {token_data.get('kick_username')}")
+                            else:
+                                print(f"[{guild_name}] ⚠️ No OAuth token found for server")
+                                continue
                         else:
-                            print(f"[{guild_name}] ⚠️ No OAuth token found for server")
-                            continue
+                            api.access_token = bot_kick_token
+                            
                     except Exception as e:
                         print(f"[{guild_name}] ❌ Error getting OAuth token: {e}")
                         continue
