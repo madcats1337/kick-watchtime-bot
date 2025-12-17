@@ -529,19 +529,42 @@ class KickWebSocketManager:
             if not await self.ensure_connection(guild_id, guild_name):
                 return False
             
-            # Get chatroom ID (NOT broadcaster_user_id) for the API call
+            # Get API instance
+            api = self.connections.get(guild_id)
+            if not api:
+                print(f"[{guild_name}] ⚠️ No API instance found")
+                return False
+            
+            # Get chatroom ID - prioritize in-memory value from kickpython
             chatroom_id = None
-            with engine.connect() as conn:
-                result = conn.execute(text("""
-                    SELECT value FROM bot_settings 
-                    WHERE key = 'kick_chatroom_id' 
-                    AND discord_server_id = :guild_id
-                    LIMIT 1
-                """), {"guild_id": guild_id}).fetchone()
-                
-                if result and result[0]:
-                    try:
-                        chatroom_id = int(result[0])
+            
+            # PRIORITY 1: Get from kickpython's in-memory chatroom_id (most reliable)
+            if hasattr(api, 'chatroom_id') and api.chatroom_id:
+                chatroom_id = int(api.chatroom_id)
+                print(f"[{guild_name}] 📋 Using chatroom_id from kickpython: {chatroom_id}")
+            
+            # PRIORITY 2: Fall back to database (for reconnections)
+            if not chatroom_id:
+                with engine.connect() as conn:
+                    result = conn.execute(text("""
+                        SELECT value FROM bot_settings 
+                        WHERE key = 'kick_chatroom_id' 
+                        AND discord_server_id = :guild_id
+                        LIMIT 1
+                    """), {"guild_id": guild_id}).fetchone()
+                    
+                    if result and result[0]:
+                        try:
+                            chatroom_id = int(result[0])
+                            print(f"[{guild_name}] 📋 Using chatroom_id from database: {chatroom_id}")
+                            
+                            # HOTFIX: 152837 is broadcaster_user_id, not chatroom_id!
+                            if chatroom_id == 152837:
+                                print(f"[{guild_name}] ⚠️ Invalid chatroom_id (152837 is broadcaster_user_id, not chatroom_id)")
+                                chatroom_id = None
+                        except (ValueError, TypeError):
+                            print(f"[{guild_name}] ⚠️ Invalid chatroom_id format")
+                            chatroom_id = None
                         
                         # HOTFIX: 152837 is broadcaster_user_id, not chatroom_id!
                         # Clear it and let kickpython refetch the correct one
@@ -672,6 +695,10 @@ class KickWebSocketManager:
                             success, message = bot.gtb_manager.add_guess(username, amount)
                             response = f"@{username} {message}" + (" Good luck! 🎰" if success else "")
                             await send_kick_message(response, guild_id=guild_id)
+                        else:
+                            await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount>", guild_id=guild_id)
+                    else:
+                        await send_kick_message(f"@{username} Usage: !gtb <amount>", guild_id=guild_id)
             
             # !clip command
             elif content_stripped.lower().startswith("!clip"):
