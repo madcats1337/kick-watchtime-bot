@@ -295,12 +295,30 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
             guild = bot.get_guild(guild_id)
             guild_name = guild.name if guild else str(guild_id)
         
-        # Get bot user token from environment (OAuth token with chat:write scope)
-        bot_token = KICK_BOT_USER_TOKEN
+        # Get bot token - check bot_tokens table first, then env var
+        bot_token = None
         channel_id = None
         
+        with engine.connect() as conn:
+            # Try to get token from bot_tokens table (saved via /bot/authorize)
+            bot_token_result = conn.execute(text("""
+                SELECT access_token FROM bot_tokens 
+                WHERE bot_username = 'lelebot'
+                LIMIT 1
+            """)).fetchone()
+            
+            if bot_token_result and bot_token_result[0]:
+                bot_token = bot_token_result[0]
+                print(f"[{guild_name}] 🔑 Using bot token from database")
+        
+        # Fallback to environment variable
         if not bot_token:
-            print(f"[{guild_name}] ⚠️ KICK_BOT_USER_TOKEN not set - authorize @Lelebot via OAuth with chat:write scope")
+            bot_token = KICK_BOT_USER_TOKEN
+            if bot_token:
+                print(f"[{guild_name}] 🔑 Using bot token from KICK_BOT_USER_TOKEN env var")
+        
+        if not bot_token:
+            print(f"[{guild_name}] ⚠️ No bot token - authorize @lelebot at https://lelebot.xyz/bot/authorize?token=BOT_AUTH_TOKEN")
             return False
         
         # Get channel ID for this guild
