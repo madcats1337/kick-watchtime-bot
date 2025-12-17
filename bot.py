@@ -415,6 +415,77 @@ class KickWebSocketManager:
             if guild_id in self.connected_channels:
                 del self.connected_channels[guild_id]
     
+    async def _refresh_oauth_token(self, guild_id: int, guild_name: str) -> Optional[str]:
+        """Refresh OAuth 2.1 token using refresh_token from bot_settings"""
+        try:
+            import aiohttp
+            import os
+            
+            # Get refresh_token from bot_settings
+            with engine.connect() as conn:
+                result = conn.execute(text("""
+                    SELECT value FROM bot_settings 
+                    WHERE key = 'kick_refresh_token' 
+                    AND discord_server_id = :guild_id
+                    LIMIT 1
+                """), {"guild_id": guild_id}).fetchone()
+                
+                if not result or not result[0]:
+                    print(f"[{guild_name}] ❌ No refresh_token found in bot_settings")
+                    return None
+                
+                refresh_token = result[0]
+            
+            # Refresh the token
+            client_id = os.getenv('KICK_CLIENT_ID')
+            client_secret = os.getenv('KICK_CLIENT_SECRET')
+            
+            data = {
+                'grant_type': 'refresh_token',
+                'client_id': client_id,
+                'client_secret': client_secret,
+                'refresh_token': refresh_token,
+            }
+            
+            print(f"[{guild_name}] 🔄 Refreshing OAuth 2.1 token...")
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    'https://id.kick.com/oauth/token',
+                    data=data,
+                    headers={'Content-Type': 'application/x-www-form-urlencoded'},
+                    timeout=10
+                ) as resp:
+                    if resp.status == 200:
+                        token_data = await resp.json()
+                        new_access_token = token_data['access_token']
+                        new_refresh_token = token_data.get('refresh_token', refresh_token)
+                        
+                        # Update both tokens in bot_settings
+                        with engine.begin() as conn:
+                            conn.execute(text("""
+                                INSERT INTO bot_settings (discord_server_id, key, value)
+                                VALUES (:guild_id, 'kick_oauth_token', :token)
+                                ON CONFLICT (discord_server_id, key) DO UPDATE SET value = EXCLUDED.value
+                            """), {"guild_id": guild_id, "token": new_access_token})
+                            
+                            conn.execute(text("""
+                                INSERT INTO bot_settings (discord_server_id, key, value)
+                                VALUES (:guild_id, 'kick_refresh_token', :token)
+                                ON CONFLICT (discord_server_id, key) DO UPDATE SET value = EXCLUDED.value
+                            """), {"guild_id": guild_id, "token": new_refresh_token})
+                        
+                        print(f"[{guild_name}] ✅ OAuth token refreshed successfully")
+                        return new_access_token
+                    else:
+                        error_text = await resp.text()
+                        print(f"[{guild_name}] ❌ Token refresh failed: HTTP {resp.status} - {error_text}")
+                        return None
+        except Exception as e:
+            print(f"[{guild_name}] ❌ Error refreshing token: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
     async def _message_sender(self, guild_id: int, guild_name: str, api):
         """Process message queue and send via kickpython (multiserver support)"""
         print(f"[{guild_name}] 📨 Message sender started")
@@ -493,16 +564,15 @@ class KickWebSocketManager:
                                 raise Exception(f"Failed to send message: HTTP {resp.status} - {error_text}")
                     
                 except Exception as send_error:
-                    # If sending fails with current token, try streamer OAuth as fallback
+                    # If sending fails with current token, try refreshing it first
                     if "Unauthorized" in str(send_error) or "401" in str(send_error):
-                        print(f"[{guild_name}] ⚠️ Token unauthorized, trying streamer OAuth fallback...")
-                        from utils.kick_oauth import get_kick_token_for_server
-                        token_data = get_kick_token_for_server(engine, guild_id)
-                        if token_data and token_data.get('access_token'):
-                            api.access_token = token_data['access_token']
-                            print(f"[{guild_name}] 🔄 Retrying with streamer token...")
+                        print(f"[{guild_name}] ⚠️ Token unauthorized, attempting refresh...")
+                        refreshed = await self._refresh_oauth_token(guild_id, guild_name)
+                        if refreshed:
+                            api.access_token = refreshed
+                            print(f"[{guild_name}] 🔄 Retrying with refreshed token...")
                             
-                            # Retry with fallback token using correct endpoint
+                            # Retry with refreshed token
                             import aiohttp
                             headers = {
                                 'Authorization': f'Bearer {api.access_token}',
@@ -520,10 +590,22 @@ class KickWebSocketManager:
                                 async with session.post(url, headers=headers, json=payload, timeout=10) as resp:
                                     if resp.status in [200, 201]:
                                         response_data = await resp.json()
-                                        print(f"[{guild_name}] ✅ Sent via streamer token: {response_data}")
+                                        print(f"[{guild_name}] ✅ Sent via refreshed token: {response_data}")
                                     else:
                                         error_text = await resp.text()
-                                        raise Exception(f"Fallback failed: HTTP {resp.status} - {error_text}")
+                                        # Try streamer OAuth as final fallback
+                                        print(f"[{guild_name}] ⚠️ Refreshed token failed, trying streamer OAuth...")
+                                        from utils.kick_oauth import get_kick_token_for_server
+                                        token_data = get_kick_token_for_server(engine, guild_id)
+                                        if token_data and token_data.get('access_token'):
+                                            api.access_token = token_data['access_token']
+                                            async with session.post(url, headers={'Authorization': f'Bearer {api.access_token}', 'Accept': 'application/json', 'Content-Type': 'application/json', 'User-Agent': 'LeleBot/1.0'}, json=payload, timeout=10) as fallback_resp:
+                                                if fallback_resp.status in [200, 201]:
+                                                    print(f"[{guild_name}] ✅ Sent via streamer OAuth")
+                                                else:
+                                                    raise Exception(f"All tokens failed: HTTP {fallback_resp.status}")
+                                        else:
+                                            raise Exception(f"Refresh failed: HTTP {resp.status} - {error_text}")
                         else:
                             raise send_error
                     else:
@@ -677,17 +759,21 @@ class KickWebSocketManager:
             # !call / !sr commands (slot requests)
             elif content_stripped.startswith(("!call", "!sr")):
                 if hasattr(bot, 'slot_call_tracker') and bot.slot_call_tracker:
-                    slot_call = content_stripped[5:].strip()[:200] if content_stripped.startswith("!call") else content_stripped[3:].strip()[:200]
-                    if slot_call:
-                        original_guild_id = getattr(bot.slot_call_tracker, 'discord_server_id', None)
-                        bot.slot_call_tracker.discord_server_id = guild_id
-                        try:
-                            await bot.slot_call_tracker.handle_slot_call(username, slot_call)
-                        finally:
-                            if original_guild_id:
-                                bot.slot_call_tracker.discord_server_id = original_guild_id
+                    # Check if slot requests are enabled first
+                    if not bot.slot_call_tracker.enabled:
+                        await send_kick_message(f"@{username} Slot requests are not open at the moment.", guild_id=guild_id)
                     else:
-                        await send_kick_message(f"@{username} Please specify a slot!", guild_id=guild_id)
+                        slot_call = content_stripped[5:].strip()[:200] if content_stripped.startswith("!call") else content_stripped[3:].strip()[:200]
+                        if slot_call:
+                            original_guild_id = getattr(bot.slot_call_tracker, 'discord_server_id', None)
+                            bot.slot_call_tracker.discord_server_id = guild_id
+                            try:
+                                await bot.slot_call_tracker.handle_slot_call(username, slot_call)
+                            finally:
+                                if original_guild_id:
+                                    bot.slot_call_tracker.discord_server_id = original_guild_id
+                        else:
+                            await send_kick_message(f"@{username} Please specify a slot!", guild_id=guild_id)
             
             # !gtb command
             elif content_stripped.lower().startswith("!gtb"):
@@ -2352,6 +2438,11 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                     content_stripped = content_text.strip()
                                     # Use bot.slot_call_tracker instead of global variable
                                     if hasattr(bot, 'slot_call_tracker') and bot.slot_call_tracker and (content_stripped.startswith("!call") or content_stripped.startswith("!sr")):
+                                        # Check if slot requests are enabled first
+                                        if not bot.slot_call_tracker.enabled:
+                                            await send_kick_message(f"@{username} Slot requests are not open at the moment.", guild_id=guild_id)
+                                            continue
+                                        
                                         # 🔒 SECURITY: Check if user is blacklisted (per-guild)
                                         is_blacklisted = False
                                         try:
