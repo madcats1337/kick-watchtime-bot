@@ -350,6 +350,70 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
                 if response.status == 200:
                     print(f"[{guild_name}] ✅ Message sent successfully to Kick as bot")
                     return True
+                elif response.status == 401:
+                    # Token expired, try to refresh
+                    print(f"[{guild_name}] ⚠️ Token expired (401), attempting refresh...")
+                    
+                    # Get refresh token from bot_tokens table
+                    with engine.connect() as conn:
+                        refresh_result = conn.execute(text("""
+                            SELECT refresh_token FROM bot_tokens
+                            WHERE bot_username = 'Lelebot'
+                            ORDER BY created_at DESC LIMIT 1
+                        """)).fetchone()
+                        
+                        if not refresh_result or not refresh_result[0]:
+                            print(f"[{guild_name}] ❌ No refresh token found")
+                            return False
+                        
+                        refresh_token = refresh_result[0]
+                    
+                    # Refresh the token
+                    token_url = "https://id.kick.com/oauth/token"
+                    token_data = {
+                        "grant_type": "refresh_token",
+                        "client_id": KICK_CLIENT_ID,
+                        "client_secret": KICK_CLIENT_SECRET,
+                        "refresh_token": refresh_token
+                    }
+                    
+                    async with session.post(token_url, data=token_data) as token_response:
+                        if token_response.status == 200:
+                            from datetime import datetime, timedelta, timezone
+                            new_tokens = await token_response.json()
+                            new_access_token = new_tokens['access_token']
+                            new_refresh_token = new_tokens.get('refresh_token', refresh_token)
+                            expires_in = new_tokens.get('expires_in', 3600)
+                            
+                            # Update token in database
+                            with engine.begin() as conn:
+                                conn.execute(text("""
+                                    UPDATE bot_tokens
+                                    SET access_token = :access_token,
+                                        refresh_token = :refresh_token,
+                                        updated_at = CURRENT_TIMESTAMP
+                                    WHERE bot_username = 'Lelebot'
+                                """), {
+                                    "access_token": new_access_token,
+                                    "refresh_token": new_refresh_token
+                                })
+                            
+                            print(f"[{guild_name}] ✅ Token refreshed, retrying message...")
+                            
+                            # Retry with new token
+                            headers["Authorization"] = f"Bearer {new_access_token}"
+                            async with session.post(url, json=payload, headers=headers) as retry_response:
+                                if retry_response.status == 200:
+                                    print(f"[{guild_name}] ✅ Message sent after token refresh")
+                                    return True
+                                else:
+                                    retry_text = await retry_response.text()
+                                    print(f"[{guild_name}] ❌ Failed after refresh: {retry_response.status} - {retry_text}")
+                                    return False
+                        else:
+                            error_text = await token_response.text()
+                            print(f"[{guild_name}] ❌ Token refresh failed: {token_response.status} - {error_text}")
+                            return False
                 else:
                     response_text = await response.text()
                     print(f"[{guild_name}] ❌ Failed to send message: {response.status} - {response_text}")
