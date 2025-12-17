@@ -314,7 +314,12 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
                 """), {"guild_id": guild_id}).fetchone()
                 
                 if result and result[0]:
-                    channel_id = result[0]
+                    # Convert to int - kickpython expects numeric channel_id
+                    try:
+                        channel_id = int(result[0])
+                    except (ValueError, TypeError):
+                        print(f"[{guild_name}] ⚠️ Invalid channel_id format: {result[0]}")
+                        return False
         
         if not channel_id:
             print(f"[{guild_name}] ⚠️ Channel ID not configured")
@@ -324,7 +329,7 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
         api = KickAPI(
             client_id=KICK_CLIENT_ID,
             client_secret=KICK_CLIENT_SECRET,
-            redirect_uri=f"{os.getenv('OAUTH_BASE_URL')}/auth/kick/callback"
+            redirect_uri=f"{OAUTH_BASE_URL}/auth/kick/callback"
         )
         
         # Manually set the access token
