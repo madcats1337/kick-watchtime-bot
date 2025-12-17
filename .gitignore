@@ -29,6 +29,10 @@ wheels/
 .env.local
 .env.*.local
 
+# OAuth secrets
+oauth_verifier.txt
+oauth_tokens.txt
+
 # Database
 *.db
 *.sqlite
