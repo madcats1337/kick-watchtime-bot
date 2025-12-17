@@ -274,38 +274,130 @@ async def get_kick_api():
         await _kick_api.setup()
     return _kick_api
 
-async def send_kick_message(message: str, guild_id: int = None) -> bool:
-    """
-    Send a message to Kick chat using kickpython library.
-    Uses per-server OAuth tokens from database.
+# -------------------------
+# Kick WebSocket Manager for sending chat messages
+# -------------------------
+class KickWebSocketManager:
+    """Manages persistent WebSocket connections for each guild using kickpython"""
     
-    Args:
-        message: The message to send
-        guild_id: Discord server ID (for multiserver support)
-        
-    Returns:
-        True if message sent successfully, False otherwise
-    """
-    # Get guild name for logging - MUST be defined before try block
-    guild_name = "Unknown"
-    if guild_id:
-        guild = bot.get_guild(guild_id)
-        guild_name = guild.name if guild else str(guild_id)
+    def __init__(self):
+        self.connections = {}  # guild_id -> KickAPI instance
+        self.connection_tasks = {}  # guild_id -> asyncio.Task
+        self.message_queues = {}  # guild_id -> asyncio.Queue
     
-    try:
+    async def ensure_connection(self, guild_id: int, guild_name: str) -> bool:
+        """Ensure there's an active websocket connection for this guild"""
         from kickpython import KickAPI
         from utils.kick_oauth import get_kick_token_for_server
         
-        # Get OAuth token and channel ID from database
-        token_data = get_kick_token_for_server(engine, guild_id)
+        # Check if already connected
+        if guild_id in self.connections:
+            return True
         
-        if not token_data or not token_data.get('access_token'):
-            print(f"[{guild_name}] ⚠️ No OAuth token - streamer needs to link Kick account")
+        try:
+            # Get OAuth token and channel info
+            token_data = get_kick_token_for_server(engine, guild_id)
+            
+            if not token_data or not token_data.get('access_token'):
+                print(f"[{guild_name}] ⚠️ No OAuth token - streamer needs to link Kick account")
+                return False
+            
+            # Get channel username (not ID - kickpython needs username for websocket)
+            kick_username = None
+            with engine.connect() as conn:
+                result = conn.execute(text("""
+                    SELECT value FROM bot_settings 
+                    WHERE key = 'kick_channel' 
+                    AND discord_server_id = :guild_id
+                    LIMIT 1
+                """), {"guild_id": guild_id}).fetchone()
+                
+                if result and result[0]:
+                    kick_username = result[0]
+            
+            if not kick_username:
+                print(f"[{guild_name}] ⚠️ Kick channel username not configured")
+                return False
+            
+            # Initialize kickpython API
+            api = KickAPI(
+                client_id=KICK_CLIENT_ID,
+                client_secret=KICK_CLIENT_SECRET,
+                redirect_uri=f"{OAUTH_BASE_URL}/auth/kick/callback"
+            )
+            
+            # Set the access token
+            api.access_token = token_data['access_token']
+            
+            # Create message queue for this guild
+            self.message_queues[guild_id] = asyncio.Queue()
+            
+            # Connect to chatroom via websocket
+            print(f"[{guild_name}] 🔌 Connecting to Kick websocket for channel: {kick_username}...")
+            
+            # Start connection in background task
+            task = asyncio.create_task(
+                self._maintain_connection(guild_id, guild_name, api, kick_username)
+            )
+            
+            self.connections[guild_id] = api
+            self.connection_tasks[guild_id] = task
+            
+            # Give it a moment to connect
+            await asyncio.sleep(2)
+            
+            print(f"[{guild_name}] ✅ Kick websocket connection established")
+            return True
+            
+        except Exception as e:
+            print(f"[{guild_name}] ❌ Failed to connect websocket: {e}")
+            import traceback
+            traceback.print_exc()
             return False
-        
-        channel_id = None
-        with engine.connect() as conn:
-            if guild_id:
+    
+    async def _maintain_connection(self, guild_id: int, guild_name: str, api, kick_username: str):
+        """Maintain websocket connection and process message queue"""
+        try:
+            # Connect to chatroom
+            await api.connect_to_chatroom(kick_username)
+            
+            # Process messages from queue
+            while True:
+                try:
+                    # Wait for message from queue
+                    message, channel_id = await asyncio.wait_for(
+                        self.message_queues[guild_id].get(),
+                        timeout=30.0
+                    )
+                    
+                    # Send via kickpython
+                    await api.post_chat(channel_id=channel_id, content=message)
+                    print(f"[{guild_name}] ✅ Sent via websocket: {message[:50]}...")
+                    
+                except asyncio.TimeoutError:
+                    # Keep connection alive with periodic checks
+                    continue
+                except Exception as e:
+                    print(f"[{guild_name}] ❌ Error sending message: {e}")
+                    
+        except Exception as e:
+            print(f"[{guild_name}] ❌ Websocket connection lost: {e}")
+            # Clean up
+            if guild_id in self.connections:
+                del self.connections[guild_id]
+            if guild_id in self.connection_tasks:
+                del self.connection_tasks[guild_id]
+    
+    async def send_message(self, message: str, guild_id: int, guild_name: str) -> bool:
+        """Queue a message to be sent via websocket"""
+        try:
+            # Ensure connection exists
+            if not await self.ensure_connection(guild_id, guild_name):
+                return False
+            
+            # Get channel ID for the API call
+            channel_id = None
+            with engine.connect() as conn:
                 result = conn.execute(text("""
                     SELECT value FROM bot_settings 
                     WHERE key = 'kick_broadcaster_user_id' 
@@ -314,33 +406,48 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
                 """), {"guild_id": guild_id}).fetchone()
                 
                 if result and result[0]:
-                    # Convert to int - kickpython expects numeric channel_id
                     try:
                         channel_id = int(result[0])
                     except (ValueError, TypeError):
-                        print(f"[{guild_name}] ⚠️ Invalid channel_id format: {result[0]}")
+                        print(f"[{guild_name}] ⚠️ Invalid channel_id format")
                         return False
-        
-        if not channel_id:
-            print(f"[{guild_name}] ⚠️ Channel ID not configured")
+            
+            if not channel_id:
+                print(f"[{guild_name}] ⚠️ Channel ID not configured")
+                return False
+            
+            # Add to queue
+            await self.message_queues[guild_id].put((message, channel_id))
+            print(f"[{guild_name}] 📤 Queued message for websocket")
+            return True
+            
+        except Exception as e:
+            print(f"[{guild_name}] ❌ Failed to queue message: {e}")
             return False
+
+# Global websocket manager instance
+kick_ws_manager = KickWebSocketManager()
+
+async def send_kick_message(message: str, guild_id: int = None) -> bool:
+    """
+    Send a message to Kick chat using kickpython websocket connection.
+    Uses per-server OAuth tokens and persistent websocket connections.
+    
+    Args:
+        message: The message to send
+        guild_id: Discord server ID (for multiserver support)
         
-        # Initialize kickpython with token
-        api = KickAPI(
-            client_id=KICK_CLIENT_ID,
-            client_secret=KICK_CLIENT_SECRET,
-            redirect_uri=f"{OAUTH_BASE_URL}/auth/kick/callback"
-        )
-        
-        # Manually set the access token
-        api.access_token = token_data['access_token']
-        
-        # Send message using kickpython
-        print(f"[{guild_name}] 📤 Sending message via kickpython to channel {channel_id}...")
-        await api.post_chat(channel_id=channel_id, content=message)
-        
-        print(f"[{guild_name}] ✅ Message sent successfully")
-        return True
+    Returns:
+        True if message queued successfully, False otherwise
+    """
+    # Get guild name for logging - MUST be defined before try block
+    guild_name = "Unknown"
+    if guild_id:
+        guild = bot.get_guild(guild_id)
+        guild_name = guild.name if guild else str(guild_id)
+    
+    try:
+        return await kick_ws_manager.send_message(message, guild_id, guild_name)
         
     except Exception as e:
         print(f"[{guild_name}] ❌ Failed to send message: {e}")
