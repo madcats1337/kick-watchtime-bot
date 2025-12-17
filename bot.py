@@ -463,6 +463,18 @@ class KickWebSocketManager:
                 if result and result[0]:
                     try:
                         chatroom_id = int(result[0])
+                        
+                        # HOTFIX: 152837 is broadcaster_user_id, not chatroom_id!
+                        # Clear it and let kickpython refetch the correct one
+                        if chatroom_id == 152837:
+                            print(f"[{guild_name}] ⚠️ Invalid chatroom_id detected (152837 is broadcaster_user_id)")
+                            print(f"[{guild_name}] 🔄 Clearing to force refetch of correct chatroom_id...")
+                            conn.execute(text("""
+                                DELETE FROM bot_settings 
+                                WHERE key = 'kick_chatroom_id' AND discord_server_id = :guild_id
+                            """), {"guild_id": guild_id})
+                            conn.commit()
+                            chatroom_id = None
                     except (ValueError, TypeError):
                         print(f"[{guild_name}] ⚠️ Invalid chatroom_id format")
                         return False
