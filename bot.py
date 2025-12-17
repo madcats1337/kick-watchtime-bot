@@ -322,15 +322,17 @@ class KickWebSocketManager:
                 print(f"[{guild_name}] ⚠️ Kick channel username not configured")
                 return False
             
-            # Initialize kickpython API with BOT token
+            # Initialize kickpython API WITHOUT access_token for chatroom_id fetch
+            # kickpython will use non-OAuth API to fetch chatroom_id (more reliable)
             api = KickAPI(
                 client_id=KICK_CLIENT_ID,
                 client_secret=KICK_CLIENT_SECRET,
                 redirect_uri=f"{OAUTH_BASE_URL}/auth/kick/callback"
             )
             
-            # Set the BOT access token from environment
-            api.access_token = bot_token
+            # DON'T set access_token here - let kickpython fetch chatroom_id without OAuth
+            # (OAuth tokens can expire, causing 401 errors during chatroom_id fetch)
+            # api.access_token = bot_token  # REMOVED - causes 401 errors
 
             # Attach a chat message handler before connecting
             async def _on_message(msg: dict):
