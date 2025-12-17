@@ -462,6 +462,9 @@ class KickWebSocketManager:
                 # Token already set at startup - no need to reload every message
                 # Send via kickpython
                 print(f"[{guild_name}] 📤 Calling api.post_chat...")
+                print(f"[{guild_name}] 🔑 api.access_token is set: {hasattr(api, 'access_token') and api.access_token is not None}")
+                if hasattr(api, 'access_token'):
+                    print(f"[{guild_name}] 🔑 api.access_token value: {api.access_token[:30] if api.access_token else 'None'}...")
                 try:
                     await api.post_chat(channel_id=channel_id, content=message)
                     print(f"[{guild_name}] ✅ Sent: {message[:50]}...")
