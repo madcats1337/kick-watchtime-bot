@@ -295,25 +295,36 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
             guild = bot.get_guild(guild_id)
             guild_name = guild.name if guild else str(guild_id)
         
-        # Get bot token using client credentials
-        bot_token = await get_kick_bot_token()
-        if not bot_token:
-            print(f"[{guild_name}] ⚠️ Failed to get bot token")
-            return False
-        
-        # Get channel ID (broadcaster user ID) from bot_settings
+        # Get bot access token from bot_tokens table
+        bot_token = None
         channel_id = None
-        if guild_id:
-            with engine.connect() as conn:
-                result = conn.execute(text("""
+        
+        with engine.connect() as conn:
+            # Get bot token for Lelebot
+            token_result = conn.execute(text("""
+                SELECT access_token FROM bot_tokens
+                WHERE bot_username = 'Lelebot'
+                ORDER BY created_at DESC LIMIT 1
+            """)).fetchone()
+            
+            if token_result and token_result[0]:
+                bot_token = token_result[0]
+            
+            # Get channel ID for this guild
+            if guild_id:
+                channel_result = conn.execute(text("""
                     SELECT value FROM bot_settings 
                     WHERE key = 'kick_broadcaster_user_id' 
                     AND discord_server_id = :guild_id
                     LIMIT 1
                 """), {"guild_id": guild_id}).fetchone()
                 
-                if result and result[0]:
-                    channel_id = result[0]
+                if channel_result and channel_result[0]:
+                    channel_id = channel_result[0]
+        
+        if not bot_token:
+            print(f"[{guild_name}] ⚠️ No bot token found in bot_tokens table")
+            return False
         
         if not channel_id:
             print(f"[{guild_name}] ⚠️ Channel ID not configured - configure in Dashboard → Profile Settings")
