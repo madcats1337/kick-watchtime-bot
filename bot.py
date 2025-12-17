@@ -1466,7 +1466,12 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                         data = json.dumps(message)
                         event_type = data.get("event")
                         
-                        # Handle chat messages
+                        # Skip chat messages if kickpython is handling them
+                        # Only process subscription events from Pusher when kickpython is enabled
+                        if KICK_USE_KICKPYTHON_WS and event_type == "App\\Events\\ChatMessageEvent":
+                            continue  # kickpython handles chat messages
+                        
+                        # Handle chat messages (only when kickpython is disabled)
                         if event_type == "App\\Events\\ChatMessageEvent":
                             payload = json.loads(data.get("data", "{}"))
                             username = payload.get("sender", {}).get("username", "Unknown")
@@ -2192,7 +2197,12 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                 await ws.send(json.dumps({"event": "pusher:pong"}))
                                 continue
 
-                            # Handle chat message
+                            # Skip chat messages if kickpython is handling them
+                            # Only process subscription events from Pusher when kickpython is enabled
+                            if KICK_USE_KICKPYTHON_WS and event_type == "App\\Events\\ChatMessageEvent":
+                                continue  # kickpython handles chat messages
+                            
+                            # Handle chat message (only when kickpython is disabled)
                             # Process ALL chat messages directly from Pusher (no webhooks)
                             if event_type == "App\\Events\\ChatMessageEvent":
                                 event_data = json.loads(data.get("data", "{}"))
