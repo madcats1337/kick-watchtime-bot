@@ -5611,8 +5611,8 @@ class PointShopPurchaseModal(discord.ui.Modal):
 
             # Get balance
             points_data = conn.execute(text("""
-                SELECT points FROM user_points WHERE kick_username = :k
-            """), {"k": kick_username}).fetchone()
+                SELECT points FROM user_points WHERE kick_username = :k AND discord_server_id = :s
+            """), {"k": kick_username, "s": interaction.guild.id}).fetchone()
 
             current_balance = points_data[0] if points_data else 0
 
@@ -5749,8 +5749,8 @@ class PointShopItemSelect(discord.ui.Select):
 
             # Get balance
             points_data = conn.execute(text("""
-                SELECT points FROM user_points WHERE kick_username = :k
-            """), {"k": kick_username}).fetchone()
+                SELECT points FROM user_points WHERE kick_username = :k AND discord_server_id = :s
+            """), {"k": kick_username, "s": interaction.guild.id}).fetchone()
 
             current_balance = points_data[0] if points_data else 0
 
@@ -5822,8 +5822,8 @@ class PointShopBalanceButton(discord.ui.Button):
             points_data = conn.execute(text("""
                 SELECT points, total_earned, total_spent
                 FROM user_points
-                WHERE kick_username = :k
-            """), {"k": kick_username}).fetchone()
+                WHERE kick_username = :k AND discord_server_id = :s
+            """), {"k": kick_username, "s": interaction.guild.id}).fetchone()
 
             if not points_data:
                 points, total_earned, total_spent = 0, 0, 0
