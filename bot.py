@@ -358,36 +358,20 @@ class KickWebSocketManager:
     async def _maintain_connection(self, guild_id: int, guild_name: str, api, kick_username: str):
         """Maintain websocket connection and process message queue"""
         try:
-            # Connect to chatroom
-            print(f"[{guild_name}] 🔌 Starting websocket connection task...")
-            await api.connect_to_chatroom(kick_username)
-            print(f"[{guild_name}] ✅ Websocket connected, starting message loop...")
+            print(f"[{guild_name}] 🔌 Starting message sender task in background...")
             
-            # Process messages from queue
-            while True:
-                try:
-                    print(f"[{guild_name}] ⏳ Waiting for messages in queue...")
-                    # Wait for message from queue with shorter timeout for testing
-                    message, channel_id = await asyncio.wait_for(
-                        self.message_queues[guild_id].get(),
-                        timeout=5.0
-                    )
-                    
-                    print(f"[{guild_name}] 📨 Got message from queue: {message[:50]}... to channel {channel_id}")
-                    
-                    # Send via kickpython
-                    print(f"[{guild_name}] 📤 Calling api.post_chat...")
-                    await api.post_chat(channel_id=channel_id, content=message)
-                    print(f"[{guild_name}] ✅ Sent via websocket: {message[:50]}...")
-                    
-                except asyncio.TimeoutError:
-                    # Keep connection alive with periodic checks
-                    print(f"[{guild_name}] 💓 Keepalive - queue empty")
-                    continue
-                except Exception as e:
-                    print(f"[{guild_name}] ❌ Error sending message: {e}")
-                    import traceback
-                    traceback.print_exc()
+            # Start the message sender as a separate task
+            sender_task = asyncio.create_task(
+                self._message_sender(guild_id, guild_name, api)
+            )
+            
+            # Now connect to chatroom (this will block)
+            print(f"[{guild_name}] 🔌 Connecting to websocket (blocking call)...")
+            await api.connect_to_chatroom(kick_username)
+            
+            # If we get here, connection was closed
+            print(f"[{guild_name}] ⚠️ Websocket connection closed")
+            sender_task.cancel()
                     
         except Exception as e:
             print(f"[{guild_name}] ❌ Websocket connection lost: {e}")
@@ -398,6 +382,37 @@ class KickWebSocketManager:
                 del self.connections[guild_id]
             if guild_id in self.connection_tasks:
                 del self.connection_tasks[guild_id]
+    
+    async def _message_sender(self, guild_id: int, guild_name: str, api):
+        """Process message queue and send via websocket"""
+        print(f"[{guild_name}] 📨 Message sender started")
+        while True:
+            try:
+                print(f"[{guild_name}] ⏳ Waiting for messages in queue...")
+                # Wait for message from queue
+                message, channel_id = await asyncio.wait_for(
+                    self.message_queues[guild_id].get(),
+                    timeout=5.0
+                )
+                
+                print(f"[{guild_name}] 📨 Got message from queue: {message[:50]}... to channel {channel_id}")
+                
+                # Send via kickpython
+                print(f"[{guild_name}] 📤 Calling api.post_chat...")
+                await api.post_chat(channel_id=channel_id, content=message)
+                print(f"[{guild_name}] ✅ Sent via websocket: {message[:50]}...")
+                
+            except asyncio.TimeoutError:
+                # Keep connection alive with periodic checks
+                print(f"[{guild_name}] 💓 Keepalive - queue empty")
+                continue
+            except asyncio.CancelledError:
+                print(f"[{guild_name}] 🛑 Message sender cancelled")
+                break
+            except Exception as e:
+                print(f"[{guild_name}] ❌ Error sending message: {e}")
+                import traceback
+                traceback.print_exc()
     
     async def send_message(self, message: str, guild_id: int, guild_name: str) -> bool:
         """Queue a message to be sent via websocket"""
