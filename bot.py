@@ -294,20 +294,11 @@ class KickWebSocketManager:
             return True
         
         try:
-            # Get BOT token from bot_tokens table (NOT streamer token)
-            bot_token = None
-            with engine.connect() as conn:
-                result = conn.execute(text("""
-                    SELECT access_token FROM bot_tokens 
-                    WHERE bot_username = 'lelebot'
-                    LIMIT 1
-                """)).fetchone()
-                
-                if result and result[0]:
-                    bot_token = result[0]
+            # Get BOT token from environment variable
+            bot_token = KICK_BOT_USER_TOKEN
             
             if not bot_token:
-                print(f"[{guild_name}] ⚠️ No bot token - bot needs to authorize via /bot/authorize")
+                print(f"[{guild_name}] ⚠️ No KICK_BOT_USER_TOKEN environment variable set")
                 return False
             
             # Get channel username for websocket connection
@@ -334,14 +325,14 @@ class KickWebSocketManager:
                 redirect_uri=f"{OAUTH_BASE_URL}/auth/kick/callback"
             )
             
-            # Set the BOT access token
+            # Set the BOT access token from environment
             api.access_token = bot_token
             
             # Create message queue for this guild
             self.message_queues[guild_id] = asyncio.Queue()
             
             # Connect to chatroom via websocket
-            print(f"[{guild_name}] 🔌 Connecting to Kick websocket for channel: {kick_username} with BOT token...")
+            print(f"[{guild_name}] 🔌 Connecting to Kick websocket for channel: {kick_username} with BOT token from env...")
             
             # Start connection in background task
             task = asyncio.create_task(
@@ -354,7 +345,7 @@ class KickWebSocketManager:
             # Give it a moment to connect
             await asyncio.sleep(2)
             
-            print(f"[{guild_name}] ✅ Kick websocket connection established with BOT token")
+            print(f"[{guild_name}] ✅ Kick websocket connection established with BOT token from env")
             return True
             
         except Exception as e:
