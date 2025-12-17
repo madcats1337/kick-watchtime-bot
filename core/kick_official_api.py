@@ -57,7 +57,7 @@ KICK_USER_INFO_URL = f"{KICK_OAUTH_SERVER}/oauth/userinfo"
 # API endpoints
 KICK_USERS_URL = f"{KICK_API_PUBLIC_V1}/users"
 KICK_CHANNELS_URL = f"{KICK_API_PUBLIC_V1}/channels"
-KICK_CHAT_URL = f"{KICK_API_V2}/messages/send"  # v2 messages endpoint (requires chatroom_id)
+KICK_CHAT_URL = f"{KICK_API_SERVER}/api/v1/chat-messages"  # v1 messages endpoint
 KICK_CATEGORIES_URL = f"{KICK_API_PUBLIC_V1}/categories"
 KICK_WEBHOOKS_URL = f"{KICK_API_PUBLIC_V1}/events/subscriptions"
 KICK_MODERATION_URL = f"{KICK_API_PUBLIC_V1}/channels/{{broadcaster_user_id}}/moderation"
@@ -504,11 +504,12 @@ class KickOfficialAPI:
             if not chatroom_id:
                 raise ValueError("chatroom_id is required for sending chat messages")
         
-        # Build URL with chatroom_id in path
-        url = f"{KICK_CHAT_URL}/{chatroom_id}"
+        # v1 endpoint doesn't use chatroom_id in path, uses it in payload
+        url = KICK_CHAT_URL
         
         payload = {
             "content": content,
+            "chatroom_id": chatroom_id,
         }
 
         if reply_to_message_id:
