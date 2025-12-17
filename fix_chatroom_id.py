@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-"""Fix kick_chatroom_id to be 151060 instead of broadcaster_user_id"""
+"""Delete incorrect chatroom_id so kickpython can fetch the correct one"""
 import os
 from sqlalchemy import create_engine, text
 
 DATABASE_URL = os.getenv('DATABASE_URL')
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    
 engine = create_engine(DATABASE_URL)
 
+print("🔧 Clearing incorrect chatroom_id from database...")
+
 with engine.begin() as conn:
-    # Update chatroom_id
+    # Delete chatroom_id = 152837 (this is broadcaster_user_id, not chatroom_id)
     result = conn.execute(text("""
-        UPDATE bot_settings 
-        SET value = '151060' 
+        DELETE FROM bot_settings 
         WHERE key = 'kick_chatroom_id' 
-        AND discord_server_id = 914986636629143562
+        AND value = '152837'
     """))
-    print(f"✅ Updated kick_chatroom_id to 151060 ({result.rowcount} rows)")
+    print(f"✅ Deleted {result.rowcount} incorrect entries")
     
     # Verify
     result = conn.execute(text("""
@@ -24,6 +28,9 @@ with engine.begin() as conn:
         AND key IN ('kick_chatroom_id', 'kick_broadcaster_user_id', 'kick_channel')
     """))
     
-    print("\n📋 Current settings:")
+    print("\n📋 Remaining settings:")
     for row in result:
         print(f"  {row[0]}: {row[1]}")
+
+print("\n✅ Done! Restart bot to let kickpython fetch correct chatroom_id")
+

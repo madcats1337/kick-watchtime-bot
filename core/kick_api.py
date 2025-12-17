@@ -24,6 +24,13 @@ except ImportError:
     HAS_OFFICIAL_API = False
     KickOfficialAPI = None
 
+# Optional: kickpython for robust chatroom_id resolution
+try:
+    from kickpython import KickAPI as KickPyAPI  # type: ignore
+    HAS_KICKPYTHON = True
+except Exception:
+    HAS_KICKPYTHON = False
+
 # User agents for rotation
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
@@ -71,6 +78,12 @@ class KickAPI:
         Returns:
             Chatroom ID as string, or None if failed
         """
+        # Strategy 0: Try kickpython first (often more reliable) if available
+        chatroom_id = await self._fetch_chatroom_id_with_kickpython(channel_name)
+        if chatroom_id:
+            return chatroom_id
+
+        # Strategy 1: HTTP v2 API with retries
         for attempt in range(max_retries):
             try:
                 print(f"[Kick] Attempt {attempt + 1}/{max_retries}: Fetching chatroom ID for {channel_name}")
@@ -106,6 +119,52 @@ class KickAPI:
 
         print(f"[Kick] ❌ Failed to fetch chatroom ID after {max_retries} attempts")
         print(f"[Kick] 💡 TIP: Set KICK_CHATROOM_ID environment variable to bypass Cloudflare")
+        return None
+
+    async def _fetch_chatroom_id_with_kickpython(self, channel_name: str, timeout_seconds: int = 10) -> Optional[str]:
+        """Resolve chatroom_id via kickpython by briefly connecting then disconnecting.
+
+        Returns:
+            str chatroom_id or None
+        """
+        if not HAS_KICKPYTHON:
+            return None
+
+        # Build API with optional access token (improves reliability)
+        try:
+            access_token = os.getenv("KICK_BOT_USER_TOKEN") or os.getenv("KICK_USER_TOKEN")
+            client_id = os.getenv("KICK_CLIENT_ID")
+            client_secret = os.getenv("KICK_CLIENT_SECRET")
+            redirect_uri = os.getenv("OAUTH_BASE_URL")
+            if redirect_uri and not redirect_uri.startswith(("http://", "https://")):
+                redirect_uri = f"https://{redirect_uri}"
+
+            api = KickPyAPI(
+                client_id=client_id,
+                client_secret=client_secret,
+                redirect_uri=f"{redirect_uri}/auth/kick/callback" if redirect_uri else None,
+            )
+            if access_token:
+                api.access_token = access_token
+
+            # Start connection in background and wait for chatroom_id to appear
+            import asyncio
+            task = asyncio.create_task(api.connect_to_chatroom(channel_name))
+            try:
+                for _ in range(timeout_seconds * 5):  # check every 200ms up to timeout
+                    await asyncio.sleep(0.2)
+                    if getattr(api, 'chatroom_id', None):
+                        chat_id = str(api.chatroom_id)
+                        print(f"[Kick] ✅ kickpython resolved chatroom_id: {chat_id}")
+                        return chat_id
+            finally:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        except Exception as e:
+            print(f"[Kick] ⚠️ kickpython resolver failed: {type(e).__name__}: {str(e)}")
         return None
 
 # Global API instance

@@ -552,9 +552,121 @@ class KickWebSocketManager:
                 }
             )
 
-            # TODO: Route commands typed in Kick chat if needed
-            # e.g., if content.startswith('!'):
-            #   await self._route_kick_command(guild_id, username, content)
+            # Process commands from Kick chat
+            content_stripped = content.strip()
+            
+            # Custom commands (from dashboard)
+            if hasattr(bot, 'custom_commands_manager') and bot.custom_commands_manager:
+                try:
+                    original_guild_id = getattr(bot.custom_commands_manager, 'discord_server_id', None)
+                    bot.custom_commands_manager.discord_server_id = guild_id
+                    bot.custom_commands_manager.send_message_callback = lambda msg: send_kick_message(msg, guild_id=guild_id)
+                    
+                    handled = await bot.custom_commands_manager.handle_message(content, username)
+                    
+                    bot.custom_commands_manager.discord_server_id = original_guild_id
+                    if handled:
+                        return  # Command was handled, don't process further
+                except Exception as e:
+                    print(f"[{guild_name}] ⚠️ Custom command error: {e}")
+            
+            # !raffle command
+            if content_stripped.lower() == "!raffle":
+                await send_kick_message(
+                    "Do you want to win a $100 super buy on Sweet Bonanza 1000? "
+                    "All you gotta do is join my discord, verify with lelebot and follow the instructions -> "
+                    "https://discord.gg/k7CXJtfrPY",
+                    guild_id=guild_id
+                )
+            
+            # !call / !sr commands (slot requests)
+            elif content_stripped.startswith(("!call", "!sr")):
+                if hasattr(bot, 'slot_call_tracker') and bot.slot_call_tracker:
+                    slot_call = content_stripped[5:].strip()[:200] if content_stripped.startswith("!call") else content_stripped[3:].strip()[:200]
+                    if slot_call:
+                        original_guild_id = getattr(bot.slot_call_tracker, 'discord_server_id', None)
+                        bot.slot_call_tracker.discord_server_id = guild_id
+                        try:
+                            await bot.slot_call_tracker.handle_slot_call(username, slot_call)
+                        finally:
+                            if original_guild_id:
+                                bot.slot_call_tracker.discord_server_id = original_guild_id
+            
+            # !gtb command
+            elif content_stripped.lower().startswith("!gtb"):
+                if hasattr(bot, 'gtb_manager') and bot.gtb_manager:
+                    parts = content_stripped.split(maxsplit=1)
+                    if len(parts) == 2:
+                        amount = parse_amount(parts[1])
+                        if amount is not None:
+                            success, message = bot.gtb_manager.add_guess(username, amount)
+                            response = f"@{username} {message}" + (" Good luck! 🎰" if success else "")
+                            await send_kick_message(response, guild_id=guild_id)
+            
+            # !clip command
+            elif content_stripped.lower().startswith("!clip"):
+                clip_title = content_stripped[5:].strip()  # Remove "!clip" and trim
+                if not clip_title:
+                    # No title provided - generate default
+                    timestamp = datetime.now().strftime("%b %d, %Y %H:%M")
+                    clip_title = f"Clip by {username} - {timestamp}"
+                
+                print(f"[{guild_name}] 🎬 {username} requested clip: {clip_title}")
+                
+                # Create clip via Dashboard API (background task)
+                async def create_clip_background(user: str, title: str):
+                    try:
+                        # Get settings from bot_settings
+                        dashboard_url = None
+                        api_key = None
+                        clip_duration = 30
+                        
+                        with engine.connect() as conn:
+                            settings_result = conn.execute(text("""
+                                SELECT key, value FROM bot_settings 
+                                WHERE discord_server_id = :guild_id 
+                                AND key IN ('dashboard_url', 'bot_api_key', 'clip_duration')
+                            """), {"guild_id": guild_id}).fetchall()
+                            
+                            for key, value in settings_result:
+                                if key == 'dashboard_url':
+                                    dashboard_url = value
+                                elif key == 'bot_api_key':
+                                    api_key = value
+                                elif key == 'clip_duration':
+                                    clip_duration = int(value) if value else 30
+                        
+                        if not dashboard_url or not api_key:
+                            print(f"[Clip] ❌ Dashboard URL or API key not configured")
+                            await send_kick_message(f"@{user} Clip service not configured!", guild_id=guild_id)
+                            return
+                        
+                        # Get kick channel
+                        kick_channel = self.connected_channels.get(guild_id)
+                        if not kick_channel:
+                            print(f"[Clip] ❌ No channel configured")
+                            return
+                        
+                        # Call Dashboard API
+                        import aiohttp
+                        async with aiohttp.ClientSession() as session:
+                            async with session.post(
+                                f"{dashboard_url}/api/clips/create",
+                                headers={'X-API-Key': api_key, 'Content-Type': 'application/json'},
+                                json={'channel': kick_channel, 'duration': clip_duration, 'username': user, 'title': title},
+                                timeout=10
+                            ) as resp:
+                                if resp.status == 200:
+                                    print(f"[Clip] ✅ Clip created for {user}")
+                                    await send_kick_message(f"@{user} Clip created! 🎬", guild_id=guild_id)
+                                else:
+                                    print(f"[Clip] ❌ Failed: HTTP {resp.status}")
+                                    await send_kick_message(f"@{user} Clip failed!", guild_id=guild_id)
+                    except Exception as e:
+                        print(f"[Clip] ❌ Error: {e}")
+                        await send_kick_message(f"@{user} Clip error!", guild_id=guild_id)
+                
+                asyncio.create_task(create_clip_background(username, clip_title))
 
         except Exception as e:
             print(f"[{guild_name}] ❌ Error handling incoming message: {e}")
