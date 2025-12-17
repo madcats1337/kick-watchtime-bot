@@ -46,7 +46,7 @@ import aiohttp
 KICK_OAUTH_SERVER = "https://id.kick.com"
 KICK_API_SERVER = "https://api.kick.com"
 KICK_API_PUBLIC_V1 = f"{KICK_API_SERVER}/public/v1"
-KICK_API_PUBLIC_V2 = f"{KICK_API_SERVER}/public/v2"
+KICK_API_V2 = f"{KICK_API_SERVER}/v2"
 
 # OAuth endpoints
 KICK_AUTHORIZE_URL = f"{KICK_OAUTH_SERVER}/oauth/authorize"
@@ -57,7 +57,7 @@ KICK_USER_INFO_URL = f"{KICK_OAUTH_SERVER}/oauth/userinfo"
 # API endpoints
 KICK_USERS_URL = f"{KICK_API_PUBLIC_V1}/users"
 KICK_CHANNELS_URL = f"{KICK_API_PUBLIC_V1}/channels"
-KICK_CHAT_URL = f"{KICK_API_PUBLIC_V2}/chat"  # v2 endpoint for chat
+KICK_CHAT_URL = f"{KICK_API_V2}/messages/send"  # v2 messages endpoint (requires chatroom_id)
 KICK_CATEGORIES_URL = f"{KICK_API_PUBLIC_V1}/categories"
 KICK_WEBHOOKS_URL = f"{KICK_API_PUBLIC_V1}/events/subscriptions"
 KICK_MODERATION_URL = f"{KICK_API_PUBLIC_V1}/channels/{{broadcaster_user_id}}/moderation"
@@ -467,30 +467,48 @@ class KickOfficialAPI:
         self,
         content: str,
         broadcaster_user_id: int = None,
+        chatroom_id: int = None,
         reply_to_message_id: str = None,
     ) -> Dict[str, Any]:
         """
         Send a chat message to a channel.
-        Requires: chat:write scope
+        Requires: chat:write scope or valid application token
 
-        For multiserver support, use type="user" with broadcaster_user_id.
-        The OAuth token holder must have permission to send messages to the target channel.
+        Uses v2 endpoint: POST /v2/messages/send/{chatroomId}
 
         Args:
             content: Message content (max 500 chars)
-            broadcaster_user_id: Target channel's broadcaster ID (required for multiserver)
+            broadcaster_user_id: Target channel's broadcaster ID (for looking up chatroom_id if not provided)
+            chatroom_id: Target chatroom ID (required, will be looked up if not provided)
             reply_to_message_id: Message ID to reply to (optional)
 
         Returns:
             Message data including message_id
         """
-        if not broadcaster_user_id:
-            raise ValueError("broadcaster_user_id is required for sending chat messages")
+        # Get chatroom_id if not provided
+        if not chatroom_id:
+            if broadcaster_user_id:
+                # Try to look up chatroom_id from bot_settings
+                from bot import engine
+                from sqlalchemy import text
+                with engine.connect() as conn:
+                    result = conn.execute(text("""
+                        SELECT value FROM bot_settings 
+                        WHERE key = 'kick_chatroom_id'
+                        LIMIT 1
+                    """)).fetchone()
+                    
+                    if result and result[0]:
+                        chatroom_id = int(result[0])
+            
+            if not chatroom_id:
+                raise ValueError("chatroom_id is required for sending chat messages")
+        
+        # Build URL with chatroom_id in path
+        url = f"{KICK_CHAT_URL}/{chatroom_id}"
         
         payload = {
             "content": content,
-            "type": "user",
-            "broadcaster_user_id": broadcaster_user_id,
         }
 
         if reply_to_message_id:
@@ -499,14 +517,14 @@ class KickOfficialAPI:
             }
         
         print(f"[Kick API] 📤 Sending chat message:")
-        print(f"[Kick API]   URL: {KICK_CHAT_URL}")
+        print(f"[Kick API]   URL: {url}")
         print(f"[Kick API]   Payload: {payload}")
         print(f"[Kick API]   Content length: {len(content)}")
-        print(f"[Kick API]   Broadcaster ID: {broadcaster_user_id}")
+        print(f"[Kick API]   Chatroom ID: {chatroom_id}")
         
         headers = {"Content-Type": "application/json"}
         try:
-            result = await self._post(KICK_CHAT_URL, json=payload, headers=headers)
+            result = await self._post(url, json=payload, headers=headers)
             print(f"[Kick API] ✅ Chat message sent successfully")
             return result
         except Exception as e:

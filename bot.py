@@ -835,6 +835,21 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
                 except (ValueError, TypeError):
                     pass
             
+            # Get chatroom_id (required for v2 messages endpoint)
+            chatroom_id = None
+            result = conn.execute(text("""
+                SELECT value FROM bot_settings 
+                WHERE key = 'kick_chatroom_id' 
+                AND discord_server_id = :guild_id
+                LIMIT 1
+            """), {"guild_id": guild_id}).fetchone()
+            
+            if result and result[0]:
+                try:
+                    chatroom_id = int(result[0])
+                except (ValueError, TypeError):
+                    pass
+            
             # PRIORITY 3: Fallback to streamer's OAuth token if no other token available
             if not access_token:
                 print(f"[{guild_name}] No Client Credentials or KICK_BOT_USER_TOKEN, using streamer's OAuth token")
@@ -843,8 +858,8 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
                 if token_data:
                     access_token = token_data.get('access_token')
         
-        if not broadcaster_user_id:
-            print(f"[{guild_name}] ⚠️ broadcaster_user_id not configured - use Sync button in dashboard")
+        if not chatroom_id:
+            print(f"[{guild_name}] ⚠️ chatroom_id not configured - use Sync button in dashboard")
             return False
         
         if not access_token:
@@ -861,6 +876,7 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
         
         await api.send_chat_message(
             content=message,
+            chatroom_id=chatroom_id,
             broadcaster_user_id=broadcaster_user_id
         )
         
