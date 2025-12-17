@@ -7118,6 +7118,7 @@ if __name__ == "__main__":
     print("✅ Multiserver bot starting")
     print("   Configure each Discord server in Dashboard → Profile Settings")
     print("   Set Kick channel name, slot calls channel, raffle settings per-server")
-    print("   Bot version: 2025-12-17")  # Trigger redeploy
+    print(f"   KICK_USE_KICKPYTHON_WS={KICK_USE_KICKPYTHON_WS}")
+    print("   Bot version: 2025-12-17-v2")  # Trigger redeploy
 
     bot.run(DISCORD_TOKEN)
