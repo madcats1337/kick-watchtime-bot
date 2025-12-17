@@ -203,7 +203,6 @@ def handle_kick_webhook():
     
     # Verify signature
     if not verify_kick_signature(request):
-        print(f"[Webhook] ❌ Signature verification failed")
         return jsonify({"error": "Invalid signature"}), 401
 
     try:
@@ -227,15 +226,12 @@ def handle_kick_webhook():
                         if result:
                             discord_server_id = result[0]
                             broadcaster_user_id = result[1]
-                            print(f"[Webhook] 🎯 Routing to server: {discord_server_id} (broadcaster: {broadcaster_user_id})")
                             
                             # Add server context to event data for handler
                             event_data['_server_id'] = discord_server_id
                             event_data['_broadcaster_user_id'] = broadcaster_user_id
-                        else:
-                            print(f"[Webhook] ⚠️  No active subscription found for ID: {subscription_id}")
             except Exception as db_err:
-                print(f"[Webhook] ⚠️  Database lookup error: {db_err}")
+                pass
 
         if _event_handler:
             import asyncio
@@ -246,7 +242,6 @@ def handle_kick_webhook():
             finally:
                 loop.close()
         else:
-            print(f"[Webhook] ⚠️ No event handler registered")
             _log_event(event_type, event_data)
 
         return jsonify({"status": "ok", "message_id": message_id}), 200
@@ -265,7 +260,6 @@ def handle_webhook_challenge():
     Kick may send a challenge request when registering webhooks.
     We need to echo back the challenge value.
     """
-    print(f"[Webhook] 🔑 Challenge endpoint called ({request.method})")
     if request.method == 'GET':
         challenge = request.args.get('challenge', '')
     else:
@@ -273,7 +267,6 @@ def handle_webhook_challenge():
         challenge = data.get('challenge', '')
 
     if challenge:
-        print(f"[Webhook] 🔑 Responding to challenge: {challenge[:20]}...")
         return challenge, 200, {'Content-Type': 'text/plain'}
 
     return jsonify({"status": "ready"}), 200
@@ -281,7 +274,6 @@ def handle_webhook_challenge():
 @kick_webhooks_bp.route('/webhooks/kick/test', methods=['GET'])
 def test_webhook_endpoint():
     """Test endpoint to verify webhook server is reachable"""
-    print(f"[Webhook] ✅ Test endpoint accessed")
     return jsonify({
         "status": "ok", 
         "message": "Webhook server is running",
