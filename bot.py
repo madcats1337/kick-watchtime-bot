@@ -1181,6 +1181,18 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
             if result and result[0]:
                 chatroom_id = int(result[0])
                 print(f"[{guild_name}] 📦 Loaded chatroom_id from database: {chatroom_id}")
+                
+                # HOTFIX: 152837 is broadcaster_user_id, not chatroom_id!
+                # Clear it and refetch the correct one
+                if chatroom_id == 152837:
+                    print(f"[{guild_name}] ⚠️ Invalid chatroom_id detected (152837 is broadcaster_user_id)")
+                    print(f"[{guild_name}] 🔄 Clearing and refetching correct chatroom_id...")
+                    conn.execute(text("""
+                        DELETE FROM bot_settings 
+                        WHERE key = 'kick_chatroom_id' AND discord_server_id = :guild_id
+                    """), {"guild_id": guild_id})
+                    conn.commit()
+                    chatroom_id = None
     except Exception as e:
         print(f"[{guild_name}] ⚠️ Error loading chatroom_id from database: {e}")
         import traceback
