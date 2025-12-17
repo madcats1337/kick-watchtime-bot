@@ -190,16 +190,9 @@ def handle_kick_webhook():
         401 Unauthorized if signature invalid
         500 Internal Server Error on handler error
     """
-    print(f"[Webhook] 🔔 INCOMING REQUEST to /webhooks/kick")
-    print(f"[Webhook] Headers: {dict(request.headers)}")
-    
     event_type = request.headers.get("Kick-Event-Type", "unknown")
     message_id = request.headers.get("Kick-Event-Message-Id", "")
     subscription_id = request.headers.get("Kick-Event-Subscription-Id", "")
-
-    print(f"[Webhook] 📥 Received event: {event_type}")
-    print(f"  Message ID: {message_id}")
-    print(f"  Subscription ID: {subscription_id}")
     
     # Verify signature
     if not verify_kick_signature(request):
