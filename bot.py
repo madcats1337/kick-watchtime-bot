@@ -1158,6 +1158,160 @@ async def ensure_chatroom_id(guild_id: int, guild_name: str) -> None:
         print(f"[{guild_name}] ⚠️ ensure_chatroom_id error: {e}")
 
 # -------------------------
+# Pusher WebSocket for direct chat message reading
+# -------------------------
+
+async def kick_chat_loop(channel_slug: str, guild_id: int):
+    """
+    Connect to Pusher WebSocket and read ALL chat messages directly (no webhooks).
+    Handles commands, watchtime tracking, and all chat interactions.
+    """
+    guild = bot.get_guild(guild_id)
+    guild_name = guild.name if guild else str(guild_id)
+    
+    # Get chatroom_id from database or fetch it
+    chatroom_id = None
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT value FROM bot_settings
+                WHERE key = 'kick_chatroom_id' AND discord_server_id = :guild_id
+                LIMIT 1
+            """), {"guild_id": guild_id}).fetchone()
+            if result and result[0]:
+                chatroom_id = int(result[0])
+    except Exception as e:
+        print(f"[{guild_name}] ⚠️ Error loading chatroom_id: {e}")
+    
+    # Fetch chatroom_id if not in database
+    if not chatroom_id:
+        try:
+            chatroom_id = await fetch_chatroom_id(channel_slug)
+            if chatroom_id:
+                with engine.begin() as conn:
+                    conn.execute(text("""
+                        INSERT INTO bot_settings (key, value, discord_server_id, updated_at)
+                        VALUES ('kick_chatroom_id', :cid, :guild_id, CURRENT_TIMESTAMP)
+                        ON CONFLICT (key, discord_server_id)
+                        DO UPDATE SET value = :cid, updated_at = CURRENT_TIMESTAMP
+                    """), {"cid": str(chatroom_id), "guild_id": guild_id})
+                print(f"[{guild_name}] 📦 Fetched and saved chatroom_id: {chatroom_id}")
+        except Exception as e:
+            print(f"[{guild_name}] ❌ Could not fetch chatroom_id: {e}")
+            return
+    
+    if not chatroom_id:
+        print(f"[{guild_name}] ❌ No chatroom_id available - cannot start WebSocket")
+        return
+    
+    channel_name = f"chatrooms.{chatroom_id}.v2"
+    print(f"[{guild_name}] 🔌 Connecting to Pusher WebSocket...")
+    print(f"[{guild_name}]    Channel: {channel_slug}, Chatroom ID: {chatroom_id}")
+    
+    while True:
+        try:
+            async with websockets.connect(KICK_CHAT_WS) as ws:
+                # Subscribe to chatroom
+                subscribe_msg = json.dumps({
+                    "event": "pusher:subscribe",
+                    "data": {"channel": channel_name}
+                })
+                await ws.send(subscribe_msg)
+                print(f"[{guild_name}] ✅ Connected to Pusher WebSocket")
+                
+                async for message in ws:
+                    try:
+                        data = json.dumps(message)
+                        event_type = data.get("event")
+                        
+                        # Handle chat messages
+                        if event_type == "App\\Events\\ChatMessageEvent":
+                            payload = json.loads(data.get("data", "{}"))
+                            username = payload.get("sender", {}).get("username", "Unknown")
+                            content = payload.get("content", "")
+                            
+                            print(f"[{guild_name}] 💬 {username}: {content}")
+                            
+                            # Update watchtime tracking
+                            now = datetime.now(timezone.utc)
+                            username_lower = username.lower()
+                            
+                            last_chat_activity_by_guild[guild_id] = now
+                            guild_active_viewers = active_viewers_by_guild.get(guild_id, {})
+                            guild_active_viewers[username_lower] = now
+                            active_viewers_by_guild[guild_id] = guild_active_viewers
+                            
+                            guild_recent_chatters = recent_chatters_by_guild.get(guild_id, {})
+                            guild_recent_chatters[username_lower] = now
+                            recent_chatters_by_guild[guild_id] = guild_recent_chatters
+                            
+                            # Process commands
+                            content_stripped = content.strip()
+                            
+                            # Custom commands
+                            if hasattr(bot, 'custom_commands_manager') and bot.custom_commands_manager:
+                                try:
+                                    original_guild_id = getattr(bot.custom_commands_manager, 'discord_server_id', None)
+                                    bot.custom_commands_manager.discord_server_id = guild_id
+                                    bot.custom_commands_manager.send_message_callback = lambda msg: send_kick_message(msg, guild_id=guild_id)
+                                    
+                                    handled = await bot.custom_commands_manager.handle_message(content, username)
+                                    
+                                    bot.custom_commands_manager.discord_server_id = original_guild_id
+                                    if handled:
+                                        continue
+                                except Exception as e:
+                                    print(f"[{guild_name}] ⚠️ Custom command error: {e}")
+                            
+                            # !raffle command
+                            if content_stripped.lower() == "!raffle":
+                                await send_kick_message(
+                                    "Do you want to win a $100 super buy on Sweet Bonanza 1000? "
+                                    "All you gotta do is join my discord, verify with lelebot and follow the instructions -> "
+                                    "https://discord.gg/k7CXJtfrPY",
+                                    guild_id=guild_id
+                                )
+                            
+                            # !call / !sr commands (slot requests)
+                            elif content_stripped.startswith(("!call", "!sr")):
+                                if hasattr(bot, 'slot_call_tracker') and bot.slot_call_tracker:
+                                    slot_call = content_stripped[5:].strip()[:200] if content_stripped.startswith("!call") else content_stripped[3:].strip()[:200]
+                                    if slot_call:
+                                        original_guild_id = getattr(bot.slot_call_tracker, 'discord_server_id', None)
+                                        bot.slot_call_tracker.discord_server_id = guild_id
+                                        try:
+                                            await bot.slot_call_tracker.handle_slot_call(username, slot_call)
+                                        finally:
+                                            if original_guild_id:
+                                                bot.slot_call_tracker.discord_server_id = original_guild_id
+                            
+                            # !gtb command
+                            elif content_stripped.lower().startswith("!gtb"):
+                                if hasattr(bot, 'gtb_manager') and bot.gtb_manager:
+                                    parts = content_stripped.split(maxsplit=1)
+                                    if len(parts) == 2:
+                                        amount = parse_amount(parts[1])
+                                        if amount is not None:
+                                            success, message = bot.gtb_manager.add_guess(username, amount)
+                                            response = f"@{username} {message}" + (" Good luck! 🎰" if success else "")
+                                            await send_kick_message(response, guild_id=guild_id)
+                        
+                        # Connection health
+                        elif event_type == "pusher:connection_established":
+                            print(f"[{guild_name}] ✅ Pusher connection established")
+                        elif event_type == "pusher_internal:subscription_succeeded":
+                            print(f"[{guild_name}] ✅ Subscribed to channel: {channel_name}")
+                        
+                    except json.JSONDecodeError:
+                        pass  # Ignore non-JSON messages
+                    except Exception as e:
+                        print(f"[{guild_name}] ⚠️ Error processing message: {e}")
+                
+        except Exception as e:
+            print(f"[{guild_name}] ❌ WebSocket error: {e}, reconnecting in 5s...")
+            await asyncio.sleep(5)
+
+# -------------------------
 # Discord bot setup
 # -------------------------
 intents = discord.Intents.default()
