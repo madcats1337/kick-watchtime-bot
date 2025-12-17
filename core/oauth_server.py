@@ -1135,7 +1135,7 @@ def handle_bot_authorization_callback(code, code_verifier, state):
             print(f"🤖 [BOT AUTH] Cleaning up state...", flush=True)
             conn.execute(text("DELETE FROM oauth_states WHERE state = :state"), {"state": state})
 
-            print(f"✅ [BOT AUTH] Bot token stored successfully in database!
+            print(f"✅ [BOT AUTH] Bot token stored successfully in database!", flush=True)
             conn.execute(text("DELETE FROM oauth_states WHERE state = :state"), {"state": state})
 
             print(f"✅ Bot token stored securely", flush=True)
