@@ -164,6 +164,9 @@ OAUTH_SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "")
 # Requires User Access Token from OAuth flow with chat:write scope
 KICK_BOT_USER_TOKEN = os.getenv("KICK_BOT_USER_TOKEN", "")  # User access token for Kick bot
 
+# Feature flag: only use kickpython to resolve chatroom_id (no WS listener)
+KICK_USE_KICKPYTHON_WS = os.getenv("KICK_USE_KICKPYTHON_WS", "false").lower() == "true"
+
 # CRITICAL: If FLASK_SECRET_KEY is not set, OAuth will not work!
 if not OAUTH_SECRET_KEY:
     print("=" * 80, flush=True)
@@ -284,6 +287,7 @@ class KickWebSocketManager:
         self.connections = {}  # guild_id -> KickAPI instance
         self.connection_tasks = {}  # guild_id -> asyncio.Task
         self.message_queues = {}  # guild_id -> asyncio.Queue
+        self.connected_channels = {}  # guild_id -> kick channel username
     
     async def ensure_connection(self, guild_id: int, guild_name: str) -> bool:
         """Ensure there's an active websocket connection for this guild"""
@@ -294,20 +298,11 @@ class KickWebSocketManager:
             return True
         
         try:
-            # Get BOT token from bot_tokens table
-            bot_token = None
-            with engine.connect() as conn:
-                result = conn.execute(text("""
-                    SELECT access_token FROM bot_tokens 
-                    WHERE bot_username = 'lelebot'
-                    LIMIT 1
-                """)).fetchone()
-                
-                if result and result[0]:
-                    bot_token = result[0]
+            # Use bot token from environment (shared across all servers)
+            bot_token = KICK_BOT_USER_TOKEN
             
             if not bot_token:
-                print(f"[{guild_name}] ⚠️ No bot token found - authorize at /bot/authorize")
+                print(f"[{guild_name}] ⚠️ KICK_BOT_USER_TOKEN not set")
                 return False
             
             # Get channel username for websocket connection
@@ -336,6 +331,14 @@ class KickWebSocketManager:
             
             # Set the BOT access token from environment
             api.access_token = bot_token
+
+            # Attach a chat message handler before connecting
+            async def _on_message(msg: dict):
+                try:
+                    await self._handle_incoming_message(guild_id, guild_name, msg)
+                except Exception as e:
+                    print(f"[{guild_name}] ❌ Error in message handler: {e}")
+            api.add_message_handler(_on_message)
             
             # Create message queue for this guild
             self.message_queues[guild_id] = asyncio.Queue()
@@ -350,6 +353,7 @@ class KickWebSocketManager:
             
             self.connections[guild_id] = api
             self.connection_tasks[guild_id] = task
+            self.connected_channels[guild_id] = kick_username
             
             # Give it a moment to connect
             await asyncio.sleep(2)
@@ -405,6 +409,8 @@ class KickWebSocketManager:
                 del self.connections[guild_id]
             if guild_id in self.connection_tasks:
                 del self.connection_tasks[guild_id]
+            if guild_id in self.connected_channels:
+                del self.connected_channels[guild_id]
     
     async def _message_sender(self, guild_id: int, guild_name: str, api):
         """Process message queue and send via kickpython (type=bot)"""
@@ -474,29 +480,136 @@ class KickWebSocketManager:
             print(f"[{guild_name}] ❌ Failed to queue message: {e}")
             return False
 
+    async def _handle_incoming_message(self, guild_id: int, guild_name: str, msg: dict):
+        """Handle inbound chat messages from kickpython websocket."""
+        try:
+            username = msg.get('sender_username') or msg.get('username') or 'unknown'
+            content = msg.get('content') or ''
+            chat_id = msg.get('chat_id') or msg.get('id')
+
+            # Basic log
+            print(f"[{guild_name}] 💬 {username}: {content}")
+
+            # Update recent chatters tracking (per-guild)
+            now = datetime.now(timezone.utc)
+            # Initialize dicts if missing
+            if 'recent_chatters_by_guild' not in globals():
+                # Safety: should exist globally, but guard anyway
+                globals()['recent_chatters_by_guild'] = {}
+            if 'last_chat_activity_by_guild' not in globals():
+                globals()['last_chat_activity_by_guild'] = {}
+
+            guild_chatters = recent_chatters_by_guild.get(guild_id) or {}
+            guild_chatters[username] = now
+            recent_chatters_by_guild[guild_id] = guild_chatters
+            last_chat_activity_by_guild[guild_id] = now
+
+            # Publish to Redis for dashboard (optional)
+            publish_redis_event(
+                channel='kick_chat',
+                action='message',
+                data={
+                    'guild_id': guild_id,
+                    'channel': self.connected_channels.get(guild_id),
+                    'username': username,
+                    'content': content,
+                    'chat_id': chat_id,
+                    'timestamp': now.isoformat(),
+                }
+            )
+
+            # TODO: Route commands typed in Kick chat if needed
+            # e.g., if content.startswith('!'):
+            #   await self._route_kick_command(guild_id, username, content)
+
+        except Exception as e:
+            print(f"[{guild_name}] ❌ Error handling incoming message: {e}")
+
 # Global websocket manager instance
 kick_ws_manager = KickWebSocketManager()
 
 async def send_kick_message(message: str, guild_id: int = None) -> bool:
     """
-    Send a message to Kick chat using kickpython websocket connection.
-    Uses per-server OAuth tokens and persistent websocket connections.
+    Send a message to Kick chat using the best available method:
+    1. kickpython WebSocket (if KICK_USE_KICKPYTHON_WS=true and connected)
+    2. Official Kick API with broadcaster_user_id (fallback)
+    
+    Automatically fetches correct IDs (chatroom_id or broadcaster_user_id) from bot_settings.
     
     Args:
         message: The message to send
         guild_id: Discord server ID (for multiserver support)
         
     Returns:
-        True if message queued successfully, False otherwise
+        True if message sent successfully, False otherwise
     """
-    # Get guild name for logging - MUST be defined before try block
+    # Get guild name for logging
     guild_name = "Unknown"
     if guild_id:
         guild = bot.get_guild(guild_id)
         guild_name = guild.name if guild else str(guild_id)
     
     try:
-        return await kick_ws_manager.send_message(message, guild_id, guild_name)
+        # Method 1: Try kickpython WebSocket if enabled and connected
+        if KICK_USE_KICKPYTHON_WS and guild_id in kick_ws_manager.connections:
+            print(f"[{guild_name}] Sending via kickpython WebSocket...")
+            return await kick_ws_manager.send_message(message, guild_id, guild_name)
+        
+        # Method 2: Fall back to Official Kick API
+        print(f"[{guild_name}] Sending via Official Kick API...")
+        
+        # Get broadcaster_user_id and OAuth token
+        broadcaster_user_id = None
+        access_token = None
+        
+        # PRIORITY 1: Use bot's own token (KICK_BOT_USER_TOKEN) to send as @Lelebot
+        bot_token = os.getenv('KICK_BOT_USER_TOKEN')
+        if bot_token:
+            print(f"[{guild_name}] Using KICK_BOT_USER_TOKEN (bot account)")
+            access_token = bot_token
+        
+        with engine.connect() as conn:
+            # Get broadcaster_user_id
+            result = conn.execute(text("""
+                SELECT value FROM bot_settings 
+                WHERE key = 'kick_broadcaster_user_id' 
+                AND discord_server_id = :guild_id
+                LIMIT 1
+            """), {"guild_id": guild_id}).fetchone()
+            
+            if result and result[0]:
+                try:
+                    broadcaster_user_id = int(result[0])
+                except (ValueError, TypeError):
+                    pass
+            
+            # PRIORITY 2: Fallback to streamer's OAuth token if bot token not available
+            if not access_token:
+                print(f"[{guild_name}] No KICK_BOT_USER_TOKEN, using streamer's OAuth token")
+                from utils.kick_oauth import get_kick_token_for_server
+                token_data = get_kick_token_for_server(engine, guild_id)
+                if token_data:
+                    access_token = token_data.get('access_token')
+        
+        if not broadcaster_user_id:
+            print(f"[{guild_name}] ⚠️ broadcaster_user_id not configured - use Sync button in dashboard")
+            return False
+        
+        if not access_token:
+            print(f"[{guild_name}] ⚠️ No OAuth token available - set KICK_BOT_USER_TOKEN or link Kick account in dashboard")
+            return False
+        
+        # Send via Official API
+        from core.kick_official_api import KickOfficialAPI
+        api = KickOfficialAPI(access_token=access_token)
+        
+        await api.send_chat_message(
+            content=message,
+            broadcaster_user_id=broadcaster_user_id
+        )
+        
+        print(f"[{guild_name}] ✅ Message sent via Official API")
+        return True
         
     except Exception as e:
         print(f"[{guild_name}] ❌ Failed to send message: {e}")
@@ -996,6 +1109,97 @@ def get_guild_settings(guild_id: int) -> BotSettingsManager:
 print("✅ Multiserver bot ready - configure each guild in Dashboard → Profile Settings")
 
 # -------------------------
+# Bot lifecycle: start Kick chat listeners
+# -------------------------
+
+@bot.event
+async def on_ready():
+    try:
+        print(f"🤝 Logged in to Discord as {bot.user}")
+        print("🔌 Starting Pusher WebSocket for direct chat message reading (no webhooks)...")
+        
+        # Start Pusher WebSocket loop for each guild to read messages directly
+        for guild in bot.guilds:
+            # Get kick channel from settings
+            kick_channel = None
+            try:
+                with engine.connect() as conn:
+                    row = conn.execute(text("""
+                        SELECT value FROM bot_settings
+                        WHERE key = 'kick_channel' AND discord_server_id = :gid
+                        LIMIT 1
+                    """), {"gid": guild.id}).fetchone()
+                    if row and row[0]:
+                        kick_channel = row[0]
+            except Exception as e:
+                print(f"[{guild.name}] ⚠️ Error loading kick_channel: {e}")
+            
+            if kick_channel:
+                # Start WebSocket loop for this guild
+                asyncio.create_task(kick_chat_loop(kick_channel, guild.id))
+                print(f"[{guild.name}] ✅ Started Pusher WebSocket for channel: {kick_channel}")
+            else:
+                print(f"[{guild.name}] ⚠️ No kick_channel configured - skipping WebSocket")
+        
+        # Also ensure chatroom_id is cached (used by send_kick_message if needed)
+        for guild in bot.guilds:
+            asyncio.create_task(ensure_chatroom_id(guild.id, guild.name))
+            
+    except Exception as e:
+        print(f"❌ on_ready initialization error: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+async def ensure_chatroom_id(guild_id: int, guild_name: str) -> None:
+    """Ensure chatroom_id exists in DB for this guild; resolve via kickpython-backed core API if missing."""
+    try:
+        # Check existing setting
+        with engine.connect() as conn:
+            row = conn.execute(text("""
+                SELECT value FROM bot_settings
+                WHERE key = 'kick_chatroom_id' AND discord_server_id = :gid
+                LIMIT 1
+            """), {"gid": guild_id}).fetchone()
+            if row and row[0]:
+                print(f"[{guild_name}] 📦 chatroom_id already set: {row[0]}")
+                return
+
+        # Need to resolve: get channel username
+        kick_username = None
+        with engine.connect() as conn:
+            row = conn.execute(text("""
+                SELECT value FROM bot_settings
+                WHERE key = 'kick_channel' AND discord_server_id = :gid
+                LIMIT 1
+            """), {"gid": guild_id}).fetchone()
+            if row and row[0]:
+                kick_username = str(row[0]).strip()
+
+        if not kick_username:
+            print(f"[{guild_name}] ⚠️ Cannot resolve chatroom_id: no kick_channel configured")
+            return
+
+        print(f"[{guild_name}] 🔎 Resolving chatroom_id for {kick_username} via core.fetch_chatroom_id()...")
+        from core.kick_api import fetch_chatroom_id as core_fetch_chatroom_id
+        chatroom_id = await core_fetch_chatroom_id(kick_username)
+        if not chatroom_id:
+            print(f"[{guild_name}] ❌ Failed to resolve chatroom_id for {kick_username}")
+            return
+
+        # Save to DB
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO bot_settings (key, value, discord_server_id)
+                VALUES ('kick_chatroom_id', :val, :gid)
+                ON CONFLICT (key, discord_server_id)
+                DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP
+            """), {"val": str(chatroom_id), "gid": guild_id})
+        print(f"[{guild_name}] ✅ Stored chatroom_id: {chatroom_id}")
+    except Exception as e:
+        print(f"[{guild_name}] ⚠️ ensure_chatroom_id error: {e}")
+
+# -------------------------
 # Discord bot setup
 # -------------------------
 intents = discord.Intents.default()
@@ -1316,7 +1520,7 @@ BROWSER_HEADERS = {
 }
 
 async def kick_chat_loop(channel_name: str, guild_id: int):
-    """Connect to Kick's Pusher WebSocket for subscription events (webhooks handle chat)."""
+    """Connect to Kick's Pusher WebSocket to read ALL chat messages and events (no webhooks)."""
     global kick_chatroom_id_global
     
     # Get guild name for logging
@@ -1629,16 +1833,12 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                 continue
 
                             # Handle chat message
-                            # NOTE: In dual mode, webhooks handle chat messages for watchtime/commands
-                            # Pusher only needed for subscription events (not available as webhooks)
-                            # We skip chat processing here to avoid duplicate handling
+                            # Process ALL chat messages directly from Pusher (no webhooks)
                             if event_type == "App\\Events\\ChatMessageEvent":
-                                # Skip chat messages in dual mode - webhooks handle these
-                                # Only process for subscription-related chat events
                                 event_data = json.loads(data.get("data", "{}"))
                                 message_type = event_data.get("type")
                                 
-                                # Check if this is a subscription-related message (not regular chat)
+                                # Check if this is a subscription-related message
                                 is_sub_message = (
                                     message_type and (
                                         "gift" in str(message_type).lower() or
@@ -1647,9 +1847,29 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                     )
                                 )
                                 
+                                # Process regular chat messages (not just subscriptions)
                                 if not is_sub_message:
-                                    # Regular chat message - skip (webhooks handle this)
-                                    continue
+                                    # Regular chat message - process it!
+                                    content_text = event_data.get("content", "")
+                                    username = event_data.get("sender", {}).get("username", "")
+                                    username_lower = username.lower() if username else ""
+                                    
+                                    if not username or not content_text:
+                                        continue
+                                    
+                                    # Update watchtime tracking
+                                    now = datetime.now(timezone.utc)
+                                    last_chat_activity_by_guild[guild_id] = now
+                                    
+                                    guild_active_viewers = active_viewers_by_guild.get(guild_id, {})
+                                    guild_active_viewers[username_lower] = now
+                                    active_viewers_by_guild[guild_id] = guild_active_viewers
+                                    
+                                    guild_recent_chatters = recent_chatters_by_guild.get(guild_id, {})
+                                    guild_recent_chatters[username_lower] = now
+                                    recent_chatters_by_guild[guild_id] = guild_recent_chatters
+                                    
+                                    print(f"[{guild_name}] 💬 {username}: {content_text}")
 
                                     # Check for custom commands first (they get priority)
                                     if hasattr(bot, 'custom_commands_manager') and bot.custom_commands_manager:

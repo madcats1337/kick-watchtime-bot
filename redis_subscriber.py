@@ -62,12 +62,13 @@ class RedisSubscriber:
         else:
             print(f"ℹ️  Kick chat disabled: {message}")
 
-    async def handle_webhook_event(self, payload):
-        """Handle Kick webhook events forwarded via Redis"""
-        try:
-            event_type = payload.get('type')
-            if event_type != 'kick_chat_message':
-                return
+    # ❌ WEBHOOK HANDLING DISABLED - Using direct Pusher WebSocket instead
+    # async def handle_webhook_event(self, payload):
+    #     """Handle Kick webhook events forwarded via Redis"""
+    #     try:
+    #         event_type = payload.get('type')
+    #         if event_type != 'kick_chat_message':
+    #             return
             
             data = payload.get('data', {})
             channel_slug = data.get('channel_slug', '')
@@ -230,10 +231,10 @@ class RedisSubscriber:
                         if original_guild_id:
                             self.bot.slot_call_tracker.discord_server_id = original_guild_id
             
-        except Exception as e:
-            print(f"[Redis] ❌ Webhook event error: {e}")
-            import traceback
-            traceback.print_exc()
+    #     except Exception as e:
+    #         print(f"[Redis] ❌ Webhook event error: {e}")
+    #         import traceback
+    #         traceback.print_exc()
 
     async def handle_slot_requests_event(self, action, data):
         """Handle slot request events from dashboard"""
@@ -908,7 +909,7 @@ Congratulations! Please contact an admin to claim your prize! 🎊
             print("Redis subscriber not enabled, skipping...")
             return
 
-        # Subscribe to all dashboard channels and bot_events for webhook messages
+        # Subscribe to all dashboard channels (webhook events disabled - using direct WebSocket)
         await asyncio.to_thread(
             self.pubsub.subscribe,
             'dashboard:slot_requests',
@@ -918,8 +919,8 @@ Congratulations! Please contact an admin to claim your prize! 🎊
             'dashboard:raffle',
             'dashboard:commands',
             'dashboard:point_shop',
-            'dashboard:bot_settings',
-            'bot_events'  # For webhook chat messages
+            'dashboard:bot_settings'
+            # 'bot_events' removed - no longer using webhooks for chat
         )
 
         print("🎧 Redis subscriber listening for dashboard events...")
@@ -953,8 +954,8 @@ Congratulations! Please contact an admin to claim your prize! 🎊
                             await self.handle_point_shop_event(action, data)
                         elif channel == 'dashboard:bot_settings':
                             await self.handle_bot_settings_event(action, data)
-                        elif channel == 'bot_events':
-                            await self.handle_webhook_event(payload)
+                        # elif channel == 'bot_events':  # Disabled - using direct WebSocket
+                        #     await self.handle_webhook_event(payload)
 
                     except json.JSONDecodeError as e:
                         print(f"Failed to decode message: {e}")
@@ -979,8 +980,8 @@ Congratulations! Please contact an admin to claim your prize! 🎊
                         'dashboard:raffle',
                         'dashboard:commands',
                         'dashboard:point_shop',
-                        'dashboard:bot_settings',
-                        'bot_events'
+                        'dashboard:bot_settings'
+                        # 'bot_events' removed - no longer using webhooks
                     )
 
 async def start_redis_subscriber(bot, send_message_callback=None):
