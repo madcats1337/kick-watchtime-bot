@@ -420,8 +420,8 @@ class KickWebSocketManager:
                 del self.connected_channels[guild_id]
     
     async def _message_sender(self, guild_id: int, guild_name: str, api):
-        """Process message queue and send via kickpython (type=bot)"""
-        print(f"[{guild_name}] 📨 Message sender started (using BOT account)")
+        """Process message queue and send via kickpython (multiserver support)"""
+        print(f"[{guild_name}] 📨 Message sender started")
         while True:
             try:
                 print(f"[{guild_name}] ⏳ Waiting for messages in queue...")
@@ -433,16 +433,25 @@ class KickWebSocketManager:
                 
                 print(f"[{guild_name}] 📨 Got message from queue: {message[:50]}... to channel {channel_id}")
                 
-                # Set access_token NOW (only when sending)
-                bot_token = KICK_BOT_USER_TOKEN
-                if bot_token and not api.access_token:
-                    api.access_token = bot_token
-                    print(f"[{guild_name}] 🔑 Set bot token for sending message")
+                # Set access_token NOW (only when sending) - per-server OAuth token
+                if not api.access_token:
+                    try:
+                        from utils.kick_oauth import get_kick_token_for_server
+                        token_data = get_kick_token_for_server(engine, guild_id)
+                        if token_data and token_data.get('access_token'):
+                            api.access_token = token_data['access_token']
+                            print(f"[{guild_name}] 🔑 Using OAuth token for {token_data.get('kick_username')}")
+                        else:
+                            print(f"[{guild_name}] ⚠️ No OAuth token found for server")
+                            continue
+                    except Exception as e:
+                        print(f"[{guild_name}] ❌ Error getting OAuth token: {e}")
+                        continue
                 
-                # Send via kickpython (uses type="bot" by default)
-                print(f"[{guild_name}] 📤 Calling api.post_chat with BOT token...")
+                # Send via kickpython
+                print(f"[{guild_name}] 📤 Calling api.post_chat...")
                 await api.post_chat(channel_id=channel_id, content=message)
-                print(f"[{guild_name}] ✅ Sent via BOT account: {message[:50]}...")
+                print(f"[{guild_name}] ✅ Sent: {message[:50]}...")
                 
             except asyncio.TimeoutError:
                 # Keep connection alive with periodic checks
