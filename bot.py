@@ -277,7 +277,7 @@ async def get_kick_api():
 async def send_kick_message(message: str, guild_id: int = None) -> bool:
     """
     Send a message to Kick chat as the bot account.
-    Uses bot token (client credentials) to send messages as LELEBOT.
+    Uses OAuth token from kick_oauth_tokens table (authorized by maikelele).
     
     Args:
         message: The message to send
@@ -287,6 +287,7 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
         True if message sent successfully, False otherwise
     """
     import aiohttp
+    from utils.kick_oauth import get_kick_token_for_server
     
     try:
         # Get guild name for logging
@@ -295,31 +296,15 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
             guild = bot.get_guild(guild_id)
             guild_name = guild.name if guild else str(guild_id)
         
-        # Get bot token - check bot_tokens table first, then env var
-        bot_token = None
-        channel_id = None
+        # Get OAuth token from database (maikelele's authorized token)
+        token_data = get_kick_token_for_server(engine, guild_id)
         
-        with engine.connect() as conn:
-            # Try to get token from bot_tokens table (saved via /bot/authorize)
-            bot_token_result = conn.execute(text("""
-                SELECT access_token FROM bot_tokens 
-                WHERE bot_username = 'lelebot'
-                LIMIT 1
-            """)).fetchone()
-            
-            if bot_token_result and bot_token_result[0]:
-                bot_token = bot_token_result[0]
-                print(f"[{guild_name}] 🔑 Using bot token from database")
-        
-        # Fallback to environment variable
-        if not bot_token:
-            bot_token = KICK_BOT_USER_TOKEN
-            if bot_token:
-                print(f"[{guild_name}] 🔑 Using bot token from KICK_BOT_USER_TOKEN env var")
-        
-        if not bot_token:
-            print(f"[{guild_name}] ⚠️ No bot token - authorize @lelebot at https://lelebot.xyz/bot/authorize?token=BOT_AUTH_TOKEN")
+        if not token_data or not token_data.get('access_token'):
+            print(f"[{guild_name}] ⚠️ No OAuth token - maikelele needs to link account in dashboard")
             return False
+        
+        bot_token = token_data['access_token']
+        channel_id = None
         
         # Get channel ID for this guild
         with engine.connect() as conn:
