@@ -295,12 +295,12 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
             guild = bot.get_guild(guild_id)
             guild_name = guild.name if guild else str(guild_id)
         
-        # Get bot access token from environment variable
-        bot_token = KICK_BOT_USER_TOKEN
+        # Get bot access token via client credentials flow
+        bot_token = await get_kick_bot_token(guild_id)
         channel_id = None
         
         if not bot_token:
-            print(f"[{guild_name}] ⚠️ KICK_BOT_USER_TOKEN not configured")
+            print(f"[{guild_name}] ⚠️ Failed to get bot token via client credentials")
             return False
         
         # Get channel ID for this guild
