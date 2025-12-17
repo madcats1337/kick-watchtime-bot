@@ -354,7 +354,22 @@ class KickWebSocketManager:
             # Give it a moment to connect
             await asyncio.sleep(2)
             
-            print(f"[{guild_name}] ✅ Kick websocket connection established with BOT token from env")
+            # Save chatroom_id to database if kickpython fetched it
+            if hasattr(api, 'chatroom_id') and api.chatroom_id:
+                try:
+                    with engine.connect() as conn:
+                        conn.execute(text("""
+                            INSERT INTO bot_settings (key, value, discord_server_id)
+                            VALUES ('kick_chatroom_id', :chatroom_id, :guild_id)
+                            ON CONFLICT (key, discord_server_id) 
+                            DO UPDATE SET value = EXCLUDED.value
+                        """), {"chatroom_id": str(api.chatroom_id), "guild_id": guild_id})
+                        conn.commit()
+                    print(f"[{guild_name}] 💾 Saved chatroom_id {api.chatroom_id} to database")
+                except Exception as e:
+                    print(f"[{guild_name}] ⚠️ Failed to save chatroom_id: {e}")
+            
+            print(f"[{guild_name}] ✅ Kick websocket connection established with BOT token")
             return True
             
         except Exception as e:
