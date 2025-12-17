@@ -847,8 +847,28 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
             if result and result[0]:
                 try:
                     chatroom_id = int(result[0])
+                    print(f"[{guild_name}] 📋 Using chatroom_id from database: {chatroom_id}")
                 except (ValueError, TypeError):
                     pass
+            
+            # Fallback: Get from kickpython's in-memory chatroom_id
+            if not chatroom_id and guild_id in kick_ws_manager.connections:
+                api = kick_ws_manager.connections[guild_id]
+                if hasattr(api, 'chatroom_id') and api.chatroom_id:
+                    chatroom_id = int(api.chatroom_id)
+                    print(f"[{guild_name}] 📋 Using chatroom_id from kickpython: {chatroom_id}")
+                    # Save it to database for next time
+                    try:
+                        conn.execute(text("""
+                            INSERT INTO bot_settings (key, value, discord_server_id)
+                            VALUES ('kick_chatroom_id', :chatroom_id, :guild_id)
+                            ON CONFLICT (key, discord_server_id) 
+                            DO UPDATE SET value = EXCLUDED.value
+                        """), {"chatroom_id": str(chatroom_id), "guild_id": guild_id})
+                        conn.commit()
+                        print(f"[{guild_name}] 💾 Saved chatroom_id to database")
+                    except Exception as e:
+                        print(f"[{guild_name}] ⚠️ Failed to save chatroom_id: {e}")
             
             # PRIORITY 3: Fallback to streamer's OAuth token if no other token available
             if not access_token:
