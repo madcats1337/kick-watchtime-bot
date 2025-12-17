@@ -276,8 +276,8 @@ async def get_kick_api():
 
 async def send_kick_message(message: str, guild_id: int = None) -> bool:
     """
-    Send a message to Kick chat as the @lelebot bot account.
-    Uses KICK_BOT_USER_TOKEN environment variable.
+    Send a message to Kick chat using kickpython library.
+    Uses per-server OAuth tokens from database.
     
     Args:
         message: The message to send
@@ -286,51 +286,61 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
     Returns:
         True if message sent successfully, False otherwise
     """
-    import aiohttp
-    
     try:
+        from kickpython import KickAPI
+        from utils.kick_oauth import get_kick_token_for_server
+        
         # Get guild name for logging
         guild_name = "Unknown"
         if guild_id:
             guild = bot.get_guild(guild_id)
             guild_name = guild.name if guild else str(guild_id)
         
-        # Get bot token from environment variable
-        bot_token = KICK_BOT_USER_TOKEN
+        # Get OAuth token and channel ID from database
+        token_data = get_kick_token_for_server(engine, guild_id)
         
-        if not bot_token:
-            print(f"[{guild_name}] ⚠️ KICK_BOT_USER_TOKEN not set - configure bot token in Railway")
+        if not token_data or not token_data.get('access_token'):
+            print(f"[{guild_name}] ⚠️ No OAuth token - streamer needs to link Kick account")
             return False
         
-        # Send message using bot token (type=bot, no broadcaster_user_id needed)
-        url = "https://api.kick.com/public/v1/chat"
-        headers = {
-            "Authorization": f"Bearer {bot_token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
-        payload = {
-            "content": message,
-            "type": "bot"
-            # Note: broadcaster_user_id is NOT needed for type=bot per Kick docs
-        }
+        channel_id = None
+        with engine.connect() as conn:
+            if guild_id:
+                result = conn.execute(text("""
+                    SELECT value FROM bot_settings 
+                    WHERE key = 'kick_broadcaster_user_id' 
+                    AND discord_server_id = :guild_id
+                    LIMIT 1
+                """), {"guild_id": guild_id}).fetchone()
+                
+                if result and result[0]:
+                    channel_id = result[0]
         
-        print(f"[{guild_name}] 📤 Sending message as @lelebot bot...")
+        if not channel_id:
+            print(f"[{guild_name}] ⚠️ Channel ID not configured")
+            return False
         
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, headers=headers) as response:
-                if response.status == 200:
-                    print(f"[{guild_name}] ✅ Message sent successfully to Kick")
-                    return True
-                else:
-                    response_text = await response.text()
-                    print(f"[{guild_name}] ❌ Failed to send message: {response.status} - {response_text}")
-                    if response.status == 401:
-                        print(f"[{guild_name}] ⚠️ Bot token invalid - check KICK_BOT_USER_TOKEN in Railway")
-                    return False
+        # Initialize kickpython with token
+        api = KickAPI(
+            client_id=KICK_CLIENT_ID,
+            client_secret=KICK_CLIENT_SECRET,
+            redirect_uri=f"{os.getenv('OAUTH_BASE_URL')}/auth/kick/callback"
+        )
+        
+        # Manually set the access token
+        api.access_token = token_data['access_token']
+        
+        # Send message using kickpython
+        print(f"[{guild_name}] 📤 Sending message via kickpython to channel {channel_id}...")
+        await api.post_chat(channel_id=channel_id, content=message)
+        
+        print(f"[{guild_name}] ✅ Message sent successfully")
+        return True
         
     except Exception as e:
         print(f"[{guild_name}] ❌ Failed to send message: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 # -------------------------
