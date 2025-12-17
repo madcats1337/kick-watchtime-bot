@@ -565,21 +565,6 @@ class KickWebSocketManager:
                         except (ValueError, TypeError):
                             print(f"[{guild_name}] ⚠️ Invalid chatroom_id format")
                             chatroom_id = None
-                        
-                        # HOTFIX: 152837 is broadcaster_user_id, not chatroom_id!
-                        # Clear it and let kickpython refetch the correct one
-                        if chatroom_id == 152837:
-                            print(f"[{guild_name}] ⚠️ Invalid chatroom_id detected (152837 is broadcaster_user_id)")
-                            print(f"[{guild_name}] 🔄 Clearing to force refetch of correct chatroom_id...")
-                            conn.execute(text("""
-                                DELETE FROM bot_settings 
-                                WHERE key = 'kick_chatroom_id' AND discord_server_id = :guild_id
-                            """), {"guild_id": guild_id})
-                            conn.commit()
-                            chatroom_id = None
-                    except (ValueError, TypeError):
-                        print(f"[{guild_name}] ⚠️ Invalid chatroom_id format")
-                        return False
             
             if not chatroom_id:
                 print(f"[{guild_name}] ⚠️ Chatroom ID not configured")
@@ -773,11 +758,10 @@ kick_ws_manager = KickWebSocketManager()
 
 async def send_kick_message(message: str, guild_id: int = None) -> bool:
     """
-    Send a message to Kick chat using the best available method:
-    1. kickpython WebSocket (if KICK_USE_KICKPYTHON_WS=true and connected)
-    2. Official Kick API with broadcaster_user_id (fallback)
+    Send a message to Kick chat using the Official Kick API.
     
-    Automatically fetches correct IDs (chatroom_id or broadcaster_user_id) from bot_settings.
+    Note: kickpython WebSocket is for READING messages only, not sending.
+    All message sending uses the Official Kick API with broadcaster_user_id.
     
     Args:
         message: The message to send
@@ -793,23 +777,48 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
         guild_name = guild.name if guild else str(guild_id)
     
     try:
-        # Method 1: Try kickpython WebSocket if enabled and connected
-        if KICK_USE_KICKPYTHON_WS and guild_id in kick_ws_manager.connections:
-            print(f"[{guild_name}] Sending via kickpython WebSocket...")
-            return await kick_ws_manager.send_message(message, guild_id, guild_name)
-        
-        # Method 2: Fall back to Official Kick API
+        # Send via Official Kick API
         print(f"[{guild_name}] Sending via Official Kick API...")
         
         # Get broadcaster_user_id and OAuth token
         broadcaster_user_id = None
         access_token = None
         
-        # PRIORITY 1: Use bot's own token (KICK_BOT_USER_TOKEN) to send as @Lelebot
-        bot_token = os.getenv('KICK_BOT_USER_TOKEN')
-        if bot_token:
-            print(f"[{guild_name}] Using KICK_BOT_USER_TOKEN (bot account)")
-            access_token = bot_token
+        # PRIORITY 1: Use Client Credentials (KICK_CLIENT_ID + KICK_CLIENT_SECRET) for @Lelebot app
+        client_id = os.getenv('KICK_CLIENT_ID')
+        client_secret = os.getenv('KICK_CLIENT_SECRET')
+        
+        if client_id and client_secret:
+            print(f"[{guild_name}] 🔐 Fetching Client Credentials token...")
+            try:
+                import aiohttp
+                token_url = "https://id.kick.com/oauth/token"
+                payload = {
+                    "grant_type": "client_credentials",
+                    "client_id": client_id,
+                    "client_secret": client_secret
+                }
+                headers = {"Content-Type": "application/x-www-form-urlencoded"}
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(token_url, data=payload, headers=headers, timeout=10) as resp:
+                        if resp.status == 200:
+                            token_data = await resp.json()
+                            access_token = token_data.get("access_token")
+                            expires_in = token_data.get("expires_in", 3600)
+                            print(f"[{guild_name}] ✅ Got Client Credentials token (expires in {expires_in}s)")
+                        else:
+                            error_text = await resp.text()
+                            print(f"[{guild_name}] ⚠️ Client Credentials failed: HTTP {resp.status} - {error_text}")
+            except Exception as e:
+                print(f"[{guild_name}] ⚠️ Error fetching Client Credentials token: {e}")
+        
+        # PRIORITY 2: Use bot's own token from environment (KICK_BOT_USER_TOKEN)
+        if not access_token:
+            bot_token = os.getenv('KICK_BOT_USER_TOKEN')
+            if bot_token:
+                print(f"[{guild_name}] Using KICK_BOT_USER_TOKEN from environment")
+                access_token = bot_token
         
         with engine.connect() as conn:
             # Get broadcaster_user_id
@@ -826,9 +835,9 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
                 except (ValueError, TypeError):
                     pass
             
-            # PRIORITY 2: Fallback to streamer's OAuth token if bot token not available
+            # PRIORITY 3: Fallback to streamer's OAuth token if no other token available
             if not access_token:
-                print(f"[{guild_name}] No KICK_BOT_USER_TOKEN, using streamer's OAuth token")
+                print(f"[{guild_name}] No Client Credentials or KICK_BOT_USER_TOKEN, using streamer's OAuth token")
                 from utils.kick_oauth import get_kick_token_for_server
                 token_data = get_kick_token_for_server(engine, guild_id)
                 if token_data:
