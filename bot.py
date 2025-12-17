@@ -659,6 +659,8 @@ class KickWebSocketManager:
                         finally:
                             if original_guild_id:
                                 bot.slot_call_tracker.discord_server_id = original_guild_id
+                    else:
+                        await send_kick_message(f"@{username} Please specify a slot!", guild_id=guild_id)
             
             # !gtb command
             elif content_stripped.lower().startswith("!gtb"):
