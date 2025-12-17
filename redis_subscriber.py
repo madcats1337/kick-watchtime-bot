@@ -662,7 +662,8 @@ class RedisSubscriber:
 
     async def handle_point_shop_event(self, action, data):
         """Handle point shop events from dashboard"""
-        print(f"📥 Point Shop Event: {action}")
+        guild_id = data.get('discord_server_id')
+        print(f"📥 Point Shop Event: {action} (guild_id={guild_id})")
 
         if action == 'post_shop':
             channel_id = data.get('channel_id')
@@ -674,9 +675,11 @@ class RedisSubscriber:
                 if success:
                     print("✅ Point shop posted to Discord")
                 else:
-                    print("⚠️ Failed to post point shop")
+                    print("⚠️  Failed to post point shop")
+            except ImportError:
+                print("⚠️  post_point_shop_to_discord function not implemented yet")
             except Exception as e:
-                print(f"⚠️ Failed to post point shop: {e}")
+                print(f"⚠️  Failed to post point shop: {e}")
                 import traceback
                 traceback.print_exc()
 
@@ -684,24 +687,28 @@ class RedisSubscriber:
             # Debounce: prevent duplicate syncs within 3 seconds
             current_time = time.time()
             if current_time - self.last_shop_sync < 3:
-                print(f"⏭️ Ignoring duplicate sync_shop (last sync {current_time - self.last_shop_sync:.1f}s ago)")
+                print(f"⏭️  Ignoring duplicate sync_shop (last sync {current_time - self.last_shop_sync:.1f}s ago)")
                 return
             
             self.last_shop_sync = current_time
             
-            # Get guild_id from event data
-            guild_id = data.get('discord_server_id')
+            if not guild_id:
+                print("❌ sync_shop event missing discord_server_id - cannot sync without guild context")
+                return
             
             # Force update the shop message
             try:
                 from bot import post_point_shop_to_discord
                 success = await post_point_shop_to_discord(self.bot, guild_id=guild_id, update_existing=True)
                 if success:
-                    print("✅ Point shop force synced to Discord")
+                    print(f"✅ Point shop force synced for guild {guild_id}")
                 else:
-                    print("⚠️ Failed to sync point shop")
+                    print(f"⚠️  Failed to sync point shop for guild {guild_id}")
+            except ImportError:
+                print(f"⚠️  post_point_shop_to_discord function not implemented yet (guild {guild_id})")
+                print("💡 Tip: Implement this function in bot.py to auto-sync shop embeds to Discord")
             except Exception as e:
-                print(f"⚠️ Failed to sync point shop: {e}")
+                print(f"⚠️  Failed to sync point shop for guild {guild_id}: {e}")
                 import traceback
                 traceback.print_exc()
 
