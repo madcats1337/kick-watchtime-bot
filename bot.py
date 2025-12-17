@@ -303,7 +303,7 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
             # Get bot token for Lelebot
             token_result = conn.execute(text("""
                 SELECT access_token FROM bot_tokens
-                WHERE bot_username = 'Lelebot'
+                WHERE bot_username = '@Lelebot'
                 ORDER BY created_at DESC LIMIT 1
             """)).fetchone()
             
@@ -358,7 +358,7 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
                     with engine.connect() as conn:
                         refresh_result = conn.execute(text("""
                             SELECT refresh_token FROM bot_tokens
-                            WHERE bot_username = 'Lelebot'
+                            WHERE bot_username = '@Lelebot'
                             ORDER BY created_at DESC LIMIT 1
                         """)).fetchone()
                         
@@ -391,7 +391,7 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
                                     UPDATE bot_tokens
                                     SET access_token = :access_token,
                                         refresh_token = :refresh_token
-                                    WHERE bot_username = 'Lelebot'
+                                    WHERE bot_username = '@Lelebot'
                                 """), {
                                     "access_token": new_access_token,
                                     "refresh_token": new_refresh_token
