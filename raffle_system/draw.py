@@ -8,6 +8,13 @@ from datetime import datetime
 import secrets
 import hashlib
 import logging
+import os
+
+# Import bot redis publisher for notifications
+try:
+    from utils.redis_publisher import bot_redis_publisher
+except ImportError:
+    bot_redis_publisher = None
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +199,19 @@ class RaffleDraw:
                         'period_id': period_id,
                         'total_tickets': total_tickets
                     })
+
+            # Publish notification to dashboard
+            if bot_redis_publisher and bot_redis_publisher.enabled and update_period:
+                try:
+                    bot_redis_publisher.publish_raffle_draw(
+                        discord_server_id=server_id,
+                        winner_kick_name=winner['kick_name'],
+                        winner_shuffle_name=shuffle_username,
+                        prize_description=prize_description or 'Raffle Prize',
+                        period_id=period_id
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to publish raffle draw notification: {e}")
 
             result = {
                 'winner_discord_id': winner['discord_id'],
