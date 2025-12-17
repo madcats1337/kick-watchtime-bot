@@ -430,36 +430,28 @@ class KickWebSocketManager:
                 print(f"[{guild_name}] 📨 Got message from queue: {message[:50]}... to channel {channel_id}")
                 
                 # Set access_token NOW (only when sending) - MULTISERVER: Each guild uses its own token
-                # PRIORITY 1: KICK_BOT_USER_TOKEN (bot account OAuth token with chat:write scope)
-                # PRIORITY 2: Per-guild bot token from bot_settings table
-                # PRIORITY 3: Client Credentials (app-level, may not have chat:write scope)
-                # PRIORITY 4: Fall back to streamer's OAuth token (per-guild)
+                # PRIORITY 1: Streamer's OAuth 2.1 token from bot_settings (kick_oauth_token)
+                # PRIORITY 2: Client Credentials (app-level, may not have chat:write scope)
+                # PRIORITY 3: Legacy kick_bot_token (deprecated)
                 if not hasattr(api, 'access_token') or not api.access_token:
                     try:
-                        bot_kick_token = None
+                        oauth_token = None
                         
-                        # Method 1: Use KICK_BOT_USER_TOKEN from environment (highest priority)
-                        kick_bot_token_env = os.getenv('KICK_BOT_USER_TOKEN')
-                        if kick_bot_token_env:
-                            bot_kick_token = kick_bot_token_env
-                            print(f"[{guild_name}] 🤖 Using KICK_BOT_USER_TOKEN from environment")
+                        # Method 1: Try OAuth 2.1 token from dashboard (kick_oauth_token)
+                        with engine.connect() as conn:
+                            result = conn.execute(text("""
+                                SELECT value FROM bot_settings 
+                                WHERE key = 'kick_oauth_token' 
+                                AND discord_server_id = :guild_id
+                                LIMIT 1
+                            """), {"guild_id": guild_id}).fetchone()
+                            
+                            if result and result[0]:
+                                oauth_token = result[0]
+                                print(f"[{guild_name}] 🤖 Using kick_oauth_token from bot_settings (OAuth 2.1)")
                         
-                        # Method 2: Try to get bot's token from bot_settings (per-guild)
-                        if not bot_kick_token:
-                            with engine.connect() as conn:
-                                result = conn.execute(text("""
-                                    SELECT value FROM bot_settings 
-                                    WHERE key = 'kick_bot_token' 
-                                    AND discord_server_id = :guild_id
-                                    LIMIT 1
-                                """), {"guild_id": guild_id}).fetchone()
-                                
-                                if result and result[0]:
-                                    bot_kick_token = result[0]
-                                    print(f"[{guild_name}] 🤖 Using kick_bot_token from bot_settings (guild-specific)")
-                        
-                        # Method 3: Client Credentials flow (application authentication)
-                        if not bot_kick_token:
+                        # Method 2: Client Credentials flow (application authentication)
+                        if not oauth_token:
                             client_id = os.getenv('KICK_CLIENT_ID')
                             client_secret = os.getenv('KICK_CLIENT_SECRET')
                             
@@ -478,26 +470,27 @@ class KickWebSocketManager:
                                     async with session.post(token_url, data=payload, headers=headers, timeout=10) as resp:
                                         if resp.status == 200:
                                             token_data = await resp.json()
-                                            bot_kick_token = token_data.get("access_token")
+                                            oauth_token = token_data.get("access_token")
                                             expires_in = token_data.get("expires_in", 3600)
                                             print(f"[{guild_name}] ✅ Got Client Credentials token (expires in {expires_in}s)")
                                         else:
                                             error_text = await resp.text()
                                             print(f"[{guild_name}] ❌ Client Credentials failed: HTTP {resp.status} - {error_text}")
                         
-                        # Method 4: Fallback to streamer's OAuth token (per-guild)
-                        if not bot_kick_token:
-                            print(f"[{guild_name}] ⚠️ No bot token configured, using streamer's OAuth token")
+                        # Method 3: Fallback to streamer OAuth if nothing else worked
+                        if not oauth_token:
+                            print(f"[{guild_name}] 🔑 Fallback: Using legacy OAuth lookup")
                             from utils.kick_oauth import get_kick_token_for_server
                             token_data = get_kick_token_for_server(engine, guild_id)
                             if token_data and token_data.get('access_token'):
-                                api.access_token = token_data['access_token']
-                                print(f"[{guild_name}] 🔑 Using OAuth token for streamer: {token_data.get('kick_username')}")
-                            else:
-                                print(f"[{guild_name}] ⚠️ No OAuth token found for server")
-                                continue
+                                oauth_token = token_data['access_token']
+                                print(f"[{guild_name}] ✅ Token found for: {token_data.get('kick_username')}")
+                        
+                        if oauth_token:
+                            api.access_token = oauth_token
                         else:
-                            api.access_token = bot_kick_token
+                            print(f"[{guild_name}] ⚠️ No OAuth token found - cannot send message")
+                            continue
                             
                     except Exception as e:
                         print(f"[{guild_name}] ❌ Error getting token: {e}")
@@ -507,8 +500,24 @@ class KickWebSocketManager:
                 
                 # Send via kickpython
                 print(f"[{guild_name}] 📤 Calling api.post_chat...")
-                await api.post_chat(channel_id=channel_id, content=message)
-                print(f"[{guild_name}] ✅ Sent: {message[:50]}...")
+                try:
+                    await api.post_chat(channel_id=channel_id, content=message)
+                    print(f"[{guild_name}] ✅ Sent: {message[:50]}...")
+                except Exception as send_error:
+                    # If sending fails with current token, try streamer OAuth as fallback
+                    if "Unauthorized" in str(send_error) or "401" in str(send_error):
+                        print(f"[{guild_name}] ⚠️ Token unauthorized, trying streamer OAuth fallback...")
+                        from utils.kick_oauth import get_kick_token_for_server
+                        token_data = get_kick_token_for_server(engine, guild_id)
+                        if token_data and token_data.get('access_token'):
+                            api.access_token = token_data['access_token']
+                            print(f"[{guild_name}] 🔄 Retrying with streamer token...")
+                            await api.post_chat(channel_id=channel_id, content=message)
+                            print(f"[{guild_name}] ✅ Sent via streamer token: {message[:50]}...")
+                        else:
+                            raise send_error
+                    else:
+                        raise send_error
                 
             except asyncio.TimeoutError:
                 # Keep connection alive with periodic checks
