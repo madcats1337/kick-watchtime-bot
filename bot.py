@@ -390,8 +390,7 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
                                 conn.execute(text("""
                                     UPDATE bot_tokens
                                     SET access_token = :access_token,
-                                        refresh_token = :refresh_token,
-                                        updated_at = CURRENT_TIMESTAMP
+                                        refresh_token = :refresh_token
                                     WHERE bot_username = 'Lelebot'
                                 """), {
                                     "access_token": new_access_token,
