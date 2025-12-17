@@ -1002,6 +1002,19 @@ async def start_redis_subscriber(bot, send_message_callback=None):
     subscriber = RedisSubscriber(bot, send_message_callback)
 
     if subscriber.enabled:
+        # Auto-sync point shop embeds on bot startup for all guilds
+        print("🔄 Auto-syncing point shop embeds on startup...")
+        for guild in bot.guilds:
+            try:
+                from bot import post_point_shop_to_discord
+                await post_point_shop_to_discord(bot, guild_id=guild.id, update_existing=True)
+                print(f"✅ Synced shop for {guild.name} (ID: {guild.id})")
+            except ImportError:
+                print(f"⚠️  post_point_shop_to_discord not available - skipping auto-sync for {guild.name}")
+                break  # Don't try other guilds if function doesn't exist
+            except Exception as e:
+                print(f"⚠️  Failed to auto-sync shop for {guild.name}: {e}")
+        
         # Run the listener in the background
         await subscriber.listen()
     else:
