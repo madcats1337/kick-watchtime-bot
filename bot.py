@@ -296,7 +296,7 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
             guild_name = guild.name if guild else str(guild_id)
         
         # Get bot access token via client credentials flow
-        bot_token = await get_kick_bot_token(guild_id)
+        bot_token = await get_kick_bot_token()
         channel_id = None
         
         if not bot_token:
