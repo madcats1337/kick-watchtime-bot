@@ -474,23 +474,24 @@ class KickWebSocketManager:
                         'User-Agent': 'LeleBot/1.0'
                     }
                     
+                    # Use bot mode - broadcaster_user_id not needed, message sent to channel attached to token
                     payload = {
                         'content': message,
-                        'type': 'message'
+                        'type': 'bot'  # bot mode instead of 'message'
                     }
                     
-                    url = f'https://api.kick.com/public/v1/chat/{channel_id}/messages'
+                    url = 'https://api.kick.com/public/v1/chat'  # Correct endpoint from OpenAPI spec
                     
                     async with aiohttp.ClientSession() as session:
                         async with session.post(url, headers=headers, json=payload, timeout=10) as resp:
                             if resp.status in [200, 201]:
-                                print(f"[{guild_name}] ✅ Message sent successfully")
+                                response_data = await resp.json()
+                                print(f"[{guild_name}] ✅ Message sent successfully: {response_data}")
                             else:
                                 error_text = await resp.text()
                                 print(f"[{guild_name}] ❌ HTTP {resp.status}: {error_text}")
                                 raise Exception(f"Failed to send message: HTTP {resp.status} - {error_text}")
                     
-                except Exception as send_error:
                 except Exception as send_error:
                     # If sending fails with current token, try streamer OAuth as fallback
                     if "Unauthorized" in str(send_error) or "401" in str(send_error):
@@ -501,7 +502,7 @@ class KickWebSocketManager:
                             api.access_token = token_data['access_token']
                             print(f"[{guild_name}] 🔄 Retrying with streamer token...")
                             
-                            # Retry with fallback token
+                            # Retry with fallback token using correct endpoint
                             import aiohttp
                             headers = {
                                 'Authorization': f'Bearer {api.access_token}',
@@ -511,14 +512,15 @@ class KickWebSocketManager:
                             }
                             payload = {
                                 'content': message,
-                                'type': 'message'
+                                'type': 'bot'
                             }
-                            url = f'https://api.kick.com/public/v1/chat/{channel_id}/messages'
+                            url = 'https://api.kick.com/public/v1/chat'
                             
                             async with aiohttp.ClientSession() as session:
                                 async with session.post(url, headers=headers, json=payload, timeout=10) as resp:
                                     if resp.status in [200, 201]:
-                                        print(f"[{guild_name}] ✅ Sent via streamer token: {message[:50]}...")
+                                        response_data = await resp.json()
+                                        print(f"[{guild_name}] ✅ Sent via streamer token: {response_data}")
                                     else:
                                         error_text = await resp.text()
                                         raise Exception(f"Fallback failed: HTTP {resp.status} - {error_text}")
