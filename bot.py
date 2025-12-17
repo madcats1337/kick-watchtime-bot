@@ -1180,14 +1180,16 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
             """), {"guild_id": guild_id}).fetchone()
             if result and result[0]:
                 chatroom_id = int(result[0])
+                print(f"[{guild_name}] 📦 Loaded chatroom_id from database: {chatroom_id}")
     except Exception as e:
-        print(f"[{guild_name}] ⚠️ Error loading chatroom_id: {e}")
+        print(f"[{guild_name}] ⚠️ Error loading chatroom_id from database: {e}")
+        import traceback
+        traceback.print_exc()
     
     # Fetch chatroom_id if not in database using kickpython
     if not chatroom_id:
+        print(f"[{guild_name}] 🔍 No chatroom_id in database, fetching for channel: {channel_slug}")
         try:
-            print(f"[{guild_name}] 🔍 Fetching chatroom_id for channel: {channel_slug}")
-            
             # Use kickpython to fetch chatroom_id
             from kickpython import KickAPI as KickPyAPI
             
@@ -1195,6 +1197,7 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
             client_id = os.getenv("KICK_CLIENT_ID")
             client_secret = os.getenv("KICK_CLIENT_SECRET")
             redirect_uri = os.getenv("OAUTH_BASE_URL")
+            
             if redirect_uri and not redirect_uri.startswith(("http://", "https://")):
                 redirect_uri = f"https://{redirect_uri}"
             
@@ -1206,41 +1209,64 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
             if access_token:
                 api.access_token = access_token
             
-            # Start connection and wait for chatroom_id
-            task = asyncio.create_task(api.connect_to_chatroom(channel_slug))
-            try:
-                timeout = 10  # 10 second timeout
-                for _ in range(timeout * 5):  # check every 200ms
-                    await asyncio.sleep(0.2)
-                    if getattr(api, 'chatroom_id', None):
-                        chatroom_id = int(api.chatroom_id)
-                        print(f"[{guild_name}] ✅ kickpython resolved chatroom_id: {chatroom_id}")
-                        
-                        # Save to database
-                        with engine.begin() as conn:
-                            conn.execute(text("""
-                                INSERT INTO bot_settings (key, value, discord_server_id, updated_at)
-                                VALUES ('kick_chatroom_id', :cid, :guild_id, CURRENT_TIMESTAMP)
-                                ON CONFLICT (key, discord_server_id)
-                                DO UPDATE SET value = :cid, updated_at = CURRENT_TIMESTAMP
-                            """), {"cid": str(chatroom_id), "guild_id": guild_id})
-                        break
-            finally:
-                task.cancel()
+            print(f"[{guild_name}] 🔌 Resolving chatroom_id via kickpython...")
+            
+            # Create task to connect
+            connect_task = asyncio.create_task(api.connect_to_chatroom(channel_slug))
+            
+            # Wait for chatroom_id to be discovered (kickpython sets this automatically)
+            timeout = 15
+            start_time = asyncio.get_event_loop().time()
+            
+            while asyncio.get_event_loop().time() - start_time < timeout:
+                await asyncio.sleep(0.3)
+                
+                # Check if chatroom_id was discovered
+                if hasattr(api, 'chatroom_id') and api.chatroom_id:
+                    chatroom_id = int(api.chatroom_id)
+                    print(f"[{guild_name}] ✅ kickpython found chatroom_id: {chatroom_id}")
+                    
+                    # Cancel the connection task since we only needed the ID
+                    connect_task.cancel()
+                    try:
+                        await connect_task
+                    except asyncio.CancelledError:
+                        pass
+                    
+                    # Save to database
+                    with engine.begin() as conn:
+                        conn.execute(text("""
+                            INSERT INTO bot_settings (key, value, discord_server_id, updated_at)
+                            VALUES ('kick_chatroom_id', :cid, :guild_id, CURRENT_TIMESTAMP)
+                            ON CONFLICT (key, discord_server_id)
+                            DO UPDATE SET value = :cid, updated_at = CURRENT_TIMESTAMP
+                        """), {"cid": str(chatroom_id), "guild_id": guild_id})
+                    print(f"[{guild_name}] 💾 Saved chatroom_id to database")
+                    break
+                
+                # Log progress every 3 seconds
+                elapsed = asyncio.get_event_loop().time() - start_time
+                if int(elapsed) % 3 == 0 and int(elapsed) > 0:
+                    print(f"[{guild_name}] ⏳ Waiting for chatroom_id... ({int(elapsed)}s)")
+            
+            # Cleanup
+            if not chatroom_id:
+                connect_task.cancel()
                 try:
-                    await task
+                    await connect_task
                 except asyncio.CancelledError:
                     pass
-            
-            if not chatroom_id:
-                print(f"[{guild_name}] ❌ kickpython timeout - could not resolve chatroom_id")
+                
+                print(f"[{guild_name}] ❌ Timeout after {timeout}s - kickpython couldn't resolve chatroom_id")
+                print(f"[{guild_name}] 💡 Verify channel name: '{channel_slug}'")
                 return
                 
-        except ImportError:
-            print(f"[{guild_name}] ❌ kickpython not installed - install with: pip install kickpython")
+        except ImportError as e:
+            print(f"[{guild_name}] ❌ kickpython not installed: {e}")
+            print(f"[{guild_name}] 💡 Install with: pip install kickpython")
             return
         except Exception as e:
-            print(f"[{guild_name}] ❌ Could not fetch chatroom_id: {e}")
+            print(f"[{guild_name}] ❌ Error fetching chatroom_id: {type(e).__name__}: {e}")
             import traceback
             traceback.print_exc()
             return
