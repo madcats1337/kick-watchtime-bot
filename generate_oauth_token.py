@@ -183,20 +183,14 @@ def step2_exchange_code(code, code_verifier, discord_server_id=None):
         # Save to database if discord_server_id provided
         if discord_server_id:
             save_to_database(discord_server_id, token_data)
+        else:
+            print("\n⚠️  No discord_server_id provided - tokens not saved to database")
+            print("Run script again and provide discord_server_id to save tokens")
         
         print("\n" + "=" * 80)
-        print("SET THESE ENVIRONMENT VARIABLES:")
+        print("TOKENS GENERATED SUCCESSFULLY")
         print("=" * 80)
-        print(f"\nKICK_BOT_USER_TOKEN={token_data['access_token']}")
-        print(f"KICK_BOT_REFRESH_TOKEN={token_data['refresh_token']}")
         
-        # Save to file
-        with open('oauth_tokens.txt', 'w') as f:
-            f.write(f"KICK_BOT_USER_TOKEN={token_data['access_token']}\n")
-            f.write(f"KICK_BOT_REFRESH_TOKEN={token_data['refresh_token']}\n")
-            f.write(f"EXPIRES_IN={token_data['expires_in']}\n")
-        
-        print("\n✅ Tokens saved to oauth_tokens.txt")
         return token_data
     else:
         print(f"\n❌ ERROR: {response.status_code}")
@@ -229,10 +223,12 @@ def save_to_database(discord_server_id, token_data):
         cur.close()
         conn.close()
         
-        print(f"\n✅ Tokens saved to database for discord_server_id={discord_server_id}")
+        print(f"\n✅ OAuth 2.1 tokens securely saved to database for discord_server_id={discord_server_id}")
+        print(f"✅ Access token expires in {token_data['expires_in']} seconds")
+        print(f"✅ Refresh token can be used to get new access tokens")
     except Exception as e:
         print(f"\n⚠️  Failed to save to database: {e}")
-        print("You'll need to update the tokens manually.")
+        print("You'll need to update the tokens manually or run the dashboard OAuth flow.")
 
 def refresh_token(refresh_token):
     """Refresh an expired access token"""
@@ -257,15 +253,10 @@ def refresh_token(refresh_token):
     if response.status_code == 200:
         token_data = response.json()
         print(f"\n✅ SUCCESS! Token refreshed:\n")
-        print(f"New Access Token:  {token_data['access_token']}")
-        print(f"New Refresh Token: {token_data['refresh_token']}")
-        print(f"Expires In:        {token_data['expires_in']} seconds")
+        print(f"New Access Token expires in: {token_data['expires_in']} seconds")
         
-        print("\n" + "=" * 80)
-        print("UPDATE ENVIRONMENT VARIABLES:")
-        print("=" * 80)
-        print(f"\nKICK_BOT_USER_TOKEN={token_data['access_token']}")
-        print(f"KICK_BOT_REFRESH_TOKEN={token_data['refresh_token']}")
+        print("\n⚠️  IMPORTANT: Update tokens in database manually")
+        print("Tokens are NOT saved to files for security reasons")
         return token_data
     else:
         print(f"\n❌ ERROR: {response.status_code}")
