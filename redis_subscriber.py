@@ -247,7 +247,7 @@ class RedisSubscriber:
             enabled = data.get('enabled')
             # Announce in Kick chat
             if enabled:
-                await self.announce_in_chat("✅ Slot requests are now ENABLED! Use !call <slot_name> or !sr <slot_name>", guild_id=guild_id)
+                await self.announce_in_chat("✅ Slot requests are now ENABLED! Use !call {slot_name} or !sr {slot_name}", guild_id=guild_id)
             else:
                 await self.announce_in_chat("❌ Slot requests have been DISABLED", guild_id=guild_id)
 
