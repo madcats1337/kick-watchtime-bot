@@ -560,7 +560,9 @@ class KickWebSocketManager:
                                 pass  # Message sent successfully
                             else:
                                 error_text = await resp.text()
-                                print(f"[{guild_name}] ❌ HTTP {resp.status}: {error_text}")
+                                # Don't log 401 errors as they trigger automatic token refresh
+                                if resp.status != 401:
+                                    print(f"[{guild_name}] ❌ HTTP {resp.status}: {error_text}")
                                 raise Exception(f"Failed to send message: HTTP {resp.status} - {error_text}")
                     
                 except Exception as send_error:
@@ -799,6 +801,19 @@ class KickWebSocketManager:
                 # Create clip via Dashboard API (background task)
                 async def create_clip_background(user: str, title: str):
                     try:
+                        # Get kick channel
+                        kick_channel = self.connected_channels.get(guild_id)
+                        if not kick_channel:
+                            print(f"[Clip] ❌ No channel configured")
+                            return
+                        
+                        # Check if stream is live FIRST
+                        stream_status = check_stream_live(kick_channel)
+                        if not stream_status.get('is_live'):
+                            print(f"[Clip] ❌ Stream is offline")
+                            await send_kick_message(f"@{user} Stream is not live! Can't create clip when offline.", guild_id=guild_id)
+                            return
+                        
                         # Get settings from bot_settings
                         dashboard_url = None
                         api_key = None
@@ -824,30 +839,35 @@ class KickWebSocketManager:
                             await send_kick_message(f"@{user} Clip service not configured!", guild_id=guild_id)
                             return
                         
-                        # Get kick channel
-                        kick_channel = self.connected_channels.get(guild_id)
-                        if not kick_channel:
-                            print(f"[Clip] ❌ No channel configured")
-                            return
-                        
                         # Call Dashboard API
                         import aiohttp
                         async with aiohttp.ClientSession() as session:
                             async with session.post(
                                 f"{dashboard_url}/api/clips/create",
                                 headers={'X-API-Key': api_key, 'Content-Type': 'application/json'},
-                                json={'channel': kick_channel, 'duration': clip_duration, 'username': user, 'title': title},
+                                json={'channel': kick_channel, 'duration': clip_duration, 'username': user, 'title': title, 'discord_server_id': guild_id},
                                 timeout=10
                             ) as resp:
                                 if resp.status == 200:
+                                    result = await resp.json()
                                     print(f"[Clip] ✅ Clip created for {user}")
-                                    await send_kick_message(f"@{user} Clip created! 🎬", guild_id=guild_id)
+                                    clip_url = result.get('clip_url', '')
+                                    await send_kick_message(f"@{user} Clip created! 🎬 {clip_url}", guild_id=guild_id)
                                 else:
-                                    print(f"[Clip] ❌ Failed: HTTP {resp.status}")
-                                    await send_kick_message(f"@{user} Clip failed!", guild_id=guild_id)
+                                    error_data = await resp.json()
+                                    error_msg = error_data.get('message', 'Unknown error')
+                                    print(f"[Clip] ❌ Failed: HTTP {resp.status} - {error_msg}")
+                                    
+                                    # Provide helpful error messages
+                                    if 'no_buffer' in error_msg or 'not_recording' in error_msg:
+                                        await send_kick_message(f"@{user} Clip buffer is starting up, try again in 30 seconds!", guild_id=guild_id)
+                                    elif 'no_segments' in error_msg:
+                                        await send_kick_message(f"@{user} Buffer still filling, try again in a few seconds!", guild_id=guild_id)
+                                    else:
+                                        await send_kick_message(f"@{user} Clip failed: {error_msg}", guild_id=guild_id)
                     except Exception as e:
                         print(f"[Clip] ❌ Error: {e}")
-                        await send_kick_message(f"@{user} Clip error!", guild_id=guild_id)
+                        await send_kick_message(f"@{user} Clip error: {str(e)}", guild_id=guild_id)
                 
                 asyncio.create_task(create_clip_background(username, clip_title))
 
@@ -1126,11 +1146,25 @@ try:
         CREATE TABLE IF NOT EXISTS clips (
             id SERIAL PRIMARY KEY,
             kick_username TEXT NOT NULL,
+            clip_title TEXT,
             clip_duration INTEGER NOT NULL,
             clip_url TEXT,
+            discord_server_id BIGINT,
+            kick_channel TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """))
+        
+        # Add multiserver columns to clips table if they don't exist
+        try:
+            conn.execute(text("""
+                ALTER TABLE clips 
+                ADD COLUMN IF NOT EXISTS discord_server_id BIGINT,
+                ADD COLUMN IF NOT EXISTS kick_channel TEXT,
+                ADD COLUMN IF NOT EXISTS clip_title TEXT;
+            """))
+        except Exception:
+            pass  # Columns may already exist
 
         # -------------------------
         # Point Reward System Tables
