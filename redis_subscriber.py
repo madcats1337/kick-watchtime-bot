@@ -247,7 +247,7 @@ class RedisSubscriber:
             enabled = data.get('enabled')
             # Announce in Kick chat
             if enabled:
-                await self.announce_in_chat("✅ Slot requests are now ENABLED! Use !call {slot_name} or !sr {slot_name}", guild_id=guild_id)
+                await self.announce_in_chat('✅ Slot requests are now ENABLED! Use !call "slot name" or !sr "slot name"', guild_id=guild_id)
             else:
                 await self.announce_in_chat("❌ Slot requests have been DISABLED", guild_id=guild_id)
 
@@ -262,14 +262,51 @@ class RedisSubscriber:
                 except Exception as e:
                     print(f"Failed to send Discord notification: {e}")
 
-            # Update Discord panel
+            # Update tracker enabled state directly
+            if hasattr(self.bot, 'slot_call_tracker') and self.bot.slot_call_tracker:
+                try:
+                    tracker = self.bot.slot_call_tracker
+                    # Store current server_id and switch to the guild that triggered this event
+                    original_server_id = tracker.server_id
+                    if guild_id:
+                        tracker.server_id = guild_id
+                    
+                    # Reload enabled state from database
+                    tracker.enabled = tracker._load_enabled_state()
+                    tracker.max_requests_per_user = tracker._load_max_requests()
+                    print(f"✅ Updated slot_call_tracker enabled state to: {tracker.enabled} for server {guild_id}")
+                    
+                    # Restore original server_id
+                    if original_server_id:
+                        tracker.server_id = original_server_id
+                except Exception as e:
+                    print(f"⚠️ Failed to update slot_call_tracker: {e}")
+            
+            # Update panel tracker (if panel exists)
             if hasattr(self.bot, 'slot_request_panel') and self.bot.slot_request_panel:
                 try:
                     panel = self.bot.slot_request_panel
                     # Refresh tracker state from database before updating panel
                     if hasattr(panel, 'tracker') and panel.tracker:
-                        panel.tracker.enabled = panel.tracker._load_enabled_state()  # Reload enabled state from DB
-                        panel.tracker.max_requests_per_user = panel.tracker._load_max_requests()  # Reload max requests too
+                        # Store current server_id and switch to the guild that triggered this event
+                        original_server_id = panel.tracker.server_id
+                        if guild_id:
+                            panel.tracker.server_id = guild_id
+                        
+                        panel.tracker.enabled = panel.tracker._load_enabled_state()
+                        panel.tracker.max_requests_per_user = panel.tracker._load_max_requests()
+                        print(f"✅ Updated panel tracker enabled state to: {panel.tracker.enabled} for server {guild_id}")
+                        
+                        # Restore original server_id
+                        if original_server_id:
+                            panel.tracker.server_id = original_server_id
+                except Exception as e:
+                    print(f"⚠️ Failed to update tracker via panel: {e}")
+            
+            # Update Discord panel (if it exists)
+            if hasattr(self.bot, 'slot_request_panel') and self.bot.slot_request_panel:
+                try:
+                    panel = self.bot.slot_request_panel
                     print(f"🔍 Panel IDs: message_id={panel.panel_message_id}, channel_id={panel.panel_channel_id}")
                     success = await panel.update_panel(force=True)
                     if success:
