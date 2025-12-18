@@ -109,27 +109,17 @@ class LinkPanel:
         self._load_panel_info()
 
     def _load_panel_info(self):
-        """Load panel message info from database"""
-        if not self.engine:
-            return
-
-        try:
-            with self.engine.connect() as conn:
-                # Get the most recent link panel
-                result = conn.execute(text("""
-                    SELECT guild_id, channel_id, message_id
-                    FROM link_panels
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                """)).fetchone()
-
-                if result:
-                    self.panel_guild_id = result[0]
-                    self.panel_channel_id = result[1]
-                    self.panel_message_id = result[2]
-
-        except Exception as e:
-            logger.error(f"Failed to load link panel info: {e}")
+        """Load panel message info from database
+        
+        NOTE: In multiserver deployments, this should be refactored to be per-guild.
+        Currently disabled to prevent cross-guild contamination.
+        Panels must be recreated after bot restarts using !createlinkpanel.
+        """
+        # MULTISERVER FIX: Disabled global panel loading
+        # In a multiserver bot, we don't know which guild's panel to load at init time.
+        # Each guild should create their own panel with !createlinkpanel command.
+        # TODO: Refactor LinkPanel to be per-guild like other managers (gifted_sub_trackers, etc.)
+        pass
 
     def _save_panel_info(self, guild_id: int, channel_id: int, message_id: int):
         """Save panel message info to database"""
