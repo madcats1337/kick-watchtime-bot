@@ -99,9 +99,10 @@ class SlotCallTracker:
                     # First time - set default to enabled
                     with self.engine.begin() as conn:
                         conn.execute(text("""
-                            INSERT INTO feature_settings (feature_name, enabled)
-                            VALUES ('slot_calls', TRUE)
-                        """))
+                            INSERT INTO bot_settings (key, value, discord_server_id)
+                            VALUES ('slot_requests_enabled', 'true', :server_id)
+                            ON CONFLICT (key, discord_server_id) DO NOTHING
+                        """), {"server_id": self.server_id})
                     logger.info("Initialized slot call state in database: enabled")
                     return True
         except Exception as e:
