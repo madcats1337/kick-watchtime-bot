@@ -87,12 +87,12 @@ class SlotCallTracker:
         try:
             with self.engine.connect() as conn:
                 result = conn.execute(text("""
-                    SELECT enabled FROM feature_settings
-                    WHERE feature_name = 'slot_calls'
-                """)).fetchone()
+                    SELECT value FROM bot_settings
+                    WHERE key = 'slot_requests_enabled' AND discord_server_id = :server_id
+                """), {"server_id": self.server_id}).fetchone()
 
                 if result:
-                    enabled = result[0]
+                    enabled = result[0].lower() == 'true'
                     logger.info(f"Loaded slot call state from database: {'enabled' if enabled else 'disabled'}")
                     return enabled
                 else:
@@ -216,11 +216,11 @@ class SlotCallTracker:
             try:
                 with self.engine.begin() as conn:
                     conn.execute(text("""
-                        INSERT INTO feature_settings (feature_name, enabled, updated_at)
-                        VALUES ('slot_calls', :enabled, CURRENT_TIMESTAMP)
-                        ON CONFLICT (feature_name)
-                        DO UPDATE SET enabled = :enabled, updated_at = CURRENT_TIMESTAMP
-                    """), {"enabled": enabled})
+                        INSERT INTO bot_settings (key, value, discord_server_id)
+                        VALUES ('slot_requests_enabled', :value, :server_id)
+                        ON CONFLICT (key, discord_server_id)
+                        DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP
+                    """), {"value": str(enabled).lower(), "server_id": self.server_id})
 
                     # Clear slot requests table when enabled after being disabled
                     if enabled and was_disabled:
