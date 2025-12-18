@@ -283,6 +283,11 @@ class TimedMessagesManager:
             logger.error(f"Error updating interval: {e}")
             return {'status': 'error', 'message': str(e)}
 
+    def reload_messages(self):
+        """Reload messages from database (public method for external calls)"""
+        self._load_messages()
+        logger.info(f"Reloaded {len(self.messages)} timed messages from database")
+
     def list_messages(self) -> List[TimedMessage]:
         """Get all timed messages"""
         return list(self.messages.values())
@@ -327,9 +332,9 @@ class TimedMessagesManager:
 
             if should_send:
                 try:
-                    # Send the message
-                    await self.kick_send_callback(msg.message)
-                    logger.info(f"Sent timed message #{msg.message_id}: {msg.message[:50]}... ({active_chatters_count} active chatters)")
+                    # Send the message with guild_id for proper routing
+                    await self.kick_send_callback(msg.message, guild_id=self.guild_id)
+                    logger.info(f"[Guild {self.guild_id}] Sent timed message #{msg.message_id}: {msg.message[:50]}... ({active_chatters_count} active chatters)")
 
                     # Update last_sent timestamp
                     if self.engine:
@@ -357,27 +362,37 @@ class TimedMessagesManager:
 class TimedMessagesCommands(commands.Cog):
     """Discord commands for managing timed messages"""
 
-    def __init__(self, bot, manager: TimedMessagesManager):
+    def __init__(self, bot, manager: TimedMessagesManager = None):
         self.bot = bot
-        self.manager = manager
+        # manager param kept for backwards compatibility but not used
         self.check_messages_task.start()
 
     def cog_unload(self):
         """Clean up when cog is unloaded"""
         self.check_messages_task.cancel()
+    
+    def _get_manager(self, guild_id: int):
+        """Get the manager for a specific guild"""
+        if hasattr(self.bot, 'timed_messages_managers'):
+            return self.bot.timed_messages_managers.get(guild_id)
+        # Fallback for backwards compatibility
+        if hasattr(self.bot, 'timed_messages_manager'):
+            return self.bot.timed_messages_manager
+        return None
 
     @tasks.loop(minutes=1)
     async def check_messages_task(self):
-        """Background task to check and send timed messages"""
-        # Get active chatters count from bot if available
-        active_chatters_count = 0
-        if hasattr(self.bot, 'get_active_chatters_count'):
-            active_chatters_count = self.bot.get_active_chatters_count()
-            print(f"[Timed Messages] Active chatters from bot: {active_chatters_count}")
-        else:
-            print(f"[Timed Messages] WARNING: Bot doesn't have get_active_chatters_count method!")
-
-        await self.manager.check_and_send_messages(active_chatters_count)
+        """Background task to check and send timed messages for all guilds"""
+        if not hasattr(self.bot, 'timed_messages_managers'):
+            return
+        
+        for guild_id, manager in self.bot.timed_messages_managers.items():
+            # Get active chatters count for this guild
+            active_chatters_count = 0
+            if hasattr(self.bot, 'get_active_chatters_count'):
+                active_chatters_count = self.bot.get_active_chatters_count(guild_id)
+            
+            await manager.check_and_send_messages(active_chatters_count)
 
     @check_messages_task.before_loop
     async def before_check_messages(self):
@@ -392,7 +407,12 @@ class TimedMessagesCommands(commands.Cog):
         Usage: !addtimer <minutes> <message>
         Example: !addtimer 30 Check out our Discord: discord.gg/example
         """
-        result = self.manager.add_message(message, interval, ctx.author.id)
+        manager = self._get_manager(ctx.guild.id)
+        if not manager:
+            await ctx.send("❌ Timed messages not initialized for this server")
+            return
+        
+        result = manager.add_message(message, interval, ctx.author.id)
 
         if result['status'] == 'success':
             embed = discord.Embed(
@@ -413,7 +433,12 @@ class TimedMessagesCommands(commands.Cog):
         Usage: !removetimer <message_id>
         Example: !removetimer 1
         """
-        result = self.manager.remove_message(message_id)
+        manager = self._get_manager(ctx.guild.id)
+        if not manager:
+            await ctx.send("❌ Timed messages not initialized for this server")
+            return
+        
+        result = manager.remove_message(message_id)
 
         if result['status'] == 'success':
             await ctx.send(f"✅ {result['message']}")
@@ -428,6 +453,10 @@ class TimedMessagesCommands(commands.Cog):
         Usage: !toggletimer <message_id> <on|off>
         Example: !toggletimer 1 off
         """
+        manager = self._get_manager(ctx.guild.id)
+        if not manager:
+            await ctx.send("❌ Timed messages not initialized for this server")
+            return
         if enabled is None:
             # Toggle current state
             msg = self.manager.get_message(message_id)
@@ -438,7 +467,7 @@ class TimedMessagesCommands(commands.Cog):
         else:
             enabled_bool = enabled.lower() in ['on', 'enable', 'enabled', 'true', 'yes']
 
-        result = self.manager.toggle_message(message_id, enabled_bool)
+        result = manager.toggle_message(message_id, enabled_bool)
 
         if result['status'] == 'success':
             await ctx.send(f"✅ {result['message']}")
@@ -453,7 +482,12 @@ class TimedMessagesCommands(commands.Cog):
         Usage: !updatetimer <message_id> <minutes>
         Example: !updatetimer 1 60
         """
-        result = self.manager.update_interval(message_id, interval)
+        manager = self._get_manager(ctx.guild.id)
+        if not manager:
+            await ctx.send("❌ Timed messages not initialized for this server")
+            return
+        
+        result = manager.update_interval(message_id, interval)
 
         if result['status'] == 'success':
             await ctx.send(f"✅ {result['message']}")
@@ -467,7 +501,12 @@ class TimedMessagesCommands(commands.Cog):
         [ADMIN] List all timed messages
         Usage: !listtimers
         """
-        messages = self.manager.list_messages()
+        manager = self._get_manager(ctx.guild.id)
+        if not manager:
+            await ctx.send("❌ Timed messages not initialized for this server")
+            return
+        
+        messages = manager.list_messages()
 
         if not messages:
             await ctx.send("📭 No timed messages configured")
@@ -524,7 +563,12 @@ class TimedMessagesCommands(commands.Cog):
         ❌ - Disable timer (react to timer field)
         🗑️ - Delete timer (react to timer field)
         """
-        messages = self.manager.list_messages()
+        manager = self._get_manager(ctx.guild.id)
+        if not manager:
+            await ctx.send("❌ Timed messages not initialized for this server")
+            return
+        
+        messages = manager.list_messages()
 
         embed = discord.Embed(
             title="⏰ Timed Messages Control Panel",
@@ -614,9 +658,10 @@ class TimedMessagesCommands(commands.Cog):
             await ctx.send(f"⚠️ Warning: Could not add reaction buttons (Discord API error)")
 
         # Store panel in database for reaction handling
-        if self.manager.engine:
+        manager = self._get_manager(ctx.guild.id)
+        if manager and manager.engine:
             try:
-                with self.manager.engine.begin() as conn:
+                with manager.engine.begin() as conn:
                     conn.execute(text("""
                         INSERT INTO timer_panels (guild_id, channel_id, message_id)
                         VALUES (:guild, :channel, :message)
@@ -632,7 +677,7 @@ class TimedMessagesCommands(commands.Cog):
 
 async def setup_timed_messages(bot, engine, kick_send_callback=None):
     """
-    Initialize timed messages system
+    Initialize timed messages system with per-guild instances
 
     Args:
         bot: Discord bot instance
@@ -640,9 +685,21 @@ async def setup_timed_messages(bot, engine, kick_send_callback=None):
         kick_send_callback: Callback function to send messages to Kick chat
 
     Returns:
-        TimedMessagesManager instance
+        Dict of TimedMessagesManager instances keyed by guild_id
     """
-    manager = TimedMessagesManager(engine, kick_send_callback)
-    await bot.add_cog(TimedMessagesCommands(bot, manager))
-    logger.info(f"✅ Timed messages system initialized ({len(manager.messages)} messages)")
-    return manager
+    managers = {}
+    
+    # Create a manager instance for each guild
+    for guild in bot.guilds:
+        manager = TimedMessagesManager(engine, kick_send_callback, guild_id=guild.id)
+        managers[guild.id] = manager
+        logger.info(f"✅ [Guild {guild.name}] Timed messages initialized ({len(manager.messages)} messages)")
+    
+    # Add commands cog only once (it will access managers via bot attribute)
+    if managers:
+        # Use first guild's manager for the cog (it will be updated to use per-guild managers)
+        first_manager = next(iter(managers.values()))
+        await bot.add_cog(TimedMessagesCommands(bot, first_manager))
+    
+    return managers
+

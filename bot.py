@@ -5448,25 +5448,37 @@ async def on_ready():
             print("✅ All guilds initialized with multiserver features")
 
             print("📝 About to setup link panel...")
-            # Setup link panel (button-based OAuth linking)
-            link_panel = await setup_link_panel_system(
+            # Setup link panel with per-guild instances
+            link_panels = await setup_link_panel_system(
                 bot,
                 engine,
                 generate_signed_oauth_url
             )
-            print(f"✅ Link panel system initialized (button + ephemeral messages)")
+            # Store as bot attribute
+            bot.link_panels = link_panels
+            
+            # Legacy single panel reference (use first guild for backwards compatibility)
+            if link_panels:
+                bot.link_panel = next(iter(link_panels.values()))
+            
+            print(f"✅ Link panel system initialized ({len(link_panels)} guilds)")
 
-            # Setup timed messages system
-            timed_messages_manager = await setup_timed_messages(
+            # Setup timed messages system with per-guild instances
+            timed_messages_managers = await setup_timed_messages(
                 bot,
                 engine,
                 kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
             )
-            # Store as bot attribute for Redis subscriber
-            bot.timed_messages_manager = timed_messages_manager
+            # Store as bot attribute for Redis subscriber and commands
+            bot.timed_messages_managers = timed_messages_managers
+            
+            # Legacy single manager reference (use first guild for backwards compatibility)
+            if timed_messages_managers:
+                bot.timed_messages_manager = next(iter(timed_messages_managers.values()))
 
             if KICK_BOT_USER_TOKEN:
-                print(f"✅ Timed messages system initialized ({len(timed_messages_manager.messages)} messages)")
+                total_messages = sum(len(mgr.messages) for mgr in timed_messages_managers.values())
+                print(f"✅ Timed messages system initialized ({len(timed_messages_managers)} guilds, {total_messages} total messages)")
             else:
                 print("ℹ️  Timed messages disabled (set KICK_BOT_USER_TOKEN to enable)")
 

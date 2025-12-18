@@ -414,11 +414,23 @@ class RedisSubscriber:
     async def handle_timed_messages_event(self, action, data):
         """Handle timed message events from dashboard"""
         print(f"📥 Timed Messages Event: {action}")
+        
+        # Extract discord_server_id from event data
+        guild_id = data.get('discord_server_id')
 
-        # Reload timed messages from database to pick up changes
-        if hasattr(self.bot, 'timed_messages_manager') and self.bot.timed_messages_manager:
+        # Reload timed messages from database for the specific guild
+        if hasattr(self.bot, 'timed_messages_managers') and guild_id:
+            manager = self.bot.timed_messages_managers.get(guild_id)
+            if manager:
+                try:
+                    manager.reload_messages()
+                    print(f"✅ Timed messages reloaded for guild {guild_id}")
+                except Exception as e:
+                    print(f"⚠️ Failed to reload timed messages: {e}")
+        elif hasattr(self.bot, 'timed_messages_manager') and self.bot.timed_messages_manager:
+            # Fallback for backwards compatibility (single global manager)
             try:
-                await self.bot.timed_messages_manager.reload_messages()
+                self.bot.timed_messages_manager.reload_messages()
                 print(f"✅ Timed messages reloaded from database")
             except Exception as e:
                 print(f"⚠️ Failed to reload timed messages: {e}")

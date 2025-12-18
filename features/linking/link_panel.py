@@ -97,29 +97,45 @@ class LinkPanelView(View):
         logger.info(f"Sent OAuth link to {interaction.user.name} (ID: {discord_id}) via ephemeral message")
 
 class LinkPanel:
-    """Manages the link panel message"""
+    """Manages the link panel message for a specific guild"""
 
-    def __init__(self, bot, engine, oauth_url_generator):
+    def __init__(self, bot, engine, oauth_url_generator, guild_id=None):
         self.bot = bot
         self.engine = engine
         self.oauth_url_generator = oauth_url_generator
+        self.guild_id = guild_id
         self.panel_message_id = None
         self.panel_channel_id = None
         self.panel_guild_id = None
         self._load_panel_info()
 
     def _load_panel_info(self):
-        """Load panel message info from database
+        """Load panel message info from database for this guild
         
-        NOTE: In multiserver deployments, this should be refactored to be per-guild.
-        Currently disabled to prevent cross-guild contamination.
-        Panels must be recreated after bot restarts using !createlinkpanel.
+        In multiserver deployments, loads only this guild's panel.
         """
-        # MULTISERVER FIX: Disabled global panel loading
-        # In a multiserver bot, we don't know which guild's panel to load at init time.
-        # Each guild should create their own panel with !createlinkpanel command.
-        # TODO: Refactor LinkPanel to be per-guild like other managers (gifted_sub_trackers, etc.)
-        pass
+        if not self.engine or self.guild_id is None:
+            return
+
+        try:
+            with self.engine.connect() as conn:
+                # Get the most recent link panel for this guild
+                result = conn.execute(text("""
+                    SELECT guild_id, channel_id, message_id
+                    FROM link_panels
+                    WHERE guild_id = :guild_id
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """), {'guild_id': self.guild_id}).fetchone()
+
+                if result:
+                    self.panel_guild_id = result[0]
+                    self.panel_channel_id = result[1]
+                    self.panel_message_id = result[2]
+                    logger.info(f"Loaded link panel info for guild {self.guild_id}")
+
+        except Exception as e:
+            logger.error(f"Failed to load link panel info for guild {self.guild_id}: {e}")
 
     def _save_panel_info(self, guild_id: int, channel_id: int, message_id: int):
         """Save panel message info to database"""
@@ -199,32 +215,45 @@ class LinkPanel:
             return False
 
 async def setup_link_panel_system(bot, engine, oauth_url_generator):
-    """Setup the link panel system"""
-    panel = LinkPanel(bot, engine, oauth_url_generator)
-
-    # Add command to create the panel
+    """Setup the link panel system with per-guild instances"""
+    panels = {}
+    
+    # Create a panel instance for each guild
+    for guild in bot.guilds:
+        panel = LinkPanel(bot, engine, oauth_url_generator, guild_id=guild.id)
+        panels[guild.id] = panel
+        logger.info(f"✅ [Guild {guild.name}] Link panel initialized")
+    
+    # Add command only once
     @bot.command(name='createlinkpanel')
     @commands.has_permissions(administrator=True)
     async def create_link_panel_cmd(ctx):
         """[ADMIN] Create the link panel in this channel"""
+        panel = panels.get(ctx.guild.id)
+        if not panel:
+            await ctx.send("❌ Link panel not initialized for this server")
+            return
+        
         success = await panel.create_panel(ctx.channel)
         if success:
             await ctx.send("✅ Link panel created! Users can now click the button to link their accounts.")
         else:
             await ctx.send("❌ Failed to create link panel. Check logs for details.")
 
-    # Re-attach view to existing panel on bot restart
-    if panel.panel_message_id and panel.panel_channel_id:
-        try:
-            channel = bot.get_channel(panel.panel_channel_id)
-            if channel:
-                message = await channel.fetch_message(panel.panel_message_id)
-                view = LinkPanelView(bot, engine, oauth_url_generator)
+    # Re-attach views to existing panels on bot restart
+    for guild_id, panel in panels.items():
+        if panel.panel_message_id and panel.panel_channel_id:
+            try:
+                channel = bot.get_channel(panel.panel_channel_id)
+                if channel:
+                    message = await channel.fetch_message(panel.panel_message_id)
+                    view = LinkPanelView(bot, engine, oauth_url_generator)
 
-                # Re-attach the view
-                await message.edit(view=view)
-                logger.info(f"Re-attached link panel view to existing message")
-        except Exception as e:
-            logger.error(f"Failed to re-attach link panel view: {e}")
+                    # Re-attach the view
+                    await message.edit(view=view)
+                    logger.info(f"Re-attached link panel view to existing message in guild {guild_id}")
+            except Exception as e:
+                logger.error(f"Failed to re-attach link panel view for guild {guild_id}: {e}")
 
-    return panel
+    return panels
+
