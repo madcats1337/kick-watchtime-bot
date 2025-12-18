@@ -284,7 +284,7 @@ async def setup_auto_leaderboard(bot, engine, channel_id=None):
 
     print(f"[Auto-Leaderboard] Setting up for channel ID: {channel_id}")
 
-    leaderboard = AutoLeaderboard(bot, engine, channel_id)
+    leaderboard = AutoLeaderboard(bot, engine, channel_id, server_id=server_id)
 
     @tasks.loop(seconds=AUTO_LEADERBOARD_UPDATE_INTERVAL)
     async def update_leaderboard_task():

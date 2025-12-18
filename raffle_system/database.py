@@ -283,25 +283,35 @@ def verify_raffle_schema(engine):
 
     return status
 
-def get_current_period(engine):
+def get_current_period(engine, discord_server_id=None):
     """
     Get the currently active raffle period
 
     Args:
         engine: SQLAlchemy engine instance
+        discord_server_id: Discord server ID for multiserver filtering (optional)
 
     Returns:
         dict: Current period info or None
     """
     try:
         with engine.begin() as conn:
-            result = conn.execute(text("""
-                SELECT id, start_date, end_date, status, total_tickets
-                FROM raffle_periods
-                WHERE status = 'active'
-                ORDER BY start_date DESC
-                LIMIT 1
-            """))
+            if discord_server_id is not None:
+                result = conn.execute(text("""
+                    SELECT id, start_date, end_date, status, total_tickets
+                    FROM raffle_periods
+                    WHERE status = 'active' AND discord_server_id = :server_id
+                    ORDER BY start_date DESC
+                    LIMIT 1
+                """), {'server_id': discord_server_id})
+            else:
+                result = conn.execute(text("""
+                    SELECT id, start_date, end_date, status, total_tickets
+                    FROM raffle_periods
+                    WHERE status = 'active'
+                    ORDER BY start_date DESC
+                    LIMIT 1
+                """))
             row = result.fetchone()
 
             if row:
@@ -318,7 +328,7 @@ def get_current_period(engine):
         logger.error(f"Failed to get current period: {e}")
         return None
 
-def create_new_period(engine, start_date, end_date, clear_tickets=True):
+def create_new_period(engine, start_date, end_date, clear_tickets=True, discord_server_id=None):
     """
     Create a new raffle period and optionally reset all tickets
 
@@ -328,6 +338,7 @@ def create_new_period(engine, start_date, end_date, clear_tickets=True):
         end_date: datetime - Period end
         clear_tickets: bool - Whether to delete all tickets (default True)
                               Set to False if winner needs to be drawn first
+        discord_server_id: Discord server ID for multiserver support
 
     Returns:
         int: New period ID or None
@@ -353,12 +364,13 @@ def create_new_period(engine, start_date, end_date, clear_tickets=True):
 
             # Create new period
             result = conn.execute(text("""
-                INSERT INTO raffle_periods (start_date, end_date, status)
-                VALUES (:start, :end, 'active')
+                INSERT INTO raffle_periods (start_date, end_date, status, discord_server_id)
+                VALUES (:start, :end, 'active', :server_id)
                 RETURNING id
             """), {
                 'start': start_date,
-                'end': end_date
+                'end': end_date,
+                'server_id': discord_server_id or 0
             })
             period_id = result.scalar()
 

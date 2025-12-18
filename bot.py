@@ -5249,9 +5249,6 @@ async def on_ready():
             else:
                 print(f"✅ Active raffle period found (#{current_period['id']})")
 
-            # Setup watchtime converter (runs every hour)
-            await setup_watchtime_converter(bot, engine)
-
             # Initialize per-guild trackers and managers (without adding cogs yet)
             for guild in bot.guilds:
                 print(f"[Init] Loading settings for guild {guild.name} ({guild.id})...")
@@ -5264,16 +5261,20 @@ async def on_ready():
                 print(f"  - raffle_announcement_channel_id: {guild_settings.raffle_announcement_channel_id}")
                 
                 # Setup gifted sub tracker for this guild
-                gifted_sub_trackers[guild.id] = setup_gifted_sub_handler(engine)
+                gifted_sub_trackers[guild.id] = setup_gifted_sub_handler(engine, server_id=guild.id, bot_settings=guild_settings)
                 print(f"✅ [Guild {guild.name}] Gifted sub tracker initialized")
 
+                # Setup watchtime converter for this guild (runs every 10 minutes)
+                await setup_watchtime_converter(bot, engine, server_id=guild.id)
+                print(f"✅ [Guild {guild.name}] Watchtime converter initialized")
+
                 # Setup Shuffle wager tracker for this guild
-                shuffle_trackers[guild.id] = await setup_shuffle_tracker(bot, engine)
+                shuffle_trackers[guild.id] = await setup_shuffle_tracker(bot, engine, server_id=guild.id)
                 print(f"✅ [Guild {guild.name}] Shuffle tracker initialized")
 
                 # Setup auto-updating leaderboard for this guild
                 leaderboard_channel_id = guild_settings.raffle_leaderboard_channel_id
-                auto_leaderboard = await setup_auto_leaderboard(bot, engine, leaderboard_channel_id)
+                auto_leaderboard = await setup_auto_leaderboard(bot, engine, leaderboard_channel_id, server_id=guild.id)
                 if not hasattr(bot, 'auto_leaderboards'):
                     bot.auto_leaderboards = {}
                 bot.auto_leaderboards[guild.id] = auto_leaderboard
@@ -5286,7 +5287,8 @@ async def on_ready():
                     bot=bot,
                     engine=engine,
                     auto_draw=raffle_auto_draw,
-                    announcement_channel_id=raffle_channel_id
+                    announcement_channel_id=raffle_channel_id,
+                    discord_server_id=guild.id
                 )
                 print(f"✅ [Guild {guild.name}] Raffle system initialized (auto-draw: {raffle_auto_draw})")
 

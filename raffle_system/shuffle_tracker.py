@@ -403,12 +403,20 @@ class ShuffleWagerTracker:
         """Get the ID of the currently active raffle period"""
         try:
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
-                    SELECT id FROM raffle_periods
-                    WHERE status = 'active'
-                    ORDER BY start_date DESC
-                    LIMIT 1
-                """))
+                if self.server_id is not None:
+                    result = conn.execute(text("""
+                        SELECT id FROM raffle_periods
+                        WHERE status = 'active' AND discord_server_id = :server_id
+                        ORDER BY start_date DESC
+                        LIMIT 1
+                    """), {'server_id': self.server_id})
+                else:
+                    result = conn.execute(text("""
+                        SELECT id FROM raffle_periods
+                        WHERE status = 'active'
+                        ORDER BY start_date DESC
+                        LIMIT 1
+                    """))
                 row = result.fetchone()
                 return row[0] if row else None
         except Exception as e:

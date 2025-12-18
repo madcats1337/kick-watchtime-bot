@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class RaffleScheduler:
     """Manages automatic raffle period transitions"""
 
-    def __init__(self, engine, bot=None, auto_draw=False, announcement_channel_id=None):
+    def __init__(self, engine, bot=None, auto_draw=False, announcement_channel_id=None, discord_server_id=None):
         """
         Initialize raffle scheduler
 
@@ -24,14 +24,16 @@ class RaffleScheduler:
             bot: Discord bot instance (for announcements)
             auto_draw: Whether to automatically draw winner at period end
             announcement_channel_id: Discord channel ID for winner announcements
+            discord_server_id: Discord server ID for multiserver support
         """
         self.engine = engine
         self.bot = bot
         self.auto_draw = auto_draw
         self.announcement_channel_id = announcement_channel_id
+        self.discord_server_id = discord_server_id
         self.raffle_draw = RaffleDraw(engine)
 
-        logger.info(f"📅 Raffle scheduler initialized (auto_draw: {auto_draw})")
+        logger.info(f"📅 Raffle scheduler initialized (auto_draw: {auto_draw}, server: {discord_server_id})")
 
     def check_period_transition(self):
         """
@@ -42,7 +44,7 @@ class RaffleScheduler:
             dict: Transition info or None if no transition needed
         """
         try:
-            current_period = get_current_period(self.engine)
+            current_period = get_current_period(self.engine, self.discord_server_id)
 
             if not current_period:
                 logger.warning("No active raffle period found - creating monthly period!")
@@ -99,7 +101,7 @@ class RaffleScheduler:
 
             end = next_month - timedelta(seconds=1)
 
-            period_id = create_new_period(self.engine, start, end)
+            period_id = create_new_period(self.engine, start, end, discord_server_id=self.discord_server_id)
             logger.info(f"✅ Auto-created monthly period #{period_id} ({start.strftime('%b %d')} - {end.strftime('%b %d, %Y')})")
 
             return {
@@ -210,7 +212,7 @@ class RaffleScheduler:
 
             end = next_month - timedelta(seconds=1)
 
-            new_period_id = create_new_period(self.engine, start, end, clear_tickets=clear_tickets)
+            new_period_id = create_new_period(self.engine, start, end, clear_tickets=clear_tickets, discord_server_id=self.discord_server_id)
             transition_info['new_period_id'] = new_period_id
 
             logger.info(f"✅ New monthly period #{new_period_id} created ({start.strftime('%b %d')} - {end.strftime('%b %d, %Y')})")
@@ -304,7 +306,7 @@ Good luck! 🍀
         except Exception as e:
             logger.error(f"Failed to announce new period: {e}")
 
-async def setup_raffle_scheduler(bot, engine, auto_draw=False, announcement_channel_id=None):
+async def setup_raffle_scheduler(bot, engine, auto_draw=False, announcement_channel_id=None, discord_server_id=None):
     """
     Setup automatic raffle period management as a Discord bot task
 
@@ -313,6 +315,7 @@ async def setup_raffle_scheduler(bot, engine, auto_draw=False, announcement_chan
         engine: SQLAlchemy database engine
         auto_draw: Whether to auto-draw winners at period end
         announcement_channel_id: Channel ID for announcements
+        discord_server_id: Discord server ID for multiserver support
 
     Returns:
         RaffleScheduler instance
@@ -321,7 +324,8 @@ async def setup_raffle_scheduler(bot, engine, auto_draw=False, announcement_chan
         engine=engine,
         bot=bot,
         auto_draw=auto_draw,
-        announcement_channel_id=announcement_channel_id
+        announcement_channel_id=announcement_channel_id,
+        discord_server_id=discord_server_id
     )
 
     @tasks.loop(minutes=1)  # Check every minute

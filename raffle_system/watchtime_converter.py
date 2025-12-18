@@ -240,17 +240,23 @@ class WatchtimeConverter:
             logger.error(f"Failed to get active period: {e}")
             return None
 
-async def setup_watchtime_converter(bot, engine):
+async def setup_watchtime_converter(bot, engine, server_id=None):
     """
     Setup the watchtime converter as a Discord bot task
 
     Args:
         bot: Discord bot instance
         engine: SQLAlchemy engine
+        server_id: Discord server/guild ID for multiserver support
     """
     from discord.ext import tasks
 
-    converter = WatchtimeConverter(engine)
+    # Get bot_settings from bot if available
+    bot_settings = None
+    if hasattr(bot, 'settings_manager') and bot.settings_manager:
+        bot_settings = bot.settings_manager
+
+    converter = WatchtimeConverter(engine, server_id=server_id, bot_settings=bot_settings)
 
     @tasks.loop(minutes=10)  # Run every 10 minutes
     async def convert_watchtime_task():
