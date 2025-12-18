@@ -210,21 +210,41 @@ class SlotRequestPanel:
         if not self.engine:
             return None
 
+        # Get server_id from tracker
+        server_id = self.tracker.server_id if self.tracker else None
+        if not server_id:
+            logger.warning("No server_id available for stats, showing all servers")
+
         try:
             with self.engine.connect() as conn:
-                # Get counts
-                total = conn.execute(text("SELECT COUNT(*) FROM slot_requests")).fetchone()[0]
-                unpicked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = FALSE")).fetchone()[0]
-                picked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = TRUE")).fetchone()[0]
+                # Get counts - filter by server_id if available
+                if server_id:
+                    total = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE discord_server_id = :server_id"), {"server_id": server_id}).fetchone()[0]
+                    unpicked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = FALSE AND discord_server_id = :server_id"), {"server_id": server_id}).fetchone()[0]
+                    picked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = TRUE AND discord_server_id = :server_id"), {"server_id": server_id}).fetchone()[0]
 
-                # Get last picked slot
-                last_picked = conn.execute(text("""
-                    SELECT kick_username, slot_call, picked_at
-                    FROM slot_requests
-                    WHERE picked = TRUE
-                    ORDER BY picked_at DESC
-                    LIMIT 1
-                """)).fetchone()
+                    # Get last picked slot for this server
+                    last_picked = conn.execute(text("""
+                        SELECT kick_username, slot_call, picked_at
+                        FROM slot_requests
+                        WHERE picked = TRUE AND discord_server_id = :server_id
+                        ORDER BY picked_at DESC
+                        LIMIT 1
+                    """), {"server_id": server_id}).fetchone()
+                else:
+                    # Fallback: show all servers
+                    total = conn.execute(text("SELECT COUNT(*) FROM slot_requests")).fetchone()[0]
+                    unpicked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = FALSE")).fetchone()[0]
+                    picked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = TRUE")).fetchone()[0]
+
+                    # Get last picked slot
+                    last_picked = conn.execute(text("""
+                        SELECT kick_username, slot_call, picked_at
+                        FROM slot_requests
+                        WHERE picked = TRUE
+                        ORDER BY picked_at DESC
+                        LIMIT 1
+                    """)).fetchone()
 
                 return {
                     "total": total,
@@ -455,16 +475,22 @@ class SlotRequestPanel:
         if not self.engine:
             return False
 
+        # Get guild_id from channel
+        guild_id = channel.guild.id if hasattr(channel, 'guild') else None
+        if not guild_id:
+            logger.error("Cannot pick slot: no guild_id available")
+            return False
+
         try:
             with self.engine.connect() as conn:
-                # Get a random unpicked slot request
+                # Get a random unpicked slot request for this server
                 result = conn.execute(text("""
                     SELECT id, kick_username, slot_call, requested_at
                     FROM slot_requests
-                    WHERE picked = FALSE
+                    WHERE picked = FALSE AND discord_server_id = :server_id
                     ORDER BY RANDOM()
                     LIMIT 1
-                """)).fetchone()
+                """), {"server_id": guild_id}).fetchone()
 
                 if not result:
                     # No slots available - just update panel
@@ -481,13 +507,13 @@ class SlotRequestPanel:
                         WHERE id = :id
                     """), {"id": request_id})
 
-                logger.info(f"Panel picked random slot: {slot_call} by {username}")
+                logger.info(f"[Server {guild_id}] Panel picked random slot: {slot_call} by {username}")
 
                 # Send message to Kick chat
                 if self.kick_send_callback:
                     try:
                         kick_message = f"🎰 Random slot picked: {slot_call} (requested by @{username})"
-                        await self.kick_send_callback(kick_message)
+                        await self.kick_send_callback(kick_message, guild_id=guild_id)
                     except Exception as kick_error:
                         logger.error(f"Failed to send pick notification to Kick: {kick_error}")
 
