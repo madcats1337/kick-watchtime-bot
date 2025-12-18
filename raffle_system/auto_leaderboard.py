@@ -253,7 +253,7 @@ class AutoLeaderboard:
                 color=discord.Color.red()
             )
 
-async def setup_auto_leaderboard(bot, engine, channel_id=None):
+async def setup_auto_leaderboard(bot, engine, channel_id=None, server_id=None):
     """
     Setup the auto-updating leaderboard as a Discord bot task
 
@@ -261,6 +261,7 @@ async def setup_auto_leaderboard(bot, engine, channel_id=None):
         bot: Discord bot instance
         engine: SQLAlchemy engine
         channel_id: Discord channel ID for leaderboard (optional, falls back to env var)
+        server_id: Discord server/guild ID for multiserver support
     """
     # Get channel ID from parameter, bot_settings, or environment variable
     if channel_id is None:
