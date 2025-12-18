@@ -59,6 +59,18 @@ class WatchtimeConverter:
             conversions = []
 
             with self.engine.begin() as conn:
+                # Get period start date to filter conversions
+                period_result = conn.execute(text("""
+                    SELECT start_date, created_at FROM raffle_periods WHERE id = :period_id
+                """), {'period_id': period_id})
+                period_row = period_result.fetchone()
+                if not period_row:
+                    return {'status': 'no_active_period', 'conversions': 0}
+                
+                period_start = period_row[0]
+                period_created = period_row[1]
+                self.discord_server_id = self.server_id
+
                 # Get all users with watchtime and their Discord IDs from links table (per-guild)
                 # Use LOWER() for case-insensitive comparison
                 result = conn.execute(text("""
@@ -92,12 +104,12 @@ class WatchtimeConverter:
                         'kick_name': kick_name
                     })
 
-                    minutes_already_converted = converted_result.scalar() or 0
+                    minutes_already_converted_this_period = converted_result.scalar() or 0
 
                     # Calculate new minutes to convert
-                    new_minutes = total_minutes - minutes_already_converted
+                    new_minutes = total_minutes - minutes_already_converted_this_period
 
-                    print(f"🔍 [WATCHTIME] {kick_name}: {total_minutes} total - {minutes_already_converted} converted = {new_minutes} new")
+                    print(f"🔍 [WATCHTIME] {kick_name}: {total_minutes} total - {minutes_already_converted_this_period} this period = {new_minutes} new")
 
                     if new_minutes < 60:
                         # Need at least 1 hour to convert
@@ -122,7 +134,7 @@ class WatchtimeConverter:
                     )
 
                     if success:
-                        # Log the conversion to prevent double-counting
+                        # Log the conversion to prevent double-counting (raffle-specific)
                         conn.execute(text("""
                             INSERT INTO raffle_watchtime_converted
                                 (period_id, kick_name, minutes_converted, tickets_awarded)
@@ -133,6 +145,19 @@ class WatchtimeConverter:
                             'kick_name': kick_name,
                             'minutes': minutes_to_convert,
                             'tickets': tickets_to_award
+                        })
+
+                        # ALSO log to permanent watchtime_conversion_logs (NEVER deleted)
+                        conn.execute(text("""
+                            INSERT INTO watchtime_conversion_logs
+                                (discord_id, kick_name, discord_server_id, raffle_minutes, points_minutes, converted_at)
+                            VALUES
+                                (:discord_id, :kick_name, :server_id, :minutes, 0, NOW())
+                        """), {
+                            'discord_id': discord_id,
+                            'kick_name': kick_name,
+                            'server_id': self.discord_server_id,
+                            'minutes': minutes_to_convert
                         })
 
                         conversions.append({

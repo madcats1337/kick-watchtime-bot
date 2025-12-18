@@ -2661,6 +2661,13 @@ async def award_points_for_watchtime(active_usernames: list, guild_id: Optional[
 
                     minutes_already_converted = converted_result[0] if converted_result else 0
 
+                    # Get discord_id to write to permanent log later
+                    link_result = conn.execute(text("""
+                        SELECT discord_id FROM links 
+                        WHERE LOWER(kick_name) = LOWER(:u) AND discord_server_id = :sid
+                    """), {"u": username, "sid": server_id}).fetchone()
+                    discord_id = link_result[0] if link_result else None
+
                     # Calculate new minutes since last conversion
                     new_minutes = total_minutes - minutes_already_converted
 
@@ -2675,12 +2682,7 @@ async def award_points_for_watchtime(active_usernames: list, guild_id: Optional[
                         points_to_award = intervals * points_per_5min
 
                         if points_to_award > 0:
-                            # Get discord_id from links table if available (multiserver: filter by server)
-                            link_result = conn.execute(text("""
-                                SELECT discord_id FROM links 
-                                WHERE LOWER(kick_name) = LOWER(:u) AND discord_server_id = :sid
-                            """), {"u": username, "sid": server_id}).fetchone()
-                            discord_id = link_result[0] if link_result else None
+                            # discord_id already retrieved above for verification
 
                             # Update or insert user points (multiserver: composite PK with discord_server_id)
                             conn.execute(text("""
@@ -2699,6 +2701,20 @@ async def award_points_for_watchtime(active_usernames: list, guild_id: Optional[
                                 (kick_username, minutes_converted, points_awarded, discord_server_id)
                                 VALUES (:u, :m, :p, :sid)
                             """), {"u": username, "m": minutes_to_convert, "p": points_to_award, "sid": server_id})
+
+                            # ALSO log to permanent watchtime_conversion_logs (NEVER deleted)
+                            if discord_id:
+                                conn.execute(text("""
+                                    INSERT INTO watchtime_conversion_logs
+                                        (discord_id, kick_name, discord_server_id, raffle_minutes, points_minutes, converted_at)
+                                    VALUES
+                                        (:discord_id, :kick_name, :server_id, 0, :minutes, NOW())
+                                """), {
+                                    'discord_id': discord_id,
+                                    'kick_name': username,
+                                    'server_id': server_id,
+                                    'minutes': minutes_to_convert
+                                })
 
                             if watchtime_debug_enabled:
                                 print(f"[Points] ✅ {username}: +{points_to_award} points ({minutes_to_convert} min converted)")

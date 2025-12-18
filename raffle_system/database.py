@@ -392,32 +392,32 @@ def create_new_period(engine, start_date, end_date, clear_tickets=True, discord_
                     """), {'server_id': discord_server_id}).rowcount
                     logger.info(f"Deleted {deleted_tickets} ticket records for server {discord_server_id}")
 
-                    # Clear conversion tracking only for this server
-                    deleted_watchtime = conn.execute(text("""
-                        DELETE FROM raffle_watchtime_converted 
-                        WHERE period_id IN (
-                            SELECT id FROM raffle_periods WHERE discord_server_id = :server_id
-                        )
-                    """), {'server_id': discord_server_id}).rowcount
-                    logger.info(f"Deleted {deleted_watchtime} watchtime conversion records for server {discord_server_id}")
+                    # DO NOT delete raffle_watchtime_converted - it's a historical log per period!
+                    # Deleting it causes watchtime to be re-awarded incorrectly
                 else:
                     # Backward compatibility: delete all if no server_id
                     deleted_tickets = conn.execute(text("DELETE FROM raffle_tickets")).rowcount
                     logger.info(f"Deleted {deleted_tickets} ticket records from all periods")
-
-                    deleted_watchtime = conn.execute(text("DELETE FROM raffle_watchtime_converted")).rowcount
-                    logger.info(f"Deleted {deleted_watchtime} watchtime conversion records")
             else:
                 logger.info(f"Tickets preserved - remember to draw winner for old period before cleanup!")
 
             # Snapshot current watchtime as "already converted" for new period
             # This prevents awarding tickets for watchtime earned before this period
-            conn.execute(text("""
-                INSERT INTO raffle_watchtime_converted (period_id, kick_name, minutes_converted, tickets_awarded)
-                SELECT :period_id, username, minutes, 0
-                FROM watchtime
-                WHERE minutes > 0
-            """), {'period_id': period_id})
+            if discord_server_id is not None:
+                conn.execute(text("""
+                    INSERT INTO raffle_watchtime_converted (period_id, kick_name, minutes_converted, tickets_awarded)
+                    SELECT :period_id, username, minutes, 0
+                    FROM watchtime
+                    WHERE minutes > 0 AND discord_server_id = :server_id
+                """), {'period_id': period_id, 'server_id': discord_server_id})
+            else:
+                # Backward compatibility: snapshot all watchtime if no server_id
+                conn.execute(text("""
+                    INSERT INTO raffle_watchtime_converted (period_id, kick_name, minutes_converted, tickets_awarded)
+                    SELECT :period_id, username, minutes, 0
+                    FROM watchtime
+                    WHERE minutes > 0
+                """), {'period_id': period_id})
             logger.info(f"Snapshotted existing watchtime for new period (prevents double-awarding)")
 
             # Delete gifted subs only for this server
