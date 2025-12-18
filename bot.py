@@ -6522,6 +6522,29 @@ class PointShopConfirmView(discord.ui.View):
                     "req_input": self.requirement_value
                 })
 
+                # Create notification for the admin dashboard
+                notification_data = {
+                    'item_id': item_id,
+                    'item_name': item_name,
+                    'buyer': self.kick_username,
+                    'price': price,
+                    'discord_id': self.discord_id
+                }
+                if self.note:
+                    notification_data['note'] = self.note
+                if self.requirement_value:
+                    notification_data['requirement'] = self.requirement_value
+
+                conn.execute(text("""
+                    INSERT INTO notifications (discord_server_id, type, title, message, data)
+                    VALUES (:server_id, 'new_sale', :title, :message, :data)
+                """), {
+                    "server_id": self.server_id,
+                    "title": f"New purchase: {item_name}",
+                    "message": f"{self.kick_username} bought {item_name} for {price:,} points",
+                    "data": json.dumps(notification_data)
+                })
+
                 # Get updated balance
                 new_balance = conn.execute(text("""
                     SELECT points FROM user_points WHERE kick_username = :k AND discord_server_id = :g
