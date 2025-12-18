@@ -362,8 +362,8 @@ async def setup_raffle_scheduler(bot, engine, auto_draw=False, announcement_chan
 
                     # Announce new period (tickets already reset by create_new_period)
                     if transition['new_period_id']:
-                        # Get new period details
-                        new_period = get_current_period(engine)
+                        # Get new period details (filter by server)
+                        new_period = get_current_period(engine, discord_server_id=scheduler.discord_server_id)
                         if new_period:
                             await scheduler.announce_new_period(
                                 new_period['id'],

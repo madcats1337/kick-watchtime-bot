@@ -103,12 +103,21 @@ class AutoLeaderboard:
         """Create the leaderboard embed"""
         try:
             with self.engine.begin() as conn:
-                # Get active period
-                period_result = conn.execute(text("""
-                    SELECT id, start_date, end_date
-                    FROM raffle_periods
-                    WHERE status = 'active'
-                """))
+                # Get active period (filter by server)
+                if self.server_id is not None:
+                    period_result = conn.execute(text("""
+                        SELECT id, start_date, end_date
+                        FROM raffle_periods
+                        WHERE status = 'active' AND discord_server_id = :server_id
+                        ORDER BY start_date DESC
+                        LIMIT 1
+                    """), {'server_id': self.server_id})
+                else:
+                    period_result = conn.execute(text("""
+                        SELECT id, start_date, end_date
+                        FROM raffle_periods
+                        WHERE status = 'active'
+                    """))
 
                 period_row = period_result.fetchone()
 

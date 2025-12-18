@@ -5234,21 +5234,6 @@ async def on_ready():
             migrate_add_platform_to_wager_tables(engine)
             migrate_add_provably_fair_to_draws(engine)
 
-            # Ensure there's an active raffle period
-            current_period = get_current_period(engine)
-            if not current_period:
-                # Create initial raffle period for this month
-                start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-                if start.month == 12:
-                    end = start.replace(year=start.year + 1, month=1, day=1) - timedelta(seconds=1)
-                else:
-                    end = start.replace(month=start.month + 1, day=1) - timedelta(seconds=1)
-
-                period_id = create_new_period(engine, start, end)
-                print(f"✅ Created initial raffle period #{period_id}")
-            else:
-                print(f"✅ Active raffle period found (#{current_period['id']})")
-
             # Initialize per-guild trackers and managers (without adding cogs yet)
             for guild in bot.guilds:
                 print(f"[Init] Loading settings for guild {guild.name} ({guild.id})...")
@@ -5259,6 +5244,21 @@ async def on_ready():
                 print(f"  - kick_channel: '{guild_settings.kick_channel}'")
                 print(f"  - slot_calls_channel_id: {guild_settings.slot_calls_channel_id}")
                 print(f"  - raffle_announcement_channel_id: {guild_settings.raffle_announcement_channel_id}")
+                
+                # Ensure this guild has an active raffle period
+                current_period = get_current_period(engine, discord_server_id=guild.id)
+                if not current_period:
+                    # Create initial raffle period for this month for this guild
+                    start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                    if start.month == 12:
+                        end = start.replace(year=start.year + 1, month=1, day=1) - timedelta(seconds=1)
+                    else:
+                        end = start.replace(month=start.month + 1, day=1) - timedelta(seconds=1)
+
+                    period_id = create_new_period(engine, start, end, discord_server_id=guild.id)
+                    print(f"✅ [Guild {guild.name}] Created initial raffle period #{period_id}")
+                else:
+                    print(f"✅ [Guild {guild.name}] Active raffle period found (#{current_period['id']})")
                 
                 # Setup gifted sub tracker for this guild
                 gifted_sub_trackers[guild.id] = setup_gifted_sub_handler(engine, server_id=guild.id, bot_settings=guild_settings)
