@@ -43,9 +43,11 @@ class SlotCallTracker:
             with self.engine.begin() as conn:
                 conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS feature_settings (
-                        feature_name TEXT PRIMARY KEY,
+                        feature_name TEXT NOT NULL,
+                        discord_server_id BIGINT NOT NULL,
                         enabled BOOLEAN NOT NULL DEFAULT TRUE,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (feature_name, discord_server_id)
                     )
                 """))
 
