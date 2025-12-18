@@ -264,7 +264,10 @@ class SlotCallTracker:
             except Exception as e:
                 logger.error(f"Error checking slot call blacklist: {e}")
         
-        if not self.enabled:
+        # Reload enabled state from database on every call (so Dashboard toggle takes effect immediately)
+        current_enabled = self._load_enabled_state()
+        
+        if not current_enabled:
             # Send "slot requests not open" message to Kick chat
             if self.kick_send_callback:
                 try:
