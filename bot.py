@@ -6527,10 +6527,11 @@ class PointShopPurchaseModal(discord.ui.Modal):
 
             kick_username = link[0]
 
-            # Get balance
+            # Get balance (with multiserver support)
             points_data = conn.execute(text("""
-                SELECT points FROM user_points WHERE kick_username = :k
-            """), {"k": kick_username}).fetchone()
+                SELECT points FROM user_points 
+                WHERE kick_username = :k AND discord_server_id = :s
+            """), {"k": kick_username, "s": interaction.guild.id}).fetchone()
 
             current_balance = points_data[0] if points_data else 0
 
