@@ -423,7 +423,7 @@ class ShuffleWagerTracker:
             logger.error(f"Failed to get active period: {e}")
             return None
 
-async def setup_shuffle_tracker(bot, engine, server_id=None):
+async def setup_shuffle_tracker(bot, engine, server_id=None, bot_settings=None):
     """
     Setup the Shuffle wager tracker as a Discord bot task
 
@@ -431,13 +431,9 @@ async def setup_shuffle_tracker(bot, engine, server_id=None):
         bot: Discord bot instance
         engine: SQLAlchemy engine
         server_id: Discord server/guild ID for multi-server support (optional)
+        bot_settings: Guild-specific bot settings manager (optional)
     """
     from discord.ext import tasks
-
-    # Get bot_settings from bot if available
-    bot_settings = None
-    if hasattr(bot, 'settings_manager') and bot.settings_manager:
-        bot_settings = bot.settings_manager
 
     tracker = ShuffleWagerTracker(engine, bot_settings=bot_settings, server_id=server_id)
 

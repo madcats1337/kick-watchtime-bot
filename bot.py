@@ -5269,7 +5269,7 @@ async def on_ready():
                 print(f"✅ [Guild {guild.name}] Watchtime converter initialized")
 
                 # Setup Shuffle wager tracker for this guild
-                shuffle_trackers[guild.id] = await setup_shuffle_tracker(bot, engine, server_id=guild.id)
+                shuffle_trackers[guild.id] = await setup_shuffle_tracker(bot, engine, server_id=guild.id, bot_settings=guild_settings)
                 print(f"✅ [Guild {guild.name}] Shuffle tracker initialized")
 
                 # Setup auto-updating leaderboard for this guild
