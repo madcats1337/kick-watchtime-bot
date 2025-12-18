@@ -20,7 +20,7 @@ from redis_subscriber import start_redis_subscriber
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text # type: ignore
-from core.kick_api import fetch_chatroom_id, check_stream_live, get_clips, KickAPI, USER_AGENTS  # Consolidated Kick API module
+from core.kick_api import fetch_chatroom_id, check_stream_live, KickAPI, USER_AGENTS  # Consolidated Kick API module
 # Clip service moved to Dashboard - bot now calls Dashboard API
 
 import discord
