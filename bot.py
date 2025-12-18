@@ -25,6 +25,12 @@ from core.kick_api import fetch_chatroom_id, check_stream_live, get_clips, KickA
 
 import discord
 from discord.ext import commands, tasks
+import logging
+
+# Disable Discord.py's default logging to reduce log spam
+logging.getLogger('discord').setLevel(logging.ERROR)
+logging.getLogger('discord.http').setLevel(logging.ERROR)
+logging.getLogger('discord.gateway').setLevel(logging.ERROR)
 
 # Raffle system imports
 from raffle_system.database import setup_raffle_database, get_current_period, create_new_period, migrate_add_created_at_to_shuffle_wagers, migrate_add_platform_to_wager_tables
@@ -521,19 +527,14 @@ class KickWebSocketManager:
         
         while True:
             try:
-                print(f"[{guild_name}] ⏳ Waiting for messages in queue...")
                 # Wait for message from queue
                 message, channel_id = await asyncio.wait_for(
                     self.message_queues[guild_id].get(),
                     timeout=5.0
                 )
                 
-                print(f"[{guild_name}] 📨 Got message from queue: {message[:50]}... to channel {channel_id}")
-                
                 # Token already set at startup - no need to reload every message
                 # Send via direct HTTP request instead of kickpython (kickpython doesn't send auth headers properly)
-                print(f"[{guild_name}] 📤 Sending message via direct HTTP POST...")
-                print(f"[{guild_name}] 🔑 Using token: {api.access_token[:30] if hasattr(api, 'access_token') and api.access_token else 'None'}...")
                 
                 try:
                     import aiohttp
@@ -556,8 +557,7 @@ class KickWebSocketManager:
                     async with aiohttp.ClientSession() as session:
                         async with session.post(url, headers=headers, json=payload, timeout=10) as resp:
                             if resp.status in [200, 201]:
-                                response_data = await resp.json()
-                                print(f"[{guild_name}] ✅ Message sent successfully: {response_data}")
+                                pass  # Message sent successfully
                             else:
                                 error_text = await resp.text()
                                 print(f"[{guild_name}] ❌ HTTP {resp.status}: {error_text}")
@@ -613,7 +613,6 @@ class KickWebSocketManager:
                 
             except asyncio.TimeoutError:
                 # Keep connection alive with periodic checks
-                print(f"[{guild_name}] 💓 Keepalive - queue empty")
                 continue
             except asyncio.CancelledError:
                 print(f"[{guild_name}] 🛑 Message sender cancelled")
@@ -686,9 +685,6 @@ class KickWebSocketManager:
             username = msg.get('sender_username') or msg.get('username') or 'unknown'
             content = msg.get('content') or ''
             chat_id = msg.get('chat_id') or msg.get('id')
-
-            # Basic log
-            print(f"[{guild_name}] 💬 {username}: {content}")
 
             # Update watchtime tracking (per-guild)
             now = datetime.now(timezone.utc)
