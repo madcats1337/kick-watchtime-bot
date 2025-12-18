@@ -7355,6 +7355,115 @@ async def cmd_post_shop(ctx, channel: discord.TextChannel = None):
         await ctx.send("❌ Failed to post point shop. Check that there are active items.")
 
 # -------------------------
+# Clip Buffer Auto-Management Task
+# -------------------------
+
+# Track stream live status per guild to detect changes
+stream_live_status = {}  # guild_id -> bool
+
+@tasks.loop(seconds=60)  # Check every minute
+async def manage_clip_buffers():
+    """Automatically start/stop clip buffers when stream goes live/offline"""
+    try:
+        for guild in bot.guilds:
+            try:
+                guild_id = guild.id
+                
+                # Get settings from database
+                with engine.connect() as conn:
+                    settings_result = conn.execute(text("""
+                        SELECT key, value FROM bot_settings 
+                        WHERE discord_server_id = :guild_id 
+                        AND key IN ('kick_channel', 'dashboard_url', 'bot_api_key')
+                    """), {"guild_id": guild_id}).fetchall()
+                    
+                    settings = {key: value for key, value in settings_result}
+                    kick_channel = settings.get('kick_channel')
+                    dashboard_url = settings.get('dashboard_url')
+                    api_key = settings.get('bot_api_key')
+                
+                if not kick_channel or not dashboard_url or not api_key:
+                    continue  # Skip if not configured
+                
+                # Check if stream is live
+                try:
+                    is_live = await check_stream_live(kick_channel)
+                except Exception as e:
+                    print(f"[Clip Buffer] [{guild.name}] ⚠️ Failed to check stream status: {e}")
+                    continue
+                
+                previous_status = stream_live_status.get(guild_id, False)
+                stream_live_status[guild_id] = is_live
+                
+                # Detect status change
+                if is_live and not previous_status:
+                    # Stream just went live - start buffer
+                    print(f"[Clip Buffer] [{guild.name}] 🔴 Stream went LIVE, starting clip buffer...")
+                    
+                    try:
+                        import aiohttp
+                        async with aiohttp.ClientSession() as session:
+                            async with session.post(
+                                f"{dashboard_url}/api/clips/buffer/start",
+                                headers={'X-API-Key': api_key, 'Content-Type': 'application/json'},
+                                json={'channel': kick_channel, 'buffer_minutes': 4},
+                                timeout=30
+                            ) as resp:
+                                if resp.status == 200:
+                                    print(f"[Clip Buffer] [{guild.name}] ✅ Clip buffer started")
+                                else:
+                                    error_text = await resp.text()
+                                    print(f"[Clip Buffer] [{guild.name}] ❌ Failed to start buffer: HTTP {resp.status} - {error_text[:200]}")
+                    except Exception as e:
+                        print(f"[Clip Buffer] [{guild.name}] ❌ Error starting buffer: {e}")
+                
+                elif not is_live and previous_status:
+                    # Stream just went offline - stop buffer
+                    print(f"[Clip Buffer] [{guild.name}] ⚫ Stream went OFFLINE, stopping clip buffer...")
+                    
+                    try:
+                        import aiohttp
+                        async with aiohttp.ClientSession() as session:
+                            async with session.post(
+                                f"{dashboard_url}/api/clips/buffer/stop",
+                                headers={'X-API-Key': api_key, 'Content-Type': 'application/json'},
+                                json={'channel': kick_channel},
+                                timeout=10
+                            ) as resp:
+                                if resp.status == 200:
+                                    print(f"[Clip Buffer] [{guild.name}] ✅ Clip buffer stopped")
+                                else:
+                                    error_text = await resp.text()
+                                    print(f"[Clip Buffer] [{guild.name}] ⚠️ Failed to stop buffer: HTTP {resp.status} - {error_text[:200]}")
+                    except Exception as e:
+                        print(f"[Clip Buffer] [{guild.name}] ⚠️ Error stopping buffer: {e}")
+            
+            except Exception as e:
+                print(f"[Clip Buffer] Error processing guild {guild.name}: {e}")
+                continue
+    
+    except Exception as e:
+        print(f"[Clip Buffer] Task error: {e}")
+        import traceback
+        traceback.print_exc()
+
+@manage_clip_buffers.before_loop
+async def before_clip_buffer_task():
+    """Wait for bot to be ready before starting clip buffer management."""
+    await bot.wait_until_ready()
+    print("[Clip Buffer] Clip buffer auto-management task started")
+
+@manage_clip_buffers.error
+async def clip_buffer_task_error(error):
+    """Handle errors in the clip buffer task loop."""
+    print(f"[Clip Buffer] ❌ Task encountered an error: {error}")
+    import traceback
+    traceback.print_exc()
+
+# Start the clip buffer management task
+manage_clip_buffers.start()
+
+# -------------------------
 # Run bot
 # -------------------------
 if __name__ == "__main__":
