@@ -977,13 +977,6 @@ try:
             PRIMARY KEY (username, discord_server_id)
         );
         """))
-        
-        # Migrate existing watchtime table if needed
-        try:
-            conn.execute(text("ALTER TABLE watchtime ADD COLUMN IF NOT EXISTS discord_server_id BIGINT"))
-        except Exception as e:
-            print(f"ℹ️ watchtime table migration (discord_server_id) note: {e}")
-        # Note: Backfill done in Admin-Dashboard migrations
 
         # Create links table (multi-server aware)
         # New columns:
@@ -1000,17 +993,6 @@ try:
             UNIQUE (kick_name, discord_server_id)
         );
         """))
-
-        # --- Migration for older schema (without discord_server_id / linked_at) ---
-        try:
-            conn.execute(text("ALTER TABLE links ADD COLUMN IF NOT EXISTS discord_server_id BIGINT"))
-        except Exception as e:
-            print(f"ℹ️ links table migration (discord_server_id) note: {e}")
-        try:
-            conn.execute(text("ALTER TABLE links ADD COLUMN IF NOT EXISTS linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
-        except Exception as e:
-            print(f"ℹ️ links table migration (linked_at) note: {e}")
-        # Note: No automatic backfill for multiserver - each link must have discord_server_id set
 
         # Create pending_links table
         conn.execute(text("""
@@ -1034,19 +1016,6 @@ try:
             processed BOOLEAN DEFAULT FALSE
         );
         """))
-
-        # Migrate existing oauth_notifications table to add new columns if they don't exist
-        try:
-            conn.execute(text("""
-                ALTER TABLE oauth_notifications
-                ADD COLUMN IF NOT EXISTS channel_id BIGINT
-            """))
-            conn.execute(text("""
-                ALTER TABLE oauth_notifications
-                ADD COLUMN IF NOT EXISTS message_id BIGINT
-            """))
-        except Exception as e:
-            print(f"ℹ️ Migration note: {e}")
 
         # Create link_panels table for reaction-based OAuth linking
         conn.execute(text("""
@@ -1227,14 +1196,6 @@ try:
         );
         """))
 
-        # Add notes column if it doesn't exist (migration for existing databases)
-        try:
-            conn.execute(text("""
-            ALTER TABLE point_sales ADD COLUMN IF NOT EXISTS notes TEXT;
-            """))
-        except Exception:
-            pass  # Column might already exist or DB doesn't support IF NOT EXISTS
-
         # Point system settings
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS point_settings (
@@ -1243,138 +1204,6 @@ try:
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """))
-
-        # =========================================================================
-        # MULTISERVER MIGRATION - Add discord_server_id to tables
-        # =========================================================================
-        print("🔄 Running multiserver migration...")
-
-        # Step 1: Add discord_server_id columns if they don't exist
-        migration_tables = [
-            'user_points', 'points_watchtime_converted', 'point_sales',
-            'watchtime', 'gtb_sessions', 'clips', 'watchtime_roles',
-            'pending_links', 'oauth_notifications'
-        ]
-        
-        for table in migration_tables:
-            try:
-                conn.execute(text(f"""
-                    ALTER TABLE {table} ADD COLUMN IF NOT EXISTS discord_server_id BIGINT
-                """))
-            except Exception as e:
-                # Column might already exist - this is fine
-                pass
-
-        # Step 2: Backfill existing data with first server ID (if exists)
-        # Only attempt if servers table exists and has data
-        try:
-            # Check if servers table exists
-            servers_exist = conn.execute(text("""
-                SELECT EXISTS (
-                    SELECT FROM information_schema.tables 
-                    WHERE table_name = 'servers'
-                )
-            """)).fetchone()[0]
-            
-            if servers_exist:
-                first_server = conn.execute(text("""
-                    SELECT discord_server_id FROM servers LIMIT 1
-                """)).fetchone()
-                
-                if first_server:
-                    server_id = first_server[0]
-                    print(f"🔄 Backfilling tables with server ID: {server_id}")
-                    
-                    for table in migration_tables:
-                        try:
-                            result = conn.execute(text(f"""
-                                UPDATE {table} SET discord_server_id = :sid WHERE discord_server_id IS NULL
-                            """), {"sid": server_id})
-                            if result.rowcount > 0:
-                                print(f"   ✅ {table}: Updated {result.rowcount} rows")
-                        except Exception:
-                            pass  # Table might be empty or not exist yet
-                else:
-                    print("ℹ️ No servers found in servers table - skipping backfill")
-            else:
-                print("ℹ️ Servers table not found - skipping backfill")
-        except Exception as e:
-            print(f"ℹ️ Backfill skipped: {e}")
-
-        # Step 3: Update primary keys for tables that need composite keys
-        # Only attempt if tables have data or NULL discord_server_id values filled
-        # user_points: (kick_username, discord_server_id)
-        try:
-            # First check if table has any rows with NULL discord_server_id
-            null_check = conn.execute(text("""
-                SELECT COUNT(*) FROM user_points WHERE discord_server_id IS NULL
-            """)).fetchone()[0]
-            
-            if null_check == 0:
-                # Safe to update primary key
-                conn.execute(text("""
-                    ALTER TABLE user_points DROP CONSTRAINT IF EXISTS user_points_kick_username_key
-                """))
-                conn.execute(text("""
-                    ALTER TABLE user_points DROP CONSTRAINT IF EXISTS user_points_pkey
-                """))
-                conn.execute(text("""
-                    ALTER TABLE user_points ADD CONSTRAINT user_points_pkey_multiserver 
-                    PRIMARY KEY (kick_username, discord_server_id)
-                """))
-                print("   ✅ user_points: Updated primary key")
-            else:
-                print(f"   ℹ️ user_points: Skipping PK update ({null_check} rows with NULL discord_server_id)")
-        except Exception as e:
-            # PK might already be updated or table might be empty
-            pass
-
-        # watchtime: (username, discord_server_id)
-        try:
-            # Check for NULL values first
-            null_check = conn.execute(text("""
-                SELECT COUNT(*) FROM watchtime WHERE discord_server_id IS NULL
-            """)).fetchone()[0]
-            
-            if null_check == 0:
-                conn.execute(text("""
-                    ALTER TABLE watchtime DROP CONSTRAINT IF EXISTS watchtime_pkey
-                """))
-                conn.execute(text("""
-                    ALTER TABLE watchtime ADD CONSTRAINT watchtime_pkey_multiserver 
-                    PRIMARY KEY (username, discord_server_id)
-                """))
-                print("   ✅ watchtime: Updated primary key")
-            else:
-                print(f"   ℹ️ watchtime: Skipping PK update ({null_check} rows with NULL discord_server_id)")
-        except Exception as e:
-            # PK might already be updated or table might be empty
-            pass
-
-        # Step 4: Create indexes for performance
-        indexes = {
-            'idx_user_points_server': 'user_points(discord_server_id)',
-            'idx_points_watchtime_server': 'points_watchtime_converted(discord_server_id)',
-            'idx_point_sales_server': 'point_sales(discord_server_id)',
-            'idx_watchtime_server': 'watchtime(discord_server_id)',
-            'idx_gtb_sessions_server': 'gtb_sessions(discord_server_id)',
-            'idx_clips_server': 'clips(discord_server_id)',
-            'idx_watchtime_roles_server': 'watchtime_roles(discord_server_id)',
-            'idx_pending_links_server': 'pending_links(discord_server_id)',
-            'idx_oauth_notifications_server': 'oauth_notifications(discord_server_id)'
-        }
-        
-        for idx_name, idx_def in indexes.items():
-            try:
-                conn.execute(text(f"""
-                    CREATE INDEX IF NOT EXISTS {idx_name} ON {idx_def}
-                """))
-            except Exception:
-                # Index might already exist
-                pass
-
-        print("✅ Multiserver migration complete")
-        # =========================================================================
 
     print("✅ Database tables initialized successfully")
 except Exception as e:
