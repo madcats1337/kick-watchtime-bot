@@ -7460,9 +7460,6 @@ async def clip_buffer_task_error(error):
     import traceback
     traceback.print_exc()
 
-# Start the clip buffer management task
-manage_clip_buffers.start()
-
 # -------------------------
 # Run bot
 # -------------------------
