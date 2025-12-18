@@ -24,11 +24,16 @@ class TimedMessage:
         self.last_sent = last_sent
 
 class TimedMessagesManager:
-    """Manage timed messages to Kick chat"""
+    """Manage timed messages to Kick chat
+    
+    NOTE: In multiserver deployments, this should be refactored to be per-guild.
+    Currently uses guild_id=None to load all messages (backwards compatible).
+    """
 
-    def __init__(self, engine, kick_send_callback=None):
+    def __init__(self, engine, kick_send_callback=None, guild_id=None):
         self.engine = engine
         self.kick_send_callback = kick_send_callback
+        self.guild_id = guild_id  # None = load all guilds (backwards compatible)
         self.messages: Dict[int, TimedMessage] = {}
         self._init_database()
         self._load_messages()
@@ -50,6 +55,7 @@ class TimedMessagesManager:
                     conn.execute(text("""
                         CREATE TABLE IF NOT EXISTS timed_messages (
                             id SERIAL PRIMARY KEY,
+                            guild_id BIGINT,
                             message TEXT NOT NULL,
                             interval_minutes INTEGER NOT NULL,
                             enabled BOOLEAN DEFAULT TRUE,
@@ -64,6 +70,7 @@ class TimedMessagesManager:
                     conn.execute(text("""
                         CREATE TABLE IF NOT EXISTS timed_messages (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            guild_id BIGINT,
                             message TEXT NOT NULL,
                             interval_minutes INTEGER NOT NULL,
                             enabled BOOLEAN DEFAULT TRUE,
@@ -84,11 +91,22 @@ class TimedMessagesManager:
 
         try:
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
-                    SELECT id, message, interval_minutes, enabled, last_sent
-                    FROM timed_messages
-                    ORDER BY id
-                """))
+                # Load messages for this guild or all guilds (if guild_id=None)
+                if self.guild_id is not None:
+                    # Load for specific guild + legacy NULL guild_id messages
+                    result = conn.execute(text("""
+                        SELECT id, message, interval_minutes, enabled, last_sent
+                        FROM timed_messages
+                        WHERE guild_id = :guild_id OR guild_id IS NULL
+                        ORDER BY id
+                    """), {'guild_id': self.guild_id}).fetchall()
+                else:
+                    # Load all messages (backwards compatible)
+                    result = conn.execute(text("""
+                        SELECT id, message, interval_minutes, enabled, last_sent
+                        FROM timed_messages
+                        ORDER BY id
+                    """)).fetchall()
 
                 self.messages.clear()
                 for row in result:
@@ -125,10 +143,11 @@ class TimedMessagesManager:
                 if is_postgres:
                     # PostgreSQL returns ID with RETURNING clause
                     result = conn.execute(text("""
-                        INSERT INTO timed_messages (message, interval_minutes, enabled, created_by)
-                        VALUES (:message, :interval, TRUE, :created_by)
+                        INSERT INTO timed_messages (guild_id, message, interval_minutes, enabled, created_by)
+                        VALUES (:guild_id, :message, :interval, TRUE, :created_by)
                         RETURNING id
                     """), {
+                        'guild_id': self.guild_id,
                         'message': message,
                         'interval': interval_minutes,
                         'created_by': created_by
@@ -137,9 +156,10 @@ class TimedMessagesManager:
                 else:
                     # SQLite uses lastrowid
                     result = conn.execute(text("""
-                        INSERT INTO timed_messages (message, interval_minutes, enabled, created_by)
-                        VALUES (:message, :interval, TRUE, :created_by)
+                        INSERT INTO timed_messages (guild_id, message, interval_minutes, enabled, created_by)
+                        VALUES (:guild_id, :message, :interval, TRUE, :created_by)
                     """), {
+                        'guild_id': self.guild_id,
                         'message': message,
                         'interval': interval_minutes,
                         'created_by': created_by
@@ -166,9 +186,17 @@ class TimedMessagesManager:
 
         try:
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
-                    DELETE FROM timed_messages WHERE id = :id
-                """), {'id': message_id})
+                # Delete with guild_id filter for multiserver isolation
+                if self.guild_id is not None:
+                    result = conn.execute(text("""
+                        DELETE FROM timed_messages 
+                        WHERE id = :id AND (guild_id = :guild_id OR guild_id IS NULL)
+                    """), {'id': message_id, 'guild_id': self.guild_id})
+                else:
+                    # No guild filter (backwards compatible)
+                    result = conn.execute(text("""
+                        DELETE FROM timed_messages WHERE id = :id
+                    """), {'id': message_id})
 
                 if result.rowcount == 0:
                     return {'status': 'error', 'message': f'Message #{message_id} not found'}
@@ -189,11 +217,19 @@ class TimedMessagesManager:
 
         try:
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
-                    UPDATE timed_messages
-                    SET enabled = :enabled, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = :id
-                """), {'id': message_id, 'enabled': enabled})
+                # Update with guild_id filter for multiserver isolation
+                if self.guild_id is not None:
+                    result = conn.execute(text("""
+                        UPDATE timed_messages
+                        SET enabled = :enabled, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = :id AND (guild_id = :guild_id OR guild_id IS NULL)
+                    """), {'id': message_id, 'enabled': enabled, 'guild_id': self.guild_id})
+                else:
+                    result = conn.execute(text("""
+                        UPDATE timed_messages
+                        SET enabled = :enabled, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = :id
+                    """), {'id': message_id, 'enabled': enabled})
 
                 if result.rowcount == 0:
                     return {'status': 'error', 'message': f'Message #{message_id} not found'}
@@ -218,11 +254,19 @@ class TimedMessagesManager:
 
         try:
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
-                    UPDATE timed_messages
-                    SET interval_minutes = :interval, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = :id
-                """), {'id': message_id, 'interval': interval_minutes})
+                # Update with guild_id filter for multiserver isolation
+                if self.guild_id is not None:
+                    result = conn.execute(text("""
+                        UPDATE timed_messages
+                        SET interval_minutes = :interval, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = :id AND (guild_id = :guild_id OR guild_id IS NULL)
+                    """), {'id': message_id, 'interval': interval_minutes, 'guild_id': self.guild_id})
+                else:
+                    result = conn.execute(text("""
+                        UPDATE timed_messages
+                        SET interval_minutes = :interval, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = :id
+                    """), {'id': message_id, 'interval': interval_minutes})
 
                 if result.rowcount == 0:
                     return {'status': 'error', 'message': f'Message #{message_id} not found'}
@@ -290,11 +334,19 @@ class TimedMessagesManager:
                     # Update last_sent timestamp
                     if self.engine:
                         with self.engine.begin() as conn:
-                            conn.execute(text("""
-                                UPDATE timed_messages
-                                SET last_sent = CURRENT_TIMESTAMP
-                                WHERE id = :id
-                            """), {'id': msg.message_id})
+                            # Update with guild_id filter for multiserver isolation
+                            if self.guild_id is not None:
+                                conn.execute(text("""
+                                    UPDATE timed_messages
+                                    SET last_sent = CURRENT_TIMESTAMP
+                                    WHERE id = :id AND (guild_id = :guild_id OR guild_id IS NULL)
+                                """), {'id': msg.message_id, 'guild_id': self.guild_id})
+                            else:
+                                conn.execute(text("""
+                                    UPDATE timed_messages
+                                    SET last_sent = CURRENT_TIMESTAMP
+                                    WHERE id = :id
+                                """), {'id': msg.message_id})
 
                         # Update in memory
                         msg.last_sent = now
