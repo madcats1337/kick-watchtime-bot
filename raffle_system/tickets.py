@@ -266,7 +266,15 @@ class TicketManager:
                     return []
 
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
+                # Build WHERE clause based on multiserver support
+                if self.server_id:
+                    where_clause = "WHERE period_id = :period_id AND discord_server_id = :server_id AND total_tickets > 0"
+                    params = {'period_id': period_id, 'server_id': self.server_id, 'limit': limit}
+                else:
+                    where_clause = "WHERE period_id = :period_id AND total_tickets > 0"
+                    params = {'period_id': period_id, 'limit': limit}
+                
+                result = conn.execute(text(f"""
                     SELECT
                         discord_id,
                         kick_name,
@@ -277,13 +285,10 @@ class TicketManager:
                         total_tickets,
                         RANK() OVER (ORDER BY total_tickets DESC) as rank
                     FROM raffle_tickets
-                    WHERE period_id = :period_id AND total_tickets > 0
+                    {where_clause}
                     ORDER BY total_tickets DESC
                     LIMIT :limit
-                """), {
-                    'period_id': period_id,
-                    'limit': limit
-                })
+                """), params)
 
                 leaderboard = []
                 for row in result:
@@ -323,13 +328,18 @@ class TicketManager:
                     return None
 
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
+                # Build WHERE clause based on multiserver support
+                if self.server_id:
+                    where_clause = "WHERE period_id = :period_id AND discord_server_id = :server_id AND discord_id = :discord_id"
+                    params = {'period_id': period_id, 'server_id': self.server_id, 'discord_id': discord_id}
+                else:
+                    where_clause = "WHERE period_id = :period_id AND discord_id = :discord_id"
+                    params = {'period_id': period_id, 'discord_id': discord_id}
+                
+                result = conn.execute(text(f"""
                     SELECT rank FROM raffle_leaderboard
-                    WHERE period_id = :period_id AND discord_id = :discord_id
-                """), {
-                    'period_id': period_id,
-                    'discord_id': discord_id
-                })
+                    {where_clause}
+                """), params)
 
                 row = result.fetchone()
                 return row[0] if row else None
@@ -356,10 +366,18 @@ class TicketManager:
                     return None
 
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
+                # Build WHERE clause based on multiserver support
+                if self.server_id:
+                    where_clause = "WHERE period_id = :period_id AND discord_server_id = :server_id"
+                    params = {'period_id': period_id, 'server_id': self.server_id}
+                else:
+                    where_clause = "WHERE period_id = :period_id"
+                    params = {'period_id': period_id}
+                
+                result = conn.execute(text(f"""
                     SELECT * FROM raffle_current_stats
-                    WHERE period_id = :period_id
-                """), {'period_id': period_id})
+                    {where_clause}
+                """), params)
 
                 row = result.fetchone()
                 if row:
