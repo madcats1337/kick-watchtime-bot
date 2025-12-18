@@ -6509,12 +6509,13 @@ class PointShopConfirmView(discord.ui.View):
 
                 # Record the sale with note and requirement input
                 conn.execute(text("""
-                    INSERT INTO point_sales (item_id, kick_username, discord_id, item_name, price_paid, quantity, status, notes, requirement_input)
-                    VALUES (:item_id, :kick, :discord, :name, :price, 1, 'pending', :notes, :req_input)
+                    INSERT INTO point_sales (item_id, kick_username, discord_id, discord_server_id, item_name, price_paid, quantity, status, notes, requirement_input)
+                    VALUES (:item_id, :kick, :discord, :server_id, :name, :price, 1, 'pending', :notes, :req_input)
                 """), {
                     "item_id": item_id,
                     "kick": self.kick_username,
                     "discord": self.discord_id,
+                    "server_id": self.server_id,
                     "name": item_name,
                     "price": price,
                     "notes": self.note,
