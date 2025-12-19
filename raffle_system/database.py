@@ -164,6 +164,7 @@ DROP VIEW IF EXISTS raffle_current_stats;
 CREATE VIEW raffle_leaderboard AS
 SELECT
     rt.period_id,
+    rt.discord_server_id,
     rt.discord_id,
     rt.kick_name,
     rt.total_tickets,
@@ -171,15 +172,16 @@ SELECT
     rt.gifted_sub_tickets,
     rt.shuffle_wager_tickets,
     rt.bonus_tickets,
-    RANK() OVER (PARTITION BY rt.period_id ORDER BY rt.total_tickets DESC) as rank
+    RANK() OVER (PARTITION BY rt.period_id, rt.discord_server_id ORDER BY rt.total_tickets DESC) as rank
 FROM raffle_tickets rt
 WHERE rt.total_tickets > 0
-ORDER BY rt.period_id DESC, rt.total_tickets DESC;
+ORDER BY rt.period_id DESC, rt.discord_server_id, rt.total_tickets DESC;
 
 -- Current period stats
 CREATE VIEW raffle_current_stats AS
 SELECT
     rp.id as period_id,
+    rp.discord_server_id,
     rp.start_date,
     rp.end_date,
     rp.status,
@@ -190,9 +192,9 @@ SELECT
     COALESCE(SUM(rt.shuffle_wager_tickets), 0) as shuffle_wager_tickets,
     COALESCE(SUM(rt.bonus_tickets), 0) as bonus_tickets
 FROM raffle_periods rp
-LEFT JOIN raffle_tickets rt ON rt.period_id = rp.id
+LEFT JOIN raffle_tickets rt ON rt.period_id = rp.id AND rt.discord_server_id = rp.discord_server_id
 WHERE rp.status = 'active'
-GROUP BY rp.id;
+GROUP BY rp.id, rp.discord_server_id;
 """
 
 def setup_raffle_database(engine):
