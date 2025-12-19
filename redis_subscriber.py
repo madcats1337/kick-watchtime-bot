@@ -875,6 +875,8 @@ class RedisSubscriber:
             guild_name = guild.name if guild else str(guild_id)
             
             if action == 'giveaway_started':
+                print(f"[{guild_name}] ▶️  Starting giveaway {giveaway_id} for guild {guild_id}")
+                
                 # Reload active giveaway from database
                 await giveaway_manager.load_active_giveaway()
                 
@@ -937,6 +939,8 @@ class RedisSubscriber:
                     print(f"[{guild_name}] ✅ Giveaway {giveaway_id} started: {giveaway_title}")
             
             elif action == 'giveaway_stopped':
+                print(f"[{guild_name}] ⏹️  Stopping giveaway {giveaway_id} for guild {guild_id}")
+                
                 # Clear active giveaway
                 giveaway_manager.active_giveaway = None
                 print(f"[{guild_name}] ✅ Giveaway {giveaway_id} stopped")
