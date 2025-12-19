@@ -848,6 +848,150 @@ class RedisSubscriber:
             guild_id = data.get('guild_id')
             print(f"✅ Reload request for guild: {guild_id}")
             
+    async def handle_giveaway_event(self, action, data):
+        """Handle giveaway events from dashboard"""
+        print(f"🎁 Giveaway event: {action}")
+        
+        try:
+            guild_id = data.get('discord_server_id')
+            giveaway_id = data.get('giveaway_id')
+            
+            if not guild_id:
+                print("⚠️ No guild_id in giveaway event")
+                return
+            
+            # Get giveaway manager for this guild
+            if not hasattr(self.bot, 'giveaway_managers'):
+                print("⚠️ Giveaway managers not initialized on bot")
+                return
+            
+            giveaway_manager = self.bot.giveaway_managers.get(guild_id)
+            if not giveaway_manager:
+                print(f"⚠️ No giveaway manager found for guild {guild_id}")
+                return
+            
+            guild = self.bot.get_guild(guild_id)
+            guild_name = guild.name if guild else str(guild_id)
+            
+            if action == 'giveaway_started':
+                # Reload active giveaway from database
+                await giveaway_manager.load_active_giveaway()
+                
+                if giveaway_manager.active_giveaway:
+                    giveaway_title = giveaway_manager.active_giveaway.get('title', 'New Giveaway')
+                    entry_method = giveaway_manager.active_giveaway.get('entry_method', 'keyword')
+                    
+                    # Announce in Discord
+                    if hasattr(self.bot, 'settings_manager'):
+                        announcement_channel_id = getattr(self.bot.settings_manager, 'raffle_announcement_channel_id', None)
+                        if announcement_channel_id:
+                            channel = self.bot.get_channel(announcement_channel_id)
+                            if channel:
+                                import discord
+                                embed = discord.Embed(
+                                    title="🎁 New Giveaway Started!",
+                                    description=giveaway_title,
+                                    color=0x00ff00
+                                )
+                                
+                                if entry_method == 'keyword':
+                                    keyword = giveaway_manager.active_giveaway.get('keyword', '')
+                                    embed.add_field(
+                                        name="How to Enter",
+                                        value=f"Type `{keyword}` in Kick chat!",
+                                        inline=False
+                                    )
+                                elif entry_method == 'active_chatter':
+                                    messages_required = giveaway_manager.active_giveaway.get('messages_required', 10)
+                                    time_window = giveaway_manager.active_giveaway.get('time_window_minutes', 10)
+                                    embed.add_field(
+                                        name="How to Enter",
+                                        value=f"Send {messages_required} unique messages in {time_window} minutes in Kick chat!",
+                                        inline=False
+                                    )
+                                
+                                allow_multiple = giveaway_manager.active_giveaway.get('allow_multiple_entries', False)
+                                if allow_multiple:
+                                    max_entries = giveaway_manager.active_giveaway.get('max_entries_per_user', 5)
+                                    embed.add_field(
+                                        name="Multiple Entries",
+                                        value=f"You can enter up to {max_entries} times!",
+                                        inline=False
+                                    )
+                                
+                                await channel.send(embed=embed)
+                                print(f"[{guild_name}] ✅ Announced giveaway start in Discord")
+                    
+                    # Announce in Kick chat
+                    if self.send_message_callback:
+                        if entry_method == 'keyword':
+                            keyword = giveaway_manager.active_giveaway.get('keyword', '')
+                            message = f"🎁 GIVEAWAY STARTED: {giveaway_title} | Type {keyword} to enter!"
+                        else:
+                            message = f"🎁 GIVEAWAY STARTED: {giveaway_title} | Be active in chat to enter!"
+                        
+                        await self.announce_in_chat(message, guild_id=guild_id)
+                        print(f"[{guild_name}] ✅ Announced giveaway start in Kick chat")
+                    
+                    print(f"[{guild_name}] ✅ Giveaway {giveaway_id} started: {giveaway_title}")
+            
+            elif action == 'giveaway_stopped':
+                # Clear active giveaway
+                giveaway_manager.active_giveaway = None
+                print(f"[{guild_name}] ✅ Giveaway {giveaway_id} stopped")
+                
+                # Announce in Kick chat
+                if self.send_message_callback:
+                    await self.announce_in_chat("🎁 Giveaway has been stopped by moderators.", guild_id=guild_id)
+            
+            elif action == 'giveaway_winner':
+                winner = data.get('winner_username')
+                giveaway_title = data.get('giveaway_title', 'Giveaway')
+                
+                if not winner:
+                    print("⚠️ No winner in giveaway_winner event")
+                    return
+                
+                # Announce in Discord
+                if hasattr(self.bot, 'settings_manager'):
+                    announcement_channel_id = getattr(self.bot.settings_manager, 'raffle_announcement_channel_id', None)
+                    if announcement_channel_id:
+                        channel = self.bot.get_channel(announcement_channel_id)
+                        if channel:
+                            import discord
+                            embed = discord.Embed(
+                                title="🎉 Giveaway Winner!",
+                                description=f"**{giveaway_title}**",
+                                color=0xffd700
+                            )
+                            embed.add_field(
+                                name="Winner",
+                                value=f"🏆 **{winner}**",
+                                inline=False
+                            )
+                            embed.add_field(
+                                name="",
+                                value="Congratulations! 🎊",
+                                inline=False
+                            )
+                            
+                            await channel.send(embed=embed)
+                            print(f"[{guild_name}] ✅ Announced giveaway winner in Discord: {winner}")
+                
+                # Announce in Kick chat
+                if self.send_message_callback:
+                    message = f"🎉 GIVEAWAY WINNER: {winner} won {giveaway_title}! Congratulations! 🎊"
+                    await self.announce_in_chat(message, guild_id=guild_id)
+                    print(f"[{guild_name}] ✅ Announced giveaway winner in Kick chat: {winner}")
+                
+                # Clear active giveaway
+                giveaway_manager.active_giveaway = None
+            
+        except Exception as e:
+            print(f"❌ Error handling giveaway event: {e}")
+            import traceback
+            traceback.print_exc()
+            
             # Refresh all per-guild settings managers
             if hasattr(self.bot, 'guild_settings') and self.bot.guild_settings:
                 try:
@@ -977,7 +1121,8 @@ Congratulations! Please contact an admin to claim your prize! 🎊
             'dashboard:raffle',
             'dashboard:commands',
             'dashboard:point_shop',
-            'dashboard:bot_settings'
+            'dashboard:bot_settings',
+            'dashboard:giveaway'
             # 'bot_events' removed - no longer using webhooks for chat
         )
 
@@ -1012,6 +1157,8 @@ Congratulations! Please contact an admin to claim your prize! 🎊
                             await self.handle_point_shop_event(action, data)
                         elif channel == 'dashboard:bot_settings':
                             await self.handle_bot_settings_event(action, data)
+                        elif channel == 'dashboard:giveaway':
+                            await self.handle_giveaway_event(action, data)
                         # elif channel == 'bot_events':  # Disabled - using direct WebSocket
                         #     await self.handle_webhook_event(payload)
 
@@ -1038,7 +1185,8 @@ Congratulations! Please contact an admin to claim your prize! 🎊
                         'dashboard:raffle',
                         'dashboard:commands',
                         'dashboard:point_shop',
-                        'dashboard:bot_settings'
+                        'dashboard:bot_settings',
+                        'dashboard:giveaway'
                         # 'bot_events' removed - no longer using webhooks
                     )
 

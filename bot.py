@@ -62,6 +62,9 @@ from features.linking.link_panel import setup_link_panel_system
 # Custom commands import
 from features.custom_commands import CustomCommandsManager
 
+# Giveaway system import
+from features.giveaway.giveaway_manager import GiveawayManager, setup_giveaway_managers
+
 # -------------------------
 # Command checks and utils
 # -------------------------
@@ -726,6 +729,26 @@ class KickWebSocketManager:
                     'timestamp': now.isoformat(),
                 }
             )
+
+            # 🎁 GIVEAWAY: Track messages for keyword and active chatter detection
+            if guild_id in giveaway_managers:
+                giveaway_manager = giveaway_managers[guild_id]
+                if giveaway_manager.active_giveaway:
+                    try:
+                        entry_method = giveaway_manager.active_giveaway['entry_method']
+                        
+                        # Keyword detection
+                        if entry_method == 'keyword':
+                            keyword = giveaway_manager.active_giveaway.get('keyword', '').lower()
+                            if keyword and keyword in content.lower():
+                                await giveaway_manager.add_entry(username, entry_method='keyword')
+                                print(f"[{guild_name}] 🎁 Giveaway entry added: {username} (keyword: {keyword})")
+                        
+                        # Active chatter tracking
+                        elif entry_method == 'active_chatter':
+                            await giveaway_manager.track_message(username, content)
+                    except Exception as e:
+                        print(f"[{guild_name}] ⚠️ Giveaway tracking error: {e}")
 
             # Process commands from Kick chat
             content_stripped = content.strip()
@@ -1502,6 +1525,26 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                             guild_recent_chatters[username_lower] = now
                             recent_chatters_by_guild[guild_id] = guild_recent_chatters
                             
+                            # 🎁 GIVEAWAY: Track messages for keyword and active chatter detection
+                            if guild_id in giveaway_managers:
+                                giveaway_manager = giveaway_managers[guild_id]
+                                if giveaway_manager.active_giveaway:
+                                    try:
+                                        entry_method = giveaway_manager.active_giveaway['entry_method']
+                                        
+                                        # Keyword detection
+                                        if entry_method == 'keyword':
+                                            keyword = giveaway_manager.active_giveaway.get('keyword', '').lower()
+                                            if keyword and keyword in content_stripped.lower():
+                                                await giveaway_manager.add_entry(username, entry_method='keyword')
+                                                print(f"[{guild_name}] 🎁 Giveaway entry added: {username} (keyword: {keyword})")
+                                        
+                                        # Active chatter tracking
+                                        elif entry_method == 'active_chatter':
+                                            await giveaway_manager.track_message(username, content)
+                                    except Exception as e:
+                                        print(f"[{guild_name}] ⚠️ Giveaway tracking error: {e}")
+                            
                             # Process commands
                             content_stripped = content.strip()
                             
@@ -1636,6 +1679,7 @@ gifted_sub_trackers = {}  # guild_id -> GiftedSubTracker
 shuffle_trackers = {}  # guild_id -> ShuffleTracker
 slot_call_trackers = {}  # guild_id -> SlotCallTracker
 gtb_managers = {}  # guild_id -> GTBManager
+giveaway_managers = {}  # guild_id -> GiveawayManager
 
 # Legacy global variables (for backward compatibility)
 gifted_sub_tracker = None
@@ -5177,6 +5221,13 @@ async def on_ready():
 
     # Attach helper function to bot so other cogs can access it
     bot.get_active_chatters_count = get_active_chatters_count
+
+    # 🎁 Setup giveaway managers for all guilds
+    print("🎁 Setting up giveaway managers...")
+    global giveaway_managers
+    giveaway_managers = await setup_giveaway_managers(bot, engine)
+    bot.giveaway_managers = giveaway_managers
+    print(f"✅ Giveaway managers initialized for {len(giveaway_managers)} guilds")
 
     # Start Redis subscriber with Kick message callback
     kick_callback = send_kick_message if KICK_BOT_USER_TOKEN else None
