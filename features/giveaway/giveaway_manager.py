@@ -96,6 +96,17 @@ class GiveawayManager:
         allow_multiple = self.active_giveaway['allow_multiple_entries']
         max_entries = self.active_giveaway['max_entries_per_user']
         
+        # Fetch profile picture from Kick API
+        profile_pic_url = None
+        try:
+            from core.kick_api import get_channel_info
+            channel_data = await get_channel_info(kick_username)
+            if channel_data and 'user' in channel_data:
+                profile_pic_url = channel_data['user'].get('profile_pic')
+                logger.debug(f"Fetched profile pic for {kick_username}: {profile_pic_url}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch profile pic for {kick_username}: {e}")
+        
         with self.engine.connect() as conn:
             # Check existing entries
             existing = conn.execute(text("""
@@ -132,15 +143,16 @@ class GiveawayManager:
                 # Create new entry
                 conn.execute(text("""
                     INSERT INTO giveaway_entries 
-                    (giveaway_id, discord_server_id, discord_id, kick_username, kick_user_id, entry_method, entry_count)
-                    VALUES (:giveaway_id, :server_id, :discord_id, :username, :user_id, :method, 1)
+                    (giveaway_id, discord_server_id, discord_id, kick_username, kick_user_id, entry_method, entry_count, profile_pic_url)
+                    VALUES (:giveaway_id, :server_id, :discord_id, :username, :user_id, :method, 1, :profile_pic)
                 """), {
                     "giveaway_id": giveaway_id,
                     "server_id": self.guild_id,
                     "discord_id": discord_id,
                     "username": kick_username,
                     "user_id": kick_user_id,
-                    "method": entry_method
+                    "method": entry_method,
+                    "profile_pic": profile_pic_url
                 })
                 logger.info(f"Added new entry for {kick_username} in giveaway {giveaway_id} via {entry_method}")
             
