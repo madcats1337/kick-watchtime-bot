@@ -1532,10 +1532,10 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                                     try:
                                         entry_method = giveaway_manager.active_giveaway['entry_method']
                                         
-# Keyword detection - exact match only (no extra text)
-                            if entry_method == 'keyword':
-                                keyword = giveaway_manager.active_giveaway.get('keyword', '').lower()
-                                if keyword and content_stripped.lower() == keyword:
+                                        # Keyword detection - exact match only (no extra text)
+                                        if entry_method == 'keyword':
+                                            keyword = giveaway_manager.active_giveaway.get('keyword', '').lower()
+                                            if keyword and content_stripped.lower() == keyword:
                                                 await giveaway_manager.add_entry(username, entry_method='keyword')
                                                 print(f"[{guild_name}] 🎁 Giveaway entry added: {username} (keyword: {keyword})")
                                         
