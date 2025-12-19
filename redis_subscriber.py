@@ -847,6 +847,7 @@ class RedisSubscriber:
             # Profile settings were updated - refresh for specific guild or all
             guild_id = data.get('guild_id')
             print(f"✅ Reload request for guild: {guild_id}")
+            # Settings will be reloaded automatically on next access
             
     async def handle_giveaway_event(self, action, data):
         """Handle giveaway events from dashboard"""
