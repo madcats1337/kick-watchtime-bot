@@ -948,10 +948,18 @@ class RedisSubscriber:
             elif action == 'giveaway_winner':
                 winner = data.get('winner_username')
                 giveaway_title = data.get('giveaway_title', 'Giveaway')
+                delay_announcement = data.get('delay_announcement', False)
                 
                 if not winner:
                     print("⚠️ No winner in giveaway_winner event")
                     return
+                
+                print(f"[{guild_name}] 🎉 Winner drawn: {winner}")
+                
+                # If delay requested, wait 7 seconds for OBS animation to complete (6s animation + 1s buffer)
+                if delay_announcement:
+                    print(f"[{guild_name}] ⏳ Waiting 7 seconds for animation to complete...")
+                    await asyncio.sleep(7)
                 
                 # Announce in Discord
                 if hasattr(self.bot, 'settings_manager'):
