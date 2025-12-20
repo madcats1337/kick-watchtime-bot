@@ -993,7 +993,7 @@ class RedisSubscriber:
                 
                 # Announce in Kick chat
                 if self.send_message_callback:
-                    message = f"🎉 GIVEAWAY WINNER: {winner} won {giveaway_title}! Congratulations! 🎊"
+                    message = f"🎉 GIVEAWAY WINNER: @{winner} won {giveaway_title}! Congratulations! 🎊"
                     await self.announce_in_chat(message, guild_id=guild_id)
                     print(f"[{guild_name}] ✅ Announced giveaway winner in Kick chat: {winner}")
                 
