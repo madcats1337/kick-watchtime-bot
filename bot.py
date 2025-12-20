@@ -790,20 +790,29 @@ class KickWebSocketManager:
                             # Extract avatar URL from Kick websocket message
                             avatar_url = None
                             sender = msg.get('sender') or {}
-                            # Try multiple possible avatar fields from Kick websocket
-                            # First check identity object (most common location)
-                            identity = sender.get('identity') or {}
-                            avatar_url = (
-                                identity.get('profile_picture') or 
-                                identity.get('profilepic') or
-                                sender.get('profile_picture') or 
-                                sender.get('profilepic') or
-                                sender.get('avatar')
-                            )
                             
-                            # Log for debugging
+                            # Log the sender structure for debugging
+                            logger.info(f"[AVATAR DEBUG] Sender structure for {username}: {json.dumps(sender, indent=2)}")
+                            
+                            # Try multiple possible avatar fields from Kick websocket
+                            # Check top-level sender first (as per API spec)
+                            avatar_url = sender.get('profile_picture')
+                            
+                            # Then check identity object
                             if not avatar_url:
-                                logger.warning(f"No avatar found in websocket for {username}. Sender keys: {list(sender.keys())}, Identity keys: {list(identity.keys())}")
+                                identity = sender.get('identity') or {}
+                                avatar_url = (
+                                    identity.get('profile_picture') or 
+                                    identity.get('profilepic') or
+                                    identity.get('avatar')
+                                )
+                            
+                            # Log result
+                            if not avatar_url:
+                                logger.warning(f"❌ No avatar found in websocket for {username}")
+                                logger.warning(f"   Sender keys: {list(sender.keys())}")
+                                if sender.get('identity'):
+                                    logger.warning(f"   Identity keys: {list(sender.get('identity', {}).keys())}")
                             else:
                                 logger.info(f"✅ Extracted avatar from websocket for {username}: {avatar_url}")
                             
