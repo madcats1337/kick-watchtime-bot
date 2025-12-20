@@ -325,10 +325,15 @@ class RedisSubscriber:
             guild_id = data.get('discord_server_id')
             delay_announcement = data.get('delay_announcement', 0)
             
+            print(f"📥 [BOT-REDIS] Received 'pick' event with delay_announcement={delay_announcement}")
+            
             # If overlay is enabled, delay the announcement to allow animation to play
             if delay_announcement > 0:
-                print(f"⏰ Delaying Kick chat announcement by {delay_announcement} seconds for overlay animation")
+                print(f"⏰ [BOT-REDIS] Delaying Kick chat announcement by {delay_announcement} seconds for overlay animation")
                 await asyncio.sleep(delay_announcement)
+                print(f"✅ [BOT-REDIS] Delay complete, announcing now")
+            else:
+                print(f"⚡ [BOT-REDIS] No delay, announcing immediately")
             
             # Announce the picked slot in Kick chat
             await self.announce_in_chat(f"🎰 PICKED: {slot_call} (requested by {username})", guild_id=guild_id)
@@ -367,13 +372,18 @@ class RedisSubscriber:
             guild_id = data.get('discord_server_id')
             delay_announcement = data.get('delay_announcement', 0)
 
+            print(f"📥 [BOT-REDIS] Received 'pick_with_reward' event with delay_announcement={delay_announcement}")
+
             # Format reward type for display
             reward_type_display = 'Bonus Buy' if reward_type == 'bonus_buy' else reward_type.capitalize()
 
             # If overlay is enabled, delay the announcement to allow animation to play
             if delay_announcement > 0:
-                print(f"⏰ Delaying Kick chat announcement by {delay_announcement} seconds for overlay animation")
+                print(f"⏰ [BOT-REDIS] Delaying Kick chat announcement by {delay_announcement} seconds for overlay animation")
                 await asyncio.sleep(delay_announcement)
+                print(f"✅ [BOT-REDIS] Delay complete, announcing now")
+            else:
+                print(f"⚡ [BOT-REDIS] No delay, announcing immediately")
 
             # Announce the picked slot WITH reward in Kick chat
             amount = float(reward_amount)
