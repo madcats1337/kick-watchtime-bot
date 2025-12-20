@@ -786,35 +786,21 @@ class KickWebSocketManager:
                     else:
                         slot_call = content_stripped[5:].strip()[:200] if content_stripped.startswith("!call") else content_stripped[3:].strip()[:200]
                         if slot_call:
-                            # Extract avatar URL from Kick websocket message
-                            # Extract avatar URL from Kick websocket message
+                            # Fetch avatar from Kick API (same method as giveaway entries - proven to work!)
                             avatar_url = None
-                            sender = msg.get('sender') or {}
-                            
-                            # Log the sender structure for debugging
-                            print(f"[AVATAR DEBUG] Sender structure for {username}: {json.dumps(sender, indent=2)}")
-                            
-                            # Try multiple possible avatar fields from Kick websocket
-                            # Check top-level sender first (as per API spec)
-                            avatar_url = sender.get('profile_picture')
-                            
-                            # Then check identity object
-                            if not avatar_url:
-                                identity = sender.get('identity') or {}
-                                avatar_url = (
-                                    identity.get('profile_picture') or 
-                                    identity.get('profilepic') or
-                                    identity.get('avatar')
-                                )
-                            
-                            # Log result
-                            if not avatar_url:
-                                print(f"❌ No avatar found in websocket for {username}")
-                                print(f"   Sender keys: {list(sender.keys())}")
-                                if sender.get('identity'):
-                                    print(f"   Identity keys: {list(sender.get('identity', {}).keys())}")
-                            else:
-                                print(f"✅ Extracted avatar from websocket for {username}: {avatar_url}")
+                            try:
+                                from core.kick_api import get_channel_info
+                                channel_data = await get_channel_info(username)
+                                if channel_data and 'user' in channel_data:
+                                    avatar_url = channel_data['user'].get('profile_pic')
+                                    if avatar_url:
+                                        print(f"✅ Fetched avatar from Kick API for {username}: {avatar_url}")
+                                    else:
+                                        print(f"⚠️ No profile_pic in Kick API response for {username}")
+                                else:
+                                    print(f"⚠️ No user data in Kick API response for {username}")
+                            except Exception as e:
+                                print(f"❌ Failed to fetch avatar for {username}: {e}")
                             
                             original_guild_id = getattr(bot.slot_call_tracker, 'discord_server_id', None)
                             bot.slot_call_tracker.discord_server_id = guild_id
