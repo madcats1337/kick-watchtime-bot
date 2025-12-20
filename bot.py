@@ -792,7 +792,7 @@ class KickWebSocketManager:
                             sender = msg.get('sender') or {}
                             
                             # Log the sender structure for debugging
-                            logger.info(f"[AVATAR DEBUG] Sender structure for {username}: {json.dumps(sender, indent=2)}")
+                            print(f"[AVATAR DEBUG] Sender structure for {username}: {json.dumps(sender, indent=2)}")
                             
                             # Try multiple possible avatar fields from Kick websocket
                             # Check top-level sender first (as per API spec)
@@ -809,12 +809,12 @@ class KickWebSocketManager:
                             
                             # Log result
                             if not avatar_url:
-                                logger.warning(f"❌ No avatar found in websocket for {username}")
-                                logger.warning(f"   Sender keys: {list(sender.keys())}")
+                                print(f"❌ No avatar found in websocket for {username}")
+                                print(f"   Sender keys: {list(sender.keys())}")
                                 if sender.get('identity'):
-                                    logger.warning(f"   Identity keys: {list(sender.get('identity', {}).keys())}")
+                                    print(f"   Identity keys: {list(sender.get('identity', {}).keys())}")
                             else:
-                                logger.info(f"✅ Extracted avatar from websocket for {username}: {avatar_url}")
+                                print(f"✅ Extracted avatar from websocket for {username}: {avatar_url}")
                             
                             original_guild_id = getattr(bot.slot_call_tracker, 'discord_server_id', None)
                             bot.slot_call_tracker.discord_server_id = guild_id
