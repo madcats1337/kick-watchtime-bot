@@ -243,13 +243,14 @@ class SlotCallTracker:
             except Exception as e:
                 logger.error(f"Failed to update panel: {e}")
 
-    async def handle_slot_call(self, kick_username: str, slot_call: str):
+    async def handle_slot_call(self, kick_username: str, slot_call: str, avatar_url: Optional[str] = None):
         """
         Handle a slot call from Kick chat
 
         Args:
             kick_username: Username from Kick chat
             slot_call: The slot call text (everything after !call)
+            avatar_url: Avatar URL from Kick websocket (if available)
         """
         # 🔒 SECURITY: Check if user is blacklisted (defensive check)
         if self.engine:
@@ -436,17 +437,37 @@ class SlotCallTracker:
                 logger.error(f"Failed to check for duplicate slot requests: {e}")
                 # Continue anyway to not block legitimate requests on DB errors
 
-        # Fetch Kick avatar BEFORE posting to Discord to avoid blocking
-        avatar_url = None
-        try:
-            import requests
-            kick_response = requests.get(f"https://kick.com/api/v2/channels/{kick_username_safe}", timeout=2)
-            if kick_response.status_code == 200:
-                kick_data = kick_response.json()
-                avatar_url = kick_data.get('user', {}).get('profile_pic')
-                logger.debug(f"Fetched Kick avatar for {kick_username_safe}: {avatar_url}")
-        except Exception as avatar_err:
-            logger.debug(f"Failed to fetch Kick avatar for {kick_username_safe}: {avatar_err}")
+        # Use avatar from websocket if provided, otherwise fetch from Kick API
+        if not avatar_url:
+            try:
+                import requests
+                # Try the users endpoint first (same as OAuth flow)
+                kick_response = requests.get(f"https://kick.com/api/v2/users/{kick_username_safe}", timeout=3)
+                if kick_response.status_code == 200:
+                    kick_data = kick_response.json()
+                    avatar_url = kick_data.get('profile_picture')
+                    logger.info(f"✅ Found Kick avatar via /users for {kick_username_safe}: {avatar_url}")
+                else:
+                    # Fallback to channels endpoint
+                    kick_response = requests.get(f"https://kick.com/api/v2/channels/{kick_username_safe}", timeout=3)
+                    if kick_response.status_code == 200:
+                        kick_data = kick_response.json()
+                        # Try multiple possible avatar fields from Kick API
+                        user_data = kick_data.get('user', {})
+                        avatar_url = user_data.get('profile_picture') or user_data.get('profile_pic') or user_data.get('profilepic') or user_data.get('avatar')
+                        
+                        # Log the API response structure for debugging
+                        logger.info(f"Kick API response for {kick_username_safe}: user keys = {list(user_data.keys())}")
+                        if avatar_url:
+                            logger.info(f"✅ Found Kick avatar via /channels for {kick_username_safe}: {avatar_url}")
+                        else:
+                            logger.warning(f"❌ No avatar found in Kick API for {kick_username_safe}")
+                    else:
+                        logger.warning(f"Kick API returned {kick_response.status_code} for {kick_username_safe}")
+            except Exception as avatar_err:
+                logger.error(f"Failed to fetch Kick avatar for {kick_username_safe}: {avatar_err}")
+        else:
+            logger.info(f"✅ Using Kick avatar from websocket for {kick_username_safe}: {avatar_url}")
         
         # Fallback to placeholder if no avatar
         if not avatar_url:

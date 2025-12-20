@@ -509,9 +509,35 @@ class SlotRequestPanel:
 
                 logger.info(f"[Server {guild_id}] Panel picked random slot: {slot_call} by {username}")
 
-                # Wait 9 seconds before sending to Kick (matches slot overlay animation)
-                import asyncio
-                await asyncio.sleep(9)
+                # Check if slot overlay is enabled in dashboard settings
+                overlay_delay_needed = False
+                if self.engine:
+                    try:
+                        with self.engine.connect() as check_conn:
+                            # Check if overlay is explicitly enabled
+                            overlay_setting = check_conn.execute(text("""
+                                SELECT value FROM bot_settings 
+                                WHERE key = 'slot_overlay_enabled' AND discord_server_id = :server_id
+                            """), {"server_id": guild_id}).fetchone()
+                            
+                            if overlay_setting:
+                                overlay_delay_needed = overlay_setting[0] == 'true'
+                                logger.info(f"[Server {guild_id}] Slot overlay setting: {overlay_setting[0]}")
+                            else:
+                                # Fallback: check if there are any unpicked slots (indicates overlay usage)
+                                remaining_slots = check_conn.execute(text("""
+                                    SELECT COUNT(*) FROM slot_requests 
+                                    WHERE discord_server_id = :server_id AND picked = FALSE
+                                """), {"server_id": guild_id}).fetchone()[0]
+                                overlay_delay_needed = remaining_slots > 0
+                                logger.info(f"[Server {guild_id}] Fallback overlay check - {remaining_slots} unpicked slots")
+                    except Exception as delay_check_error:
+                        logger.warning(f"Could not check overlay status: {delay_check_error}")
+
+                # Apply 9-second delay if overlay is being used (syncs with slot picker animation)
+                if overlay_delay_needed:
+                    import asyncio
+                    await asyncio.sleep(9)
 
                 # Send message to Kick chat
                 if self.kick_send_callback:
