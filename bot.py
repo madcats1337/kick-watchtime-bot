@@ -786,10 +786,18 @@ class KickWebSocketManager:
                     else:
                         slot_call = content_stripped[5:].strip()[:200] if content_stripped.startswith("!call") else content_stripped[3:].strip()[:200]
                         if slot_call:
+                            # Extract avatar URL from Kick websocket message
+                            avatar_url = None
+                            sender = msg.get('sender') or {}
+                            # Try multiple possible avatar fields from Kick API
+                            avatar_url = (
+                                sender.get('identity', {}).get('badges', [{}])[0].get('image_url') if sender.get('identity', {}).get('badges') else None
+                            ) or sender.get('identity', {}).get('profile_picture') or sender.get('profile_picture') or sender.get('avatar')
+                            
                             original_guild_id = getattr(bot.slot_call_tracker, 'discord_server_id', None)
                             bot.slot_call_tracker.discord_server_id = guild_id
                             try:
-                                await bot.slot_call_tracker.handle_slot_call(username, slot_call)
+                                await bot.slot_call_tracker.handle_slot_call(username, slot_call, avatar_url=avatar_url)
                             finally:
                                 if original_guild_id:
                                     bot.slot_call_tracker.discord_server_id = original_guild_id
