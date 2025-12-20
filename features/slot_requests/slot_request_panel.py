@@ -509,6 +509,10 @@ class SlotRequestPanel:
 
                 logger.info(f"[Server {guild_id}] Panel picked random slot: {slot_call} by {username}")
 
+                # Wait 9 seconds before sending to Kick (matches slot overlay animation)
+                import asyncio
+                await asyncio.sleep(9)
+
                 # Send message to Kick chat
                 if self.kick_send_callback:
                     try:

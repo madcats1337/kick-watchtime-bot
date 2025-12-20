@@ -436,6 +436,22 @@ class SlotCallTracker:
                 logger.error(f"Failed to check for duplicate slot requests: {e}")
                 # Continue anyway to not block legitimate requests on DB errors
 
+        # Fetch Kick avatar BEFORE posting to Discord to avoid blocking
+        avatar_url = None
+        try:
+            import requests
+            kick_response = requests.get(f"https://kick.com/api/v2/channels/{kick_username_safe}", timeout=2)
+            if kick_response.status_code == 200:
+                kick_data = kick_response.json()
+                avatar_url = kick_data.get('user', {}).get('profile_pic')
+                logger.debug(f"Fetched Kick avatar for {kick_username_safe}: {avatar_url}")
+        except Exception as avatar_err:
+            logger.debug(f"Failed to fetch Kick avatar for {kick_username_safe}: {avatar_err}")
+        
+        # Fallback to placeholder if no avatar
+        if not avatar_url:
+            avatar_url = f"https://ui-avatars.com/api/?name={kick_username_safe}&background=random&size=95"
+
         # Get the Discord channel
         channel = self.bot.get_channel(self.discord_channel_id)
         if not channel:
@@ -455,24 +471,9 @@ class SlotCallTracker:
             await channel.send(embed=embed)
             logger.info(f"Posted slot call from {kick_username_safe}: {slot_call_safe}")
 
-            # Save slot request to database
+            # Save slot request to database with avatar
             if self.engine:
                 try:
-                    # Fetch Kick avatar
-                    avatar_url = None
-                    try:
-                        import requests
-                        kick_response = requests.get(f"https://kick.com/api/v2/channels/{kick_username_safe}", timeout=2)
-                        if kick_response.status_code == 200:
-                            kick_data = kick_response.json()
-                            avatar_url = kick_data.get('user', {}).get('profile_pic')
-                            logger.debug(f"Fetched Kick avatar for {kick_username_safe}: {avatar_url}")
-                    except Exception as avatar_err:
-                        logger.debug(f"Failed to fetch Kick avatar for {kick_username_safe}: {avatar_err}")
-                    
-                    # Fallback to placeholder if no avatar
-                    if not avatar_url:
-                        avatar_url = f"https://ui-avatars.com/api/?name={kick_username_safe}&background=random&size=95"
                     
                     with self.engine.begin() as conn:
                         if self.server_id:
@@ -502,7 +503,7 @@ class SlotCallTracker:
                 except Exception as e:
                     logger.error(f"Failed to save slot request to database: {e}")
 
-            # Send confirmation message to Kick chat if callback is available
+            # Send confirmation message to Kick chat immediately (no delay)
             if self.kick_send_callback:
                 kick_response = f"@{kick_username_safe} Your slot request for {slot_call_safe} has been received! ✅"
                 try:
