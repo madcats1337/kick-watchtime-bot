@@ -458,18 +458,34 @@ class SlotCallTracker:
             # Save slot request to database
             if self.engine:
                 try:
+                    # Fetch Kick avatar
+                    avatar_url = None
+                    try:
+                        import requests
+                        kick_response = requests.get(f"https://kick.com/api/v2/channels/{kick_username_safe}", timeout=2)
+                        if kick_response.status_code == 200:
+                            kick_data = kick_response.json()
+                            avatar_url = kick_data.get('user', {}).get('profile_pic')
+                            logger.debug(f"Fetched Kick avatar for {kick_username_safe}: {avatar_url}")
+                    except Exception as avatar_err:
+                        logger.debug(f"Failed to fetch Kick avatar for {kick_username_safe}: {avatar_err}")
+                    
+                    # Fallback to placeholder if no avatar
+                    if not avatar_url:
+                        avatar_url = f"https://ui-avatars.com/api/?name={kick_username_safe}&background=random&size=95"
+                    
                     with self.engine.begin() as conn:
                         if self.server_id:
                             conn.execute(text("""
-                                INSERT INTO slot_requests (kick_username, slot_call, requested_at, discord_server_id)
-                                VALUES (:username, :slot_call, CURRENT_TIMESTAMP, :server_id)
-                            """), {"username": kick_username_safe, "slot_call": slot_call_safe, "server_id": self.server_id})
+                                INSERT INTO slot_requests (kick_username, slot_call, requested_at, discord_server_id, avatar_url)
+                                VALUES (:username, :slot_call, CURRENT_TIMESTAMP, :server_id, :avatar_url)
+                            """), {"username": kick_username_safe, "slot_call": slot_call_safe, "server_id": self.server_id, "avatar_url": avatar_url})
                         else:
                             conn.execute(text("""
-                                INSERT INTO slot_requests (kick_username, slot_call, requested_at)
-                                VALUES (:username, :slot_call, CURRENT_TIMESTAMP)
-                            """), {"username": kick_username_safe, "slot_call": slot_call_safe})
-                    logger.debug(f"Saved slot request to database")
+                                INSERT INTO slot_requests (kick_username, slot_call, requested_at, avatar_url)
+                                VALUES (:username, :slot_call, CURRENT_TIMESTAMP, :avatar_url)
+                            """), {"username": kick_username_safe, "slot_call": slot_call_safe, "avatar_url": avatar_url})
+                    logger.debug(f"Saved slot request to database with avatar")
 
                     # Publish event for real-time dashboard updates
                     try:
