@@ -787,12 +787,25 @@ class KickWebSocketManager:
                         slot_call = content_stripped[5:].strip()[:200] if content_stripped.startswith("!call") else content_stripped[3:].strip()[:200]
                         if slot_call:
                             # Extract avatar URL from Kick websocket message
+                            # Extract avatar URL from Kick websocket message
                             avatar_url = None
                             sender = msg.get('sender') or {}
-                            # Try multiple possible avatar fields from Kick API
+                            # Try multiple possible avatar fields from Kick websocket
+                            # First check identity object (most common location)
+                            identity = sender.get('identity') or {}
                             avatar_url = (
-                                sender.get('identity', {}).get('badges', [{}])[0].get('image_url') if sender.get('identity', {}).get('badges') else None
-                            ) or sender.get('identity', {}).get('profile_picture') or sender.get('profile_picture') or sender.get('avatar')
+                                identity.get('profile_picture') or 
+                                identity.get('profilepic') or
+                                sender.get('profile_picture') or 
+                                sender.get('profilepic') or
+                                sender.get('avatar')
+                            )
+                            
+                            # Log for debugging
+                            if not avatar_url:
+                                logger.warning(f"No avatar found in websocket for {username}. Sender keys: {list(sender.keys())}, Identity keys: {list(identity.keys())}")
+                            else:
+                                logger.info(f"✅ Extracted avatar from websocket for {username}: {avatar_url}")
                             
                             original_guild_id = getattr(bot.slot_call_tracker, 'discord_server_id', None)
                             bot.slot_call_tracker.discord_server_id = guild_id
