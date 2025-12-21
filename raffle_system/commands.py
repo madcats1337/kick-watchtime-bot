@@ -43,12 +43,14 @@ class RaffleCommands(commands.Cog):
         Check your raffle ticket balance
         Usage: !tickets
         """
+        logger.info(f"[TICKETS] Command called by {ctx.author} (ID: {ctx.author.id}) in guild {ctx.guild.name if ctx.guild else 'DM'}")
         try:
             discord_id = ctx.author.id
             managers = self._get_guild_managers(ctx)
             ticket_manager = managers['ticket_manager']
             raffle_draw = managers['raffle_draw']
             
+            logger.info(f"[TICKETS] Getting tickets for user {discord_id}")
             tickets = ticket_manager.get_user_tickets(discord_id)
 
             if not tickets or tickets['total_tickets'] == 0:
@@ -157,6 +159,10 @@ Use `!leaderboard` to see top participants!
             raffle_draw = managers['raffle_draw']
 
             stats = ticket_manager.get_period_stats()
+            
+            # Debug logging
+            logger.info(f"[raffleinfo] guild_id={ctx.guild.id}, server_id={managers['ticket_manager'].server_id}")
+            logger.info(f"[raffleinfo] stats={stats}")
 
             if not stats:
                 await ctx.send("❌ No active raffle period!")

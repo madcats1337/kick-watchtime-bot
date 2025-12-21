@@ -102,87 +102,52 @@ class AutoLeaderboard:
     async def create_leaderboard_embed(self):
         """Create the leaderboard embed"""
         try:
-            with self.engine.begin() as conn:
-                # Get active period (filter by server)
-                if self.server_id is not None:
-                    period_result = conn.execute(text("""
-                        SELECT id, start_date, end_date
-                        FROM raffle_periods
-                        WHERE status = 'active' AND discord_server_id = :server_id
-                        ORDER BY start_date DESC
-                        LIMIT 1
-                    """), {'server_id': self.server_id})
-                else:
-                    period_result = conn.execute(text("""
-                        SELECT id, start_date, end_date
-                        FROM raffle_periods
-                        WHERE status = 'active'
-                    """))
+            # Import here to avoid circular import
+            from .tickets import TicketManager
+            
+            # Create ticket manager with server_id for proper multiserver support
+            ticket_manager = TicketManager(self.engine, server_id=self.server_id)
+            
+            # Get period stats using the proper method
+            stats = ticket_manager.get_period_stats()
+            
+            if not stats:
+                return discord.Embed(
+                    title="🎟️ Raffle Ticket Leaderboard",
+                    description="No active raffle period",
+                    color=discord.Color.red()
+                )
+            
+            period_id = stats['period_id']
+            start_date = stats['start_date']
+            end_date = stats['end_date']
+            
+            # Check if period hasn't started yet
+            now = datetime.now()
+            if now < start_date:
+                days_until_start = (start_date - now).days
+                hours_until_start = ((start_date - now).seconds // 3600)
 
-                period_row = period_result.fetchone()
+                time_msg = f"{days_until_start} days" if days_until_start > 0 else f"{hours_until_start} hours"
 
-                if not period_row:
-                    return discord.Embed(
-                        title="🎟️ Raffle Ticket Leaderboard",
-                        description="No active raffle period",
-                        color=discord.Color.red()
-                    )
-
-                period_id = period_row[0]
-                start_date = period_row[1]
-                end_date = period_row[2]
-
-                # Check if period hasn't started yet
-                now = datetime.now()
-                if now < start_date:
-                    days_until_start = (start_date - now).days
-                    hours_until_start = ((start_date - now).seconds // 3600)
-
-                    time_msg = f"{days_until_start} days" if days_until_start > 0 else f"{hours_until_start} hours"
-
-                    return discord.Embed(
-                        title="🎟️ Raffle Ticket Leaderboard",
-                        description=(
-                            f"**Raffle Period Not Started Yet**\n\n"
-                            f"📅 **Starts:** {start_date.strftime('%b %d, %Y at %I:%M %p')}\n"
-                            f"📅 **Ends:** {end_date.strftime('%b %d, %Y at %I:%M %p')}\n\n"
-                            f"⏳ **Time until start:** {time_msg}\n\n"
-                            f"Get ready to earn tickets by watching streams, gifting subs, and wagering on Shuffle!"
-                        ),
-                        color=discord.Color.blue()
-                    )
-
-                # Get top 5 participants (per-guild)
-                result = conn.execute(text("""
-                    SELECT
-                        kick_name,
-                        total_tickets,
-                        watchtime_tickets,
-                        gifted_sub_tickets,
-                        shuffle_wager_tickets,
-                        bonus_tickets
-                    FROM raffle_tickets
-                    WHERE period_id = :period_id
-                        AND discord_server_id = :server_id
-                    ORDER BY total_tickets DESC
-                    LIMIT 5
-                """), {'period_id': period_id, 'server_id': self.server_id})
-
-                rows = result.fetchall()
-
-                # Get total stats (per-guild)
-                stats_result = conn.execute(text("""
-                    SELECT
-                        COUNT(DISTINCT discord_id),
-                        COALESCE(SUM(total_tickets), 0)
-                    FROM raffle_tickets
-                    WHERE period_id = :period_id
-                        AND discord_server_id = :server_id
-                """), {'period_id': period_id, 'server_id': self.server_id})
-
-                stats_row = stats_result.fetchone()
-                total_participants = stats_row[0] or 0
-                total_tickets = stats_row[1] or 0
+                return discord.Embed(
+                    title="🎟️ Raffle Ticket Leaderboard",
+                    description=(
+                        f"**Raffle Period Not Started Yet**\n\n"
+                        f"📅 **Starts:** {start_date.strftime('%b %d, %Y at %I:%M %p')}\n"
+                        f"📅 **Ends:** {end_date.strftime('%b %d, %Y at %I:%M %p')}\n\n"
+                        f"⏳ **Time until start:** {time_msg}\n\n"
+                        f"Get ready to earn tickets by watching streams, gifting subs, and wagering on Shuffle!"
+                    ),
+                    color=discord.Color.blue()
+                )
+            
+            # Get leaderboard using the proper method (top 5)
+            leaderboard = ticket_manager.get_leaderboard(limit=5)
+            
+            # Get total stats from stats dict
+            total_participants = stats['total_participants']
+            total_tickets = stats['total_tickets']
 
             # Create embed
             embed = discord.Embed(
@@ -193,7 +158,7 @@ class AutoLeaderboard:
                 timestamp=datetime.utcnow()
             )
 
-            if not rows:
+            if not leaderboard:
                 embed.add_field(
                     name="No Participants Yet",
                     value="Be the first to earn tickets!",
@@ -204,21 +169,22 @@ class AutoLeaderboard:
                 medals = ["🥇", "🥈", "🥉"]
 
                 leaderboard_text = ""
-                for idx, row in enumerate(rows, 1):
-                    kick_name = row[0] or "Unknown"
-                    total = row[1]
-                    watchtime = row[2]
-                    gifted = row[3]
-                    shuffle = row[4]
-                    bonus = row[5]
+                for entry in leaderboard:
+                    rank = entry['rank']
+                    kick_name = entry['kick_name'] or "Unknown"
+                    total = entry['total_tickets']
+                    watchtime = entry['watchtime_tickets']
+                    gifted = entry['gifted_sub_tickets']
+                    shuffle = entry['shuffle_wager_tickets']
+                    bonus = entry['bonus_tickets']
 
                     # Medal or rank number
-                    rank = medals[idx-1] if idx <= 3 else f"`{idx}.`"
+                    rank_display = medals[rank-1] if rank <= 3 else f"`{rank}.`"
 
                     # Calculate win probability
                     win_prob = (total / total_tickets * 100) if total_tickets > 0 else 0
 
-                    leaderboard_text += f"{rank} **{kick_name}** - {total:,} tickets ({win_prob:.2f}%)\n"
+                    leaderboard_text += f"{rank_display} **{kick_name}** - {total:,} tickets ({win_prob:.2f}%)\n"
                     leaderboard_text += f"    ⏱️ {watchtime} 🎁 {gifted} 🎲 {shuffle} ⭐ {bonus}\n"
 
                 embed.add_field(
