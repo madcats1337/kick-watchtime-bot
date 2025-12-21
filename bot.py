@@ -7540,6 +7540,98 @@ async def clip_buffer_task_error(error):
     traceback.print_exc()
 
 # -------------------------
+# Bot Events
+# -------------------------
+@bot.event
+async def on_ready():
+    """Bot startup handler - initialize all systems"""
+    print(f'\n{"="*60}')
+    print(f'✅ Bot logged in as {bot.user}')
+    print(f'✅ Connected to {len(bot.guilds)} guild(s)')
+    print(f'{"="*60}\n')
+    
+    # Store startup time for health checks
+    bot.uptime_start = datetime.now()
+    
+    # Initialize kickpython WebSocket connections for each guild
+    print('🔌 Initializing Kick WebSocket connections...\n')
+    for guild in bot.guilds:
+        guild_id = guild.id
+        guild_name = guild.name
+        
+        try:
+            # Get kick_channel from bot_settings for this guild
+            kick_channel = None
+            with engine.connect() as conn:
+                result = conn.execute(text("""
+                    SELECT value FROM bot_settings 
+                    WHERE key = 'kick_channel' AND discord_server_id = :guild_id
+                    LIMIT 1
+                """), {"guild_id": guild_id}).fetchone()
+                
+                if result and result[0]:
+                    kick_channel = result[0]
+            
+            if not kick_channel:
+                print(f'⚠️  [{guild_name}] No Kick channel configured - skipping WebSocket')
+                print(f'    💡 Configure in Dashboard → Profile Settings\n')
+                continue
+            
+            # Start WebSocket connection for this guild
+            print(f'🔌 [{guild_name}] Connecting to Kick channel: {kick_channel}')
+            success = await kick_ws_manager.ensure_connection(guild_id, guild_name)
+            
+            if success:
+                print(f'✅ [{guild_name}] Kick WebSocket connected - ready to receive chat messages!\n')
+            else:
+                print(f'❌ [{guild_name}] Failed to connect Kick WebSocket\n')
+                
+        except Exception as e:
+            print(f'❌ [{guild_name}] Error initializing Kick WebSocket: {e}')
+            import traceback
+            traceback.print_exc()
+            print()
+    
+    print(f'{"="*60}')
+    print('✅ Bot initialization complete!')
+    print(f'{"="*60}\n')
+    
+    # Start background tasks
+    print('⚙️  Starting background tasks...\n')
+    
+    if not update_watchtime_task.is_running():
+        update_watchtime_task.start()
+        print('✅ Watchtime tracker started')
+    
+    if not update_roles_task.is_running():
+        update_roles_task.start()
+        print('✅ Role updater started')
+    
+    if not cleanup_pending_links_task.is_running():
+        cleanup_pending_links_task.start()
+        print('✅ Cleanup task started')
+    
+    if not check_oauth_notifications_task.is_running():
+        check_oauth_notifications_task.start()
+        print('✅ OAuth notifications task started')
+    
+    if not proactive_token_refresh_task.is_running():
+        proactive_token_refresh_task.start()
+        print('✅ Token refresh task started')
+    
+    if not clip_buffer_management_task.is_running():
+        clip_buffer_management_task.start()
+        print('✅ Clip buffer management started')
+    
+    if not manage_clip_buffers.is_running():
+        manage_clip_buffers.start()
+        print('✅ Clip buffer auto-management started')
+    
+    print(f'\n{"="*60}')
+    print('🎉 Bot is ready to receive Kick chat commands!')
+    print(f'{"="*60}\n')
+
+# -------------------------
 # Run bot
 # -------------------------
 if __name__ == "__main__":
@@ -7550,6 +7642,6 @@ if __name__ == "__main__":
     print("   Configure each Discord server in Dashboard → Profile Settings")
     print("   Set Kick channel name, slot calls channel, raffle settings per-server")
     print(f"   KICK_USE_KICKPYTHON_WS={KICK_USE_KICKPYTHON_WS}")
-    print("   Bot version: 2025-12-17-v2")  # Trigger redeploy
+    print("   Bot version: 2025-12-21-v1")  # Trigger redeploy with WebSocket fix
 
     bot.run(DISCORD_TOKEN)
