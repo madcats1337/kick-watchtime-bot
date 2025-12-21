@@ -788,12 +788,14 @@ class KickWebSocketManager:
             
             # !raffle command
             if content_stripped.lower() == "!raffle":
-                await send_kick_message(
+                print(f"[{guild_name}] 🎟️ Processing !raffle command from {username}")
+                result = await send_kick_message(
                     "Do you want to win a $100 super buy on Sweet Bonanza 1000? "
                     "All you gotta do is join my discord, verify with lelebot and follow the instructions -> "
                     "https://discord.gg/k7CXJtfrPY",
                     guild_id=guild_id
                 )
+                print(f"[{guild_name}] 🎟️ !raffle message send result: {result}")
             
             # !call / !sr commands (slot requests)
             elif content_stripped.startswith(("!call", "!sr")):
@@ -7755,6 +7757,11 @@ async def on_ready():
     if not manage_clip_buffers.is_running():
         manage_clip_buffers.start()
         print('✅ Clip buffer auto-management started')
+    
+    # Start Redis subscriber for dashboard events
+    print('📡 Starting Redis subscriber for dashboard events...')
+    asyncio.create_task(start_redis_subscriber(bot, send_message_callback=send_kick_message))
+    print('✅ Redis subscriber started')
     
     print(f'\n{"="*60}')
     print('🎉 Bot is ready to receive Kick chat commands!')
