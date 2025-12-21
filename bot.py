@@ -5644,6 +5644,25 @@ async def on_ready():
         print(f"✅ Using webhooks only (Pusher disabled)")
         print(f"   ⚠️ WARNING: Gifted sub raffle tracking will not work!")
         print(f"   Set USE_DUAL_MODE=true to enable Pusher for subscription events")
+    
+    # ========== MERGED CODE FROM SECOND ON_READY ==========
+    # Additional slot tracker initialization with backwards compatibility
+    print('\n⚙️  Ensuring slot tracker backwards compatibility...')
+    if not hasattr(bot, 'slot_trackers'):
+        bot.slot_trackers = {}
+    
+    # Set default slot_call_tracker for backwards compatibility (use first guild)
+    if slot_call_trackers and not hasattr(bot, 'slot_call_tracker'):
+        first_guild_id = list(slot_call_trackers.keys())[0] if slot_call_trackers else None
+        if first_guild_id:
+            bot.slot_call_tracker = slot_call_trackers[first_guild_id]
+            bot.slot_trackers = slot_call_trackers  # Also expose as slot_trackers
+            print(f'✅ Backwards compatibility attributes set')
+    
+    print(f'\n{"="*60}')
+    print('🎉 Bot initialization complete - ready to receive commands!')
+    print(f'{"="*60}\n')
+    # ========== END MERGED CODE ==========
 
 async def handle_timer_panel_reaction(payload):
     """Handle reactions on timer panel messages."""
@@ -7577,165 +7596,7 @@ async def clip_buffer_task_error(error):
     traceback.print_exc()
 
 # -------------------------
-# Bot Events
-# -------------------------
-@bot.event
-async def on_ready():
-    """Bot startup handler - initialize all systems"""
-    print(f'\n{"="*60}')
-    print(f'✅ Bot logged in as {bot.user}')
-    print(f'✅ Connected to {len(bot.guilds)} guild(s)')
-    print(f'{"="*60}\n')
-    
-    # Store startup time for health checks
-    bot.uptime_start = datetime.now()
-    
-    # Initialize bot features for each guild
-    print('⚙️  Initializing bot features for each guild...\n')
-    for guild in bot.guilds:
-        guild_id = guild.id
-        guild_name = guild.name
-        
-        try:
-            print(f'🔧 [{guild_name}] Initializing features...')
-            
-            # Initialize Slot Call Tracker
-            from features.slot_requests.slot_calls import setup_slot_call_tracker
-            
-            # Get slot calls channel from bot_settings
-            slot_channel_id = None
-            with engine.connect() as conn:
-                result = conn.execute(text("""
-                    SELECT value FROM bot_settings 
-                    WHERE key = 'slot_calls_channel_id' AND discord_server_id = :guild_id
-                    LIMIT 1
-                """), {"guild_id": guild_id}).fetchone()
-                
-                if result and result[0]:
-                    try:
-                        slot_channel_id = int(result[0])
-                    except ValueError:
-                        print(f'⚠️  [{guild_name}] Invalid slot_calls_channel_id in database')
-            
-            # Create slot tracker (without adding cog - we'll add cog once at the end)
-            from features.slot_requests.slot_calls import SlotCallTracker
-            tracker = SlotCallTracker(
-                bot, 
-                discord_channel_id=slot_channel_id,
-                kick_send_callback=send_kick_message,
-                engine=engine,
-                server_id=guild_id
-            )
-            
-            # Store tracker on bot (use guild-specific attribute)
-            if not hasattr(bot, 'slot_trackers'):
-                bot.slot_trackers = {}
-            bot.slot_trackers[guild_id] = tracker
-            
-            # Also set default bot.slot_call_tracker for backwards compatibility
-            if not hasattr(bot, 'slot_call_tracker'):
-                bot.slot_call_tracker = tracker
-            
-            print(f'✅ [{guild_name}] Slot tracker initialized (channel: {slot_channel_id or "Not set"})')
-            
-        except Exception as e:
-            print(f'❌ [{guild_name}] Feature initialization error: {e}')
-            import traceback
-            traceback.print_exc()
-    
-    # Add slot commands cog once (shared across all guilds)
-    if hasattr(bot, 'slot_call_tracker') and bot.slot_call_tracker:
-        try:
-            from features.slot_requests.slot_calls import SlotCallCommands
-            await bot.add_cog(SlotCallCommands(bot, bot.slot_call_tracker))
-            print('✅ Slot call commands cog added')
-        except Exception as e:
-            print(f'⚠️  Failed to add slot commands cog: {e}')
-    
-    print()
-    
-    # Initialize kickpython WebSocket connections for each guild
-    print('🔌 Initializing Kick WebSocket connections...\n')
-    for guild in bot.guilds:
-        guild_id = guild.id
-        guild_name = guild.name
-        
-        try:
-            # Get kick_channel from bot_settings for this guild
-            kick_channel = None
-            with engine.connect() as conn:
-                result = conn.execute(text("""
-                    SELECT value FROM bot_settings 
-                    WHERE key = 'kick_channel' AND discord_server_id = :guild_id
-                    LIMIT 1
-                """), {"guild_id": guild_id}).fetchone()
-                
-                if result and result[0]:
-                    kick_channel = result[0]
-            
-            if not kick_channel:
-                print(f'⚠️  [{guild_name}] No Kick channel configured - skipping WebSocket')
-                print(f'    💡 Configure in Dashboard → Profile Settings\n')
-                continue
-            
-            # Start WebSocket connection for this guild
-            print(f'🔌 [{guild_name}] Connecting to Kick channel: {kick_channel}')
-            success = await kick_ws_manager.ensure_connection(guild_id, guild_name)
-            
-            if success:
-                print(f'✅ [{guild_name}] Kick WebSocket connected - ready to receive chat messages!\n')
-            else:
-                print(f'❌ [{guild_name}] Failed to connect Kick WebSocket\n')
-                
-        except Exception as e:
-            print(f'❌ [{guild_name}] Error initializing Kick WebSocket: {e}')
-            import traceback
-            traceback.print_exc()
-            print()
-    
-    print(f'{"="*60}')
-    print('✅ Bot initialization complete!')
-    print(f'{"="*60}\n')
-    
-    # Start background tasks
-    print('⚙️  Starting background tasks...\n')
-    
-    if not update_watchtime_task.is_running():
-        update_watchtime_task.start()
-        print('✅ Watchtime tracker started')
-    
-    if not update_roles_task.is_running():
-        update_roles_task.start()
-        print('✅ Role updater started')
-    
-    if not cleanup_pending_links_task.is_running():
-        cleanup_pending_links_task.start()
-        print('✅ Cleanup task started')
-    
-    if not check_oauth_notifications_task.is_running():
-        check_oauth_notifications_task.start()
-        print('✅ OAuth notifications task started')
-    
-    if not proactive_token_refresh_task.is_running():
-        proactive_token_refresh_task.start()
-        print('✅ Token refresh task started')
-    
-    if not clip_buffer_management_task.is_running():
-        clip_buffer_management_task.start()
-        print('✅ Clip buffer management started')
-    
-    if not manage_clip_buffers.is_running():
-        manage_clip_buffers.start()
-        print('✅ Clip buffer auto-management started')
-    
-    # Start Redis subscriber for dashboard events
-    print('📡 Starting Redis subscriber for dashboard events...')
-    asyncio.create_task(start_redis_subscriber(bot, send_message_callback=send_kick_message))
-    print('✅ Redis subscriber started')
-    
-    print(f'\n{"="*60}')
-    print('🎉 Bot is ready to receive Kick chat commands!')
-    print(f'{"="*60}\n')
+# Run bot
 
 # -------------------------
 # Run bot
