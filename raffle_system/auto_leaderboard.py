@@ -119,8 +119,14 @@ class AutoLeaderboard:
                 )
             
             period_id = stats['period_id']
+            # Convert timestamps to datetime objects if they're not already
             start_date = stats['start_date']
             end_date = stats['end_date']
+            
+            if isinstance(start_date, (int, float)):
+                start_date = datetime.fromtimestamp(start_date)
+            if isinstance(end_date, (int, float)):
+                end_date = datetime.fromtimestamp(end_date)
             
             # Check if period hasn't started yet
             now = datetime.now()
