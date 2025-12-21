@@ -7614,8 +7614,9 @@ async def on_ready():
                     except ValueError:
                         print(f'⚠️  [{guild_name}] Invalid slot_calls_channel_id in database')
             
-            # Setup slot tracker with send_kick_message callback
-            tracker = await setup_slot_call_tracker(
+            # Create slot tracker (without adding cog - we'll add cog once at the end)
+            from features.slot_requests.slot_calls import SlotCallTracker
+            tracker = SlotCallTracker(
                 bot, 
                 discord_channel_id=slot_channel_id,
                 kick_send_callback=send_kick_message,
@@ -7634,53 +7635,19 @@ async def on_ready():
             
             print(f'✅ [{guild_name}] Slot tracker initialized (channel: {slot_channel_id or "Not set"})')
             
-            # Initialize Custom Commands Manager
-            try:
-                from features.custom_commands import CustomCommandsManager
-                commands_manager = CustomCommandsManager(
-                    engine=engine,
-                    discord_server_id=guild_id,
-                    send_message_callback=lambda msg: send_kick_message(msg, guild_id=guild_id)
-                )
-                
-                if not hasattr(bot, 'custom_commands_managers'):
-                    bot.custom_commands_managers = {}
-                bot.custom_commands_managers[guild_id] = commands_manager
-                
-                # Set default for backwards compatibility
-                if not hasattr(bot, 'custom_commands_manager'):
-                    bot.custom_commands_manager = commands_manager
-                
-                print(f'✅ [{guild_name}] Custom commands manager initialized')
-            except Exception as e:
-                print(f'⚠️  [{guild_name}] Custom commands manager failed: {e}')
-            
-            # Initialize GTB Manager
-            try:
-                from features.games.guess_the_balance import GuessTheBalanceManager
-                gtb_manager = GuessTheBalanceManager(
-                    bot=bot,
-                    engine=engine,
-                    guild_id=guild_id,
-                    send_message_callback=lambda msg: send_kick_message(msg, guild_id=guild_id)
-                )
-                
-                if not hasattr(bot, 'gtb_managers'):
-                    bot.gtb_managers = {}
-                bot.gtb_managers[guild_id] = gtb_manager
-                
-                # Set default for backwards compatibility
-                if not hasattr(bot, 'gtb_manager'):
-                    bot.gtb_manager = gtb_manager
-                
-                print(f'✅ [{guild_name}] GTB manager initialized')
-            except Exception as e:
-                print(f'⚠️  [{guild_name}] GTB manager failed: {e}')
-            
         except Exception as e:
             print(f'❌ [{guild_name}] Feature initialization error: {e}')
             import traceback
             traceback.print_exc()
+    
+    # Add slot commands cog once (shared across all guilds)
+    if hasattr(bot, 'slot_call_tracker') and bot.slot_call_tracker:
+        try:
+            from features.slot_requests.slot_calls import SlotCallCommands
+            await bot.add_cog(SlotCallCommands(bot, bot.slot_call_tracker))
+            print('✅ Slot call commands cog added')
+        except Exception as e:
+            print(f'⚠️  Failed to add slot commands cog: {e}')
     
     print()
     
