@@ -536,6 +536,12 @@ class KickWebSocketManager:
                     timeout=5.0
                 )
                 
+                # Debug: Log what we're about to send
+                print(f"[{guild_name}] 📤 Preparing to send message:")
+                print(f"[{guild_name}]    Message: {message[:100]}...")
+                print(f"[{guild_name}]    Channel ID: {channel_id}")
+                print(f"[{guild_name}]    Token: {api.access_token[:20] if api.access_token else 'NONE'}...")
+                
                 # Token already set at startup - no need to reload every message
                 # Send via direct HTTP request instead of kickpython (kickpython doesn't send auth headers properly)
                 
@@ -559,14 +565,20 @@ class KickWebSocketManager:
                     
                     async with aiohttp.ClientSession() as session:
                         async with session.post(url, headers=headers, json=payload, timeout=10) as resp:
+                            response_text = await resp.text()
                             if resp.status in [200, 201]:
-                                pass  # Message sent successfully
+                                # Log the actual response to see what Kick returns
+                                print(f"[{guild_name}] ✅ Kick API Response ({resp.status}): {response_text[:200]}")
+                                try:
+                                    response_json = json.loads(response_text) if response_text else {}
+                                    print(f"[{guild_name}] 📊 Response data: {response_json}")
+                                except:
+                                    pass
                             else:
-                                error_text = await resp.text()
                                 # Don't log 401 errors as they trigger automatic token refresh
                                 if resp.status != 401:
-                                    print(f"[{guild_name}] ❌ HTTP {resp.status}: {error_text}")
-                                raise Exception(f"Failed to send message: HTTP {resp.status} - {error_text}")
+                                    print(f"[{guild_name}] ❌ HTTP {resp.status}: {response_text}")
+                                raise Exception(f"Failed to send message: HTTP {resp.status} - {response_text}")
                     
                 except Exception as send_error:
                     # If sending fails with current token, try refreshing it first
@@ -690,6 +702,9 @@ class KickWebSocketManager:
             username = msg.get('sender_username') or msg.get('username') or 'unknown'
             content = msg.get('content') or ''
             chat_id = msg.get('chat_id') or msg.get('id')
+            
+            # Debug: Log every incoming message
+            print(f"[{guild_name}] 💬 Received Kick message: {username}: {content[:100]}")
 
             # Update watchtime tracking (per-guild)
             now = datetime.now(timezone.utc)
@@ -752,18 +767,21 @@ class KickWebSocketManager:
 
             # Process commands from Kick chat
             content_stripped = content.strip()
+            print(f"[{guild_name}] 🔍 Processing message: '{content_stripped[:50]}...'")
             
             # Custom commands (from dashboard)
-            if hasattr(bot, 'custom_commands_manager') and bot.custom_commands_manager:
+            if hasattr(bot, 'custom_commands_managers') and guild_id in bot.custom_commands_managers:
                 try:
-                    original_guild_id = getattr(bot.custom_commands_manager, 'discord_server_id', None)
-                    bot.custom_commands_manager.discord_server_id = guild_id
-                    bot.custom_commands_manager.send_message_callback = lambda msg: send_kick_message(msg, guild_id=guild_id)
+                    commands_manager = bot.custom_commands_managers[guild_id]
+                    original_guild_id = getattr(commands_manager, 'discord_server_id', None)
+                    commands_manager.discord_server_id = guild_id
+                    commands_manager.send_message_callback = lambda msg: send_kick_message(msg, guild_id=guild_id)
                     
-                    handled = await bot.custom_commands_manager.handle_message(content, username)
+                    handled = await commands_manager.handle_message(content, username)
                     
-                    bot.custom_commands_manager.discord_server_id = original_guild_id
+                    commands_manager.discord_server_id = original_guild_id
                     if handled:
+                        print(f"[{guild_name}] ✅ Custom command handled")
                         return  # Command was handled, don't process further
                 except Exception as e:
                     print(f"[{guild_name}] ⚠️ Custom command error: {e}")
@@ -779,11 +797,27 @@ class KickWebSocketManager:
             
             # !call / !sr commands (slot requests)
             elif content_stripped.startswith(("!call", "!sr")):
-                if hasattr(bot, 'slot_call_tracker') and bot.slot_call_tracker:
+                print(f"[{guild_name}] 🎰 Detected slot command: {content_stripped[:50]}")
+                print(f"[{guild_name}] 🔍 Has slot_trackers: {hasattr(bot, 'slot_trackers')}")
+                
+                # Use guild-specific tracker
+                tracker = None
+                if hasattr(bot, 'slot_trackers') and guild_id in bot.slot_trackers:
+                    tracker = bot.slot_trackers[guild_id]
+                    print(f"[{guild_name}] ✅ Found guild-specific tracker")
+                elif hasattr(bot, 'slot_call_tracker'):
+                    tracker = bot.slot_call_tracker
+                    print(f"[{guild_name}] ⚠️ Using fallback global tracker")
+                
+                if tracker:
+                    print(f"[{guild_name}] 🔍 Slot tracker enabled: {tracker.enabled}")
+                    print(f"[{guild_name}] 🔍 Slot tracker guild_id: {getattr(tracker, 'discord_server_id', 'NOT SET')}")
                     # Check if slot requests are enabled first
-                    if not bot.slot_call_tracker.enabled:
+                    if not tracker.enabled:
+                        print(f"[{guild_name}] ❌ Slot requests disabled, sending rejection message")
                         await send_kick_message(f"@{username} Slot requests are not open at the moment.", guild_id=guild_id)
                     else:
+                        print(f"[{guild_name}] ✅ Slot requests enabled, processing command")
                         slot_call = content_stripped[5:].strip()[:200] if content_stripped.startswith("!call") else content_stripped[3:].strip()[:200]
                         if slot_call:
                             # Fetch avatar from Kick API (same method as giveaway entries - proven to work!)
@@ -802,20 +836,18 @@ class KickWebSocketManager:
                             except Exception as e:
                                 print(f"❌ Failed to fetch avatar for {username}: {e}")
                             
-                            original_guild_id = getattr(bot.slot_call_tracker, 'discord_server_id', None)
-                            bot.slot_call_tracker.discord_server_id = guild_id
+                            original_guild_id = getattr(tracker, 'discord_server_id', None)
+                            tracker.discord_server_id = guild_id
                             try:
-                                await bot.slot_call_tracker.handle_slot_call(username, slot_call, avatar_url=avatar_url)
+                                await tracker.handle_slot_call(username, slot_call, avatar_url=avatar_url)
+                                print(f"[{guild_name}] ✅ Slot call processed: {username} - {slot_call}")
                             finally:
                                 if original_guild_id:
-                                    bot.slot_call_tracker.discord_server_id = original_guild_id
+                                    tracker.discord_server_id = original_guild_id
                         else:
                             await send_kick_message(f"@{username} Please specify a slot!", guild_id=guild_id)
-            
-            # !gtb command
-            elif content_stripped.lower().startswith("!gtb"):
-                if hasattr(bot, 'gtb_manager') and bot.gtb_manager:
-                    parts = content_stripped.split(maxsplit=1)
+                else:
+                    print(f"[{guild_name}] ❌ No slot tracker found for this guild")
                     if len(parts) == 2:
                         amount = parse_amount(parts[1])
                         if amount is not None:
@@ -7552,6 +7584,103 @@ async def on_ready():
     
     # Store startup time for health checks
     bot.uptime_start = datetime.now()
+    
+    # Initialize bot features for each guild
+    print('⚙️  Initializing bot features for each guild...\n')
+    for guild in bot.guilds:
+        guild_id = guild.id
+        guild_name = guild.name
+        
+        try:
+            print(f'🔧 [{guild_name}] Initializing features...')
+            
+            # Initialize Slot Call Tracker
+            from features.slot_requests.slot_calls import setup_slot_call_tracker
+            
+            # Get slot calls channel from bot_settings
+            slot_channel_id = None
+            with engine.connect() as conn:
+                result = conn.execute(text("""
+                    SELECT value FROM bot_settings 
+                    WHERE key = 'slot_calls_channel_id' AND discord_server_id = :guild_id
+                    LIMIT 1
+                """), {"guild_id": guild_id}).fetchone()
+                
+                if result and result[0]:
+                    try:
+                        slot_channel_id = int(result[0])
+                    except ValueError:
+                        print(f'⚠️  [{guild_name}] Invalid slot_calls_channel_id in database')
+            
+            # Setup slot tracker with send_kick_message callback
+            tracker = await setup_slot_call_tracker(
+                bot, 
+                discord_channel_id=slot_channel_id,
+                kick_send_callback=send_kick_message,
+                engine=engine,
+                server_id=guild_id
+            )
+            
+            # Store tracker on bot (use guild-specific attribute)
+            if not hasattr(bot, 'slot_trackers'):
+                bot.slot_trackers = {}
+            bot.slot_trackers[guild_id] = tracker
+            
+            # Also set default bot.slot_call_tracker for backwards compatibility
+            if not hasattr(bot, 'slot_call_tracker'):
+                bot.slot_call_tracker = tracker
+            
+            print(f'✅ [{guild_name}] Slot tracker initialized (channel: {slot_channel_id or "Not set"})')
+            
+            # Initialize Custom Commands Manager
+            try:
+                from features.custom_commands import CustomCommandsManager
+                commands_manager = CustomCommandsManager(
+                    engine=engine,
+                    discord_server_id=guild_id,
+                    send_message_callback=lambda msg: send_kick_message(msg, guild_id=guild_id)
+                )
+                
+                if not hasattr(bot, 'custom_commands_managers'):
+                    bot.custom_commands_managers = {}
+                bot.custom_commands_managers[guild_id] = commands_manager
+                
+                # Set default for backwards compatibility
+                if not hasattr(bot, 'custom_commands_manager'):
+                    bot.custom_commands_manager = commands_manager
+                
+                print(f'✅ [{guild_name}] Custom commands manager initialized')
+            except Exception as e:
+                print(f'⚠️  [{guild_name}] Custom commands manager failed: {e}')
+            
+            # Initialize GTB Manager
+            try:
+                from features.games.guess_the_balance import GuessTheBalanceManager
+                gtb_manager = GuessTheBalanceManager(
+                    bot=bot,
+                    engine=engine,
+                    guild_id=guild_id,
+                    send_message_callback=lambda msg: send_kick_message(msg, guild_id=guild_id)
+                )
+                
+                if not hasattr(bot, 'gtb_managers'):
+                    bot.gtb_managers = {}
+                bot.gtb_managers[guild_id] = gtb_manager
+                
+                # Set default for backwards compatibility
+                if not hasattr(bot, 'gtb_manager'):
+                    bot.gtb_manager = gtb_manager
+                
+                print(f'✅ [{guild_name}] GTB manager initialized')
+            except Exception as e:
+                print(f'⚠️  [{guild_name}] GTB manager failed: {e}')
+            
+        except Exception as e:
+            print(f'❌ [{guild_name}] Feature initialization error: {e}')
+            import traceback
+            traceback.print_exc()
+    
+    print()
     
     # Initialize kickpython WebSocket connections for each guild
     print('🔌 Initializing Kick WebSocket connections...\n')
