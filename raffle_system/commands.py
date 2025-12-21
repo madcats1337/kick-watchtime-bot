@@ -246,7 +246,13 @@ Get ready to participate when the period starts!
                 """
 
                 if last_winner:
-                    response += f"\n**Last Winner**: {last_winner['winner_kick_name']} ({last_winner['total_tickets']:,} tickets, {last_winner['win_probability']:.2%} chance)"
+                    winner_tickets = last_winner.get('total_tickets', 0)
+                    # Calculate win probability if we have the data
+                    win_prob = last_winner.get('win_probability', 0)
+                    if win_prob:
+                        response += f"\n**Last Winner**: {last_winner['winner_kick_name']} ({winner_tickets:,} tickets, {win_prob:.2%} chance)"
+                    else:
+                        response += f"\n**Last Winner**: {last_winner['winner_kick_name']} ({winner_tickets:,} tickets)"
 
             await ctx.send(response.strip())
 
