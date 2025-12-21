@@ -6455,6 +6455,7 @@ class PointShopConfirmView(discord.ui.View):
         self.kick_username = kick_username
         self.discord_id = discord_id
         self.guild_id = guild_id
+        self.server_id = guild_id  # Set server_id for database queries
         self.requirement_value = requirement_value
         self.note = note
 
