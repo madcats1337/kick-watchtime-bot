@@ -6497,10 +6497,14 @@ class PointShopConfirmView(discord.ui.View):
                         WHERE id = :id
                     """), {"id": item_id})
 
-                # Record the sale with note and requirement input
+                # Record the sale with requirement input (and note in requirement if both exist)
+                full_requirement = self.requirement_value
+                if self.note:
+                    full_requirement = f"{self.requirement_value}\nNote: {self.note}" if self.requirement_value else f"Note: {self.note}"
+                
                 conn.execute(text("""
-                    INSERT INTO point_sales (item_id, kick_username, discord_id, discord_server_id, item_name, price_paid, quantity, status, notes, requirement_input)
-                    VALUES (:item_id, :kick, :discord, :server_id, :name, :price, 1, 'pending', :notes, :req_input)
+                    INSERT INTO point_sales (item_id, kick_username, discord_id, discord_server_id, item_name, price_paid, quantity, status, requirement_input)
+                    VALUES (:item_id, :kick, :discord, :server_id, :name, :price, 1, 'pending', :req_input)
                 """), {
                     "item_id": item_id,
                     "kick": self.kick_username,
@@ -6508,8 +6512,7 @@ class PointShopConfirmView(discord.ui.View):
                     "server_id": self.server_id,
                     "name": item_name,
                     "price": price,
-                    "notes": self.note,
-                    "req_input": self.requirement_value
+                    "req_input": full_requirement
                 })
 
                 # Create notification for the admin dashboard
