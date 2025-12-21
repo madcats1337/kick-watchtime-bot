@@ -335,8 +335,8 @@ class RedisSubscriber:
             else:
                 print(f"⚡ [BOT-REDIS] No delay, announcing immediately")
             
-            # Announce the picked slot in Kick chat
-            await self.announce_in_chat(f"🎰 PICKED: {slot_call} (requested by {username})", guild_id=guild_id)
+            # Announce the picked slot in Kick chat (tag the user)
+            await self.announce_in_chat(f"🎰 PICKED: {slot_call} (requested by @{username})", guild_id=guild_id)
 
             # Post to Discord
             if hasattr(self.bot, 'slot_calls_channel_id') and self.bot.slot_calls_channel_id:
@@ -385,9 +385,9 @@ class RedisSubscriber:
             else:
                 print(f"⚡ [BOT-REDIS] No delay, announcing immediately")
 
-            # Announce the picked slot WITH reward in Kick chat
+            # Announce the picked slot WITH reward in Kick chat (tag the user)
             amount = float(reward_amount)
-            await self.announce_in_chat(f"🎰 PICKED: {slot_call} (requested by {username}) 💰 WON ${amount:.2f} {reward_type_display}!", guild_id=guild_id)
+            await self.announce_in_chat(f"🎰 PICKED: {slot_call} (requested by @{username}) 💰 WON ${amount:.2f} {reward_type_display}!", guild_id=guild_id)
 
             # Post to Discord
             if hasattr(self.bot, 'slot_calls_channel_id') and self.bot.slot_calls_channel_id:
