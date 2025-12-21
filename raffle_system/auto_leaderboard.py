@@ -124,9 +124,17 @@ class AutoLeaderboard:
             end_date = stats['end_date']
             
             if isinstance(start_date, (int, float)):
-                start_date = datetime.fromtimestamp(start_date)
+                # Handle both seconds and milliseconds timestamps
+                if start_date > 10000000000:  # Milliseconds timestamp (year > 2286)
+                    start_date = datetime.fromtimestamp(start_date / 1000)
+                else:
+                    start_date = datetime.fromtimestamp(start_date)
             if isinstance(end_date, (int, float)):
-                end_date = datetime.fromtimestamp(end_date)
+                # Handle both seconds and milliseconds timestamps
+                if end_date > 10000000000:  # Milliseconds timestamp (year > 2286)
+                    end_date = datetime.fromtimestamp(end_date / 1000)
+                else:
+                    end_date = datetime.fromtimestamp(end_date)
             
             # Check if period hasn't started yet
             now = datetime.now()
