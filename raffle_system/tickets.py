@@ -383,15 +383,16 @@ class TicketManager:
                 if row:
                     return {
                         'period_id': row[0],
-                        'start_date': row[1],
-                        'end_date': row[2],
-                        'status': row[3],
-                        'total_participants': row[4],
-                        'total_tickets': row[5],
-                        'watchtime_tickets': row[6],
-                        'gifted_sub_tickets': row[7],
-                        'shuffle_wager_tickets': row[8],
-                        'bonus_tickets': row[9]
+                        'discord_server_id': row[1],
+                        'start_date': row[2],
+                        'end_date': row[3],
+                        'status': row[4],
+                        'total_participants': row[5],
+                        'total_tickets': row[6],
+                        'watchtime_tickets': row[7],
+                        'gifted_sub_tickets': row[8],
+                        'shuffle_wager_tickets': row[9],
+                        'bonus_tickets': row[10]
                     }
                 return None
 

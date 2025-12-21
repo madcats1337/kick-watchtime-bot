@@ -122,12 +122,6 @@ class AutoLeaderboard:
             start_date = stats['start_date']
             end_date = stats['end_date']
             
-            # Ensure dates are datetime objects (handle both datetime and timestamp)
-            if not isinstance(start_date, datetime):
-                start_date = datetime.fromtimestamp(start_date) if isinstance(start_date, (int, float)) else start_date
-            if not isinstance(end_date, datetime):
-                end_date = datetime.fromtimestamp(end_date) if isinstance(end_date, (int, float)) else end_date
-            
             # Check if period hasn't started yet
             now = datetime.now()
             if now < start_date:
