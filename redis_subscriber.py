@@ -63,178 +63,8 @@ class RedisSubscriber:
             print(f"ℹ️  Kick chat disabled: {message}")
 
     # ❌ WEBHOOK HANDLING DISABLED - Using direct Pusher WebSocket instead
-    # async def handle_webhook_event(self, payload):
-    #     """Handle Kick webhook events forwarded via Redis"""
-    #     try:
-    #         event_type = payload.get('type')
-    #         if event_type != 'kick_chat_message':
-    #             return
-            
-            data = payload.get('data', {})
-            channel_slug = data.get('channel_slug', '')
-            username = data.get('username', '')
-            content = data.get('content', '')
-            
-            # Import bot utilities
-            from bot import send_kick_message, engine, parse_amount, active_viewers_by_guild, last_chat_activity_by_guild, recent_chatters_by_guild, bot
-            from sqlalchemy import text
-            from datetime import datetime, timezone
-            
-            # Use guild_id from webhook routing (already looked up in kick_webhooks.py)
-            guild_id = data.get('_server_id')
-            
-            # Get guild name for logging
-            guild_name = "Unknown"
-            if guild_id:
-                guild = bot.get_guild(guild_id)
-                guild_name = guild.name if guild else str(guild_id)
-            
-            if not guild_id:
-                # Fallback: Lookup guild_id from channel_slug (shouldn't happen with webhooks)
-                with engine.connect() as conn:
-                    result = conn.execute(text("""
-                        SELECT discord_server_id FROM servers
-                        WHERE kick_channel = :channel_slug
-                        LIMIT 1
-                    """), {"channel_slug": channel_slug}).fetchone()
-                    
-                    if result:
-                        guild_id = result[0]
-                        guild = bot.get_guild(guild_id)
-                        guild_name = guild.name if guild else str(guild_id)
-                        print(f"[{guild_name}] 🎯 Webhook: Matched via channel lookup")
-                    else:
-                        print(f"[Webhook] ⚠️ No server found for channel: {channel_slug}")
-                        return
-            
-            print(f"[{guild_name}] 💬 Webhook: {username}: {content}")
-            
-            # ✅ UPDATE ACTIVE VIEWERS FOR WATCHTIME TRACKING
-            if username:
-                now = datetime.now(timezone.utc)
-                username_lower = username.lower()
-                
-                # Update last chat activity for this guild
-                last_chat_activity_by_guild[guild_id] = now
-                
-                # Track per-guild active viewers
-                guild_active_viewers = active_viewers_by_guild.get(guild_id, {})
-                is_new_viewer = username_lower not in guild_active_viewers
-                guild_active_viewers[username_lower] = now
-                active_viewers_by_guild[guild_id] = guild_active_viewers
-                
-                # Track per-guild recent chatters for stream-live detection
-                guild_recent_chatters = recent_chatters_by_guild.get(guild_id, {})
-                guild_recent_chatters[username_lower] = now
-                recent_chatters_by_guild[guild_id] = guild_recent_chatters
-                
-                print(f"[{guild_name}] ✅ Webhook: Updated active viewers: {username_lower} (total: {len(guild_active_viewers)})")
-                if is_new_viewer:
-                    print(f"[{guild_name}] 🆕 Webhook: New viewer tracked: {username_lower}")
-            
-            content_stripped = content.strip()
-            username_lower = username.lower()
-            
-            # Check for custom commands first
-            if hasattr(self.bot, 'custom_commands_manager') and self.bot.custom_commands_manager:
-                try:
-                    original_guild_id = getattr(self.bot.custom_commands_manager, 'discord_server_id', None)
-                    original_callback = self.bot.custom_commands_manager.send_message_callback
-                    
-                    # Set guild context
-                    self.bot.custom_commands_manager.discord_server_id = guild_id
-                    self.bot.custom_commands_manager.send_message_callback = lambda msg: send_kick_message(msg, guild_id=guild_id)
-                    
-                    handled = await self.bot.custom_commands_manager.handle_message(content, username)
-                    
-                    # Restore
-                    self.bot.custom_commands_manager.discord_server_id = original_guild_id
-                    self.bot.custom_commands_manager.send_message_callback = original_callback
-                    
-                    if handled:
-                        print(f"[Redis] ✅ Custom command handled")
-                        return
-                except Exception as e:
-                    print(f"[Redis] ⚠️ Custom command error: {e}")
-            
-            # Handle slot commands
-            if hasattr(self.bot, 'slot_call_tracker') and self.bot.slot_call_tracker and (content_stripped.startswith("!call") or content_stripped.startswith("!sr")):
-                # Set guild context for slot tracker
-                original_guild_id = getattr(self.bot.slot_call_tracker, 'discord_server_id', None)
-                print(f"[REDIS DEBUG] Setting slot_call_tracker.discord_server_id to: {guild_id}")
-                self.bot.slot_call_tracker.discord_server_id = guild_id
-                
-                try:
-                    # Check if slot requests are enabled for this guild
-                    if not self.bot.slot_call_tracker.is_enabled():
-                        await send_kick_message(f"@{username} Slot requests are not open at the moment.", guild_id=guild_id)
-                        print(f"[Redis] ❌ Slot requests disabled - rejected {username}'s request")
-                        return
-                    
-                    # Check blacklist
-                    is_blacklisted = False
-                    with engine.begin() as check_conn:
-                        result = check_conn.execute(text("""
-                            SELECT 1 FROM slot_call_blacklist 
-                            WHERE kick_username = :username AND discord_server_id = :guild_id
-                        """), {"username": username_lower, "guild_id": guild_id}).fetchone()
-                        is_blacklisted = result is not None
-                    
-                    if not is_blacklisted:
-                        slot_call = content_stripped[5:].strip()[:200] if content_stripped.startswith("!call") else content_stripped[3:].strip()[:200]
-                        
-                        if slot_call:
-                            await self.bot.slot_call_tracker.handle_slot_call(username, slot_call)
-                            print(f"[Redis] ✅ Slot call processed")
-                        else:
-                            await send_kick_message(f"@{username} Please specify a slot!", guild_id=guild_id)
-                finally:
-                    if original_guild_id:
-                        self.bot.slot_call_tracker.discord_server_id = original_guild_id
-            
-            # Handle !raffle
-            elif content_stripped.lower() == "!raffle":
-                await send_kick_message(
-                    "Do you want to win a $100 super buy on Sweet Bonanza 1000? "
-                    "All you gotta do is join my discord, verify with lelebot and follow the instructions -> "
-                    "https://discord.gg/k7CXJtfrPY",
-                    guild_id=guild_id
-                )
-                print(f"[Redis] ✅ Raffle message sent")
-            
-            # Handle !gtb
-            elif content_stripped.lower().startswith("!gtb"):
-                if hasattr(self.bot, 'gtb_manager') and hasattr(self.bot, 'slot_call_tracker'):
-                    # Check if slot requests are enabled (GTB is part of slot system)
-                    original_guild_id = getattr(self.bot.slot_call_tracker, 'discord_server_id', None)
-                    self.bot.slot_call_tracker.discord_server_id = guild_id
-                    
-                    try:
-                        if not self.bot.slot_call_tracker.is_enabled():
-                            await send_kick_message(f"@{username} Slot requests are not open at the moment.", guild_id=guild_id)
-                            print(f"[Redis] ❌ GTB disabled - rejected {username}'s guess")
-                            return
-                        
-                        parts = content_stripped.split(maxsplit=1)
-                        if len(parts) == 2:
-                            amount = parse_amount(parts[1])
-                            if amount is not None:
-                                success, message = self.bot.gtb_manager.add_guess(username, amount)
-                                response = f"@{username} {message}" + (" Good luck! 🎰" if success else "")
-                                await send_kick_message(response, guild_id=guild_id)
-                            else:
-                                await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount>", guild_id=guild_id)
-                        else:
-                            await send_kick_message(f"@{username} Usage: !gtb <amount>", guild_id=guild_id)
-                        print(f"[Redis] ✅ GTB command processed")
-                    finally:
-                        if original_guild_id:
-                            self.bot.slot_call_tracker.discord_server_id = original_guild_id
-            
-    #     except Exception as e:
-    #         print(f"[Redis] ❌ Webhook event error: {e}")
-    #         import traceback
-    #         traceback.print_exc()
+    # NOTE: The previous webhook handler implementation was intentionally removed
+    # because it was disabled and must not run at import/class-definition time.
 
     async def handle_slot_requests_event(self, action, data):
         """Handle slot request events from dashboard"""
@@ -757,6 +587,59 @@ class RedisSubscriber:
                 import traceback
                 traceback.print_exc()
 
+        elif action == 'sync_shop':
+            # Debounce: prevent duplicate syncs within 3 seconds
+            current_time = time.time()
+            if current_time - self.last_shop_sync < 3:
+                print(f"⏭️  Ignoring duplicate sync_shop for {guild_name} (last sync {current_time - self.last_shop_sync:.1f}s ago)")
+                return
+
+            self.last_shop_sync = current_time
+
+            if not guild_id:
+                print("❌ sync_shop event missing discord_server_id - cannot sync without guild context")
+                return
+
+            # Force update the shop message
+            try:
+                from bot import post_point_shop_to_discord
+                success = await post_point_shop_to_discord(self.bot, guild_id=guild_id, update_existing=True)
+                if success:
+                    print(f"✅ Point shop force synced for {guild_name} (guild_id={guild_id})")
+                else:
+                    print(f"⚠️  Failed to sync point shop for {guild_name} (guild_id={guild_id})")
+            except ImportError:
+                print(f"⚠️  post_point_shop_to_discord function not implemented yet (guild={guild_name}, guild_id={guild_id})")
+                print("💡 Tip: Implement this function in bot.py to auto-sync shop embeds to Discord")
+            except Exception as e:
+                print(f"⚠️  Failed to sync point shop for {guild_name} (guild_id={guild_id}): {e}")
+                import traceback
+                traceback.print_exc()
+
+        elif action == 'update_settings':
+            print(f"✅ Point settings updated: {data}")
+            # Settings are stored in DB, no action needed here
+
+        elif action == 'item_update':
+            item_id = data.get('item_id')
+            item_name = data.get('item_name')
+            update_type = data.get('type', 'update')  # create, update, delete
+            guild_id = data.get('discord_server_id')
+            print(f"✅ Point shop item {update_type}: {item_name} (ID: {item_id})")
+
+            # Auto-update the shop message when items change
+            try:
+                from bot import post_point_shop_to_discord
+                success = await post_point_shop_to_discord(self.bot, guild_id=guild_id, update_existing=True)
+                if success:
+                    print("✅ Point shop message auto-updated")
+                else:
+                    print("⚠️ Could not auto-update point shop (no channel configured?)")
+            except Exception as e:
+                print(f"⚠️ Failed to auto-update point shop: {e}")
+                import traceback
+                traceback.print_exc()
+
     async def handle_notifications_event(self, action, data):
         """Handle notifications events from dashboard and forward to Discord if configured."""
         try:
@@ -850,59 +733,6 @@ class RedisSubscriber:
             print(f"[Notifications] Failed to forward notification: {e}")
             import traceback
             traceback.print_exc()
-
-        elif action == 'sync_shop':
-            # Debounce: prevent duplicate syncs within 3 seconds
-            current_time = time.time()
-            if current_time - self.last_shop_sync < 3:
-                print(f"⏭️  Ignoring duplicate sync_shop for {guild_name} (last sync {current_time - self.last_shop_sync:.1f}s ago)")
-                return
-            
-            self.last_shop_sync = current_time
-            
-            if not guild_id:
-                print("❌ sync_shop event missing discord_server_id - cannot sync without guild context")
-                return
-            
-            # Force update the shop message
-            try:
-                from bot import post_point_shop_to_discord
-                success = await post_point_shop_to_discord(self.bot, guild_id=guild_id, update_existing=True)
-                if success:
-                    print(f"✅ Point shop force synced for {guild_name} (guild_id={guild_id})")
-                else:
-                    print(f"⚠️  Failed to sync point shop for {guild_name} (guild_id={guild_id})")
-            except ImportError:
-                print(f"⚠️  post_point_shop_to_discord function not implemented yet (guild={guild_name}, guild_id={guild_id})")
-                print("💡 Tip: Implement this function in bot.py to auto-sync shop embeds to Discord")
-            except Exception as e:
-                print(f"⚠️  Failed to sync point shop for {guild_name} (guild_id={guild_id}): {e}")
-                import traceback
-                traceback.print_exc()
-
-        elif action == 'update_settings':
-            print(f"✅ Point settings updated: {data}")
-            # Settings are stored in DB, no action needed here
-
-        elif action == 'item_update':
-            item_id = data.get('item_id')
-            item_name = data.get('item_name')
-            update_type = data.get('type', 'update')  # create, update, delete
-            guild_id = data.get('discord_server_id')
-            print(f"✅ Point shop item {update_type}: {item_name} (ID: {item_id})")
-
-            # Auto-update the shop message when items change
-            try:
-                from bot import post_point_shop_to_discord
-                success = await post_point_shop_to_discord(self.bot, guild_id=guild_id, update_existing=True)
-                if success:
-                    print("✅ Point shop message auto-updated")
-                else:
-                    print("⚠️ Could not auto-update point shop (no channel configured?)")
-            except Exception as e:
-                print(f"⚠️ Failed to auto-update point shop: {e}")
-                import traceback
-                traceback.print_exc()
 
     async def handle_bot_settings_event(self, action, data):
         """Handle bot settings events from dashboard"""
