@@ -20,6 +20,44 @@ import asyncio
 from datetime import datetime
 import time
 
+import discord
+from sqlalchemy import create_engine, text  # type: ignore
+
+DATABASE_URL = os.getenv('DATABASE_URL', '')
+if DATABASE_URL.startswith('postgres://'):
+    DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
+
+engine = None
+if DATABASE_URL:
+    try:
+        engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+    except Exception as e:
+        print(f"⚠️  Failed to initialize DB engine in redis_subscriber: {e}")
+        engine = None
+
+import discord
+from sqlalchemy import create_engine, text
+
+_engine = None
+
+
+def get_engine():
+    """Create (or return) a SQLAlchemy engine for the bot database."""
+    global _engine
+    if _engine is not None:
+        return _engine
+
+    database_url = os.getenv('DATABASE_URL', '')
+    if not database_url:
+        raise RuntimeError('DATABASE_URL is not set; cannot query point_settings')
+
+    # SQLAlchemy expects postgresql://
+    if database_url.startswith('postgres://'):
+        database_url = database_url.replace('postgres://', 'postgresql://', 1)
+
+    _engine = create_engine(database_url, pool_pre_ping=True)
+    return _engine
+
 class RedisSubscriber:
     def __init__(self, bot, send_message_callback=None):
         self.bot = bot
@@ -37,7 +75,7 @@ class RedisSubscriber:
                 self.enabled = True
                 print("✅ Redis subscriber initialized")
             except Exception as e:
-                print("⚠️  Redis unavailable: {e}")
+                print(f"⚠️  Redis unavailable: {e}")
                 self.enabled = False
         else:
             print("⚠️  REDIS_URL not set, dashboard events will not be received")
@@ -660,6 +698,10 @@ class RedisSubscriber:
                 return
 
             notif_data = data.get('data') or {}
+
+            if engine is None:
+                print("[Notifications] DB engine not available; cannot lookup point_settings")
+                return
 
             # Lookup target channel (and optional target server) from point_settings
             with engine.connect() as conn:
