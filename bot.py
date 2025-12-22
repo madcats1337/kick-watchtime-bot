@@ -6521,10 +6521,12 @@ class PointShopConfirmView(discord.ui.View):
                 full_requirement = self.requirement_value
                 if self.note:
                     full_requirement = f"{self.requirement_value}\nNote: {self.note}" if self.requirement_value else f"Note: {self.note}"
-                
-                conn.execute(text("""
+
+                # Create sale record and capture order ID
+                sale_id_row = conn.execute(text("""
                     INSERT INTO point_sales (item_id, kick_username, discord_id, discord_server_id, item_name, price_paid, quantity, status, requirement_input)
                     VALUES (:item_id, :kick, :discord, :server_id, :name, :price, 1, 'pending', :req_input)
+                    RETURNING id
                 """), {
                     "item_id": item_id,
                     "kick": self.kick_username,
@@ -6533,7 +6535,60 @@ class PointShopConfirmView(discord.ui.View):
                     "name": item_name,
                     "price": price,
                     "req_input": full_requirement
-                })
+                }).fetchone()
+
+                sale_id = int(sale_id_row[0]) if sale_id_row and sale_id_row[0] is not None else None
+
+                # Attempt to post an order notification embed (non-blocking)
+                try:
+                    purchase_guild_id = int(self.guild_id)
+
+                    # Settings live in point_settings scoped by discord_server_id
+                    notify_channel_result = conn.execute(text("""
+                        SELECT value FROM point_settings
+                        WHERE key = 'shop_notification_channel_id' AND discord_server_id = :guild_id
+                    """), {"guild_id": purchase_guild_id}).fetchone()
+                    notify_channel_id = int(notify_channel_result[0]) if notify_channel_result and notify_channel_result[0] else None
+
+                    notify_server_result = conn.execute(text("""
+                        SELECT value FROM point_settings
+                        WHERE key = 'shop_order_notify_server_id' AND discord_server_id = :guild_id
+                    """), {"guild_id": purchase_guild_id}).fetchone()
+                    notify_server_id = int(notify_server_result[0]) if notify_server_result and notify_server_result[0] else purchase_guild_id
+
+                    if notify_channel_id:
+                        channel = self.bot.get_channel(notify_channel_id)
+                        if not channel:
+                            guild = self.bot.get_guild(notify_server_id)
+                            channel = guild.get_channel(notify_channel_id) if guild else None
+
+                        if channel:
+                            embed = discord.Embed(
+                                title="🛒 New Point Shop Order",
+                                description=f"**{self.kick_username}** placed an order.",
+                                color=discord.Color.purple()
+                            )
+                            if sale_id is not None:
+                                embed.add_field(name="Order ID", value=f"#{sale_id}", inline=True)
+                            embed.add_field(name="Item", value=item_name, inline=True)
+                            embed.add_field(name="Price", value=f"{price:,} points", inline=True)
+                            embed.add_field(name="Status", value="Pending", inline=True)
+
+                            if full_requirement:
+                                # Discord embed field limit is 1024 chars
+                                details = full_requirement
+                                if len(details) > 1000:
+                                    details = details[:1000] + "…"
+                                embed.add_field(name="Details", value=details, inline=False)
+
+                            embed.set_footer(text=f"Server: {notify_server_id} • Channel: {notify_channel_id}")
+                            await channel.send(embed=embed)
+                        else:
+                            print(f"[Point Shop] Notification channel not found: {notify_channel_id} (notify_server_id={notify_server_id})")
+                    else:
+                        print("[Point Shop] No notification channel configured (shop_notification_channel_id)")
+                except Exception as e:
+                    print(f"[Point Shop] Failed to post order notification embed: {e}")
 
                 # Create notification for the admin dashboard
                 notification_data = {
