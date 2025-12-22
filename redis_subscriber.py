@@ -757,6 +757,100 @@ class RedisSubscriber:
                 import traceback
                 traceback.print_exc()
 
+    async def handle_notifications_event(self, action, data):
+        """Handle notifications events from dashboard and forward to Discord if configured."""
+        try:
+            if action != 'new_notification':
+                return
+
+            notif_type = data.get('type')
+            if notif_type != 'new_sale':
+                return
+
+            source_server_id = data.get('discord_server_id')
+            if not source_server_id:
+                return
+
+            try:
+                source_server_id_int = int(source_server_id)
+            except Exception:
+                return
+
+            notif_data = data.get('data') or {}
+
+            # Lookup target channel (and optional target server) from point_settings
+            with engine.connect() as conn:
+                notify_channel_row = conn.execute(text("""
+                    SELECT value FROM point_settings
+                    WHERE key = 'shop_notification_channel_id' AND discord_server_id = :guild_id
+                """), {"guild_id": source_server_id_int}).fetchone()
+                notify_channel_id = int(notify_channel_row[0]) if notify_channel_row and notify_channel_row[0] else None
+
+                notify_server_row = conn.execute(text("""
+                    SELECT value FROM point_settings
+                    WHERE key = 'shop_order_notify_server_id' AND discord_server_id = :guild_id
+                """), {"guild_id": source_server_id_int}).fetchone()
+                notify_server_id = int(notify_server_row[0]) if notify_server_row and notify_server_row[0] else source_server_id_int
+
+            if not notify_channel_id:
+                return
+
+            channel = self.bot.get_channel(notify_channel_id)
+            if not channel:
+                guild = self.bot.get_guild(notify_server_id)
+                channel = guild.get_channel(notify_channel_id) if guild else None
+
+            if not channel:
+                print(f"[Notifications] Channel not found: {notify_channel_id} (notify_server_id={notify_server_id})")
+                return
+
+            buyer = notif_data.get('buyer') or notif_data.get('username') or 'Unknown'
+            item_name = notif_data.get('item_name') or 'Unknown'
+            price = notif_data.get('price')
+            sale_id = notif_data.get('sale_id')
+            requirement_title = notif_data.get('requirement_title')
+            requirement_footer = notif_data.get('requirement_footer')
+            requirement_input = notif_data.get('requirement_input') or notif_data.get('requirement')
+            note = notif_data.get('note')
+
+            embed = discord.Embed(
+                title="🛒 New Point Shop Order",
+                description=f"**{buyer}** placed an order.",
+                color=discord.Color.purple()
+            )
+
+            if sale_id is not None:
+                embed.add_field(name="Order ID", value=f"#{sale_id}", inline=True)
+            embed.add_field(name="Item", value=str(item_name), inline=True)
+            if price is not None:
+                try:
+                    embed.add_field(name="Price", value=f"{int(price):,} points", inline=True)
+                except Exception:
+                    embed.add_field(name="Price", value=f"{price} points", inline=True)
+            embed.add_field(name="Status", value="Pending", inline=True)
+
+            if requirement_title:
+                embed.add_field(name="Requirement Title", value=str(requirement_title)[:1024], inline=False)
+            if requirement_footer:
+                embed.add_field(name="Requirement Footer", value=str(requirement_footer)[:1024], inline=False)
+
+            details_parts = []
+            if requirement_input:
+                details_parts.append(str(requirement_input))
+            if note:
+                details_parts.append(f"Note: {note}")
+            if details_parts:
+                details = "\n".join(details_parts)
+                if len(details) > 1000:
+                    details = details[:1000] + "…"
+                embed.add_field(name="Details", value=details, inline=False)
+
+            await channel.send(embed=embed)
+        except Exception as e:
+            print(f"[Notifications] Failed to forward notification: {e}")
+            import traceback
+            traceback.print_exc()
+
         elif action == 'sync_shop':
             # Debounce: prevent duplicate syncs within 3 seconds
             current_time = time.time()
@@ -1138,6 +1232,7 @@ Congratulations! Please contact an admin to claim your prize! 🎊
             'dashboard:raffle',
             'dashboard:commands',
             'dashboard:point_shop',
+            'dashboard:notifications',
             'dashboard:bot_settings',
             'dashboard:giveaway'
             # 'bot_events' removed - no longer using webhooks for chat
@@ -1172,6 +1267,8 @@ Congratulations! Please contact an admin to claim your prize! 🎊
                             await self.handle_commands_event(action, data)
                         elif channel == 'dashboard:point_shop':
                             await self.handle_point_shop_event(action, data)
+                        elif channel == 'dashboard:notifications':
+                            await self.handle_notifications_event(action, data)
                         elif channel == 'dashboard:bot_settings':
                             await self.handle_bot_settings_event(action, data)
                         elif channel == 'dashboard:giveaway':
@@ -1202,6 +1299,7 @@ Congratulations! Please contact an admin to claim your prize! 🎊
                         'dashboard:raffle',
                         'dashboard:commands',
                         'dashboard:point_shop',
+                        'dashboard:notifications',
                         'dashboard:bot_settings',
                         'dashboard:giveaway'
                         # 'bot_events' removed - no longer using webhooks
