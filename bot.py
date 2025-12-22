@@ -786,8 +786,36 @@ class KickWebSocketManager:
                 except Exception as e:
                     print(f"[{guild_name}] ⚠️ Custom command error: {e}")
             
+            # !points command
+            if content_stripped.lower() == "!points":
+                print(f"[{guild_name}] 💰 Processing !points command from {username}")
+                try:
+                    with engine.connect() as conn:
+                        result = conn.execute(text("""
+                            SELECT points FROM user_points
+                            WHERE LOWER(kick_username) = :username AND discord_server_id = :guild_id
+                        """), {"username": username.lower(), "guild_id": guild_id}).fetchone()
+                        
+                        if result and result[0] is not None:
+                            points_balance = int(result[0])
+                            await send_kick_message(
+                                f"@{username}, You currently have {points_balance:,} points.",
+                                guild_id=guild_id
+                            )
+                        else:
+                            await send_kick_message(
+                                f"@{username}, You currently have 0 points. Start watching to earn points!",
+                                guild_id=guild_id
+                            )
+                except Exception as e:
+                    print(f"[{guild_name}] ❌ Error fetching points for {username}: {e}")
+                    await send_kick_message(
+                        f"@{username}, Unable to retrieve points balance at this time.",
+                        guild_id=guild_id
+                    )
+            
             # !raffle command
-            if content_stripped.lower() == "!raffle":
+            elif content_stripped.lower() == "!raffle":
                 print(f"[{guild_name}] 🎟️ Processing !raffle command from {username}")
                 result = await send_kick_message(
                     "Do you want to win a $100 super buy on Sweet Bonanza 1000? "
