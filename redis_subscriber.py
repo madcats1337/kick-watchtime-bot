@@ -66,6 +66,21 @@ class RedisSubscriber:
         self.enabled = False
         self.last_shop_sync = 0  # Timestamp for debouncing shop sync
 
+        # Ensure point_sales has columns for tracking Discord order notification messages
+        try:
+            if engine is not None:
+                with engine.begin() as conn:
+                    conn.execute(text("""
+                        ALTER TABLE point_sales
+                        ADD COLUMN IF NOT EXISTS discord_notification_channel_id BIGINT
+                    """))
+                    conn.execute(text("""
+                        ALTER TABLE point_sales
+                        ADD COLUMN IF NOT EXISTS discord_notification_message_id BIGINT
+                    """))
+        except Exception as e:
+            print(f"⚠️  Failed to ensure point_sales notification columns: {e}")
+
         if self.redis_url:
             if '://' not in self.redis_url:
                 self.redis_url = f'redis://{self.redis_url}'
@@ -678,6 +693,75 @@ class RedisSubscriber:
                 import traceback
                 traceback.print_exc()
 
+        elif action == 'sale_status_updated':
+            # Update the previously posted order notification message, if we have its message ID.
+            try:
+                sale_id = data.get('sale_id')
+                new_status = data.get('new_status')
+                if not sale_id or not new_status:
+                    return
+
+                if engine is None:
+                    print("[Point Shop] DB engine not available; cannot update order message")
+                    return
+
+                with engine.connect() as conn:
+                    row = conn.execute(text("""
+                        SELECT discord_notification_channel_id, discord_notification_message_id
+                        FROM point_sales
+                        WHERE id = :sale_id
+                    """), {"sale_id": int(sale_id)}).fetchone()
+
+                if not row or not row[0] or not row[1]:
+                    print(f"[Point Shop] No stored Discord message for sale_id={sale_id}; skipping update")
+                    return
+
+                channel_id = int(row[0])
+                message_id = int(row[1])
+
+                channel = self.bot.get_channel(channel_id)
+                if not channel:
+                    print(f"[Point Shop] Channel not found for update: {channel_id}")
+                    return
+
+                try:
+                    message = await channel.fetch_message(message_id)
+                except Exception as e:
+                    print(f"[Point Shop] Failed to fetch order message {message_id}: {e}")
+                    return
+
+                status_lower = str(new_status).lower()
+                if status_lower == 'completed':
+                    color = discord.Color.green()
+                    status_label = 'Completed'
+                elif status_lower == 'cancelled':
+                    color = discord.Color.red()
+                    status_label = 'Cancelled'
+                else:
+                    color = discord.Color.purple()
+                    status_label = 'Pending'
+
+                embed = message.embeds[0] if message.embeds else discord.Embed(title="🛒 Point Shop Order", color=color)
+                embed.color = color
+
+                # Update (or add) the Status field
+                status_field_index = None
+                for i, f in enumerate(embed.fields):
+                    if (f.name or '').strip().lower() == 'status':
+                        status_field_index = i
+                        break
+                if status_field_index is None:
+                    embed.add_field(name='Status', value=status_label, inline=True)
+                else:
+                    embed.set_field_at(status_field_index, name='Status', value=status_label, inline=True)
+
+                await message.edit(embed=embed)
+                print(f"✅ Updated order embed for sale_id={sale_id} to status={status_lower}")
+            except Exception as e:
+                print(f"[Point Shop] Failed to update order message for status change: {e}")
+                import traceback
+                traceback.print_exc()
+
     async def handle_notifications_event(self, action, data):
         """Handle notifications events from dashboard and forward to Discord if configured."""
         try:
@@ -770,7 +854,24 @@ class RedisSubscriber:
                     details = details[:1000] + "…"
                 embed.add_field(name="Details", value=details, inline=False)
 
-            await channel.send(embed=embed)
+            sent_message = await channel.send(embed=embed)
+
+            # Store message mapping so we can edit it on status changes
+            try:
+                if sale_id is not None and engine is not None:
+                    with engine.begin() as conn:
+                        conn.execute(text("""
+                            UPDATE point_sales
+                            SET discord_notification_channel_id = :channel_id,
+                                discord_notification_message_id = :message_id
+                            WHERE id = :sale_id
+                        """), {
+                            "channel_id": int(channel.id),
+                            "message_id": int(sent_message.id),
+                            "sale_id": int(sale_id)
+                        })
+            except Exception as e:
+                print(f"[Notifications] WARN: failed to store sale->message mapping: {e}")
         except Exception as e:
             print(f"[Notifications] Failed to forward notification: {e}")
             import traceback
