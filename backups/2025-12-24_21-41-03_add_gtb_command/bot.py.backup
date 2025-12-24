@@ -881,14 +881,9 @@ class KickWebSocketManager:
                     if len(parts) == 2:
                         amount = parse_amount(parts[1])
                         if amount is not None:
-                            # Use per-guild GTB manager
-                            gtb_mgr = bot.gtb_managers_by_guild.get(guild_id) if hasattr(bot, 'gtb_managers_by_guild') else None
-                            if gtb_mgr:
-                                success, message = gtb_mgr.add_guess(username, amount)
-                                response = f"@{username} {message}" + (" Good luck! 🎰" if success else "")
-                                await send_kick_message(response, guild_id=guild_id)
-                            else:
-                                await send_kick_message(f"@{username} GTB system not initialized", guild_id=guild_id)
+                            success, message = bot.gtb_manager.add_guess(username, amount)
+                            response = f"@{username} {message}" + (" Good luck! 🎰" if success else "")
+                            await send_kick_message(response, guild_id=guild_id)
                         else:
                             await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount>", guild_id=guild_id)
                     else:
@@ -1670,14 +1665,12 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                             
                             # !gtb command
                             elif content_stripped.lower().startswith("!gtb"):
-                                # Use per-guild GTB manager
-                                gtb_mgr = bot.gtb_managers_by_guild.get(guild_id) if hasattr(bot, 'gtb_managers_by_guild') else None
-                                if gtb_mgr:
+                                if hasattr(bot, 'gtb_manager') and bot.gtb_manager:
                                     parts = content_stripped.split(maxsplit=1)
                                     if len(parts) == 2:
                                         amount = parse_amount(parts[1])
                                         if amount is not None:
-                                            success, message = gtb_mgr.add_guess(username, amount)
+                                            success, message = bot.gtb_manager.add_guess(username, amount)
                                             response = f"@{username} {message}" + (" Good luck! 🎰" if success else "")
                                             await send_kick_message(response, guild_id=guild_id)
                         
@@ -2487,16 +2480,13 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
 
                                     # Handle !gtb (Guess the Balance) command
                                     if content_stripped.lower().startswith("!gtb"):
-                                        # Use per-guild GTB manager
-                                        gtb_mgr = bot.gtb_managers_by_guild.get(guild_id) if hasattr(bot, 'gtb_managers_by_guild') else None
-                                        if gtb_mgr:
-                                            gtb_parts = content_stripped.split(maxsplit=1)
-                                            if len(gtb_parts) == 2:
-                                                amount_str = gtb_parts[1]
-                                                amount = parse_amount(amount_str)
+                                        gtb_parts = content_stripped.split(maxsplit=1)
+                                        if len(gtb_parts) == 2:
+                                            amount_str = gtb_parts[1]
+                                            amount = parse_amount(amount_str)
 
-                                                if amount is not None:
-                                                    success, message = gtb_mgr.add_guess(username, amount)
+                                            if amount is not None:
+                                                success, message = gtb_manager.add_guess(username, amount)
                                                 if success:
                                                     # Send confirmation to Kick chat
                                                     response = f"@{username} {message} Good luck! 🎰"

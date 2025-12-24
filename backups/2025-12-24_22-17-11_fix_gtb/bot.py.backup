@@ -790,23 +790,27 @@ class KickWebSocketManager:
             if content_stripped.lower() == "!points":
                 print(f"[{guild_name}] 💰 Processing !points command from {username}")
                 try:
-                    with engine.connect() as conn:
-                        result = conn.execute(text("""
-                            SELECT points FROM user_points
-                            WHERE LOWER(kick_username) = :username AND discord_server_id = :guild_id
-                        """), {"username": username.lower(), "guild_id": guild_id}).fetchone()
-                        
-                        if result and result[0] is not None:
-                            points_balance = int(result[0])
-                            await send_kick_message(
-                                f"@{username}, You currently have {points_balance:,} points.",
-                                guild_id=guild_id
-                            )
-                        else:
-                            await send_kick_message(
-                                f"@{username}, You currently have 0 points. Start watching to earn points!",
-                                guild_id=guild_id
-                            )
+                    # ⚡ ASYNC: Run DB query in thread pool to avoid blocking
+                    def _fetch_points():
+                        with engine.connect() as conn:
+                            result = conn.execute(text("""
+                                SELECT points FROM user_points
+                                WHERE LOWER(kick_username) = :username AND discord_server_id = :guild_id
+                            """), {"username": username.lower(), "guild_id": guild_id}).fetchone()
+                            return result[0] if result and result[0] is not None else None
+                    
+                    points_balance = await asyncio.to_thread(_fetch_points)
+                    
+                    if points_balance is not None:
+                        await send_kick_message(
+                            f"@{username}, You currently have {int(points_balance):,} points.",
+                            guild_id=guild_id
+                        )
+                    else:
+                        await send_kick_message(
+                            f"@{username}, You currently have 0 points. Start watching to earn points!",
+                            guild_id=guild_id
+                        )
                 except Exception as e:
                     print(f"[{guild_name}] ❌ Error fetching points for {username}: {e}")
                     await send_kick_message(
@@ -881,14 +885,9 @@ class KickWebSocketManager:
                     if len(parts) == 2:
                         amount = parse_amount(parts[1])
                         if amount is not None:
-                            # Use per-guild GTB manager
-                            gtb_mgr = bot.gtb_managers_by_guild.get(guild_id) if hasattr(bot, 'gtb_managers_by_guild') else None
-                            if gtb_mgr:
-                                success, message = gtb_mgr.add_guess(username, amount)
-                                response = f"@{username} {message}" + (" Good luck! 🎰" if success else "")
-                                await send_kick_message(response, guild_id=guild_id)
-                            else:
-                                await send_kick_message(f"@{username} GTB system not initialized", guild_id=guild_id)
+                            success, message = bot.gtb_manager.add_guess(username, amount)
+                            response = f"@{username} {message}" + (" Good luck! 🎰" if success else "")
+                            await send_kick_message(response, guild_id=guild_id)
                         else:
                             await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount>", guild_id=guild_id)
                     else:
@@ -1072,14 +1071,15 @@ engine = create_engine(
     future=True,
     pool_pre_ping=True,     # Detect disconnections
     pool_recycle=1800,      # Recycle connections after 30 minutes (Railway timeout)
-    pool_size=10,           # 🔒 SECURITY: Increased from 3 to 10 to prevent connection exhaustion
-    max_overflow=10,        # 🔒 SECURITY: Increased from 5 to 10 for better availability
-    pool_timeout=30,        # Wait up to 30 seconds for a connection
+    pool_size=20,           # ⚡ PERFORMANCE: Connection pool for faster queries
+    max_overflow=30,        # ⚡ PERFORMANCE: Allow burst traffic
+    pool_timeout=10,        # Reduced timeout for faster failure detection
     echo=False,             # Don't log all SQL
     echo_pool=False,        # Disable pool logging to reduce noise
     pool_use_lifo=True,     # Last In First Out for better performance
+    poolclass=None,         # Use default QueuePool (best for PostgreSQL)
     connect_args={
-        "connect_timeout": 10,           # Connection timeout
+        "connect_timeout": 5,            # ⚡ Faster connection timeout
         "keepalives": 1,                 # Enable TCP keepalives
         "keepalives_idle": 30,           # Start keepalives after 30s idle
         "keepalives_interval": 10,       # Send keepalive every 10s
@@ -1670,14 +1670,12 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                             
                             # !gtb command
                             elif content_stripped.lower().startswith("!gtb"):
-                                # Use per-guild GTB manager
-                                gtb_mgr = bot.gtb_managers_by_guild.get(guild_id) if hasattr(bot, 'gtb_managers_by_guild') else None
-                                if gtb_mgr:
+                                if hasattr(bot, 'gtb_manager') and bot.gtb_manager:
                                     parts = content_stripped.split(maxsplit=1)
                                     if len(parts) == 2:
                                         amount = parse_amount(parts[1])
                                         if amount is not None:
-                                            success, message = gtb_mgr.add_guess(username, amount)
+                                            success, message = bot.gtb_manager.add_guess(username, amount)
                                             response = f"@{username} {message}" + (" Good luck! 🎰" if success else "")
                                             await send_kick_message(response, guild_id=guild_id)
                         
@@ -2487,16 +2485,13 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
 
                                     # Handle !gtb (Guess the Balance) command
                                     if content_stripped.lower().startswith("!gtb"):
-                                        # Use per-guild GTB manager
-                                        gtb_mgr = bot.gtb_managers_by_guild.get(guild_id) if hasattr(bot, 'gtb_managers_by_guild') else None
-                                        if gtb_mgr:
-                                            gtb_parts = content_stripped.split(maxsplit=1)
-                                            if len(gtb_parts) == 2:
-                                                amount_str = gtb_parts[1]
-                                                amount = parse_amount(amount_str)
+                                        gtb_parts = content_stripped.split(maxsplit=1)
+                                        if len(gtb_parts) == 2:
+                                            amount_str = gtb_parts[1]
+                                            amount = parse_amount(amount_str)
 
-                                                if amount is not None:
-                                                    success, message = gtb_mgr.add_guess(username, amount)
+                                            if amount is not None:
+                                                success, message = gtb_manager.add_guess(username, amount)
                                                 if success:
                                                     # Send confirmation to Kick chat
                                                     response = f"@{username} {message} Good luck! 🎰"
