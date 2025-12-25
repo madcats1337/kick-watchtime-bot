@@ -878,28 +878,21 @@ class KickWebSocketManager:
                             await send_kick_message(f"@{username} Please specify a slot!", guild_id=guild_id)
                 else:
                     print(f"[{guild_name}] ❌ No slot tracker found for this guild")
-            
-            # !gtb command
-            elif content_stripped.lower().startswith("!gtb"):
-                print(f"[{guild_name}] 🎲 Processing !gtb command from {username}")
-                parts = content_stripped.split(maxsplit=1)
-                if len(parts) == 2:
-                    amount = parse_amount(parts[1])
-                    if amount is not None:
-                        # Use per-guild GTB manager
-                        gtb_mgr = bot.gtb_managers_by_guild.get(guild_id) if hasattr(bot, 'gtb_managers_by_guild') else None
-                        if gtb_mgr:
-                            success, message = gtb_mgr.add_guess(username, amount)
-                            response = f"@{username} {message}" + (" Good luck! 🎰" if success else "")
-                            await send_kick_message(response, guild_id=guild_id)
-                            print(f"[{guild_name}] ✅ GTB guess processed: {username} - ${amount}")
+                    if len(parts) == 2:
+                        amount = parse_amount(parts[1])
+                        if amount is not None:
+                            # Use per-guild GTB manager
+                            gtb_mgr = bot.gtb_managers_by_guild.get(guild_id) if hasattr(bot, 'gtb_managers_by_guild') else None
+                            if gtb_mgr:
+                                success, message = gtb_mgr.add_guess(username, amount)
+                                response = f"@{username} {message}" + (" Good luck! 🎰" if success else "")
+                                await send_kick_message(response, guild_id=guild_id)
+                            else:
+                                await send_kick_message(f"@{username} GTB system not initialized", guild_id=guild_id)
                         else:
-                            await send_kick_message(f"@{username} GTB system not initialized", guild_id=guild_id)
-                            print(f"[{guild_name}] ❌ GTB system not initialized")
+                            await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount>", guild_id=guild_id)
                     else:
-                        await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount>", guild_id=guild_id)
-                else:
-                    await send_kick_message(f"@{username} Usage: !gtb <amount> (e.g., !gtb 1234.56)", guild_id=guild_id)
+                        await send_kick_message(f"@{username} Usage: !gtb <amount>", guild_id=guild_id)
             
             # !clip command
             elif content_stripped.lower().startswith("!clip"):
@@ -2493,8 +2486,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                         await send_kick_message(raffle_message, guild_id=guild_id)
 
                                     # Handle !gtb (Guess the Balance) command
-                                    elif content_stripped.lower().startswith("!gtb"):
-                                        print(f"[GTB] {username} issued !gtb command")
+                                    if content_stripped.lower().startswith("!gtb"):
                                         # Use per-guild GTB manager
                                         gtb_mgr = bot.gtb_managers_by_guild.get(guild_id) if hasattr(bot, 'gtb_managers_by_guild') else None
                                         if gtb_mgr:
@@ -2505,22 +2497,19 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
 
                                                 if amount is not None:
                                                     success, message = gtb_mgr.add_guess(username, amount)
-                                                    if success:
-                                                        # Send confirmation to Kick chat
-                                                        response = f"@{username} {message} Good luck! 🎰"
-                                                        await send_kick_message(response, guild_id=guild_id)
-                                                        print(f"[GTB] {username} guessed ${amount:,.2f}")
-                                                    else:
-                                                        # Send error message to Kick chat
-                                                        await send_kick_message(f"@{username} {message}", guild_id=guild_id)
-                                                        print(f"[GTB] Failed guess from {username}: {message}")
+                                                if success:
+                                                    # Send confirmation to Kick chat
+                                                    response = f"@{username} {message} Good luck! 🎰"
+                                                    await send_kick_message(response, guild_id=guild_id)
+                                                    print(f"[GTB] {username} guessed ${amount:,.2f}")
                                                 else:
-                                                    await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount> (e.g., !gtb 1234.56)", guild_id=guild_id)
+                                                    # Send error message to Kick chat
+                                                    await send_kick_message(f"@{username} {message}", guild_id=guild_id)
+                                                    print(f"[GTB] Failed guess from {username}: {message}")
                                             else:
-                                                await send_kick_message(f"@{username} Usage: !gtb <amount> (e.g., !gtb 1234.56)", guild_id=guild_id)
+                                                await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount> (e.g., !gtb 1234.56)", guild_id=guild_id)
                                         else:
-                                            print(f"[GTB] GTB manager not found for guild {guild_id}")
-                                            await send_kick_message(f"@{username} GTB system not initialized", guild_id=guild_id)
+                                            await send_kick_message(f"@{username} Usage: !gtb <amount> (e.g., !gtb 1234.56)", guild_id=guild_id)
 
                                     # Handle !clip command - Create a clip of the livestream
                                     if content_stripped.lower().startswith("!clip"):
