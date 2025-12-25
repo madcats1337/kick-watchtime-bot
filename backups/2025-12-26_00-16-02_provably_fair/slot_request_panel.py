@@ -471,10 +471,7 @@ class SlotRequestPanel:
             logger.error(f"Error handling panel reaction: {e}")
 
     async def _pick_random_slot(self, channel):
-        """Pick a random slot request using provably fair algorithm - returns True if successful, False if no slots available"""
-        from utils.provably_fair import generate_provably_fair_result
-        import secrets
-        
+        """Pick a random slot request - returns True if successful, False if no slots available"""
         if not self.engine:
             return False
 
@@ -486,68 +483,31 @@ class SlotRequestPanel:
 
         try:
             with self.engine.connect() as conn:
-                # Get ALL unpicked slot requests for this server (for provably fair selection)
-                results = conn.execute(text("""
+                # Get a random unpicked slot request for this server
+                result = conn.execute(text("""
                     SELECT id, kick_username, slot_call, requested_at
                     FROM slot_requests
                     WHERE picked = FALSE AND discord_server_id = :server_id
-                    ORDER BY id ASC
-                """), {"server_id": guild_id}).fetchall()
+                    ORDER BY RANDOM()
+                    LIMIT 1
+                """), {"server_id": guild_id}).fetchone()
 
-                if not results:
+                if not result:
                     # No slots available - just update panel
                     await self.update_panel()
                     return False
-                
-                # Use provably fair to select winner
-                total_requests = len(results)
-                
-                # Generate server seed
-                server_seed = secrets.token_hex(32)
-                
-                # Use first request as base for client seed
-                first_request = results[0]
-                client_seed = f"slot_picker:{guild_id}:{total_requests}"
-                
-                # Generate provably fair result
-                result = generate_provably_fair_result(
-                    kick_username=client_seed,
-                    slot_request_id=first_request[0],  # Use first request ID as nonce base
-                    slot_call="random_pick",
-                    chance_percent=100.0  # Always "wins" to generate random value
-                )
-                
-                # Use random_value to select from requests
-                winner_index = int((result['random_value'] / 100.0) * total_requests)
-                winner_index = min(winner_index, total_requests - 1)  # Ensure within bounds
-                
-                selected_request = results[winner_index]
-                request_id, username, slot_call, requested_at = selected_request
-                
-                logger.info(f"[Server {guild_id}] Provably fair pick - Random: {result['random_value']}, Index: {winner_index}/{total_requests}, Winner: {username}")
 
-                # Mark as picked and save provably fair data
+                request_id, username, slot_call, requested_at = result
+
+                # Mark as picked
                 with self.engine.begin() as update_conn:
                     update_conn.execute(text("""
                         UPDATE slot_requests
-                        SET picked = TRUE, 
-                            picked_at = CURRENT_TIMESTAMP,
-                            server_seed = :server_seed,
-                            client_seed = :client_seed,
-                            nonce = :nonce,
-                            proof_hash = :proof_hash,
-                            random_value = :random_value
+                        SET picked = TRUE, picked_at = CURRENT_TIMESTAMP
                         WHERE id = :id
-                    """), {
-                        "id": request_id,
-                        "server_seed": result['server_seed'],
-                        "client_seed": result['client_seed'],
-                        "nonce": result['nonce'],
-                        "proof_hash": result['proof_hash'],
-                        "random_value": result['random_value']
-                    })
+                    """), {"id": request_id})
 
-                logger.info(f"[Server {guild_id}] Panel picked random slot: {slot_call} by {username} (provably fair)")
+                logger.info(f"[Server {guild_id}] Panel picked random slot: {slot_call} by {username}")
 
                 # Check if slot overlay is enabled in dashboard settings
                 overlay_delay_needed = False

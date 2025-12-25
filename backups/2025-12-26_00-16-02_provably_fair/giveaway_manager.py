@@ -244,9 +244,8 @@ class GiveawayManager:
             return [dict(row._mapping) for row in results]
     
     async def draw_winner(self):
-        """Randomly select a winner using provably fair algorithm (weighted by entry_count if multiple entries allowed)"""
-        from utils.provably_fair import generate_provably_fair_result
-        import secrets
+        """Randomly select a winner (weighted by entry_count if multiple entries allowed)"""
+        import random
         
         if not self.active_giveaway:
             return None
@@ -262,59 +261,26 @@ class GiveawayManager:
             for _ in range(entry['entry_count']):
                 weighted_entries.append(entry['kick_username'])
         
-        # Generate provably fair selection
-        giveaway_id = self.active_giveaway['id']
+        # Random selection
+        winner_username = random.choice(weighted_entries)
         
-        # Use first entry as client seed base, combined with giveaway data
-        client_seed = f"giveaway:{giveaway_id}:{len(weighted_entries)}"
-        
-        # Generate server seed
-        server_seed = secrets.token_hex(32)
-        
-        # Create provably fair result to get random value
-        # We'll use the random value to select from weighted entries
-        result = generate_provably_fair_result(
-            kick_username=client_seed,  # Use giveaway data as client seed
-            slot_request_id=giveaway_id,
-            slot_call="giveaway_draw",
-            chance_percent=100.0  # Always "wins" to generate random value
-        )
-        
-        # Use random_value (0.00-99.99) to select winner
-        # Scale to index: int(random_value / 100 * len(weighted_entries))
-        winner_index = int((result['random_value'] / 100.0) * len(weighted_entries))
-        winner_index = min(winner_index, len(weighted_entries) - 1)  # Ensure within bounds
-        winner_username = weighted_entries[winner_index]
-        
-        logger.info(f"Provably fair draw - Random value: {result['random_value']}, Index: {winner_index}/{len(weighted_entries)}, Winner: {winner_username}")
-        
-        # Save winner and provably fair data to database
+        # Save winner to database
         with self.engine.connect() as conn:
             conn.execute(text("""
                 UPDATE giveaways 
                 SET winner_kick_username = :winner,
                     status = 'completed',
                     ended_at = :now,
-                    updated_at = :now,
-                    server_seed = :server_seed,
-                    client_seed = :client_seed,
-                    nonce = :nonce,
-                    proof_hash = :proof_hash,
-                    random_value = :random_value
+                    updated_at = :now
                 WHERE id = :giveaway_id
             """), {
                 "winner": winner_username,
-                "giveaway_id": giveaway_id,
-                "now": datetime.utcnow(),
-                "server_seed": result['server_seed'],
-                "client_seed": result['client_seed'],
-                "nonce": result['nonce'],
-                "proof_hash": result['proof_hash'],
-                "random_value": result['random_value']
+                "giveaway_id": self.active_giveaway['id'],
+                "now": datetime.utcnow()
             })
             conn.commit()
         
-        logger.info(f"Drew winner: {winner_username} for giveaway {giveaway_id} (provably fair)")
+        logger.info(f"Drew winner: {winner_username} for giveaway {self.active_giveaway['id']}")
         self.active_giveaway = None
         return winner_username
 

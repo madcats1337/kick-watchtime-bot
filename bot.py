@@ -5379,6 +5379,30 @@ async def on_ready():
                     )
                 """))
                 print("✅ slot_call_blacklist table ready")
+                
+                # Add provably fair columns to giveaways table
+                print("🔄 Checking provably fair columns in giveaways table...")
+                conn.execute(text("""
+                    ALTER TABLE giveaways 
+                    ADD COLUMN IF NOT EXISTS server_seed TEXT,
+                    ADD COLUMN IF NOT EXISTS client_seed TEXT,
+                    ADD COLUMN IF NOT EXISTS nonce TEXT,
+                    ADD COLUMN IF NOT EXISTS proof_hash TEXT,
+                    ADD COLUMN IF NOT EXISTS random_value NUMERIC(5,2)
+                """))
+                print("✅ Provably fair columns added to giveaways table")
+                
+                # Add provably fair columns to slot_requests table
+                print("🔄 Checking provably fair columns in slot_requests table...")
+                conn.execute(text("""
+                    ALTER TABLE slot_requests 
+                    ADD COLUMN IF NOT EXISTS server_seed TEXT,
+                    ADD COLUMN IF NOT EXISTS client_seed TEXT,
+                    ADD COLUMN IF NOT EXISTS nonce TEXT,
+                    ADD COLUMN IF NOT EXISTS proof_hash TEXT,
+                    ADD COLUMN IF NOT EXISTS random_value NUMERIC(5,2)
+                """))
+                print("✅ Provably fair columns added to slot_requests table")
         except Exception as e:
             print(f"⚠️ Database migration check failed: {e}")
 
