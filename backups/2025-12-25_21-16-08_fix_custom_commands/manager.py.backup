@@ -9,23 +9,21 @@ import asyncio
 from datetime import datetime, timedelta
 
 class CustomCommandsManager:
-    def __init__(self, bot, send_message_callback=None, discord_server_id=None):
+    def __init__(self, bot, send_message_callback=None):
         """
         Initialize custom commands manager
 
         Args:
             bot: The Discord bot instance
             send_message_callback: Async function to send messages to Kick chat
-            discord_server_id: Discord server ID for multiserver support
         """
         self.bot = bot
         self.send_message_callback = send_message_callback
-        self.discord_server_id = discord_server_id
         self.commands = {}  # {command_name: {response, cooldown, enabled, use_count}}
         self.last_used = {}  # {command_name: last_used_timestamp}
         self.database_url = os.getenv('DATABASE_URL')
 
-        print(f"🔧 Custom Commands Manager initialized for server {discord_server_id}")
+        print("🔧 Custom Commands Manager initialized")
 
     async def load_commands(self):
         """Load all custom commands from database"""
@@ -58,20 +56,11 @@ class CustomCommandsManager:
         conn = psycopg2.connect(self.database_url)
         cursor = conn.cursor()
 
-        if self.discord_server_id:
-            cursor.execute("""
-                SELECT id, command, response, cooldown, enabled, use_count
-                FROM custom_commands
-                WHERE discord_server_id = %s
-                ORDER BY command
-            """, (self.discord_server_id,))
-        else:
-            # Fallback for backward compatibility
-            cursor.execute("""
-                SELECT id, command, response, cooldown, enabled, use_count
-                FROM custom_commands
-                ORDER BY command
-            """)
+        cursor.execute("""
+            SELECT id, command, response, cooldown, enabled, use_count
+            FROM custom_commands
+            ORDER BY command
+        """)
 
         commands = []
         for row in cursor.fetchall():
