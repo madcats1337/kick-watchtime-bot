@@ -5517,7 +5517,8 @@ async def on_ready():
                 # Setup Custom Commands manager for this guild
                 custom_commands_manager = CustomCommandsManager(
                     bot=bot,
-                    send_message_callback=lambda msg: asyncio.create_task(send_kick_message(msg, guild_id=guild.id))
+                    send_message_callback=lambda msg, gid=guild.id: asyncio.create_task(send_kick_message(msg, guild_id=gid)),
+                    discord_server_id=guild.id
                 )
                 await custom_commands_manager.start()  # Load commands from database
                 if not hasattr(bot, 'custom_commands_managers'):
