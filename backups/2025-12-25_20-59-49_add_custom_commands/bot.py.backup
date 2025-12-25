@@ -5513,13 +5513,6 @@ async def on_ready():
                     bot.gtb_managers_by_guild = {}
                 bot.gtb_managers_by_guild[guild.id] = gtb_managers[guild.id]
                 print(f"✅ [Guild {guild.name}] GTB system initialized")
-                
-                # Setup Custom Commands manager for this guild
-                custom_commands_manager = CustomCommandsManager(engine, guild.id)
-                if not hasattr(bot, 'custom_commands_managers'):
-                    bot.custom_commands_managers = {}
-                bot.custom_commands_managers[guild.id] = custom_commands_manager
-                print(f"✅ [Guild {guild.name}] Custom commands system initialized")
 
             # Sync Shuffle code user role (run once, not per-guild)
             await sync_shuffle_role_on_startup(bot, engine)
