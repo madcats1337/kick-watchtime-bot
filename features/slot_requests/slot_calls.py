@@ -738,11 +738,22 @@ class SlotCallCommands(commands.Cog):
         try:
             with self.tracker.engine.begin() as conn:
                 if self.tracker.server_id:
+                    # Delete slot_picks first (foreign key constraint)
+                    conn.execute(text("""
+                        DELETE FROM slot_picks WHERE slot_request_id IN 
+                        (SELECT id FROM slot_requests WHERE discord_server_id = :server_id)
+                    """), {"server_id": self.tracker.server_id})
+                    
+                    # Now delete slot_requests
                     result = conn.execute(text("""
                         DELETE FROM slot_requests
                         WHERE discord_server_id = :server_id
                     """), {"server_id": self.tracker.server_id})
                 else:
+                    # Delete all slot_picks first
+                    conn.execute(text("DELETE FROM slot_picks"))
+                    
+                    # Now delete all slot_requests
                     result = conn.execute(text("DELETE FROM slot_requests"))
                 deleted_count = result.rowcount
 
