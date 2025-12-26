@@ -111,6 +111,7 @@ class ShuffleWagerTracker:
             logger.info(f"Found {len(filtered_data)} users with campaign codes '{self.campaign_code}' on {self.platform_name}")
 
             updates = []
+            tickets_to_award = []  # Store ticket awards to process after wager updates
 
             with self.engine.begin() as conn:
                 for user_data in filtered_data:
@@ -173,42 +174,34 @@ class ShuffleWagerTracker:
 
                         # Award tickets if user is linked
                         if discord_id and kick_name:
-                            success = self.ticket_manager.award_tickets(
-                                discord_id=discord_id,
-                                kick_name=kick_name,
-                                tickets=new_tickets,
-                                source='shuffle_wager',  # Keep source name for backwards compatibility
-                                description=f"{self.platform_name.capitalize()} wager: ${wager_delta:.2f} (${last_known_wager:.2f} → ${current_wager:.2f})",
-                                period_id=period_id
-                            )
-
-                            if success:
-                                # Update wager tracking
-                                conn.execute(text("""
-                                    UPDATE raffle_shuffle_wagers
-                                    SET
-                                        last_known_wager = :current_wager,
-                                        total_wager_usd = :current_wager,
-                                        tickets_awarded = tickets_awarded + :new_tickets,
-                                        last_checked = CURRENT_TIMESTAMP,
-                                        last_updated = CURRENT_TIMESTAMP
-                                    WHERE period_id = :period_id AND shuffle_username = :username
-                                """), {
-                                    'period_id': period_id,
-                                    'username': shuffle_username,
-                                    'current_wager': current_wager,
-                                    'new_tickets': new_tickets
-                                })
-
-                                updates.append({
-                                    'shuffle_username': shuffle_username,
-                                    'kick_name': kick_name,
-                                    'wager_delta': wager_delta,
-                                    'tickets_awarded': new_tickets,
-                                    'total_wager': current_wager
-                                })
-
-                                logger.info(f"💰 {kick_name} ({shuffle_username}): ${wager_delta:.2f} wagered → {new_tickets} tickets")
+                            # Queue ticket award to happen after wager update transaction
+                            tickets_to_award.append({
+                                'discord_id': discord_id,
+                                'kick_name': kick_name,
+                                'tickets': new_tickets,
+                                'description': f"{self.platform_name.capitalize()} wager: ${wager_delta:.2f} (${last_known_wager:.2f} → ${current_wager:.2f})",
+                                'period_id': period_id,
+                                'shuffle_username': shuffle_username,
+                                'wager_delta': wager_delta,
+                                'current_wager': current_wager
+                            })
+                            
+                            # Update wager tracking (will commit with transaction)
+                            conn.execute(text("""
+                                UPDATE raffle_shuffle_wagers
+                                SET
+                                    last_known_wager = :current_wager,
+                                    total_wager_usd = :current_wager,
+                                    tickets_awarded = tickets_awarded + :new_tickets,
+                                    last_checked = CURRENT_TIMESTAMP,
+                                    last_updated = CURRENT_TIMESTAMP
+                                WHERE period_id = :period_id AND shuffle_username = :username
+                            """), {
+                                'period_id': period_id,
+                                'username': shuffle_username,
+                                'current_wager': current_wager,
+                                'new_tickets': new_tickets
+                            })
                         else:
                             # User exists but not linked - just update wager
                             conn.execute(text("""
@@ -256,6 +249,33 @@ class ShuffleWagerTracker:
                         # No tickets awarded for initial/existing wagers
                         logger.info(f"📊 Tracking new Shuffle user: {shuffle_username} (${current_wager:.2f}) - "
                                   f"{'Linked to ' + kick_name if kick_name else 'Not linked'}")
+
+            # Wager transaction is complete, now award tickets in separate transactions
+            for award in tickets_to_award:
+                try:
+                    success = self.ticket_manager.award_tickets(
+                        discord_id=award['discord_id'],
+                        kick_name=award['kick_name'],
+                        tickets=award['tickets'],
+                        source='shuffle_wager',
+                        description=award['description'],
+                        period_id=award['period_id']
+                    )
+                    
+                    if success:
+                        updates.append({
+                            'shuffle_username': award['shuffle_username'],
+                            'kick_name': award['kick_name'],
+                            'wager_delta': award['wager_delta'],
+                            'tickets_awarded': award['tickets'],
+                            'total_wager': award['current_wager']
+                        })
+                        logger.info(f"💰 {award['kick_name']} ({award['shuffle_username']}): "
+                                  f"${award['wager_delta']:.2f} wagered → {award['tickets']} tickets")
+                    else:
+                        logger.error(f"Failed to award {award['tickets']} tickets to {award['kick_name']}")
+                except Exception as e:
+                    logger.error(f"Error awarding tickets to {award['kick_name']}: {e}")
 
             return {
                 'status': 'success',
@@ -440,22 +460,37 @@ async def setup_shuffle_tracker(bot, engine, server_id=None, bot_settings=None):
     @tasks.loop(minutes=15)  # Run every 15 minutes
     async def update_shuffle_task():
         """Periodic task to update Shuffle wagers and award tickets"""
-        # Refresh settings before each update to get latest from database
-        tracker.refresh_settings()
+        try:
+            # Refresh settings before each update to get latest from database
+            tracker.refresh_settings()
 
-        if not tracker.affiliate_url:
-            print("[Shuffle Tracker] ⚠️ No affiliate URL configured - skipping update")
-            return
+            if not tracker.affiliate_url:
+                print("[Shuffle Tracker] ⚠️ No affiliate URL configured - skipping update")
+                return
 
-        print("[Shuffle Tracker] 🔄 Checking wagers...")
-        result = await tracker.update_shuffle_wagers()
+            print("[Shuffle Tracker] 🔄 Checking wagers...")
+            result = await tracker.update_shuffle_wagers()
 
-        if result['status'] == 'success' and result['updates'] > 0:
-            print(f"[Shuffle Tracker] ✅ Updated {result['updates']} wager(s)")
-        elif result['status'] == 'no_active_period':
-            print("[Shuffle Tracker] ⏸️ No active raffle period")
-        elif result['status'] == 'error':
-            print(f"[Shuffle Tracker] ❌ Update failed: {result.get('error')}")
+            if result['status'] == 'success' and result['updates'] > 0:
+                print(f"[Shuffle Tracker] ✅ Updated {result['updates']} wager(s)")
+                # Print details of each update
+                for detail in result.get('details', []):
+                    print(f"  💰 {detail['kick_name']} ({detail['shuffle_username']}): "
+                          f"${detail['wager_delta']:.2f} → +{detail['tickets_awarded']} tickets")
+            elif result['status'] == 'success':
+                print(f"[Shuffle Tracker] ℹ️ No new wagers found")
+            elif result['status'] == 'no_active_period':
+                print("[Shuffle Tracker] ⏸️ No active raffle period")
+            elif result['status'] == 'no_users':
+                print(f"[Shuffle Tracker] ℹ️ No users found with campaign code(s): {tracker.campaign_code}")
+            elif result['status'] == 'fetch_failed':
+                print(f"[Shuffle Tracker] ❌ Failed to fetch data from affiliate URL")
+            elif result['status'] == 'error':
+                print(f"[Shuffle Tracker] ❌ Update failed: {result.get('error')}")
+        except Exception as e:
+            print(f"[Shuffle Tracker] ❌ Task error: {e}")
+            import traceback
+            traceback.print_exc()
 
     @update_shuffle_task.before_loop
     async def before_shuffle_task():
