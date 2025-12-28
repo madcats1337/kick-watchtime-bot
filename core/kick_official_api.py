@@ -723,28 +723,16 @@ class KickOfficialAPI:
         
         response = await self._post(KICK_WEBHOOKS_URL, json=data)
         
-        # Kick returns a LIST for webhook creation
-        if isinstance(response, list):
-            if not response:
-                raise RuntimeError("Empty webhook creation response")
-            webhook_data = response[0]
-        elif isinstance(response, dict):
-            # Handle {data: {...}} wrapper
-            webhook_data = response.get("data", response)
-            # If data is still a list, take first item
-            if isinstance(webhook_data, list):
-                if not webhook_data:
-                    raise RuntimeError("Empty webhook creation response")
-                webhook_data = webhook_data[0]
-        else:
-            raise RuntimeError(f"Unexpected webhook response type: {type(response)}")
+        # Kick may return 200/201/204 with empty body, list, or dict
+        # ALL are SUCCESS - we don't fail on empty responses
+        # HTTP status code determines success, not response body
         
-        # Ensure we have a dict before unpacking
-        if not isinstance(webhook_data, dict):
-            raise RuntimeError(f"Expected dict, got {type(webhook_data)}: {webhook_data}")
+        print(f"[API] Webhook creation response type: {type(response)}")
+        print(f"[API] Webhook creation response: {response}")
         
-        # Pass all fields to WebhookSubscription
-        return WebhookSubscription(**webhook_data)
+        # Return response as-is (may be empty, list, or dict)
+        # Caller doesn't need WebhookSubscription object for creation
+        return response if response else {"event": event, "status": "created"}
 
     # -------------------------
     # Moderation API

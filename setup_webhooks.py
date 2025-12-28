@@ -243,17 +243,27 @@ async def setup_webhooks_for_server(discord_server_id: str):
             print(f"\n🔧 Registering: {event_type}")
             
             try:
-                subscription = await api.subscribe_webhook(
+                response = await api.subscribe_webhook(
                     event=event_type,
                     callback_url=WEBHOOK_URL,
                     broadcaster_user_id=broadcaster_user_id,
                     secret=webhook_secret  # Same secret for all events
                 )
                 
-                sub_dict = subscription.__dict__ if hasattr(subscription, '__dict__') else subscription
-                subscription_id = sub_dict.get('id')
+                # Webhook creation succeeded (HTTP 200/201/204)
+                # Response may be empty, list, or dict - all indicate success
+                # Extract subscription_id if available
+                subscription_id = None
+                if isinstance(response, dict):
+                    subscription_id = response.get('id') or response.get('subscription_id')
+                elif isinstance(response, list) and response:
+                    subscription_id = response[0].get('id') if isinstance(response[0], dict) else None
                 
-                print(f"   ✅ Subscription created: {subscription_id}")
+                # Use event name as fallback ID
+                if not subscription_id:
+                    subscription_id = f"{broadcaster_user_id}_{event_type}"
+                
+                print(f"   ✅ Webhook registered successfully (ID: {subscription_id})")
                 
                 # Store in database with the SAME secret
                 with engine.begin() as conn:
