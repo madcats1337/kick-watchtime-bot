@@ -672,6 +672,53 @@ class KickOfficialAPI:
         await self._delete(f"{KICK_WEBHOOKS_URL}/{subscription_id}")
         return True
 
+    async def subscribe_webhook(
+        self,
+        event: str,
+        callback_url: str,
+        broadcaster_user_id: str,
+        secret: str = None,
+    ) -> WebhookSubscription:
+        """
+        Subscribe to a webhook event.
+        Requires: events:subscribe scope
+
+        Args:
+            event: Event type (e.g., 'livestream.status.updated')
+            callback_url: Your webhook endpoint URL
+            broadcaster_user_id: Broadcaster's user ID
+            secret: Webhook signing secret (you generate this)
+
+        Returns:
+            WebhookSubscription object
+        """
+        data = {
+            "event": event,
+            "method": "webhook",
+            "callback_url": callback_url,
+            "broadcaster_user_id": int(broadcaster_user_id),
+        }
+        
+        # Add secret if provided (for HMAC signature verification)
+        if secret:
+            data["secret"] = secret
+        
+        response = await self._post(KICK_WEBHOOKS_URL, json=data)
+        
+        # Return WebhookSubscription from response
+        sub_data = response.get("data", response)
+        return WebhookSubscription(
+            event=sub_data.get("event"),
+            version=sub_data.get("version", 1),
+            callback_url=sub_data.get("callback_url"),
+            created_at=sub_data.get("created_at", ""),
+            updated_at=sub_data.get("updated_at", ""),
+            id=str(sub_data.get("id", "")),
+            method=sub_data.get("method", "webhook"),
+            status=sub_data.get("status", ""),
+            broadcaster_user_id=sub_data.get("broadcaster_user_id"),
+        )
+
     # -------------------------
     # Moderation API
     # -------------------------
