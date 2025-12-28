@@ -65,47 +65,72 @@ def get_database_engine():
 
 
 async def get_oauth_tokens(engine, discord_server_id: str):
-    """Get OAuth tokens and broadcaster info from database"""
+    """Get OAuth tokens and broadcaster info from database
+    
+    Checks both bot_settings and kick_oauth_tokens tables for OAuth data
+    """
     with engine.connect() as conn:
+        # OPTION 1: Try bot_settings table (key-value store)
         result = conn.execute(text("""
-            SELECT 
-                kick_username,
-                kick_broadcaster_user_id,
-                kick_access_token,
-                kick_refresh_token
+            SELECT key, value 
             FROM bot_settings
             WHERE discord_server_id = :server_id
-            AND key IN ('kick_username', 'kick_broadcaster_user_id', 'kick_access_token', 'kick_refresh_token')
+            AND key IN ('kick_channel', 'kick_broadcaster_user_id', 'kick_access_token', 'kick_refresh_token')
         """), {"server_id": discord_server_id}).fetchall()
         
-        if not result:
-            return None
-        
-        # Parse results
-        data = {}
-        for row in result:
-            key = row[0]
-            if key == 'kick_username':
-                data['username'] = row[1]
-            elif key == 'kick_broadcaster_user_id':
-                data['broadcaster_user_id'] = row[1]
-            elif key == 'kick_access_token':
-                data['access_token'] = row[1]
-            elif key == 'kick_refresh_token':
-                data['refresh_token'] = row[1]
-        
-        # Try alternative query if needed
-        if not data:
-            result = conn.execute(text("""
-                SELECT value FROM bot_settings
-                WHERE discord_server_id = :server_id
-                AND key = 'kick_broadcaster_user_id'
-            """), {"server_id": discord_server_id}).fetchone()
+        if result:
+            # Parse key-value pairs from bot_settings
+            data = {}
+            for row in result:
+                key = row[0]
+                value = row[1]
+                
+                if key == 'kick_channel':
+                    data['username'] = value
+                elif key == 'kick_broadcaster_user_id':
+                    data['broadcaster_user_id'] = value
+                elif key == 'kick_access_token':
+                    data['access_token'] = value
+                elif key == 'kick_refresh_token':
+                    data['refresh_token'] = value
             
-            if result:
-                data['broadcaster_user_id'] = result[0]
+            if data.get('username'):
+                print(f"✅ Found OAuth data in bot_settings for: {data.get('username')}")
+                return data
         
-        return data if data else None
+        # OPTION 2: Try kick_oauth_tokens table (dedicated OAuth table)
+        # First get the kick_channel to look up in oauth tokens table
+        channel_result = conn.execute(text("""
+            SELECT value FROM bot_settings
+            WHERE discord_server_id = :server_id AND key = 'kick_channel'
+        """), {"server_id": discord_server_id}).fetchone()
+        
+        if channel_result and channel_result[0]:
+            kick_username = channel_result[0].lower()
+            
+            # Look up in kick_oauth_tokens table
+            oauth_result = conn.execute(text("""
+                SELECT 
+                    user_id,
+                    kick_username,
+                    access_token,
+                    refresh_token
+                FROM kick_oauth_tokens
+                WHERE LOWER(kick_username) = :username
+                LIMIT 1
+            """), {"username": kick_username}).fetchone()
+            
+            if oauth_result:
+                print(f"✅ Found OAuth data in kick_oauth_tokens for: {oauth_result[1]}")
+                return {
+                    'broadcaster_user_id': oauth_result[0],  # user_id is the broadcaster ID
+                    'username': oauth_result[1],
+                    'access_token': oauth_result[2],
+                    'refresh_token': oauth_result[3]
+                }
+        
+        print(f"❌ No OAuth data found for server {discord_server_id}")
+        return None
 
 
 async def setup_webhooks_for_server(discord_server_id: str):
