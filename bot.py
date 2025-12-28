@@ -2988,9 +2988,6 @@ async def update_watchtime_task():
     global stream_tracking_enabled, last_chat_activity, recent_chatters
 
     try:
-        if watchtime_debug_enabled:
-            print(f"[Watchtime Debug] Task running - tracking enabled: {stream_tracking_enabled}")
-
         # Check if tracking is enabled by admin
         if not stream_tracking_enabled:
             return
@@ -3071,8 +3068,6 @@ async def update_watchtime_task():
                             "t": last_seen.isoformat(),
                             "sid": server_id
                         })
-                        if watchtime_debug_enabled:
-                            print(f"[Watchtime Debug][Guild {guild.name}] ✅ Updated {user}: +{minutes_to_add} minutes")
                     except Exception as e:
                         print(f"⚠️ Error updating watchtime for {user}: {e}")
                         continue  # Skip this user but continue with others
@@ -3084,16 +3079,11 @@ async def update_watchtime_task():
         print(f"⚠️ Error in watchtime update task: {e}")
         import traceback
         traceback.print_exc()
-    finally:
-        if watchtime_debug_enabled:
-            print(f"[Watchtime Debug] Task iteration complete, will run again in {WATCH_INTERVAL_SECONDS}s")
 
 @update_watchtime_task.before_loop
 async def before_watchtime_task():
     """Wait for bot to be ready before starting watchtime updates."""
     await bot.wait_until_ready()
-    if watchtime_debug_enabled:
-        print("[Watchtime Debug] Watchtime task waiting for bot ready - complete")
 
 @update_watchtime_task.error
 async def update_watchtime_task_error(error):
