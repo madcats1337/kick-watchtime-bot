@@ -3384,16 +3384,22 @@ async def cleanup_pending_links_task():
         except Exception:
             pass
 
-@tasks.loop(seconds=30)
+@tasks.loop(minutes=5)  # Fallback check every 5 minutes (PRIMARY: webhooks)
 async def clip_buffer_management_task():
     """
-    Monitor stream status per guild and manage clip buffers on Dashboard.
+    FALLBACK: Monitor stream status per guild and manage clip buffers on Dashboard.
+    
+    PRIMARY METHOD: Kick webhooks (livestream.status.updated) in kick_webhooks.py
+    - Instant response when stream goes live/offline
+    - Triggers clip buffer start/stop automatically
+    
+    FALLBACK: This polling task runs every 5 minutes in case:
+    - Webhooks aren't registered for a server
+    - Webhook delivery fails
+    - Dashboard restarts and loses buffer state
 
     - When stream goes LIVE: Start clip buffer on Dashboard
     - When stream goes OFFLINE: Stop clip buffer on Dashboard
-
-    This ensures the clip buffer is always recording when the stream is live,
-    so clips can capture the past 30+ seconds of footage.
     """
     global clip_buffer_active_by_guild, last_stream_live_state_by_guild
 
@@ -7658,118 +7664,6 @@ async def cmd_post_shop(ctx, channel: discord.TextChannel = None):
             await ctx.send(f"✅ Point shop posted to {target_channel.mention}!")
     else:
         await ctx.send("❌ Failed to post point shop. Check that there are active items.")
-
-# -------------------------
-# Clip Buffer Auto-Management Task (Fallback)
-# Primary method is via webhooks (livestream.status.updated)
-# This task runs every 5 minutes as a fallback in case webhooks fail
-# -------------------------
-
-# Track stream live status per guild to detect changes
-stream_live_status = {}  # guild_id -> bool
-
-@tasks.loop(minutes=5)  # Fallback check every 5 minutes (webhooks are primary)
-async def manage_clip_buffers():
-    """
-    Fallback: Automatically start/stop clip buffers when stream goes live/offline.
-    
-    PRIMARY METHOD: Kick webhooks (livestream.status.updated) - instant response
-    FALLBACK: This polling task runs every 5 minutes in case webhooks fail/aren't registered
-    """
-    try:
-        for guild in bot.guilds:
-            try:
-                guild_id = guild.id
-                
-                # Get settings from database
-                with engine.connect() as conn:
-                    settings_result = conn.execute(text("""
-                        SELECT key, value FROM bot_settings 
-                        WHERE discord_server_id = :guild_id 
-                        AND key IN ('kick_channel', 'dashboard_url', 'bot_api_key')
-                    """), {"guild_id": guild_id}).fetchall()
-                    
-                    settings = {key: value for key, value in settings_result}
-                    kick_channel = settings.get('kick_channel')
-                    dashboard_url = settings.get('dashboard_url')
-                    api_key = settings.get('bot_api_key')
-                
-                if not kick_channel or not dashboard_url or not api_key:
-                    continue  # Skip if not configured
-                
-                # Check if stream is live
-                try:
-                    is_live = await check_stream_live(kick_channel)
-                except Exception as e:
-                    # Don't spam logs - this is just a fallback
-                    continue
-                
-                previous_status = stream_live_status.get(guild_id, False)
-                stream_live_status[guild_id] = is_live
-                
-                # Detect status change
-                if is_live and not previous_status:
-                    # Stream just went live - start buffer
-                    print(f"[Clip Buffer Fallback] [{guild.name}] 🔴 Stream went LIVE, starting clip buffer...")
-                    
-                    try:
-                        import aiohttp
-                        async with aiohttp.ClientSession() as session:
-                            async with session.post(
-                                f"{dashboard_url}/api/clips/buffer/start",
-                                headers={'X-API-Key': api_key, 'Content-Type': 'application/json'},
-                                json={'channel': kick_channel, 'buffer_minutes': 4},
-                                timeout=30
-                            ) as resp:
-                                if resp.status == 200:
-                                    print(f"[Clip Buffer Fallback] [{guild.name}] ✅ Clip buffer started")
-                                else:
-                                    error_text = await resp.text()
-                                    print(f"[Clip Buffer Fallback] [{guild.name}] ❌ Failed to start buffer: HTTP {resp.status} - {error_text[:200]}")
-                    except Exception as e:
-                        print(f"[Clip Buffer Fallback] [{guild.name}] ❌ Error starting buffer: {e}")
-                
-                elif not is_live and previous_status:
-                    # Stream just went offline - stop buffer
-                    print(f"[Clip Buffer Fallback] [{guild.name}] ⚫ Stream went OFFLINE, stopping clip buffer...")
-                    
-                    try:
-                        import aiohttp
-                        async with aiohttp.ClientSession() as session:
-                            async with session.post(
-                                f"{dashboard_url}/api/clips/buffer/stop",
-                                headers={'X-API-Key': api_key, 'Content-Type': 'application/json'},
-                                json={'channel': kick_channel},
-                                timeout=10
-                            ) as resp:
-                                if resp.status == 200:
-                                    print(f"[Clip Buffer Fallback] [{guild.name}] ✅ Clip buffer stopped")
-                                else:
-                                    error_text = await resp.text()
-                                    print(f"[Clip Buffer Fallback] [{guild.name}] ⚠️ Failed to stop buffer: HTTP {resp.status} - {error_text[:200]}")
-                    except Exception as e:
-                        print(f"[Clip Buffer Fallback] [{guild.name}] ⚠️ Error stopping buffer: {e}")
-            
-            except Exception as e:
-                # Silent fail for fallback task
-                continue
-    
-    except Exception as e:
-        print(f"[Clip Buffer Fallback] Task error: {e}")
-
-@manage_clip_buffers.before_loop
-async def before_clip_buffer_task():
-    """Wait for bot to be ready before starting clip buffer management."""
-    await bot.wait_until_ready()
-    print("[Clip Buffer] Fallback polling task started (every 5 min) - Primary: webhooks")
-
-@manage_clip_buffers.error
-async def clip_buffer_task_error(error):
-    """Handle errors in the clip buffer task loop."""
-    print(f"[Clip Buffer Fallback] ❌ Task encountered an error: {error}")
-
-# -------------------------
-# Run bot
 
 # -------------------------
 # Run bot
