@@ -198,6 +198,12 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
         # - channel.subscription.gift (gifted subscriptions)  
         # - channel.follow (new followers)
         # - stream.online / stream.offline (stream status)
+    
+    # Register webhook routes with Flask app
+    register_webhook_routes(app, webhook_handler)
+    print("[OAuth] ✅ Webhook routes registered at /webhooks/kick", flush=True)
+else:
+    print("[OAuth] ⚠️ Kick webhook support not available", flush=True)
         # For now, only chat.message.sent is supported by Kick's Events API
 
     register_webhook_routes(app, webhook_handler)

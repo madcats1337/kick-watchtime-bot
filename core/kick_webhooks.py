@@ -22,14 +22,14 @@ Usage:
 import os
 import hashlib
 import hmac
-import base64
+import secrets
 import json
 from datetime import datetime, timezone
 from typing import Callable, Dict, Any, Optional
 from dataclasses import dataclass
 from functools import wraps
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, abort
 
 # Import webhook payload classes
 try:
@@ -57,38 +57,43 @@ kick_webhooks_bp = Blueprint('kick_webhooks', __name__)
 # Signature Verification
 # -------------------------
 
-def verify_kick_signature(request) -> bool:
+def verify_kick_signature(raw_body: bytes, signature_header: str, webhook_secret: str) -> bool:
     """
-    Verify the Kick webhook signature.
+    Verify the Kick webhook signature using HMAC-SHA256.
     
-    NOTE: Kick uses RSA-2048 signatures but hasn't published the public key yet.
-    For production use, we skip signature verification and rely on:
-    1. Subscription ID validation (must exist in our database)
-    2. Webhook URL is private (only Kick knows it)
-    3. TLS encryption prevents tampering in transit
+    Args:
+        raw_body: Raw request body as bytes
+        signature_header: Signature from Kick-Signature header
+        webhook_secret: The webhook secret for this broadcaster
     
-    This is secure enough until Kick publishes their RSA public key.
+    Returns:
+        True if signature is valid, False otherwise
     """
-    subscription_id = request.headers.get("Kick-Event-Subscription-Id", "")
-    message_id = request.headers.get("Kick-Event-Message-Id", "")
-    timestamp = request.headers.get("Kick-Event-Message-Timestamp", "")
-
-    if not all([subscription_id, message_id, timestamp]):
-        print("[Webhook] ❌ Missing required headers")
+    if not signature_header or not webhook_secret:
         return False
-
-    print(f"[Webhook] ✅ Accepting webhook (signature verification disabled)")
-    print(f"  Subscription: {subscription_id}, Message: {message_id}")
     
-    # Subscription ID will be validated in handler (must exist in database)
-    return True
+    try:
+        # Compute expected signature
+        expected_hash = hmac.new(
+            key=webhook_secret.encode('utf-8'),
+            msg=raw_body,
+            digestmod=hashlib.sha256
+        ).hexdigest()
+        
+        expected_signature = f"sha256={expected_hash}"
+        
+        # Constant-time comparison
+        return hmac.compare_digest(expected_signature, signature_header.strip())
+    except Exception as e:
+        print(f"[Webhook] ❌ Signature verification error: {e}")
+        return False
 
 def require_webhook_signature(f):
     """Decorator to require valid webhook signature"""
     @wraps(f)
     def decorated(*args, **kwargs):
-        if not verify_kick_signature(request):
-            return jsonify({"error": "Invalid signature"}), 401
+        # Note: Signature verification happens in the route handler
+        # after we look up the secret from the database
         return f(*args, **kwargs)
     return decorated
 
@@ -181,53 +186,99 @@ def handle_kick_webhook():
     Main webhook endpoint for Kick events.
 
     Expected Headers:
-    - Kick-Event-Subscription-Type: Event type
+    - Kick-Event-Type: Event type
     - Kick-Event-Message-Id: Unique message ID
     - Kick-Event-Subscription-Id: Subscription ID
+    - Kick-Signature: HMAC-SHA256 signature
 
     Returns:
         200 OK on success
         401 Unauthorized if signature invalid
         500 Internal Server Error on handler error
     """
+    # 1️⃣ GET RAW BODY FIRST (before any parsing)
+    raw_body: bytes = request.get_data(cache=True)
+    
+    # 2️⃣ GET HEADERS
     event_type = request.headers.get("Kick-Event-Type", "unknown")
     message_id = request.headers.get("Kick-Event-Message-Id", "")
     subscription_id = request.headers.get("Kick-Event-Subscription-Id", "")
+    signature_header = (
+        request.headers.get("Kick-Signature")
+        or request.headers.get("X-Kick-Signature")
+    )
     
-    # Verify signature
-    if not verify_kick_signature(request):
-        return jsonify({"error": "Invalid signature"}), 401
+    if not signature_header:
+        print("[Webhook] ❌ Missing signature header")
+        return jsonify({"error": "Missing signature"}), 401
+    
+    if not subscription_id:
+        print("[Webhook] ❌ Missing subscription ID")
+        return jsonify({"error": "Missing subscription ID"}), 400
 
     try:
-        event_data = request.get_json(force=True, silent=True)
-        if not event_data:
-            return jsonify({"error": "Empty payload"}), 400
+        # 3️⃣ PARSE JSON AFTER RAW BODY
+        try:
+            event_data = json.loads(raw_body.decode('utf-8'))
+        except json.JSONDecodeError:
+            return jsonify({"error": "Invalid JSON"}), 400
         
-        # Multiserver routing: Lookup which Discord server this subscription belongs to
+        # 4️⃣ EXTRACT BROADCASTER ID
+        broadcaster_id = (
+            event_data.get("broadcaster", {}).get("id")
+            or event_data.get("channel", {}).get("id")
+            or event_data.get("data", {}).get("broadcaster_id")
+        )
+        
+        if not broadcaster_id:
+            print("[Webhook] ❌ Missing broadcaster ID in payload")
+            return jsonify({"error": "Missing broadcaster ID"}), 400
+        
+        # 5️⃣ MULTISERVER ROUTING: Look up Discord server & webhook secret for this subscription
         discord_server_id = None
-        if subscription_id:
-            try:
-                from sqlalchemy import create_engine, text
-                db_url = os.getenv('DATABASE_URL')
-                if db_url:
-                    engine = create_engine(db_url)
-                    with engine.connect() as conn:
-                        result = conn.execute(text("""
-                            SELECT discord_server_id, broadcaster_user_id 
-                            FROM kick_webhook_subscriptions 
-                            WHERE subscription_id = :sub_id AND status = 'active'
-                        """), {"sub_id": subscription_id}).fetchone()
+        webhook_secret = None
+        
+        try:
+            from sqlalchemy import create_engine, text
+            db_url = os.getenv('DATABASE_URL')
+            if db_url:
+                engine = create_engine(db_url, pool_pre_ping=True)
+                with engine.connect() as conn:
+                    result = conn.execute(text("""
+                        SELECT discord_server_id, broadcaster_user_id, webhook_secret
+                        FROM kick_webhook_subscriptions 
+                        WHERE subscription_id = :sub_id AND status = 'active'
+                    """), {"sub_id": subscription_id}).fetchone()
+                    
+                    if result:
+                        discord_server_id = result[0]
+                        broadcaster_user_id = result[1]
+                        webhook_secret = result[2]
                         
-                        if result:
-                            discord_server_id = result[0]
-                            broadcaster_user_id = result[1]
-                            
-                            # Add server context to event data for handler
-                            event_data['_server_id'] = discord_server_id
-                            event_data['_broadcaster_user_id'] = broadcaster_user_id
-            except Exception as db_err:
-                pass
+                        # Add server context to event data for handler
+                        event_data['_server_id'] = discord_server_id
+                        event_data['_broadcaster_user_id'] = broadcaster_user_id
+                        
+                        print(f"[Webhook] 📥 Event for server {discord_server_id}, broadcaster {broadcaster_user_id}")
+                    else:
+                        print(f"[Webhook] ❌ Unknown subscription ID: {subscription_id}")
+                        return jsonify({"error": "Unknown subscription"}), 401
+        except Exception as db_err:
+            print(f"[Webhook] ❌ Database error: {db_err}")
+            return jsonify({"error": "Database error"}), 500
+        
+        if not webhook_secret:
+            print(f"[Webhook] ❌ No webhook secret found for subscription {subscription_id}")
+            return jsonify({"error": "No webhook secret"}), 401
+        
+        # 6️⃣ VERIFY SIGNATURE
+        if not verify_kick_signature(raw_body, signature_header, webhook_secret):
+            print(f"[Webhook] ❌ Invalid signature for subscription {subscription_id}")
+            return jsonify({"error": "Invalid signature"}), 401
+        
+        print(f"[Webhook] ✅ Signature verified for subscription {subscription_id}")
 
+        # 7️⃣ HANDLE EVENT
         if _event_handler:
             import asyncio
             # Run async handler in event loop
@@ -337,6 +388,42 @@ def create_discord_notifier(discord_bot, channel_id: int):
         giftees = data.get("giftees", [])
         count = len(giftees)
         broadcaster = data.get("broadcaster", {}).get("username", "")
+        discord_server_id = data.get("_server_id")
+
+        # Track in raffle system
+        if discord_server_id:
+            try:
+                from raffle_system.gifted_sub_tracker import track_gifted_sub
+                from sqlalchemy import create_engine, text
+                
+                db_url = os.getenv('DATABASE_URL')
+                if db_url:
+                    engine = create_engine(db_url, pool_pre_ping=True)
+                    with engine.connect() as conn:
+                        # Get active raffle period
+                        period_result = conn.execute(text("""
+                            SELECT id FROM raffle_periods
+                            WHERE status = 'active' AND discord_server_id = :guild_id
+                            LIMIT 1
+                        """), {"guild_id": discord_server_id}).fetchone()
+                        
+                        if period_result:
+                            period_id = period_result[0]
+                            
+                            # Track each giftee
+                            for giftee in giftees:
+                                giftee_username = giftee.get("username")
+                                if giftee_username:
+                                    # Track gifted sub for raffle
+                                    await track_gifted_sub(
+                                        kick_username=giftee_username,
+                                        guild_id=discord_server_id,
+                                        period_id=period_id
+                                    )
+                            
+                            print(f"[Webhook] ✅ Tracked {count} gifted subs for raffle")
+            except Exception as e:
+                print(f"[Webhook] ⚠️ Failed to track gifted subs in raffle: {e}")
 
         channel = discord_bot.get_channel(channel_id)
         if channel:
@@ -348,6 +435,26 @@ def create_discord_notifier(discord_bot, channel_id: int):
                 f"🎁 **Gifted Subs!**\n"
                 f"**{gifter}** gifted **{count}** sub(s) to **{broadcaster}**!\n"
                 f"Recipients: {giftee_names}"
+            )
+
+    @handler.on("channel.subscription.renewal")
+    async def on_sub_renewal(data):
+        """Handle subscription renewal"""
+        subscriber = data.get("subscriber", {}).get("username", "Unknown")
+        duration = data.get("duration", 1)
+        broadcaster = data.get("broadcaster", {}).get("username", "")
+        discord_server_id = data.get("_server_id")
+        
+        print(f"[Webhook] 🔄 Sub renewal: {subscriber} renewed for {duration} month(s)")
+        
+        # Renewals could grant bonus tickets or other rewards in the future
+        # For now, just log it
+        
+        channel = discord_bot.get_channel(channel_id)
+        if channel:
+            await channel.send(
+                f"🔄 **Subscription Renewed!**\n"
+                f"**{subscriber}** renewed their subscription to **{broadcaster}** ({duration} month(s))!"
             )
 
     @handler.on("kicks.gifted")
