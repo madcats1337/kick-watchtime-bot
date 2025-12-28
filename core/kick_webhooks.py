@@ -237,25 +237,11 @@ def handle_kick_webhook():
         return jsonify({"error": "Missing subscription ID"}), 400
 
     try:
-        # 3️⃣ PARSE JSON AFTER RAW BODY
-        try:
-            event_data = json.loads(raw_body.decode('utf-8'))
-        except json.JSONDecodeError:
-            return jsonify({"error": "Invalid JSON"}), 400
-        
-        # 4️⃣ EXTRACT BROADCASTER ID
-        broadcaster_id = (
-            event_data.get("broadcaster", {}).get("id")
-            or event_data.get("channel", {}).get("id")
-            or event_data.get("data", {}).get("broadcaster_id")
-        )
-        
-        if not broadcaster_id:
-            print("[Webhook] ❌ Missing broadcaster ID in payload")
-            return jsonify({"error": "Missing broadcaster ID"}), 400
-        
-        # 5️⃣ MULTISERVER ROUTING: Look up Discord server & webhook secret for this subscription
+        # 3️⃣ RESOLVE SUBSCRIPTION CONTEXT FROM DATABASE
+        # Use subscription_id from header to get broadcaster_user_id and discord_server_id
+        # This works for ALL event types (chat.message.sent doesn't have broadcaster in payload)
         discord_server_id = None
+        broadcaster_user_id = None
         webhook_secret = None
         
         try:
@@ -275,11 +261,8 @@ def handle_kick_webhook():
                         broadcaster_user_id = result[1]
                         webhook_secret = result[2]
                         
-                        # Add server context to event data for handler
-                        event_data['_server_id'] = discord_server_id
-                        event_data['_broadcaster_user_id'] = broadcaster_user_id
-                        
-                        print(f"[Webhook] 📥 Event for server {discord_server_id}, broadcaster {broadcaster_user_id}")
+                        if os.getenv("DEBUG_WEBHOOKS") == "true":
+                            print(f"[Webhook] ✅ Resolved subscription: server={discord_server_id}, broadcaster={broadcaster_user_id}")
                     else:
                         print(f"[Webhook] ❌ Unknown subscription ID: {subscription_id}")
                         return jsonify({"error": "Unknown subscription"}), 401
@@ -291,14 +274,26 @@ def handle_kick_webhook():
             print(f"[Webhook] ❌ No webhook secret found for subscription {subscription_id}")
             return jsonify({"error": "No webhook secret"}), 401
         
-        # 6️⃣ VERIFY SIGNATURE
+        # 4️⃣ VERIFY SIGNATURE
         if not verify_kick_signature(raw_body, signature_header, webhook_secret):
             print(f"[Webhook] ❌ Invalid signature for subscription {subscription_id}")
             return jsonify({"error": "Invalid signature"}), 401
         
         print(f"[Webhook] ✅ Signature verified for subscription {subscription_id}")
 
-        # 7️⃣ IDEMPOTENCY CHECK (Kick retries webhooks on failure)
+        # 5️⃣ PARSE JSON AFTER SIGNATURE VERIFICATION
+        try:
+            event_data = json.loads(raw_body.decode('utf-8'))
+        except json.JSONDecodeError:
+            return jsonify({"error": "Invalid JSON"}), 400
+        
+        # Add server context to event data for handlers
+        event_data['_server_id'] = discord_server_id
+        event_data['_broadcaster_user_id'] = broadcaster_user_id
+        
+        print(f"[Webhook] 📥 Event for server {discord_server_id}, broadcaster {broadcaster_user_id}")
+
+        # 6️⃣ IDEMPOTENCY CHECK (Kick retries webhooks on failure)
         # Check if we've already processed this message_id
         if message_id:
             try:
