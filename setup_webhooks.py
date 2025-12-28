@@ -85,13 +85,6 @@ async def get_oauth_tokens(engine, discord_server_id: str):
             AND key IN ('kick_channel', 'kick_broadcaster_user_id', 'kick_oauth_token', 'kick_access_token', 'kick_refresh_token')
         """), {"server_id": discord_server_id}).fetchall()
         
-        print(f"[DEBUG] Found {len(result)} keys in bot_settings:")
-        for row in result:
-            key = row[0]
-            value = row[1] if row[1] else "NULL"
-            value_preview = value[:20] + "..." if len(str(value)) > 20 else value
-            print(f"[DEBUG]   {key} = {value_preview}")
-        
         if result:
             # Parse key-value pairs from bot_settings
             data = {}
