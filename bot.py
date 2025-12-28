@@ -973,9 +973,9 @@ class KickWebSocketManager:
                 
                 asyncio.create_task(create_clip_background(username, clip_title))
             
-            # !ticket command
-            elif content_stripped.lower() == "!ticket":
-                print(f"[{guild_name}] 🎟️ Processing !ticket command from {username}")
+            # !tickets command
+            elif content_stripped.lower() == "!tickets":
+                print(f"[{guild_name}] 🎟️ Processing !tickets command from {username}")
                 try:
                     with engine.connect() as conn:
                         # Check if user is linked
