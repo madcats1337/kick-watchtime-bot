@@ -82,7 +82,6 @@ class BotSettingsManager:
             with self._engine.connect() as conn:
                 if active_guild_id:
                     # Multi-server mode: Load global settings first, then override with server-specific
-                    print(f"[Settings DEBUG] Querying for guild_id={active_guild_id}, type={type(active_guild_id)}")
                     result = conn.execute(text("""
                         SELECT key, value FROM bot_settings
                         WHERE discord_server_id IS NULL
@@ -98,9 +97,6 @@ class BotSettingsManager:
                     """))
                 
                 rows = result.fetchall()
-                print(f"[Settings DEBUG] Query returned {len(rows)} rows")
-                if rows and len(rows) > 0:
-                    print(f"[Settings DEBUG] First row: {rows[0]}")
 
                 # Later rows override earlier ones (server-specific overrides global)
                 self._cache = {row[0]: row[1] for row in rows}
