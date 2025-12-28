@@ -135,10 +135,15 @@ class CustomCommandsManager:
                 print(f"⏱️  Command !{command} on cooldown ({remaining}s remaining)")
                 return True  # Still handled, just on cooldown
 
-        # Send response
+        # Send response with variable replacements
         try:
             if self.send_message_callback:
-                await self.send_message_callback(cmd_data['response'])
+                response = cmd_data['response']
+                
+                # Apply variable replacements
+                response = await self._replace_variables(response, username, command)
+                
+                await self.send_message_callback(response)
                 print(f"✅ Custom command !{command} executed by {username}")
 
                 # Update last used
@@ -155,6 +160,91 @@ class CustomCommandsManager:
         except Exception as e:
             print(f"❌ Error executing custom command !{command}: {e}")
             return False
+    
+    async def _replace_variables(self, text: str, username: str, command: str) -> str:
+        """
+        Replace custom variables in command response text
+        
+        Available variables:
+        - {user} - Username who triggered the command
+        - {channel} - Kick channel name
+        - {tickets} - User's raffle ticket count (if linked)
+        - {points} - User's points balance (if they have points)
+        - {watchtime} - User's total watchtime in hours (if linked)
+        
+        Args:
+            text: The response text with variables
+            username: Username who triggered the command
+            command: Command name (for logging)
+            
+        Returns:
+            Text with variables replaced
+        """
+        try:
+            # Basic replacements
+            text = text.replace('{user}', username)
+            
+            # Get channel name and user data if we have discord_server_id
+            if self.discord_server_id and self.database_url:
+                try:
+                    conn = psycopg2.connect(self.database_url)
+                    cursor = conn.cursor()
+                    
+                    # Get channel name
+                    cursor.execute("""
+                        SELECT value FROM bot_settings 
+                        WHERE key = 'kick_channel' AND discord_server_id = %s
+                    """, (self.discord_server_id,))
+                    result = cursor.fetchone()
+                    if result:
+                        text = text.replace('{channel}', result[0])
+                    
+                    # Get user's ticket count if linked
+                    if '{tickets}' in text:
+                        cursor.execute("""
+                            SELECT rt.total_tickets
+                            FROM raffle_tickets rt
+                            JOIN links l ON rt.discord_id = l.discord_id AND rt.discord_server_id = l.discord_server_id
+                            WHERE LOWER(l.kick_name) = %s 
+                            AND rt.discord_server_id = %s
+                            AND rt.period_id = (SELECT id FROM raffle_periods WHERE status = 'active' AND discord_server_id = %s LIMIT 1)
+                        """, (username.lower(), self.discord_server_id, self.discord_server_id))
+                        result = cursor.fetchone()
+                        tickets = int(result[0]) if result and result[0] else 0
+                        text = text.replace('{tickets}', f"{tickets:,}")
+                    
+                    # Get user's points
+                    if '{points}' in text:
+                        cursor.execute("""
+                            SELECT points FROM user_points
+                            WHERE LOWER(kick_username) = %s AND discord_server_id = %s
+                        """, (username.lower(), self.discord_server_id))
+                        result = cursor.fetchone()
+                        points = int(result[0]) if result and result[0] else 0
+                        text = text.replace('{points}', f"{points:,}")
+                    
+                    # Get user's watchtime in hours
+                    if '{watchtime}' in text:
+                        cursor.execute("""
+                            SELECT minutes FROM watchtime w
+                            JOIN links l ON w.discord_id = l.discord_id AND w.discord_server_id = l.discord_server_id
+                            WHERE LOWER(l.kick_name) = %s AND w.discord_server_id = %s
+                        """, (username.lower(), self.discord_server_id))
+                        result = cursor.fetchone()
+                        minutes = result[0] if result and result[0] else 0
+                        hours = minutes / 60
+                        text = text.replace('{watchtime}', f"{hours:.1f}")
+                    
+                    cursor.close()
+                    conn.close()
+                    
+                except Exception as e:
+                    print(f"⚠️ Error fetching variable data: {e}")
+            
+            return text
+        except Exception as e:
+            print(f"❌ Error replacing variables: {e}")
+            return text  # Return original text if error
 
     async def _increment_use_count(self, command_id):
         """Increment use count in database"""

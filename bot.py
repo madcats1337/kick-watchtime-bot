@@ -814,17 +814,6 @@ class KickWebSocketManager:
                         guild_id=guild_id
                     )
             
-            # !raffle command
-            elif content_stripped.lower() == "!raffle":
-                print(f"[{guild_name}] 🎟️ Processing !raffle command from {username}")
-                result = await send_kick_message(
-                    "Do you want to win a $100 super buy on Sweet Bonanza 1000? "
-                    "All you gotta do is join my discord, verify with lelebot and follow the instructions -> "
-                    "https://discord.gg/k7CXJtfrPY",
-                    guild_id=guild_id
-                )
-                print(f"[{guild_name}] 🎟️ !raffle message send result: {result}")
-            
             # !call / !sr commands (slot requests)
             elif content_stripped.startswith(("!call", "!sr")):
                 print(f"[{guild_name}] 🎰 Detected slot command: {content_stripped[:50]}")
@@ -983,6 +972,93 @@ class KickWebSocketManager:
                         await send_kick_message(f"@{user} Clip error: {str(e)}", guild_id=guild_id)
                 
                 asyncio.create_task(create_clip_background(username, clip_title))
+            
+            # !ticket command
+            elif content_stripped.lower() == "!ticket":
+                print(f"[{guild_name}] 🎟️ Processing !ticket command from {username}")
+                try:
+                    with engine.connect() as conn:
+                        # Check if user is linked
+                        link_result = conn.execute(text("""
+                            SELECT discord_id FROM links
+                            WHERE LOWER(kick_name) = :username AND discord_server_id = :guild_id
+                        """), {"username": username.lower(), "guild_id": guild_id}).fetchone()
+                        
+                        if not link_result:
+                            await send_kick_message(
+                                f"@{username}, You need to link your account first! Use !link in Discord.",
+                                guild_id=guild_id
+                            )
+                        else:
+                            discord_id = link_result[0]
+                            
+                            # Get current raffle period
+                            period_result = conn.execute(text("""
+                                SELECT id FROM raffle_periods
+                                WHERE status = 'active' AND discord_server_id = :guild_id
+                                LIMIT 1
+                            """), {"guild_id": guild_id}).fetchone()
+                            
+                            if not period_result:
+                                await send_kick_message(
+                                    f"@{username}, No active raffle period right now.",
+                                    guild_id=guild_id
+                                )
+                            else:
+                                period_id = period_result[0]
+                                
+                                # Get ticket balance
+                                ticket_result = conn.execute(text("""
+                                    SELECT 
+                                        total_tickets,
+                                        watchtime_tickets,
+                                        gifted_sub_tickets,
+                                        shuffle_wager_tickets,
+                                        bonus_tickets
+                                    FROM raffle_tickets
+                                    WHERE period_id = :period_id 
+                                    AND discord_id = :discord_id 
+                                    AND discord_server_id = :guild_id
+                                """), {
+                                    "period_id": period_id,
+                                    "discord_id": discord_id,
+                                    "guild_id": guild_id
+                                }).fetchone()
+                                
+                                if not ticket_result or ticket_result[0] == 0:
+                                    await send_kick_message(
+                                        f"@{username}, You currently have 0 raffle tickets. Watch streams, gift subs, or wager to earn tickets!",
+                                        guild_id=guild_id
+                                    )
+                                else:
+                                    total_tickets = ticket_result[0] or 0
+                                    watchtime = ticket_result[1] or 0
+                                    gifted_subs = ticket_result[2] or 0
+                                    wager = ticket_result[3] or 0
+                                    bonus = ticket_result[4] or 0
+                                    
+                                    # Calculate win probability
+                                    total_pool = conn.execute(text("""
+                                        SELECT COALESCE(SUM(total_tickets), 0)
+                                        FROM raffle_tickets
+                                        WHERE period_id = :period_id AND discord_server_id = :guild_id
+                                    """), {"period_id": period_id, "guild_id": guild_id}).scalar()
+                                    
+                                    win_prob = (total_tickets / total_pool * 100) if total_pool > 0 else 0
+                                    
+                                    await send_kick_message(
+                                        f"@{username}, You have {int(total_tickets):,} tickets "
+                                        f"(Watch: {int(watchtime)} | Subs: {int(gifted_subs)} | Wager: {int(wager)} | Bonus: {int(bonus)}) "
+                                        f"Win chance: {win_prob:.2f}% 🎟️",
+                                        guild_id=guild_id
+                                    )
+                                    print(f"[{guild_name}] ✅ Sent ticket balance to {username}")
+                except Exception as e:
+                    print(f"[{guild_name}] ❌ Error fetching tickets for {username}: {e}")
+                    await send_kick_message(
+                        f"@{username}, Unable to retrieve ticket balance at this time.",
+                        guild_id=guild_id
+                    )
 
         except Exception as e:
             print(f"[{guild_name}] ❌ Error handling incoming message: {e}")
