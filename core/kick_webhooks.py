@@ -535,11 +535,103 @@ def create_discord_notifier(discord_bot, channel_id: int):
         is_live = data.get("is_live", False)
         broadcaster = data.get("broadcaster", {}).get("username", "")
         title = data.get("livestream", {}).get("session_title", "")
+        category = data.get("livestream", {}).get("category", {}).get("name", "Just Chatting")
         discord_server_id = data.get("_server_id")
         
         print(f"[Webhook] 📺 Stream status update: {broadcaster} is_live={is_live}, server_id={discord_server_id}")
 
-        # Send Discord notification
+        # Send Discord embed notification if enabled
+        if discord_server_id and is_live:
+            try:
+                from sqlalchemy import create_engine, text
+                import aiohttp
+                
+                db_url = os.getenv('DATABASE_URL')
+                if db_url:
+                    engine = create_engine(db_url, pool_pre_ping=True)
+                    with engine.connect() as conn:
+                        # Get stream notification settings
+                        settings_result = conn.execute(text("""
+                            SELECT key, value FROM bot_settings 
+                            WHERE discord_server_id = :guild_id 
+                            AND key IN ('stream_notification_enabled', 'stream_notification_channel_id', 
+                                        'stream_notification_title', 'stream_notification_description', 'kick_channel')
+                        """), {"guild_id": discord_server_id}).fetchall()
+                        
+                        settings = {key: value for key, value in settings_result}
+                        
+                        if settings.get('stream_notification_enabled') == 'true' and settings.get('stream_notification_channel_id'):
+                            notification_channel_id = settings['stream_notification_channel_id']
+                            custom_title = settings.get('stream_notification_title', '{streamer} is now live on Kick!')
+                            custom_description = settings.get('stream_notification_description', '')
+                            
+                            # Replace placeholders
+                            stream_url = f"https://kick.com/{broadcaster}"
+                            embed_title = custom_title.replace('{streamer}', broadcaster)
+                            embed_description = custom_description.replace('{streamer}', broadcaster) \
+                                                                   .replace('{title}', title or 'Live Stream') \
+                                                                   .replace('{category}', category) \
+                                                                   .replace('{stream_url}', stream_url)
+                            
+                            if not embed_description:
+                                embed_description = f"🔴 **{broadcaster}** just went live!\n\n**{title or 'Live Stream'}**\nPlaying: {category}"
+                            
+                            embed = {
+                                "title": embed_title,
+                                "description": embed_description,
+                                "color": 0x53fc18,  # Kick green
+                                "url": stream_url,
+                                "thumbnail": {
+                                    "url": f"https://kick.com/api/v1/channels/{broadcaster}/profile-image"
+                                },
+                                "fields": [
+                                    {
+                                        "name": "Category",
+                                        "value": category,
+                                        "inline": True
+                                    }
+                                ],
+                                "footer": {
+                                    "text": "Kick.com"
+                                }
+                            }
+                            
+                            components = [
+                                {
+                                    "type": 1,
+                                    "components": [
+                                        {
+                                            "type": 2,
+                                            "style": 5,
+                                            "label": "Watch Stream",
+                                            "url": stream_url,
+                                            "emoji": {"name": "🔴"}
+                                        }
+                                    ]
+                                }
+                            ]
+                            
+                            bot_token = os.getenv('DISCORD_BOT_TOKEN')
+                            if bot_token:
+                                async with aiohttp.ClientSession() as session:
+                                    async with session.post(
+                                        f"https://discord.com/api/v10/channels/{notification_channel_id}/messages",
+                                        headers={
+                                            "Authorization": f"Bot {bot_token}",
+                                            "Content-Type": "application/json"
+                                        },
+                                        json={"embeds": [embed], "components": components},
+                                        timeout=10
+                                    ) as resp:
+                                        if resp.status in [200, 201]:
+                                            print(f"[Webhook] ✅ Discord stream notification sent to channel {notification_channel_id}")
+                                        else:
+                                            error_text = await resp.text()
+                                            print(f"[Webhook] ⚠️ Failed to send Discord notification: {resp.status} - {error_text[:200]}")
+            except Exception as e:
+                print(f"[Webhook] ⚠️ Failed to send Discord stream notification: {e}")
+
+        # Send basic Discord notification (legacy - to the handler's configured channel)
         channel = discord_bot.get_channel(channel_id)
         if channel:
             if is_live:
