@@ -1148,7 +1148,7 @@ class RedisSubscriber:
             
             import aiohttp
             import os
-            bot_token = os.getenv('DISCORD_BOT_TOKEN')
+            bot_token = os.getenv('DISCORD_TOKEN')  # Bot uses DISCORD_TOKEN not DISCORD_BOT_TOKEN
             
             if not bot_token:
                 print("❌ DISCORD_BOT_TOKEN not configured")

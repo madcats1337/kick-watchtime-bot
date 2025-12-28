@@ -585,7 +585,7 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                 }
                             ]
                             
-                            bot_token = os.getenv('DISCORD_BOT_TOKEN')
+                            bot_token = os.getenv('DISCORD_TOKEN')  # Bot uses DISCORD_TOKEN not DISCORD_BOT_TOKEN
                             if bot_token:
                                 async with aiohttp.ClientSession() as session:
                                     async with session.post(
