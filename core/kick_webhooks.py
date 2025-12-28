@@ -196,21 +196,38 @@ def handle_kick_webhook():
         401 Unauthorized if signature invalid
         500 Internal Server Error on handler error
     """
-    # 1️⃣ GET RAW BODY FIRST (before any parsing)
+    # 0️⃣ SKIP VERIFICATION FOR NON-POST REQUESTS (health checks, etc.)
+    if request.method != "POST":
+        return "", 204
+    
+    # 1️⃣ GET RAW BODY FIRST (CRITICAL: before ANY json parsing)
     raw_body: bytes = request.get_data(cache=True)
     
     # 2️⃣ GET HEADERS
     event_type = request.headers.get("Kick-Event-Type", "unknown")
     message_id = request.headers.get("Kick-Event-Message-Id", "")
     subscription_id = request.headers.get("Kick-Event-Subscription-Id", "")
-    signature_header = (
-        request.headers.get("Kick-Signature")
-        or request.headers.get("X-Kick-Signature")
-    )
     
+    # Look for Kick-Signature header (case-insensitive)
+    signature_header = None
+    signature_header_name = None
+    for header_name in request.headers.keys():
+        if header_name.lower() == "kick-signature":
+            signature_header = request.headers.get(header_name)
+            signature_header_name = header_name
+            break
+    
+    # DEBUG: Only log when signature is missing (temporary diagnostic)
     if not signature_header:
+        if os.getenv("DEBUG_WEBHOOKS") == "true":
+            print(f"[Webhook] 🔍 DEBUG: method={request.method}, content-length={request.content_length}")
+            print(f"[Webhook] 🔍 DEBUG: Available headers: {list(request.headers.keys())}")
         print("[Webhook] ❌ Missing signature header")
         return jsonify({"error": "Missing signature"}), 401
+    
+    # DEBUG: Log which header was found (temporary diagnostic)
+    if os.getenv("DEBUG_WEBHOOKS") == "true":
+        print(f"[Webhook] ✅ Found signature in header: {signature_header_name}")
     
     if not subscription_id:
         print("[Webhook] ❌ Missing subscription ID")
