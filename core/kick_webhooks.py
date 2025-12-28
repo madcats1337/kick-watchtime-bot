@@ -206,13 +206,15 @@ def handle_kick_webhook():
     # 2️⃣ GET HEADERS
     event_type = request.headers.get("Kick-Event-Type", "unknown")
     message_id = request.headers.get("Kick-Event-Message-Id", "")
+    message_timestamp = request.headers.get("Kick-Event-Message-Timestamp", "")
     subscription_id = request.headers.get("Kick-Event-Subscription-Id", "")
     
-    # Look for Kick-Signature header (case-insensitive)
+    # Look for Kick-Event-Signature header (case-insensitive)
+    # Kick officially uses: Kick-Event-Signature
     signature_header = None
     signature_header_name = None
     for header_name in request.headers.keys():
-        if header_name.lower() == "kick-signature":
+        if header_name.lower() == "kick-event-signature":
             signature_header = request.headers.get(header_name)
             signature_header_name = header_name
             break
@@ -222,12 +224,13 @@ def handle_kick_webhook():
         if os.getenv("DEBUG_WEBHOOKS") == "true":
             print(f"[Webhook] 🔍 DEBUG: method={request.method}, content-length={request.content_length}")
             print(f"[Webhook] 🔍 DEBUG: Available headers: {list(request.headers.keys())}")
-        print("[Webhook] ❌ Missing signature header")
+        print("[Webhook] ❌ Missing signature header (looking for Kick-Event-Signature)")
         return jsonify({"error": "Missing signature"}), 401
     
     # DEBUG: Log which header was found (temporary diagnostic)
     if os.getenv("DEBUG_WEBHOOKS") == "true":
         print(f"[Webhook] ✅ Found signature in header: {signature_header_name}")
+        print(f"[Webhook] ℹ️  Event: {event_type}, Message ID: {message_id}, Timestamp: {message_timestamp}")
     
     if not subscription_id:
         print("[Webhook] ❌ Missing subscription ID")
