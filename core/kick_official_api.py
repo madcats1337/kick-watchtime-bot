@@ -117,19 +117,36 @@ class OAuthTokens:
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
-@dataclass
 class WebhookSubscription:
-    """Webhook subscription data - accepts all fields Kick returns"""
-    id: Optional[str] = None
-    app_id: Optional[str] = None
-    event: Optional[str] = None
-    version: Optional[int] = None
-    broadcaster_user_id: Optional[int] = None
-    method: Optional[str] = None
-    status: Optional[str] = None
-    callback_url: Optional[str] = None
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    """Webhook subscription data - fully permissive constructor"""
+    def __init__(
+        self,
+        *,
+        id=None,
+        app_id=None,
+        event=None,
+        version=None,
+        broadcaster_user_id=None,
+        method=None,
+        status=None,
+        callback_url=None,
+        created_at=None,
+        updated_at=None,
+        **kwargs  # Accept any other fields Kick might add
+    ):
+        self.id = id
+        self.app_id = app_id
+        self.event = event
+        self.version = version
+        self.broadcaster_user_id = broadcaster_user_id
+        self.method = method
+        self.status = status
+        self.callback_url = callback_url
+        self.created_at = created_at
+        self.updated_at = updated_at
+        # Store any extra fields
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
 class KickOfficialAPI:
     """
@@ -662,10 +679,16 @@ class KickOfficialAPI:
             subscription_id: The subscription ID to delete
 
         Returns:
-            True if successful
+            True if successful, False if not found (404)
         """
-        await self._delete(f"{KICK_WEBHOOKS_URL}/{subscription_id}")
-        return True
+        try:
+            await self._delete(f"{KICK_WEBHOOKS_URL}/{subscription_id}")
+            return True
+        except Exception as e:
+            # Treat 404 as non-fatal (already deleted)
+            if "404" in str(e) or "Not Found" in str(e):
+                return False
+            raise
 
     async def subscribe_webhook(
         self,
@@ -700,19 +723,28 @@ class KickOfficialAPI:
         
         response = await self._post(KICK_WEBHOOKS_URL, json=data)
         
-        # Handle response - Kick may return data wrapped or as list
-        if isinstance(response, dict):
-            sub_data = response.get("data", response)
-            # If data is a list, take first item
-            if isinstance(sub_data, list) and len(sub_data) > 0:
-                sub_data = sub_data[0]
-        elif isinstance(response, list) and len(response) > 0:
-            sub_data = response[0]
+        # Kick returns a LIST for webhook creation
+        if isinstance(response, list):
+            if not response:
+                raise RuntimeError("Empty webhook creation response")
+            webhook_data = response[0]
+        elif isinstance(response, dict):
+            # Handle {data: {...}} wrapper
+            webhook_data = response.get("data", response)
+            # If data is still a list, take first item
+            if isinstance(webhook_data, list):
+                if not webhook_data:
+                    raise RuntimeError("Empty webhook creation response")
+                webhook_data = webhook_data[0]
         else:
-            sub_data = response
+            raise RuntimeError(f"Unexpected webhook response type: {type(response)}")
+        
+        # Ensure we have a dict before unpacking
+        if not isinstance(webhook_data, dict):
+            raise RuntimeError(f"Expected dict, got {type(webhook_data)}: {webhook_data}")
         
         # Pass all fields to WebhookSubscription
-        return WebhookSubscription(**sub_data)
+        return WebhookSubscription(**webhook_data)
 
     # -------------------------
     # Moderation API
