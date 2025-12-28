@@ -264,15 +264,19 @@ def handle_kick_webhook():
                         if os.getenv("DEBUG_WEBHOOKS") == "true":
                             print(f"[Webhook] ✅ Resolved subscription: server={discord_server_id}, broadcaster={broadcaster_user_id}")
                     else:
-                        print(f"[Webhook] ❌ Unknown subscription ID: {subscription_id}")
-                        return jsonify({"error": "Unknown subscription"}), 401
+                        # Unknown subscription (legacy/old webhook still firing)
+                        # Return 200 OK to prevent Kick retry storms, but do NOT process
+                        print(f"[Webhook] ⚠️  Unknown subscription ID: {subscription_id} (legacy webhook, ignoring)")
+                        return jsonify({"status": "ok", "message": "unknown subscription"}), 200
         except Exception as db_err:
             print(f"[Webhook] ❌ Database error: {db_err}")
             return jsonify({"error": "Database error"}), 500
         
         if not webhook_secret:
-            print(f"[Webhook] ❌ No webhook secret found for subscription {subscription_id}")
-            return jsonify({"error": "No webhook secret"}), 401
+            # Subscription exists but no secret (should never happen with current setup)
+            # Return 200 OK to prevent retry storms, but do NOT process
+            print(f"[Webhook] ⚠️  No webhook secret for subscription {subscription_id} (cannot verify, ignoring)")
+            return jsonify({"status": "ok", "message": "no secret"}), 200
         
         # 4️⃣ VERIFY SIGNATURE
         if not verify_kick_signature(raw_body, signature_header, webhook_secret):
