@@ -602,18 +602,31 @@ class RedisSubscriber:
 
     async def handle_commands_event(self, action, data):
         """Handle custom commands events from dashboard"""
-        print(f"📥 Commands Event: {action}")
+        guild_id = data.get('discord_server_id')
+        print(f"📥 Commands Event: {action} (guild_id={guild_id})")
 
         if action == 'reload':
-            # Trigger custom commands reload
-            if hasattr(self.bot, 'custom_commands_manager'):
+            # Trigger custom commands reload for specific guild or all guilds
+            if hasattr(self.bot, 'custom_commands_managers'):
                 try:
-                    await self.bot.custom_commands_manager.reload_commands()
-                    print("✅ Custom commands reloaded")
+                    if guild_id:
+                        # Reload commands for specific guild
+                        if guild_id in self.bot.custom_commands_managers:
+                            await self.bot.custom_commands_managers[guild_id].reload_commands()
+                            print(f"✅ Custom commands reloaded for guild {guild_id}")
+                        else:
+                            print(f"⚠️ No custom commands manager found for guild {guild_id}")
+                    else:
+                        # Reload commands for all guilds
+                        for gid, manager in self.bot.custom_commands_managers.items():
+                            await manager.reload_commands()
+                        print(f"✅ Custom commands reloaded for all {len(self.bot.custom_commands_managers)} guilds")
                 except Exception as e:
                     print(f"⚠️ Failed to reload custom commands: {e}")
+                    import traceback
+                    traceback.print_exc()
             else:
-                print("⚠️ Custom commands manager not initialized")
+                print("⚠️ Custom commands managers not initialized")
 
     async def handle_point_shop_event(self, action, data):
         """Handle point shop events from dashboard"""
