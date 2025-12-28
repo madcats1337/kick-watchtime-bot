@@ -120,13 +120,14 @@ class OAuthTokens:
 @dataclass
 class WebhookSubscription:
     """Webhook subscription data"""
-    id: str
     event: str
-    method: str
     version: int
     callback_url: str
     created_at: str
     updated_at: str
+    id: Optional[str] = None
+    method: str = "POST"
+    status: str = ""
     broadcaster_user_id: Optional[int] = None
 
 class KickOfficialAPI:
@@ -636,16 +637,24 @@ class KickOfficialAPI:
         subscriptions = []
 
         for sub in response.get("data", []):
-            subscriptions.append(WebhookSubscription(
-                id=sub.get("id"),
-                event=sub.get("event"),
-                method=sub.get("method"),
-                version=sub.get("version"),
-                callback_url=sub.get("callback_url"),
-                created_at=sub.get("created_at"),
-                updated_at=sub.get("updated_at"),
-                broadcaster_user_id=sub.get("broadcaster_user_id"),
-            ))
+            # Create WebhookSubscription with only the fields defined in the dataclass
+            try:
+                subscriptions.append(WebhookSubscription(
+                    event=str(sub.get("event", "")),
+                    version=int(sub.get("version", 1)),
+                    callback_url=str(sub.get("callback_url", "")),
+                    created_at=str(sub.get("created_at", "")),
+                    updated_at=str(sub.get("updated_at", "")),
+                    id=str(sub.get("id", "")),
+                    method=str(sub.get("method", "POST")),
+                    status=str(sub.get("status", "")),
+                    broadcaster_user_id=sub.get("broadcaster_user_id"),
+                ))
+            except Exception as e:
+                print(f"[API] Error creating WebhookSubscription: {e}")
+                print(f"[API] Raw subscription data: {sub}")
+                # Return as dict if dataclass fails
+                subscriptions.append(sub)
 
         return subscriptions
 
