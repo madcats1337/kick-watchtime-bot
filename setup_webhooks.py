@@ -4,10 +4,17 @@ Setup Kick Webhooks with Proper Signature Verification
 
 This script:
 1. Uses existing OAuth tokens from database
-2. Refreshes access token if needed
+2. Generates ONE webhook secret per streamer (for all events)
 3. Deletes old webhooks
-4. Registers new webhooks with secure secrets
-5. Stores webhook secrets in database
+4. Registers new webhooks with the secret
+5. Stores webhook secrets in database for HMAC verification
+
+IMPORTANT NOTES:
+- One webhook secret per streamer (NOT per event)
+- OAuth auto-refresh is handled elsewhere in the system
+- Webhook secrets are unrelated to OAuth tokens
+- Idempotency: Webhooks are deduplicated by message_id
+- Gunicorn-safe: Database operations use transactions
 
 Usage:
     # For a specific Discord server

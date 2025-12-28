@@ -278,7 +278,39 @@ def handle_kick_webhook():
         
         print(f"[Webhook] ✅ Signature verified for subscription {subscription_id}")
 
-        # 7️⃣ HANDLE EVENT
+        # 7️⃣ IDEMPOTENCY CHECK (Kick retries webhooks on failure)
+        # Check if we've already processed this message_id
+        if message_id:
+            try:
+                with engine.begin() as conn:
+                    # Check if this message was already processed
+                    existing = conn.execute(text("""
+                        SELECT id FROM processed_webhook_messages
+                        WHERE message_id = :msg_id AND broadcaster_user_id = :broadcaster_id
+                        LIMIT 1
+                    """), {"msg_id": message_id, "broadcaster_id": broadcaster_user_id}).fetchone()
+                    
+                    if existing:
+                        print(f"[Webhook] ℹ️ Duplicate message {message_id}, already processed")
+                        # Return 200 OK to prevent Kick from retrying
+                        return jsonify({"status": "ok", "message": "already processed"}), 200
+                    
+                    # Mark this message as processed (with expiry for cleanup)
+                    conn.execute(text("""
+                        INSERT INTO processed_webhook_messages 
+                        (message_id, broadcaster_user_id, event_type, processed_at)
+                        VALUES (:msg_id, :broadcaster_id, :event_type, NOW())
+                        ON CONFLICT (message_id) DO NOTHING
+                    """), {
+                        "msg_id": message_id,
+                        "broadcaster_id": broadcaster_user_id,
+                        "event_type": event_type
+                    })
+            except Exception as dedup_err:
+                # If deduplication fails, continue anyway (better to process twice than not at all)
+                print(f"[Webhook] ⚠️ Deduplication check failed: {dedup_err}")
+
+        # 8️⃣ HANDLE EVENT
         if _event_handler:
             import asyncio
             # Run async handler in event loop
