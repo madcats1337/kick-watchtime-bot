@@ -1108,6 +1108,77 @@ class RedisSubscriber:
             import traceback
             traceback.print_exc()
 
+    async def handle_stream_notification_event(self, action, data):
+        """Handle stream notification events from dashboard - send Discord message when stream goes live"""
+        print(f"📺 Stream notification event: {action}")
+        
+        try:
+            if action != 'send':
+                return
+            
+            channel_id = data.get('channel_id')
+            streamer = data.get('streamer')
+            discord_server_id = data.get('discord_server_id')
+            is_test = data.get('test', False)
+            
+            if not channel_id or not streamer:
+                print("⚠️ Missing channel_id or streamer in stream notification event")
+                return
+            
+            stream_url = f"https://kick.com/{streamer}"
+            
+            # Message content: URL triggers Discord oEmbed unfurl with live preview
+            message_content = f"{stream_url} just went live!"
+            
+            # Discord button component for "Watch Stream"
+            components = [
+                {
+                    "type": 1,
+                    "components": [
+                        {
+                            "type": 2,
+                            "style": 5,
+                            "label": "Watch Stream",
+                            "url": stream_url,
+                            "emoji": {"name": "🔴"}
+                        }
+                    ]
+                }
+            ]
+            
+            import aiohttp
+            import os
+            bot_token = os.getenv('DISCORD_BOT_TOKEN')
+            
+            if not bot_token:
+                print("❌ DISCORD_BOT_TOKEN not configured")
+                return
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"https://discord.com/api/v10/channels/{channel_id}/messages",
+                    headers={
+                        "Authorization": f"Bot {bot_token}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "content": message_content,
+                        "components": components
+                    },
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    if resp.status in [200, 201]:
+                        test_label = " (TEST)" if is_test else ""
+                        print(f"✅ Discord stream notification sent to channel {channel_id}{test_label}")
+                    else:
+                        error_text = await resp.text()
+                        print(f"❌ Failed to send Discord notification: {resp.status} - {error_text[:200]}")
+                        
+        except Exception as e:
+            print(f"❌ Error handling stream notification event: {e}")
+            import traceback
+            traceback.print_exc()
+
     async def announce_in_chat(self, message, guild_id=None):
             # Kick channel was synced from dashboard - refresh to pick up new chatroom_id
             kick_channel = data.get('kick_channel')
@@ -1220,7 +1291,8 @@ Congratulations! Please contact an admin to claim your prize! 🎊
             'dashboard:point_shop',
             'dashboard:notifications',
             'dashboard:bot_settings',
-            'dashboard:giveaway'
+            'dashboard:giveaway',
+            'dashboard:stream_notification'
             # 'bot_events' removed - no longer using webhooks for chat
         )
 
@@ -1259,6 +1331,8 @@ Congratulations! Please contact an admin to claim your prize! 🎊
                             await self.handle_bot_settings_event(action, data)
                         elif channel == 'dashboard:giveaway':
                             await self.handle_giveaway_event(action, data)
+                        elif channel == 'dashboard:stream_notification':
+                            await self.handle_stream_notification_event(action, data)
                         # elif channel == 'bot_events':  # Disabled - using direct WebSocket
                         #     await self.handle_webhook_event(payload)
 
@@ -1287,7 +1361,8 @@ Congratulations! Please contact an admin to claim your prize! 🎊
                         'dashboard:point_shop',
                         'dashboard:notifications',
                         'dashboard:bot_settings',
-                        'dashboard:giveaway'
+                        'dashboard:giveaway',
+                        'dashboard:stream_notification'
                         # 'bot_events' removed - no longer using webhooks
                     )
 
