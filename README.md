@@ -735,3 +735,5 @@ Need help? Check these resources:
 ---
 
 Made with ❤️ for the Kick.com community
+#   T r i g g e r   r e d e p l o y  
+ 
