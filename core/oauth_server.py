@@ -204,14 +204,6 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
     print("[OAuth] ✅ Webhook routes registered at /webhooks/kick", flush=True)
 else:
     print("[OAuth] ⚠️ Kick webhook support not available", flush=True)
-        # For now, only chat.message.sent is supported by Kick's Events API
-
-    register_webhook_routes(app, webhook_handler)
-    print("[OAuth] ✅ Kick webhook routes registered")
-    print("[OAuth] 📝 Currently handling: chat.message.sent")
-    print("[OAuth] 📝 Future events (when Kick adds support): subscriptions, follows, stream status")
-else:
-    print("[OAuth] ℹ️ Kick webhook routes not available")
 
 # 404 handler - ignore not found errors (bots/scanners)
 @app.errorhandler(404)
