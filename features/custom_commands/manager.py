@@ -226,20 +226,22 @@ class CustomCommandsManager:
                     # Get user's watchtime in hours
                     if '{watchtime}' in text:
                         cursor.execute("""
-                            SELECT minutes FROM watchtime w
-                            JOIN links l ON w.discord_id = l.discord_id AND w.discord_server_id = l.discord_server_id
-                            WHERE LOWER(l.kick_name) = %s AND w.discord_server_id = %s
+                            SELECT minutes FROM watchtime
+                            WHERE LOWER(username) = %s AND discord_server_id = %s
                         """, (username.lower(), self.discord_server_id))
                         result = cursor.fetchone()
                         minutes = result[0] if result and result[0] else 0
                         hours = minutes / 60
                         text = text.replace('{watchtime}', f"{hours:.1f}")
+                        print(f"✅ Replaced {{watchtime}} for {username}: {hours:.1f} hours ({minutes} minutes)")
                     
                     cursor.close()
                     conn.close()
                     
                 except Exception as e:
-                    print(f"⚠️ Error fetching variable data: {e}")
+                    print(f"⚠️ Error fetching variable data for {username}: {e}")
+                    import traceback
+                    traceback.print_exc()
             
             return text
         except Exception as e:
