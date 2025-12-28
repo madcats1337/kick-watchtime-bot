@@ -209,6 +209,12 @@ def handle_kick_webhook():
     message_timestamp = request.headers.get("Kick-Event-Message-Timestamp", "")
     subscription_id = request.headers.get("Kick-Event-Subscription-Id", "")
     
+    # 🚫 ARCHITECTURAL DECISION: Ignore chat.message.sent (handled by kickpython WebSockets)
+    # EARLY EXIT before verification, database lookup, or ANY processing
+    if event_type == "chat.message.sent":
+        print(f"[Webhook] ⚠️  Ignoring chat.message.sent — chat handled via WebSockets")
+        return jsonify({"status": "ok", "message": "chat handled by websockets"}), 200
+    
     # Look for Kick-Event-Signature header (case-insensitive)
     # Kick officially uses: Kick-Event-Signature
     signature_header = None
