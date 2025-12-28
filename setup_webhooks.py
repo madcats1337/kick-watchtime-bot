@@ -176,35 +176,16 @@ async def setup_webhooks_for_server(discord_server_id: str):
     )
     
     try:
-        # Refresh access token if we have refresh token
-        if refresh_token:
-            print("🔄 Refreshing access token...")
-            try:
-                token_data = await api.refresh_access_token(refresh_token)
-                api.access_token = token_data.get("access_token")
-                new_refresh_token = token_data.get("refresh_token")
-                
-                # Update tokens in database
-                with engine.begin() as conn:
-                    conn.execute(text("""
-                        UPDATE bot_settings
-                        SET value = :access_token
-                        WHERE discord_server_id = :server_id AND key = 'kick_access_token'
-                    """), {"access_token": api.access_token, "server_id": discord_server_id})
-                    
-                    if new_refresh_token:
-                        conn.execute(text("""
-                            UPDATE bot_settings
-                            SET value = :refresh_token
-                            WHERE discord_server_id = :server_id AND key = 'kick_refresh_token'
-                        """), {"refresh_token": new_refresh_token, "server_id": discord_server_id})
-                
-                print("✅ Access token refreshed")
-            except Exception as e:
-                print(f"⚠️  Could not refresh token: {e}")
-                if not access_token:
-                    print("❌ No valid access token available")
-                    return False
+        # NOTE: OAuth auto-refresh is handled elsewhere in the system
+        # We use the existing access token from database
+        # If it's expired, the API calls will fail and user needs to re-authenticate
+        
+        if not access_token:
+            print("❌ No access token available")
+            print("   User needs to complete OAuth linking first")
+            return False
+        
+        print(f"✅ Using access token for {username}")
         
         # List existing webhooks
         print("\n📋 Checking existing webhooks...")
@@ -229,23 +210,23 @@ async def setup_webhooks_for_server(discord_server_id: str):
         else:
             print("ℹ️  No existing webhooks found")
         
-        # Register new webhooks with secrets
-        print(f"\n📨 Registering new webhooks for events: {', '.join(WEBHOOK_EVENTS)}")
+        # Generate ONE webhook secret for this streamer (used for ALL events)
+        webhook_secret = secrets.token_hex(32)  # 256-bit secret
+        print(f"\n🔐 Generated webhook secret for {username}: {webhook_secret[:8]}...{webhook_secret[-8:]}")
         
+        # Register new webhooks - ALL use the SAME secret
+        print(f"\n📨 Registering webhooks for events: {', '.join(WEBHOOK_EVENTS)}")
+        
+        registered_count = 0
         for event_type in WEBHOOK_EVENTS:
-            # Generate unique secret for this webhook
-            webhook_secret = secrets.token_hex(32)  # 256-bit secret
-            
             print(f"\n🔧 Registering: {event_type}")
-            print(f"   URL: {WEBHOOK_URL}")
-            print(f"   Secret: {webhook_secret[:8]}...{webhook_secret[-8:]}")
             
             try:
                 subscription = await api.subscribe_webhook(
                     event=event_type,
                     callback_url=WEBHOOK_URL,
                     broadcaster_user_id=broadcaster_user_id,
-                    secret=webhook_secret  # Pass the secret to Kick
+                    secret=webhook_secret  # Same secret for all events
                 )
                 
                 sub_dict = subscription.__dict__ if hasattr(subscription, '__dict__') else subscription
@@ -253,7 +234,7 @@ async def setup_webhooks_for_server(discord_server_id: str):
                 
                 print(f"   ✅ Subscription created: {subscription_id}")
                 
-                # Store in database
+                # Store in database with the SAME secret
                 with engine.begin() as conn:
                     conn.execute(text("""
                         INSERT INTO kick_webhook_subscriptions 
@@ -274,12 +255,15 @@ async def setup_webhooks_for_server(discord_server_id: str):
                     })
                 
                 print(f"   ✅ Stored in database")
+                registered_count += 1
                 
             except Exception as e:
                 print(f"   ❌ Failed to register: {e}")
         
         print(f"\n{'='*60}")
         print(f"✅ Webhook setup complete for {username}!")
+        print(f"   Registered {registered_count}/{len(WEBHOOK_EVENTS)} events")
+        print(f"   All events use the same webhook secret")
         print(f"{'='*60}\n")
         
         return True
