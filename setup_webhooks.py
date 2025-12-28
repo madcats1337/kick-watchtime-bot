@@ -205,11 +205,16 @@ async def setup_webhooks_for_server(discord_server_id: str):
         print("\n📋 Checking existing webhooks...")
         existing_subs = await api.get_webhook_subscriptions()
         
+        print(f"Found {len(existing_subs)} existing webhook(s)")
+        
         # Delete existing webhooks for this broadcaster
         deleted_count = 0
         for sub in existing_subs:
             sub_dict = sub.__dict__ if hasattr(sub, '__dict__') else sub
-            if sub_dict.get('broadcaster_user_id') == broadcaster_user_id:
+            sub_broadcaster = sub_dict.get('broadcaster_user_id')
+            
+            # Compare as strings or ints
+            if str(sub_broadcaster) == str(broadcaster_user_id):
                 sub_id = sub_dict.get('id')
                 event = sub_dict.get('event')
                 print(f"🗑️  Deleting old webhook: {event} (ID: {sub_id})")
@@ -221,8 +226,10 @@ async def setup_webhooks_for_server(discord_server_id: str):
         
         if deleted_count > 0:
             print(f"✅ Deleted {deleted_count} old webhook(s)")
-        else:
+        elif len(existing_subs) == 0:
             print("ℹ️  No existing webhooks found")
+        else:
+            print(f"ℹ️  No webhooks found for broadcaster {broadcaster_user_id}")
         
         # Generate ONE webhook secret for this streamer (used for ALL events)
         webhook_secret = secrets.token_hex(32)  # 256-bit secret

@@ -119,16 +119,17 @@ class OAuthTokens:
 
 @dataclass
 class WebhookSubscription:
-    """Webhook subscription data"""
-    event: str
-    version: int
-    callback_url: str
-    created_at: str
-    updated_at: str
+    """Webhook subscription data - accepts all fields Kick returns"""
     id: Optional[str] = None
-    method: str = "POST"
-    status: str = ""
+    app_id: Optional[str] = None
+    event: Optional[str] = None
+    version: Optional[int] = None
     broadcaster_user_id: Optional[int] = None
+    method: Optional[str] = None
+    status: Optional[str] = None
+    callback_url: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 class KickOfficialAPI:
     """
@@ -636,24 +637,18 @@ class KickOfficialAPI:
         response = await self._get(KICK_WEBHOOKS_URL)
         subscriptions = []
 
-        for sub in response.get("data", []):
-            # Create WebhookSubscription with only the fields defined in the dataclass
+        data = response.get("data", [])
+        if not data:
+            return subscriptions
+
+        for sub in data:
             try:
-                subscriptions.append(WebhookSubscription(
-                    event=str(sub.get("event", "")),
-                    version=int(sub.get("version", 1)),
-                    callback_url=str(sub.get("callback_url", "")),
-                    created_at=str(sub.get("created_at", "")),
-                    updated_at=str(sub.get("updated_at", "")),
-                    id=str(sub.get("id", "")),
-                    method=str(sub.get("method", "POST")),
-                    status=str(sub.get("status", "")),
-                    broadcaster_user_id=sub.get("broadcaster_user_id"),
-                ))
+                # Pass all fields Kick returns - WebhookSubscription accepts them all
+                subscriptions.append(WebhookSubscription(**sub))
             except Exception as e:
                 print(f"[API] Error creating WebhookSubscription: {e}")
                 print(f"[API] Raw subscription data: {sub}")
-                # Return as dict if dataclass fails
+                # Return raw dict if dataclass fails
                 subscriptions.append(sub)
 
         return subscriptions
@@ -705,19 +700,19 @@ class KickOfficialAPI:
         
         response = await self._post(KICK_WEBHOOKS_URL, json=data)
         
-        # Return WebhookSubscription from response
-        sub_data = response.get("data", response)
-        return WebhookSubscription(
-            event=sub_data.get("event"),
-            version=sub_data.get("version", 1),
-            callback_url=sub_data.get("callback_url"),
-            created_at=sub_data.get("created_at", ""),
-            updated_at=sub_data.get("updated_at", ""),
-            id=str(sub_data.get("id", "")),
-            method=sub_data.get("method", "webhook"),
-            status=sub_data.get("status", ""),
-            broadcaster_user_id=sub_data.get("broadcaster_user_id"),
-        )
+        # Handle response - Kick may return data wrapped or as list
+        if isinstance(response, dict):
+            sub_data = response.get("data", response)
+            # If data is a list, take first item
+            if isinstance(sub_data, list) and len(sub_data) > 0:
+                sub_data = sub_data[0]
+        elif isinstance(response, list) and len(response) > 0:
+            sub_data = response[0]
+        else:
+            sub_data = response
+        
+        # Pass all fields to WebhookSubscription
+        return WebhookSubscription(**sub_data)
 
     # -------------------------
     # Moderation API
