@@ -422,55 +422,6 @@ def health():
     """Health check endpoint for Railway."""
     return jsonify({"status": "healthy", "oauth_configured": bool(KICK_CLIENT_ID and KICK_CLIENT_SECRET)}), 200
 
-@app.route('/admin/setup-webhooks/<discord_server_id>')
-def admin_setup_webhooks(discord_server_id):
-    """
-    Admin endpoint to trigger webhook setup for a Discord server.
-    
-    Usage: GET https://bot.lelebot.xyz/admin/setup-webhooks/YOUR_DISCORD_SERVER_ID
-    
-    This will:
-    - Refresh OAuth tokens
-    - Delete old webhooks
-    - Register new webhooks with secrets
-    - Store subscription IDs in database
-    """
-    try:
-        # Import here to avoid circular imports
-        import asyncio
-        from setup_webhooks import setup_webhooks_for_server
-        
-        # Run the async function
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        success = loop.run_until_complete(setup_webhooks_for_server(discord_server_id))
-        loop.close()
-        
-        if success:
-            return jsonify({
-                "status": "success",
-                "message": f"Webhooks successfully configured for server {discord_server_id}",
-                "events": [
-                    "livestream.status.updated",
-                    "channel.subscription.new",
-                    "channel.subscription.gifts",
-                    "channel.subscription.renewal"
-                ]
-            }), 200
-        else:
-            return jsonify({
-                "status": "error",
-                "message": "Failed to setup webhooks. Check logs for details."
-            }), 500
-            
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-
 @app.route('/api/status')
 def api_status():
     """
