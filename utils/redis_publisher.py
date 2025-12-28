@@ -60,5 +60,12 @@ class BotRedisPublisher:
             'stream_url': stream_url
         })
 
+    def publish_stream_offline(self, discord_server_id, streamer):
+        """Publish stream offline event to dashboard"""
+        return self.publish('bot:stream_status', 'stream_offline', {
+            'discord_server_id': discord_server_id,
+            'streamer': streamer
+        })
+
 # Global instance
 bot_redis_publisher = BotRedisPublisher()

@@ -531,11 +531,15 @@ def create_discord_notifier(discord_bot, channel_id: int):
 
     @handler.on("livestream.status.updated")
     async def on_stream_status(data):
-        """Handle stream going live/offline"""
+        """Handle stream going live/offline - triggers clip buffer and dashboard notifications"""
         is_live = data.get("is_live", False)
         broadcaster = data.get("broadcaster", {}).get("username", "")
         title = data.get("livestream", {}).get("session_title", "")
+        discord_server_id = data.get("_server_id")
+        
+        print(f"[Webhook] 📺 Stream status update: {broadcaster} is_live={is_live}, server_id={discord_server_id}")
 
+        # Send Discord notification
         channel = discord_bot.get_channel(channel_id)
         if channel:
             if is_live:
@@ -550,6 +554,79 @@ def create_discord_notifier(discord_bot, channel_id: int):
                     f"⚫ **Stream Ended**\n"
                     f"**{broadcaster}** has ended their stream."
                 )
+        
+        # Publish to Redis for dashboard notifications
+        if discord_server_id:
+            try:
+                from utils.redis_publisher import bot_redis_publisher
+                if is_live:
+                    bot_redis_publisher.publish_stream_live(
+                        discord_server_id=str(discord_server_id),
+                        streamer=broadcaster,
+                        stream_url=f"https://kick.com/{broadcaster}"
+                    )
+                    print(f"[Webhook] 📤 Published stream_live to Redis for server {discord_server_id}")
+                else:
+                    bot_redis_publisher.publish_stream_offline(
+                        discord_server_id=str(discord_server_id),
+                        streamer=broadcaster
+                    )
+                    print(f"[Webhook] 📤 Published stream_offline to Redis for server {discord_server_id}")
+            except Exception as e:
+                print(f"[Webhook] ⚠️ Failed to publish stream status to Redis: {e}")
+        
+        # Trigger clip buffer start/stop via dashboard API
+        if discord_server_id:
+            try:
+                from sqlalchemy import create_engine, text
+                import aiohttp
+                
+                db_url = os.getenv('DATABASE_URL')
+                if db_url:
+                    engine = create_engine(db_url, pool_pre_ping=True)
+                    with engine.connect() as conn:
+                        # Get dashboard URL and API key for this server
+                        settings_result = conn.execute(text("""
+                            SELECT key, value FROM bot_settings 
+                            WHERE discord_server_id = :guild_id 
+                            AND key IN ('kick_channel', 'dashboard_url', 'bot_api_key')
+                        """), {"guild_id": discord_server_id}).fetchall()
+                        
+                        settings = {key: value for key, value in settings_result}
+                        kick_channel = settings.get('kick_channel')
+                        dashboard_url = settings.get('dashboard_url')
+                        api_key = settings.get('bot_api_key')
+                        
+                        if dashboard_url and api_key and kick_channel:
+                            async with aiohttp.ClientSession() as session:
+                                if is_live:
+                                    # Start clip buffer
+                                    async with session.post(
+                                        f"{dashboard_url}/api/clips/buffer/start",
+                                        headers={'X-API-Key': api_key, 'Content-Type': 'application/json'},
+                                        json={'channel': kick_channel, 'buffer_minutes': 4},
+                                        timeout=30
+                                    ) as resp:
+                                        if resp.status == 200:
+                                            print(f"[Webhook] ✅ Clip buffer started for {broadcaster}")
+                                        else:
+                                            error_text = await resp.text()
+                                            print(f"[Webhook] ⚠️ Failed to start clip buffer: {resp.status} - {error_text[:200]}")
+                                else:
+                                    # Stop clip buffer
+                                    async with session.post(
+                                        f"{dashboard_url}/api/clips/buffer/stop",
+                                        headers={'X-API-Key': api_key, 'Content-Type': 'application/json'},
+                                        json={'channel': kick_channel},
+                                        timeout=10
+                                    ) as resp:
+                                        if resp.status == 200:
+                                            print(f"[Webhook] ✅ Clip buffer stopped for {broadcaster}")
+                                        else:
+                                            error_text = await resp.text()
+                                            print(f"[Webhook] ⚠️ Failed to stop clip buffer: {resp.status} - {error_text[:200]}")
+            except Exception as e:
+                print(f"[Webhook] ⚠️ Failed to control clip buffer: {e}")
 
     @handler.on("channel.followed")
     async def on_follow(data):
