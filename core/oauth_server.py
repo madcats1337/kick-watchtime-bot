@@ -1132,6 +1132,43 @@ def handle_bot_authorization_callback(code, code_verifier, state):
             conn.execute(text("DELETE FROM oauth_states WHERE state = :state"), {"state": state})
 
             print(f"✅ Bot token stored securely", flush=True)
+            
+            # 🎯 AUTO-SETUP WEBHOOKS after successful bot authorization
+            print(f"🔧 [WEBHOOK AUTO-SETUP] Starting automatic webhook setup for {kick_username}...", flush=True)
+            try:
+                import asyncio
+                from setup_webhooks import setup_webhooks_for_server
+                
+                # Get the Discord server ID for this bot auth (from guild_id in state or bot_settings)
+                # For now, try to find it from bot_settings with matching kick_channel
+                server_result = conn.execute(text("""
+                    SELECT discord_server_id FROM bot_settings
+                    WHERE key = 'kick_channel' AND value = :username
+                    LIMIT 1
+                """), {"username": kick_username}).fetchone()
+                
+                if server_result:
+                    discord_server_id = server_result[0]
+                    print(f"🔧 [WEBHOOK AUTO-SETUP] Found server ID: {discord_server_id}", flush=True)
+                    
+                    # Run webhook setup asynchronously
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    webhook_success = loop.run_until_complete(setup_webhooks_for_server(discord_server_id))
+                    loop.close()
+                    
+                    if webhook_success:
+                        print(f"✅ [WEBHOOK AUTO-SETUP] Webhooks configured successfully!", flush=True)
+                    else:
+                        print(f"⚠️  [WEBHOOK AUTO-SETUP] Webhook setup had issues, check logs", flush=True)
+                else:
+                    print(f"⚠️  [WEBHOOK AUTO-SETUP] Could not find Discord server ID for {kick_username}", flush=True)
+                    
+            except Exception as webhook_err:
+                print(f"⚠️  [WEBHOOK AUTO-SETUP] Failed to auto-setup webhooks: {webhook_err}", flush=True)
+                import traceback
+                traceback.print_exc()
+                # Don't fail the OAuth flow if webhook setup fails
 
         # Return success page
         return f"""
