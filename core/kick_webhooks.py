@@ -562,40 +562,14 @@ def create_discord_notifier(discord_bot, channel_id: int):
                         
                         if settings.get('stream_notification_enabled') == 'true' and settings.get('stream_notification_channel_id'):
                             notification_channel_id = settings['stream_notification_channel_id']
-                            custom_title = settings.get('stream_notification_title', '{streamer} is now live on Kick!')
-                            custom_description = settings.get('stream_notification_description', '')
                             
-                            # Replace placeholders
+                            # Stream URL - Discord will auto-unfurl this with the live player via oEmbed
                             stream_url = f"https://kick.com/{broadcaster}"
-                            embed_title = custom_title.replace('{streamer}', broadcaster)
-                            embed_description = custom_description.replace('{streamer}', broadcaster) \
-                                                                   .replace('{title}', title or 'Live Stream') \
-                                                                   .replace('{category}', category) \
-                                                                   .replace('{stream_url}', stream_url)
                             
-                            if not embed_description:
-                                embed_description = f"🔴 **{broadcaster}** just went live!\n\n**{title or 'Live Stream'}**\nPlaying: {category}"
+                            # Message content: URL so Discord unfurls it with live preview
+                            message_content = f"{stream_url} just went live!"
                             
-                            embed = {
-                                "title": embed_title,
-                                "description": embed_description,
-                                "color": 0x53fc18,  # Kick green
-                                "url": stream_url,
-                                "thumbnail": {
-                                    "url": f"https://kick.com/api/v1/channels/{broadcaster}/profile-image"
-                                },
-                                "fields": [
-                                    {
-                                        "name": "Category",
-                                        "value": category,
-                                        "inline": True
-                                    }
-                                ],
-                                "footer": {
-                                    "text": "Kick.com"
-                                }
-                            }
-                            
+                            # Discord button component for "Watch Stream"
                             components = [
                                 {
                                     "type": 1,
@@ -620,13 +594,17 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                             "Authorization": f"Bot {bot_token}",
                                             "Content-Type": "application/json"
                                         },
-                                        json={"embeds": [embed], "components": components},
+                                        json={
+                                            "content": message_content,  # URL triggers Discord oEmbed unfurl with live preview
+                                            "components": components
+                                        },
                                         timeout=10
                                     ) as resp:
                                         if resp.status in [200, 201]:
                                             print(f"[Webhook] ✅ Discord stream notification sent to channel {notification_channel_id}")
                                         else:
                                             error_text = await resp.text()
+                                            print(f"[Webhook] ⚠️ Failed to send Discord notification: {resp.status} - {error_text[:200]}")
                                             print(f"[Webhook] ⚠️ Failed to send Discord notification: {resp.status} - {error_text[:200]}")
             except Exception as e:
                 print(f"[Webhook] ⚠️ Failed to send Discord stream notification: {e}")
