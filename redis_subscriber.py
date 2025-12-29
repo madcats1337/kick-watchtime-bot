@@ -1125,10 +1125,12 @@ class RedisSubscriber:
                 print("⚠️ Missing channel_id or streamer in stream notification event")
                 return
             
+            # Use player.kick.com URL for better Discord embed with video thumbnail
+            player_url = f"https://player.kick.com/{streamer}"
             stream_url = f"https://kick.com/{streamer}"
             
-            # Message content: URL triggers Discord oEmbed unfurl with live preview
-            message_content = f"{stream_url} just went live!"
+            # Message content: player URL triggers Discord oEmbed unfurl with video preview
+            message_content = f"{player_url} just went live!"
             
             # Discord button component for "Watch Stream"
             components = [

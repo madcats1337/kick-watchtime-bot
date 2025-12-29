@@ -563,11 +563,12 @@ def create_discord_notifier(discord_bot, channel_id: int):
                         if settings.get('stream_notification_enabled') == 'true' and settings.get('stream_notification_channel_id'):
                             notification_channel_id = settings['stream_notification_channel_id']
                             
-                            # Stream URL - Discord will auto-unfurl this with the live player via oEmbed
+                            # Use player.kick.com URL for better Discord embed with video thumbnail
+                            player_url = f"https://player.kick.com/{broadcaster}"
                             stream_url = f"https://kick.com/{broadcaster}"
                             
-                            # Message content: URL so Discord unfurls it with live preview
-                            message_content = f"{stream_url} just went live!"
+                            # Message content: player URL triggers Discord oEmbed unfurl with video preview
+                            message_content = f"{player_url} just went live!"
                             
                             # Discord button component for "Watch Stream"
                             components = [
