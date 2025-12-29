@@ -556,7 +556,7 @@ def create_discord_notifier(discord_bot, channel_id: int):
                             WHERE discord_server_id = :guild_id 
                             AND key IN ('stream_notification_enabled', 'stream_notification_channel_id', 
                                         'stream_notification_title', 'stream_notification_description', 
-                                        'stream_notification_link_text', 'kick_channel')
+                                        'stream_notification_link_text', 'stream_notification_link_small', 'kick_channel')
                         """), {"guild_id": discord_server_id}).fetchall()
                         
                         settings = {key: value for key, value in settings_result}
@@ -568,10 +568,11 @@ def create_discord_notifier(discord_bot, channel_id: int):
                             # Use clkick.com for Discord video embed (proxy with proper oEmbed)
                             embed_url = f"https://clkick.com/{broadcaster}"
                             
-                            # Get custom title, description, and link text from settings
+                            # Get custom title, description, link text and small text setting
                             custom_title = settings.get('stream_notification_title')
                             custom_description = settings.get('stream_notification_description')
                             custom_link_text = settings.get('stream_notification_link_text')
+                            link_small = settings.get('stream_notification_link_small') == 'true'
                             
                             # Replace placeholders in custom title/description
                             def replace_placeholders(text):
@@ -581,8 +582,11 @@ def create_discord_notifier(discord_bot, channel_id: int):
                             
                             # Build message content using Discord markdown hyperlink to hide URL
                             # Format: [Link Text](URL) - Discord may still show embed from oEmbed
+                            # Use -# prefix for small/subtext format if enabled
                             link_text = custom_link_text or "Watch Preview"
                             hidden_link = f"[{link_text}]({embed_url})"
+                            if link_small:
+                                hidden_link = f"-# {hidden_link}"
                             
                             if custom_title:
                                 title_text = replace_placeholders(custom_title)

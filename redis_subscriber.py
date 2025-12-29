@@ -1138,10 +1138,11 @@ class RedisSubscriber:
                 print("❌ DISCORD_TOKEN not configured")
                 return
             
-            # Fetch custom title, description, and link text from database
+            # Fetch custom title, description, link text, and small text setting from database
             custom_title = None
             custom_description = None
             custom_link_text = None
+            link_small = False
             
             if discord_server_id and engine:
                 try:
@@ -1150,7 +1151,8 @@ class RedisSubscriber:
                         result = conn.execute(text("""
                             SELECT key, value FROM bot_settings 
                             WHERE discord_server_id = :guild_id 
-                            AND key IN ('stream_notification_title', 'stream_notification_description', 'stream_notification_link_text')
+                            AND key IN ('stream_notification_title', 'stream_notification_description', 
+                                        'stream_notification_link_text', 'stream_notification_link_small')
                         """), {"guild_id": discord_server_id}).fetchall()
                         
                         for key, value in result:
@@ -1160,6 +1162,8 @@ class RedisSubscriber:
                                 custom_description = value
                             elif key == 'stream_notification_link_text' and value:
                                 custom_link_text = value
+                            elif key == 'stream_notification_link_small':
+                                link_small = value == 'true'
                 except Exception as db_err:
                     print(f"⚠️ Failed to fetch notification settings: {db_err}")
             
@@ -1171,8 +1175,11 @@ class RedisSubscriber:
             
             # Build message content using Discord markdown hyperlink to hide URL
             # Format: [Link Text](URL) - Discord may still show embed from oEmbed
+            # Use -# prefix for small/subtext format if enabled
             link_text = custom_link_text or "Watch Preview"
             hidden_link = f"[{link_text}]({embed_url})"
+            if link_small:
+                hidden_link = f"-# {hidden_link}"
             
             if custom_title:
                 title_text = replace_placeholders(custom_title)
