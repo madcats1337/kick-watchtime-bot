@@ -3291,55 +3291,115 @@ async def check_oauth_notifications_task():
         print(f"⚠️ Error in OAuth notifications task: {e}", flush=True)
 @tasks.loop(minutes=30)  # Check every 30 minutes for faster response
 async def proactive_token_refresh_task():
-    """Proactively refresh OAuth token before it expires."""
+    """Proactively refresh OAuth tokens before they expire."""
     if not engine:
         return
 
     try:
-        # Check if token will expire soon - use kick_oauth_tokens table
+        print("[Kick] 🔄 Running proactive token refresh check...")
+        
+        # Check ALL tokens that might expire soon
         with engine.connect() as conn:
-            result = conn.execute(text("""
-                SELECT expires_at, kick_username FROM kick_oauth_tokens
-                ORDER BY updated_at DESC LIMIT 1
-            """)).fetchone()
+            results = conn.execute(text("""
+                SELECT user_id, kick_username, refresh_token, expires_at 
+                FROM kick_oauth_tokens
+                WHERE refresh_token IS NOT NULL
+                ORDER BY expires_at ASC
+            """)).fetchall()
 
-            if not result:
+            if not results:
+                print("[Kick] ℹ️  No OAuth tokens in database")
                 return
-
-            expires_at, kick_username = result
-
-            if not expires_at:
-                print(f"[Kick] ⚠️  No expiration time stored for {kick_username} - token will refresh on-demand")
-                return
-
-            # Make expires_at timezone-aware if it isn't already
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
 
             now = datetime.now(timezone.utc)
-            time_until_expiry = expires_at - now
-            minutes_until_expiry = time_until_expiry.total_seconds() / 60
+            refreshed = 0
+            failed = 0
+            
+            for user_id, kick_username, refresh_token, expires_at in results:
+                if not expires_at:
+                    print(f"[Kick] ⚠️  No expiration time for {kick_username} - skipping")
+                    continue
 
-            # Refresh if token expires in less than 30 minutes (very aggressive)
-            # This ensures we always have a valid token
-            if minutes_until_expiry < 30:
-                print(f"[Kick] ⚠️  Token expires in {minutes_until_expiry:.1f} minutes - refreshing proactively...")
-                if await refresh_kick_oauth_token():
-                    print(f"[Kick] ✅ Proactive token refresh successful!")
+                # Make expires_at timezone-aware if it isn't already
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+                time_until_expiry = expires_at - now
+                minutes_until_expiry = time_until_expiry.total_seconds() / 60
+
+                # Refresh if token expires in less than 30 minutes
+                if minutes_until_expiry < 30:
+                    print(f"[Kick] ⚠️  Token for {kick_username} expires in {minutes_until_expiry:.1f} minutes - refreshing...")
+                    if await refresh_kick_oauth_token_for_user(user_id, kick_username, refresh_token):
+                        refreshed += 1
+                        print(f"[Kick] ✅ Token refreshed for {kick_username}")
+                    else:
+                        failed += 1
+                        print(f"[Kick] ❌ Token refresh failed for {kick_username}")
+                elif minutes_until_expiry < 120:
+                    print(f"[Kick] ⚠️  Token for {kick_username} expires in {minutes_until_expiry:.1f} minutes")
                 else:
-                    print(f"[Kick] ❌ Proactive token refresh failed - will retry on next cycle")
-            elif minutes_until_expiry < 120:
-                # Warn if getting close
-                print(f"[Kick] ⚠️  Token expires in {minutes_until_expiry:.1f} minutes")
-            else:
-                # Only log occasionally to avoid spam
-                hours = minutes_until_expiry / 60
-                print(f"[Kick] ✓ Token valid for {hours:.1f} more hours")
+                    hours = minutes_until_expiry / 60
+                    print(f"[Kick] ✓ Token for {kick_username} valid for {hours:.1f} more hours")
+            
+            if refreshed > 0 or failed > 0:
+                print(f"[Kick] Token refresh complete - Refreshed: {refreshed}, Failed: {failed}")
 
     except Exception as e:
         print(f"[Kick] ❌ Error in proactive token refresh: {e}")
         import traceback
         traceback.print_exc()
+
+
+async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, refresh_token: str) -> bool:
+    """Refresh OAuth token for a specific user."""
+    try:
+        token_url = "https://id.kick.com/oauth/token"
+        token_data = {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": KICK_CLIENT_ID,
+            "client_secret": KICK_CLIENT_SECRET
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(token_url, data=token_data, timeout=10) as response:
+                if response.status == 200:
+                    token_response = await response.json()
+                    new_access_token = token_response.get("access_token")
+                    new_refresh_token = token_response.get("refresh_token", refresh_token)
+                    expires_in = token_response.get("expires_in", 3600)
+
+                    if not new_access_token:
+                        return False
+
+                    expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+
+                    with engine.begin() as conn:
+                        conn.execute(text("""
+                            UPDATE kick_oauth_tokens
+                            SET access_token = :access_token,
+                                refresh_token = :refresh_token,
+                                expires_at = :expires_at,
+                                updated_at = CURRENT_TIMESTAMP
+                            WHERE user_id = :user_id
+                        """), {
+                            "access_token": new_access_token,
+                            "refresh_token": new_refresh_token,
+                            "expires_at": expires_at,
+                            "user_id": user_id
+                        })
+
+                    return True
+                else:
+                    error_text = await response.text()
+                    print(f"[Kick] ❌ Refresh failed for {kick_username} (HTTP {response.status}): {error_text[:100]}")
+                    return False
+
+    except Exception as e:
+        print(f"[Kick] ❌ Error refreshing token for {kick_username}: {e}")
+        return False
+
 
 @tasks.loop(minutes=5)
 async def cleanup_pending_links_task():
