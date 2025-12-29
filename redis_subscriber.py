@@ -1143,6 +1143,7 @@ class RedisSubscriber:
             custom_description = None
             custom_link_text = None
             link_small = False
+            custom_footer = None
             
             if discord_server_id and engine:
                 try:
@@ -1152,7 +1153,8 @@ class RedisSubscriber:
                             SELECT key, value FROM bot_settings 
                             WHERE discord_server_id = :guild_id 
                             AND key IN ('stream_notification_title', 'stream_notification_description', 
-                                        'stream_notification_link_text', 'stream_notification_link_small')
+                                        'stream_notification_link_text', 'stream_notification_link_small',
+                                        'stream_notification_footer')
                         """), {"guild_id": discord_server_id}).fetchall()
                         
                         for key, value in result:
@@ -1164,6 +1166,8 @@ class RedisSubscriber:
                                 custom_link_text = value
                             elif key == 'stream_notification_link_small':
                                 link_small = value == 'true'
+                            elif key == 'stream_notification_footer' and value:
+                                custom_footer = value
                 except Exception as db_err:
                     print(f"⚠️ Failed to fetch notification settings: {db_err}")
             
@@ -1191,6 +1195,11 @@ class RedisSubscriber:
                 message_content = f"{title_text}\n{desc_text}\n{hidden_link}"
             else:
                 message_content = f"{title_text}\n{hidden_link}"
+            
+            # Add footer if set (appears after the button in the message)
+            footer_text = None
+            if custom_footer:
+                footer_text = replace_placeholders(custom_footer)
             
             # Discord button component for "Watch Stream"
             components = [
@@ -1222,6 +1231,21 @@ class RedisSubscriber:
                     timeout=aiohttp.ClientTimeout(total=10)
                 ) as resp:
                     if resp.status in [200, 201]:
+                        # If footer is set, send it as a follow-up message
+                        if footer_text:
+                            await asyncio.sleep(0.5)
+                            async with session.post(
+                                f"https://discord.com/api/v10/channels/{channel_id}/messages",
+                                headers={
+                                    "Authorization": f"Bot {bot_token}",
+                                    "Content-Type": "application/json"
+                                },
+                                json={"content": f"-# {footer_text}"},
+                                timeout=aiohttp.ClientTimeout(total=10)
+                            ) as footer_resp:
+                                if footer_resp.status not in [200, 201]:
+                                    print(f"⚠️ Failed to send footer: {footer_resp.status}")
+                        
                         test_label = " (TEST)" if is_test else ""
                         print(f"✅ Discord stream notification sent to channel {channel_id}{test_label}")
                     else:

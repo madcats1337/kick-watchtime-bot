@@ -556,7 +556,8 @@ def create_discord_notifier(discord_bot, channel_id: int):
                             WHERE discord_server_id = :guild_id 
                             AND key IN ('stream_notification_enabled', 'stream_notification_channel_id', 
                                         'stream_notification_title', 'stream_notification_description', 
-                                        'stream_notification_link_text', 'stream_notification_link_small', 'kick_channel')
+                                        'stream_notification_link_text', 'stream_notification_link_small', 
+                                        'stream_notification_footer', 'kick_channel')
                         """), {"guild_id": discord_server_id}).fetchall()
                         
                         settings = {key: value for key, value in settings_result}
@@ -568,11 +569,12 @@ def create_discord_notifier(discord_bot, channel_id: int):
                             # Use clkick.com for Discord video embed (proxy with proper oEmbed)
                             embed_url = f"https://clkick.com/{broadcaster}"
                             
-                            # Get custom title, description, link text and small text setting
+                            # Get custom title, description, link text, small text and footer
                             custom_title = settings.get('stream_notification_title')
                             custom_description = settings.get('stream_notification_description')
                             custom_link_text = settings.get('stream_notification_link_text')
                             link_small = settings.get('stream_notification_link_small') == 'true'
+                            custom_footer = settings.get('stream_notification_footer')
                             
                             # Replace placeholders in custom title/description
                             def replace_placeholders(text):
@@ -598,6 +600,11 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                 message_content = f"{title_text}\n{desc_text}\n{hidden_link}"
                             else:
                                 message_content = f"{title_text}\n{hidden_link}"
+                            
+                            # Process footer if set
+                            footer_text = None
+                            if custom_footer:
+                                footer_text = replace_placeholders(custom_footer)
                             
                             # Discord button component for "Watch Stream"
                             components = [
@@ -631,6 +638,21 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                         timeout=aiohttp.ClientTimeout(total=10)
                                     ) as resp:
                                         if resp.status in [200, 201]:
+                                            # Send footer as follow-up if set
+                                            if footer_text:
+                                                await asyncio.sleep(0.5)
+                                                async with session.post(
+                                                    f"https://discord.com/api/v10/channels/{notification_channel_id}/messages",
+                                                    headers={
+                                                        "Authorization": f"Bot {bot_token}",
+                                                        "Content-Type": "application/json"
+                                                    },
+                                                    json={"content": f"-# {footer_text}"},
+                                                    timeout=aiohttp.ClientTimeout(total=10)
+                                                ) as footer_resp:
+                                                    if footer_resp.status not in [200, 201]:
+                                                        print(f"[Webhook] ⚠️ Failed to send footer: {footer_resp.status}")
+                                            
                                             print(f"[Webhook] ✅ Discord stream notification sent to channel {notification_channel_id}")
                                         else:
                                             error_text = await resp.text()
