@@ -357,15 +357,7 @@ with engine.begin() as conn:
     except Exception:
         pass  # Column already exists or database doesn't support IF NOT EXISTS
 
-    # Create bot_tokens table for securely storing bot access tokens
-    conn.execute(text("""
-        CREATE TABLE IF NOT EXISTS bot_tokens (
-            bot_username TEXT PRIMARY KEY,
-            access_token TEXT NOT NULL,
-            refresh_token TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """))
+    # kick_oauth_tokens table is created by the dashboard - no need to create bot_tokens here
 
 # Note: OAuth states are stored in database, not in-memory
 # This is necessary because Gunicorn workers don't share memory
@@ -1060,18 +1052,8 @@ def handle_bot_authorization_callback(code, code_verifier, state):
     
     try:
         # Ensure bot_tokens table exists with expires_at column
-        print(f"🤖 [BOT AUTH] Creating bot_tokens table if not exists...", flush=True)
-        with engine.begin() as conn:
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS bot_tokens (
-                    bot_username TEXT PRIMARY KEY,
-                    access_token TEXT NOT NULL,
-                    refresh_token TEXT,
-                    expires_at TIMESTAMP,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """))
-        print(f"🤖 [BOT AUTH] Table created/verified", flush=True)
+        # kick_oauth_tokens table is created by the dashboard
+        print(f"🤖 [BOT AUTH] Using kick_oauth_tokens table...", flush=True)
 
         # Exchange code for access token
         print(f"🤖 [BOT AUTH] Exchanging code for token...", flush=True)
@@ -1092,35 +1074,41 @@ def handle_bot_authorization_callback(code, code_verifier, state):
         try:
             kick_user = get_kick_user_info(access_token)
             kick_username = kick_user.get('username', 'lelebot')
-            print(f"🤖 Bot username: {kick_username}", flush=True)
+            kick_user_id = kick_user.get('user_id', 0)
+            print(f"🤖 Bot username: {kick_username}, user_id: {kick_user_id}", flush=True)
         except Exception as e:
             print(f"⚠️ Could not get bot user info: {e}, using default: lelebot", flush=True)
             kick_username = "lelebot"
+            kick_user_id = 0
 
         # Calculate expiration time
         from datetime import datetime, timedelta
         expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
 
-        # Store token in database with expiration time
+        # Store token in kick_oauth_tokens table (same table as dashboard)
         
-        print(f"🤖 [BOT AUTH] Storing token in database...", flush=True)
-        print(f"🤖 [BOT AUTH] Username: {kick_username}", flush=True)
+        print(f"🤖 [BOT AUTH] Storing token in kick_oauth_tokens table...", flush=True)
+        print(f"🤖 [BOT AUTH] Username: {kick_username}, user_id: {kick_user_id}", flush=True)
         print(f"🤖 [BOT AUTH] Expires at: {expires_at}", flush=True)
 
         with engine.begin() as conn:
-            print(f"🤖 [BOT AUTH] Deleting old token for {kick_username}...", flush=True)
+            # Use UPSERT to kick_oauth_tokens table
+            print(f"🤖 [BOT AUTH] Upserting token for {kick_username}...", flush=True)
             conn.execute(text("""
-                DELETE FROM bot_tokens WHERE bot_username = :username
-            """), {"username": kick_username})
-
-            print(f"🤖 [BOT AUTH] Inserting new token...", flush=True)
-            conn.execute(text("""
-                INSERT INTO bot_tokens (bot_username, access_token, refresh_token, expires_at, created_at)
-                VALUES (:username, :access_token, :refresh_token, :expires_at, CURRENT_TIMESTAMP)
+                INSERT INTO kick_oauth_tokens (user_id, kick_username, access_token, refresh_token, scopes, expires_at)
+                VALUES (:user_id, :username, :access_token, :refresh_token, :scopes, :expires_at)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    access_token = EXCLUDED.access_token,
+                    refresh_token = EXCLUDED.refresh_token,
+                    scopes = EXCLUDED.scopes,
+                    expires_at = EXCLUDED.expires_at,
+                    updated_at = CURRENT_TIMESTAMP
             """), {
+                "user_id": kick_user_id,
                 "username": kick_username,
                 "access_token": access_token,
                 "refresh_token": token_data.get('refresh_token', ''),
+                "scopes": token_data.get('scope', ''),
                 "expires_at": expires_at
             })
 
@@ -1128,8 +1116,7 @@ def handle_bot_authorization_callback(code, code_verifier, state):
             print(f"🤖 [BOT AUTH] Cleaning up state...", flush=True)
             conn.execute(text("DELETE FROM oauth_states WHERE state = :state"), {"state": state})
 
-            print(f"✅ [BOT AUTH] Bot token stored successfully in database!", flush=True)
-            conn.execute(text("DELETE FROM oauth_states WHERE state = :state"), {"state": state})
+            print(f"✅ [BOT AUTH] Bot token stored successfully in kick_oauth_tokens!", flush=True)
 
             print(f"✅ Bot token stored securely", flush=True)
             
@@ -1620,14 +1607,7 @@ def bot_authorize():
 
         # Ensure bot_tokens table exists
         with engine.begin() as conn:
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS bot_tokens (
-                    bot_username TEXT PRIMARY KEY,
-                    access_token TEXT NOT NULL,
-                    refresh_token TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """))
+            # kick_oauth_tokens table is created by the dashboard - no need to create it here
 
         # Generate PKCE pair
         code_verifier, code_challenge = generate_pkce_pair()

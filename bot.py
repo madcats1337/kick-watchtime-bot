@@ -2020,21 +2020,21 @@ async def refresh_kick_oauth_token() -> bool:
         return False
 
     try:
-        # Get refresh token from database
+        # Get refresh token from kick_oauth_tokens table
         with engine.connect() as conn:
             result = conn.execute(text("""
-                SELECT refresh_token FROM bot_tokens
-                WHERE bot_username = 'maikelele'
-                ORDER BY created_at DESC LIMIT 1
+                SELECT refresh_token, kick_username FROM kick_oauth_tokens
+                ORDER BY updated_at DESC LIMIT 1
             """)).fetchone()
 
             if not result or not result[0]:
-                print("[Kick] ❌ No refresh token available in database")
+                print("[Kick] ❌ No refresh token available in kick_oauth_tokens table")
                 return False
 
             refresh_token = result[0]
+            kick_username = result[1]
 
-        print(f"[Kick] 🔄 Attempting to refresh OAuth token...")
+        print(f"[Kick] 🔄 Attempting to refresh OAuth token for {kick_username}...")
 
         # Call Kick's token endpoint to refresh
         token_url = "https://id.kick.com/oauth/token"
@@ -2062,22 +2062,23 @@ async def refresh_kick_oauth_token() -> bool:
                     # Calculate expiration time in Python (safer than SQL date math)
                     expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
-                    # Update tokens in database with expiration time
+                    # Update tokens in kick_oauth_tokens table
                     with engine.begin() as conn:
                         conn.execute(text("""
-                            UPDATE bot_tokens
+                            UPDATE kick_oauth_tokens
                             SET access_token = :access_token,
                                 refresh_token = :refresh_token,
                                 expires_at = :expires_at,
-                                created_at = CURRENT_TIMESTAMP
-                            WHERE bot_username = 'maikelele'
+                                updated_at = CURRENT_TIMESTAMP
+                            WHERE kick_username = :kick_username
                         """), {
                             "access_token": new_access_token,
                             "refresh_token": new_refresh_token,
-                            "expires_at": expires_at
+                            "expires_at": expires_at,
+                            "kick_username": kick_username
                         })
 
-                    print(f"[Kick] ✅ OAuth token refreshed successfully!")
+                    print(f"[Kick] ✅ OAuth token refreshed successfully for {kick_username}!")
                     return True
                 else:
                     error_text = await response.text()
@@ -3295,21 +3296,20 @@ async def proactive_token_refresh_task():
         return
 
     try:
-        # Check if token will expire soon
+        # Check if token will expire soon - use kick_oauth_tokens table
         with engine.connect() as conn:
             result = conn.execute(text("""
-                SELECT expires_at, bot_username FROM bot_tokens
-                WHERE bot_username = 'maikelele'
-                ORDER BY created_at DESC LIMIT 1
+                SELECT expires_at, kick_username FROM kick_oauth_tokens
+                ORDER BY updated_at DESC LIMIT 1
             """)).fetchone()
 
             if not result:
                 return
 
-            expires_at, bot_username = result
+            expires_at, kick_username = result
 
             if not expires_at:
-                print("[Kick] ⚠️  No expiration time stored - token will refresh on-demand")
+                print(f"[Kick] ⚠️  No expiration time stored for {kick_username} - token will refresh on-demand")
                 return
 
             # Make expires_at timezone-aware if it isn't already
@@ -5409,35 +5409,10 @@ async def on_ready():
     else:
         print("ℹ️  Redis subscriber started (messages logged only - set KICK_BOT_USER_TOKEN to enable Kick chat)")
 
-    # Auto-migrate database: create bot_tokens table and add expires_at column if missing
+    # Auto-migrate database tables
     if engine:
         try:
             with engine.begin() as conn:
-                # Create bot_tokens table if it doesn't exist
-                print("🔄 Checking bot_tokens table...")
-                conn.execute(text("""
-                    CREATE TABLE IF NOT EXISTS bot_tokens (
-                        bot_username TEXT PRIMARY KEY,
-                        access_token TEXT NOT NULL,
-                        refresh_token TEXT NOT NULL,
-                        expires_at TIMESTAMP,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """))
-                print("✅ bot_tokens table ready")
-
-                # Check if expires_at column exists (for old tables)
-                result = conn.execute(text("""
-                    SELECT column_name
-                    FROM information_schema.columns
-                    WHERE table_name = 'bot_tokens' AND column_name = 'expires_at'
-                """)).fetchone()
-
-                if not result:
-                    print("🔄 Adding expires_at column to bot_tokens table...")
-                    conn.execute(text("ALTER TABLE bot_tokens ADD COLUMN expires_at TIMESTAMP"))
-                    print("✅ Database migrated: expires_at column added")
-
                 # Create slot_call_blacklist table if missing
                 print("🔄 Checking slot_call_blacklist table...")
                 conn.execute(text("""
