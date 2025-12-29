@@ -1138,9 +1138,10 @@ class RedisSubscriber:
                 print("❌ DISCORD_TOKEN not configured")
                 return
             
-            # Fetch custom title and description from database
+            # Fetch custom title, description, and link text from database
             custom_title = None
             custom_description = None
+            custom_link_text = None
             
             if discord_server_id and engine:
                 try:
@@ -1149,7 +1150,7 @@ class RedisSubscriber:
                         result = conn.execute(text("""
                             SELECT key, value FROM bot_settings 
                             WHERE discord_server_id = :guild_id 
-                            AND key IN ('stream_notification_title', 'stream_notification_description')
+                            AND key IN ('stream_notification_title', 'stream_notification_description', 'stream_notification_link_text')
                         """), {"guild_id": discord_server_id}).fetchall()
                         
                         for key, value in result:
@@ -1157,6 +1158,8 @@ class RedisSubscriber:
                                 custom_title = value
                             elif key == 'stream_notification_description' and value:
                                 custom_description = value
+                            elif key == 'stream_notification_link_text' and value:
+                                custom_link_text = value
                 except Exception as db_err:
                     print(f"⚠️ Failed to fetch notification settings: {db_err}")
             
@@ -1168,7 +1171,8 @@ class RedisSubscriber:
             
             # Build message content using Discord markdown hyperlink to hide URL
             # Format: [Link Text](URL) - Discord may still show embed from oEmbed
-            hidden_link = f"[Watch Preview]({embed_url})"
+            link_text = custom_link_text or "Watch Preview"
+            hidden_link = f"[{link_text}]({embed_url})"
             
             if custom_title:
                 title_text = replace_placeholders(custom_title)
