@@ -1125,11 +1125,12 @@ class RedisSubscriber:
                 print("⚠️ Missing channel_id or streamer in stream notification event")
                 return
             
-            # Use kick.com URL - Discord will auto-unfurl with oEmbed (shows video when live)
+            # Use our oEmbed proxy URL for Discord video embed
+            proxy_url = f"https://lelebot.xyz/embed/kick/{streamer}"
             stream_url = f"https://kick.com/{streamer}"
             
-            # Put URL on its own line for proper Discord unfurling with video embed
-            message_content = f"{stream_url}\n{streamer} just went live!"
+            # Post the proxy URL - Discord will fetch oEmbed and show video player
+            message_content = proxy_url
             
             # Discord button component for "Watch Stream"
             components = [
@@ -1149,10 +1150,10 @@ class RedisSubscriber:
             
             import aiohttp
             import os
-            bot_token = os.getenv('DISCORD_TOKEN')  # Bot uses DISCORD_TOKEN not DISCORD_BOT_TOKEN
+            bot_token = os.getenv('DISCORD_TOKEN')
             
             if not bot_token:
-                print("❌ DISCORD_BOT_TOKEN not configured")
+                print("❌ DISCORD_TOKEN not configured")
                 return
             
             async with aiohttp.ClientSession() as session:

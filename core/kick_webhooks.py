@@ -563,11 +563,12 @@ def create_discord_notifier(discord_bot, channel_id: int):
                         if settings.get('stream_notification_enabled') == 'true' and settings.get('stream_notification_channel_id'):
                             notification_channel_id = settings['stream_notification_channel_id']
                             
-                            # Use kick.com URL - Discord will auto-unfurl with oEmbed (shows video when live)
+                            # Use our oEmbed proxy URL for Discord video embed
+                            proxy_url = f"https://lelebot.xyz/embed/kick/{broadcaster}"
                             stream_url = f"https://kick.com/{broadcaster}"
                             
-                            # Put URL on its own line for proper Discord unfurling with video embed
-                            message_content = f"{stream_url}\n{broadcaster} just went live!"
+                            # Post the proxy URL - Discord will fetch oEmbed and show video player
+                            message_content = proxy_url
                             
                             # Discord button component for "Watch Stream"
                             components = [
@@ -585,7 +586,7 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                 }
                             ]
                             
-                            bot_token = os.getenv('DISCORD_TOKEN')  # Bot uses DISCORD_TOKEN not DISCORD_BOT_TOKEN
+                            bot_token = os.getenv('DISCORD_TOKEN')
                             if bot_token:
                                 async with aiohttp.ClientSession() as session:
                                     async with session.post(
@@ -595,7 +596,7 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                             "Content-Type": "application/json"
                                         },
                                         json={
-                                            "content": message_content,  # URL triggers Discord oEmbed unfurl with live preview
+                                            "content": message_content,
                                             "components": components
                                         },
                                         timeout=10
@@ -604,7 +605,6 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                             print(f"[Webhook] ✅ Discord stream notification sent to channel {notification_channel_id}")
                                         else:
                                             error_text = await resp.text()
-                                            print(f"[Webhook] ⚠️ Failed to send Discord notification: {resp.status} - {error_text[:200]}")
                                             print(f"[Webhook] ⚠️ Failed to send Discord notification: {resp.status} - {error_text[:200]}")
             except Exception as e:
                 print(f"[Webhook] ⚠️ Failed to send Discord stream notification: {e}")
