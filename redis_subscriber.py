@@ -1125,12 +1125,34 @@ class RedisSubscriber:
                 print("⚠️ Missing channel_id or streamer in stream notification event")
                 return
             
-            # Use our oEmbed proxy URL for Discord video embed
-            proxy_url = f"https://lelebot.xyz/embed/kick/{streamer}"
-            stream_url = f"https://kick.com/{streamer}"
+            import aiohttp
+            import os
+            import time
             
-            # Post the proxy URL - Discord will fetch oEmbed and show video player
-            message_content = proxy_url
+            stream_url = f"https://kick.com/{streamer}"
+            # Live stream thumbnail from Kick
+            thumbnail_url = f"https://thumb.kick.com/previews/{streamer}/1280/720/video.webp?t={int(time.time())}"
+            
+            bot_token = os.getenv('DISCORD_TOKEN')
+            
+            if not bot_token:
+                print("❌ DISCORD_TOKEN not configured")
+                return
+            
+            # Rich embed with large live stream thumbnail
+            embed = {
+                "title": f"🔴 {streamer} is now LIVE on Kick!",
+                "url": stream_url,
+                "description": "Click the button below to watch the stream!",
+                "color": 0x53fc18,  # Kick green
+                "image": {
+                    "url": thumbnail_url
+                },
+                "footer": {
+                    "text": "Kick.com • Live Now",
+                    "icon_url": "https://kick.com/favicon.ico"
+                }
+            }
             
             # Discord button component for "Watch Stream"
             components = [
@@ -1148,14 +1170,6 @@ class RedisSubscriber:
                 }
             ]
             
-            import aiohttp
-            import os
-            bot_token = os.getenv('DISCORD_TOKEN')
-            
-            if not bot_token:
-                print("❌ DISCORD_TOKEN not configured")
-                return
-            
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     f"https://discord.com/api/v10/channels/{channel_id}/messages",
@@ -1164,7 +1178,8 @@ class RedisSubscriber:
                         "Content-Type": "application/json"
                     },
                     json={
-                        "content": message_content,
+                        "content": f"🔴 **{streamer}** just went live!",
+                        "embeds": [embed],
                         "components": components
                     },
                     timeout=aiohttp.ClientTimeout(total=10)

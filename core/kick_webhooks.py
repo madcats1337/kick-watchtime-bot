@@ -563,12 +563,27 @@ def create_discord_notifier(discord_bot, channel_id: int):
                         if settings.get('stream_notification_enabled') == 'true' and settings.get('stream_notification_channel_id'):
                             notification_channel_id = settings['stream_notification_channel_id']
                             
-                            # Use our oEmbed proxy URL for Discord video embed
-                            proxy_url = f"https://lelebot.xyz/embed/kick/{broadcaster}"
                             stream_url = f"https://kick.com/{broadcaster}"
+                            # Kick's live thumbnail URL with cache buster
+                            import time as time_module
+                            thumbnail_url = f"https://thumb.kick.com/previews/{broadcaster}/1280/720/video.webp?t={int(time_module.time())}"
                             
-                            # Post the proxy URL - Discord will fetch oEmbed and show video player
-                            message_content = proxy_url
+                            # Rich embed with large stream thumbnail image
+                            embed = {
+                                "title": f"🔴 {broadcaster} is now LIVE on Kick!",
+                                "url": stream_url,
+                                "description": title if title else "Click the button below to watch the stream!",
+                                "color": 0x53fc18,  # Kick green
+                                "image": {
+                                    "url": thumbnail_url
+                                },
+                                "fields": [
+                                    {"name": "Category", "value": category, "inline": True}
+                                ] if category else [],
+                                "footer": {
+                                    "text": "Kick.com • Live Now"
+                                }
+                            }
                             
                             # Discord button component for "Watch Stream"
                             components = [
@@ -596,7 +611,7 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                             "Content-Type": "application/json"
                                         },
                                         json={
-                                            "content": message_content,
+                                            "embeds": [embed],
                                             "components": components
                                         },
                                         timeout=10
