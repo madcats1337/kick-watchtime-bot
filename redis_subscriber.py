@@ -1130,29 +1130,14 @@ class RedisSubscriber:
             import time
             
             stream_url = f"https://kick.com/{streamer}"
-            # Live stream thumbnail from Kick
-            thumbnail_url = f"https://thumb.kick.com/previews/{streamer}/1280/720/video.webp?t={int(time.time())}"
+            # Live video clip URL - Discord will embed this as a playable video
+            live_clip_url = f"https://lelebot.xyz/stream/live/{streamer}.mp4?t={int(time.time())}"
             
             bot_token = os.getenv('DISCORD_TOKEN')
             
             if not bot_token:
                 print("❌ DISCORD_TOKEN not configured")
                 return
-            
-            # Rich embed with large live stream thumbnail
-            embed = {
-                "title": f"🔴 {streamer} is now LIVE on Kick!",
-                "url": stream_url,
-                "description": "Click the button below to watch the stream!",
-                "color": 0x53fc18,  # Kick green
-                "image": {
-                    "url": thumbnail_url
-                },
-                "footer": {
-                    "text": "Kick.com • Live Now",
-                    "icon_url": "https://kick.com/favicon.ico"
-                }
-            }
             
             # Discord button component for "Watch Stream"
             components = [
@@ -1170,6 +1155,9 @@ class RedisSubscriber:
                 }
             ]
             
+            # Send message with live clip URL - Discord will auto-embed the video
+            message_content = f"🔴 **{streamer}** is now LIVE on Kick!\n{live_clip_url}"
+            
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     f"https://discord.com/api/v10/channels/{channel_id}/messages",
@@ -1178,8 +1166,7 @@ class RedisSubscriber:
                         "Content-Type": "application/json"
                     },
                     json={
-                        "content": f"🔴 **{streamer}** just went live!",
-                        "embeds": [embed],
+                        "content": message_content,
                         "components": components
                     },
                     timeout=aiohttp.ClientTimeout(total=10)

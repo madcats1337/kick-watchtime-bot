@@ -564,26 +564,9 @@ def create_discord_notifier(discord_bot, channel_id: int):
                             notification_channel_id = settings['stream_notification_channel_id']
                             
                             stream_url = f"https://kick.com/{broadcaster}"
-                            # Kick's live thumbnail URL with cache buster
+                            # Live video clip URL - Discord will embed this as a playable video
                             import time as time_module
-                            thumbnail_url = f"https://thumb.kick.com/previews/{broadcaster}/1280/720/video.webp?t={int(time_module.time())}"
-                            
-                            # Rich embed with large stream thumbnail image
-                            embed = {
-                                "title": f"🔴 {broadcaster} is now LIVE on Kick!",
-                                "url": stream_url,
-                                "description": title if title else "Click the button below to watch the stream!",
-                                "color": 0x53fc18,  # Kick green
-                                "image": {
-                                    "url": thumbnail_url
-                                },
-                                "fields": [
-                                    {"name": "Category", "value": category, "inline": True}
-                                ] if category else [],
-                                "footer": {
-                                    "text": "Kick.com • Live Now"
-                                }
-                            }
+                            live_clip_url = f"https://lelebot.xyz/stream/live/{broadcaster}.mp4?t={int(time_module.time())}"
                             
                             # Discord button component for "Watch Stream"
                             components = [
@@ -601,6 +584,9 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                 }
                             ]
                             
+                            # Message with live clip URL - Discord will auto-embed the video
+                            message_content = f"🔴 **{broadcaster}** is now LIVE on Kick!\n{live_clip_url}"
+                            
                             bot_token = os.getenv('DISCORD_TOKEN')
                             if bot_token:
                                 async with aiohttp.ClientSession() as session:
@@ -611,7 +597,7 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                             "Content-Type": "application/json"
                                         },
                                         json={
-                                            "embeds": [embed],
+                                            "content": message_content,
                                             "components": components
                                         },
                                         timeout=10
