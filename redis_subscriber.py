@@ -1127,7 +1127,6 @@ class RedisSubscriber:
             
             import aiohttp
             import os
-            import time
             
             stream_url = f"https://kick.com/{streamer}"
             # Use clkick.com for Discord video embed (proxy with proper oEmbed)
@@ -1138,6 +1137,46 @@ class RedisSubscriber:
             if not bot_token:
                 print("❌ DISCORD_TOKEN not configured")
                 return
+            
+            # Fetch custom title and description from database
+            custom_title = None
+            custom_description = None
+            
+            if discord_server_id and engine:
+                try:
+                    from sqlalchemy import text
+                    with engine.connect() as conn:
+                        result = conn.execute(text("""
+                            SELECT key, value FROM bot_settings 
+                            WHERE discord_server_id = :guild_id 
+                            AND key IN ('stream_notification_title', 'stream_notification_description')
+                        """), {"guild_id": discord_server_id}).fetchall()
+                        
+                        for key, value in result:
+                            if key == 'stream_notification_title' and value:
+                                custom_title = value
+                            elif key == 'stream_notification_description' and value:
+                                custom_description = value
+                except Exception as db_err:
+                    print(f"⚠️ Failed to fetch notification settings: {db_err}")
+            
+            # Replace placeholders in custom title/description
+            def replace_placeholders(text):
+                if not text:
+                    return text
+                return text.replace('{streamer}', streamer).replace('{channel}', streamer)
+            
+            # Build message content
+            if custom_title:
+                title_text = replace_placeholders(custom_title)
+            else:
+                title_text = f"🔴 **{streamer}** is now LIVE on Kick!"
+            
+            if custom_description:
+                desc_text = replace_placeholders(custom_description)
+                message_content = f"{title_text}\n{desc_text}\n{embed_url}"
+            else:
+                message_content = f"{title_text}\n{embed_url}"
             
             # Discord button component for "Watch Stream"
             components = [
@@ -1155,12 +1194,7 @@ class RedisSubscriber:
                 }
             ]
             
-            # Message content without visible link - embed URL will be auto-embedded
-            # Using the embed URL at the end allows Discord to embed it while keeping message clean
-            message_content = f"🔴 **{streamer}** is now LIVE on Kick!\n{embed_url}"
-            
             async with aiohttp.ClientSession() as session:
-                # First, send message with the URL to trigger Discord's embed
                 async with session.post(
                     f"https://discord.com/api/v10/channels/{channel_id}/messages",
                     headers={
@@ -1174,29 +1208,6 @@ class RedisSubscriber:
                     timeout=aiohttp.ClientTimeout(total=10)
                 ) as resp:
                     if resp.status in [200, 201]:
-                        response_data = await resp.json()
-                        message_id = response_data.get('id')
-                        
-                        # Now edit the message to remove the URL but keep the embed
-                        if message_id:
-                            await asyncio.sleep(2)  # Wait for Discord to process embed
-                            async with session.patch(
-                                f"https://discord.com/api/v10/channels/{channel_id}/messages/{message_id}",
-                                headers={
-                                    "Authorization": f"Bot {bot_token}",
-                                    "Content-Type": "application/json"
-                                },
-                                json={
-                                    "content": f"🔴 **{streamer}** is now LIVE on Kick!",
-                                    "components": components
-                                },
-                                timeout=aiohttp.ClientTimeout(total=10)
-                            ) as edit_resp:
-                                if edit_resp.status in [200, 201]:
-                                    print(f"✅ Message edited to hide URL, embed preserved")
-                                else:
-                                    print(f"⚠️ Failed to edit message: {edit_resp.status}")
-                        
                         test_label = " (TEST)" if is_test else ""
                         print(f"✅ Discord stream notification sent to channel {channel_id}{test_label}")
                     else:

@@ -567,6 +567,28 @@ def create_discord_notifier(discord_bot, channel_id: int):
                             # Use clkick.com for Discord video embed (proxy with proper oEmbed)
                             embed_url = f"https://clkick.com/{broadcaster}"
                             
+                            # Get custom title and description from settings
+                            custom_title = settings.get('stream_notification_title')
+                            custom_description = settings.get('stream_notification_description')
+                            
+                            # Replace placeholders in custom title/description
+                            def replace_placeholders(text):
+                                if not text:
+                                    return text
+                                return text.replace('{streamer}', broadcaster).replace('{channel}', broadcaster)
+                            
+                            # Build message content
+                            if custom_title:
+                                title_text = replace_placeholders(custom_title)
+                            else:
+                                title_text = f"🔴 **{broadcaster}** is now LIVE on Kick!"
+                            
+                            if custom_description:
+                                desc_text = replace_placeholders(custom_description)
+                                message_content = f"{title_text}\n{desc_text}\n{embed_url}"
+                            else:
+                                message_content = f"{title_text}\n{embed_url}"
+                            
                             # Discord button component for "Watch Stream"
                             components = [
                                 {
@@ -583,13 +605,9 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                 }
                             ]
                             
-                            # Message with clkick.com URL - Discord will auto-embed the video
-                            message_content = f"🔴 **{broadcaster}** is now LIVE on Kick!\n{embed_url}"
-                            
                             bot_token = os.getenv('DISCORD_TOKEN')
                             if bot_token:
                                 async with aiohttp.ClientSession() as session:
-                                    # First send with URL to trigger embed
                                     async with session.post(
                                         f"https://discord.com/api/v10/channels/{notification_channel_id}/messages",
                                         headers={
@@ -603,30 +621,7 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                         timeout=aiohttp.ClientTimeout(total=10)
                                     ) as resp:
                                         if resp.status in [200, 201]:
-                                            response_data = await resp.json()
-                                            message_id = response_data.get('id')
-                                            
-                                            # Edit to remove URL but keep embed
-                                            if message_id:
-                                                await asyncio.sleep(2)
-                                                async with session.patch(
-                                                    f"https://discord.com/api/v10/channels/{notification_channel_id}/messages/{message_id}",
-                                                    headers={
-                                                        "Authorization": f"Bot {bot_token}",
-                                                        "Content-Type": "application/json"
-                                                    },
-                                                    json={
-                                                        "content": f"🔴 **{broadcaster}** is now LIVE on Kick!",
-                                                        "components": components
-                                                    },
-                                                    timeout=aiohttp.ClientTimeout(total=10)
-                                                ) as edit_resp:
-                                                    if edit_resp.status in [200, 201]:
-                                                        print(f"[Webhook] ✅ Discord notification sent, URL hidden, embed preserved")
-                                                    else:
-                                                        print(f"[Webhook] ⚠️ Edit failed: {edit_resp.status}")
-                                            else:
-                                                print(f"[Webhook] ✅ Discord stream notification sent to channel {notification_channel_id}")
+                                            print(f"[Webhook] ✅ Discord stream notification sent to channel {notification_channel_id}")
                                         else:
                                             error_text = await resp.text()
                                             print(f"[Webhook] ⚠️ Failed to send Discord notification: {resp.status} - {error_text[:200]}")
