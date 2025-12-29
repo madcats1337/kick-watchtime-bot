@@ -577,7 +577,10 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                     return text
                                 return text.replace('{streamer}', broadcaster).replace('{channel}', broadcaster)
                             
-                            # Build message content
+                            # Build message content using Discord markdown hyperlink to hide URL
+                            # Format: [Link Text](URL) - Discord may still show embed from oEmbed
+                            hidden_link = f"[🎬 Watch Preview]({embed_url})"
+                            
                             if custom_title:
                                 title_text = replace_placeholders(custom_title)
                             else:
@@ -585,9 +588,9 @@ def create_discord_notifier(discord_bot, channel_id: int):
                             
                             if custom_description:
                                 desc_text = replace_placeholders(custom_description)
-                                message_content = f"{title_text}\n{desc_text}\n{embed_url}"
+                                message_content = f"{title_text}\n{desc_text}\n{hidden_link}"
                             else:
-                                message_content = f"{title_text}\n{embed_url}"
+                                message_content = f"{title_text}\n{hidden_link}"
                             
                             # Discord button component for "Watch Stream"
                             components = [

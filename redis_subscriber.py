@@ -1166,7 +1166,10 @@ class RedisSubscriber:
                     return text
                 return text.replace('{streamer}', streamer).replace('{channel}', streamer)
             
-            # Build message content
+            # Build message content using Discord markdown hyperlink to hide URL
+            # Format: [Link Text](URL) - Discord may still show embed from oEmbed
+            hidden_link = f"[🎬 Watch Preview]({embed_url})"
+            
             if custom_title:
                 title_text = replace_placeholders(custom_title)
             else:
@@ -1174,9 +1177,9 @@ class RedisSubscriber:
             
             if custom_description:
                 desc_text = replace_placeholders(custom_description)
-                message_content = f"{title_text}\n{desc_text}\n{embed_url}"
+                message_content = f"{title_text}\n{desc_text}\n{hidden_link}"
             else:
-                message_content = f"{title_text}\n{embed_url}"
+                message_content = f"{title_text}\n{hidden_link}"
             
             # Discord button component for "Watch Stream"
             components = [
