@@ -1605,9 +1605,7 @@ def bot_authorize():
 
         print(f"🤖 Bot authorization initiated with valid token", flush=True)
 
-        # Ensure bot_tokens table exists
-        with engine.begin() as conn:
-            # kick_oauth_tokens table is created by the dashboard - no need to create it here
+        # kick_oauth_tokens table is created by the dashboard - no need to create it here
 
         # Generate PKCE pair
         code_verifier, code_challenge = generate_pkce_pair()
