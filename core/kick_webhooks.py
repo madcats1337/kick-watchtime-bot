@@ -404,8 +404,12 @@ def simulate_webhook_event():
         "data": { ... event-specific data ... }
     }
     """
-    # Verify test token (use FLASK_SECRET_KEY or a dedicated test token)
-    test_token = os.getenv("WEBHOOK_TEST_TOKEN") or os.getenv("FLASK_SECRET_KEY", "")[:32]
+    # Verify test token - must be set via WEBHOOK_TEST_TOKEN env var
+    test_token = os.getenv("WEBHOOK_TEST_TOKEN", "")
+    
+    if not test_token:
+        print(f"[Webhook Simulate] ❌ WEBHOOK_TEST_TOKEN not configured")
+        return jsonify({"error": "WEBHOOK_TEST_TOKEN not configured on bot"}), 500
     
     try:
         body = request.get_json() or {}
@@ -414,7 +418,7 @@ def simulate_webhook_event():
     
     provided_token = body.get("test_token", "")
     if not provided_token or not hmac.compare_digest(provided_token, test_token):
-        print(f"[Webhook Simulate] ❌ Invalid test token")
+        print(f"[Webhook Simulate] ❌ Invalid test token (provided: {provided_token[:8]}... expected: {test_token[:8]}...)")
         return jsonify({"error": "Invalid test token"}), 401
     
     event_type = body.get("event_type", "livestream.status.updated")
