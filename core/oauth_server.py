@@ -185,6 +185,127 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
             import traceback
             traceback.print_exc()
 
+    @webhook_handler.on("livestream.status.updated")
+    async def handle_livestream_status(event_data):
+        """Handle stream going live/offline - send Discord notification"""
+        try:
+            is_live = event_data.get("is_live", False)
+            broadcaster_data = event_data.get("broadcaster", {})
+            broadcaster = broadcaster_data.get("slug") or broadcaster_data.get("username", "")
+            livestream = event_data.get("livestream", {})
+            title = livestream.get("session_title", "")
+            category = livestream.get("category", {}).get("name", "Just Chatting")
+            discord_server_id = event_data.get("_server_id")
+            is_simulated = event_data.get("_simulated", False)
+            
+            print(f"[Webhook] 📺 Stream status: {broadcaster} is_live={is_live}, server={discord_server_id}, simulated={is_simulated}")
+            
+            # Only send notification when going LIVE
+            if not is_live:
+                print(f"[Webhook] ℹ️ Stream offline, no notification sent")
+                return
+            
+            if not discord_server_id:
+                print(f"[Webhook] ⚠️ No server_id, cannot send notification")
+                return
+            
+            # Get notification settings from database
+            from sqlalchemy import create_engine, text
+            import aiohttp
+            
+            db_url = os.getenv('DATABASE_URL')
+            if not db_url:
+                print(f"[Webhook] ⚠️ DATABASE_URL not set")
+                return
+            
+            engine = create_engine(db_url, pool_pre_ping=True)
+            with engine.connect() as conn:
+                # Get stream notification settings
+                settings_result = conn.execute(text("""
+                    SELECT key, value FROM bot_settings 
+                    WHERE discord_server_id = :guild_id 
+                    AND key IN ('stream_notification_enabled', 'stream_notification_channel_id', 
+                                'stream_notification_title', 'stream_notification_description', 
+                                'stream_notification_link_text', 'stream_notification_link_small', 
+                                'stream_notification_footer', 'kick_channel')
+                """), {"guild_id": discord_server_id}).fetchall()
+                
+                settings = {key: value for key, value in settings_result}
+                
+                if settings.get('stream_notification_enabled') != 'true':
+                    print(f"[Webhook] ℹ️ Stream notifications disabled for server {discord_server_id}")
+                    return
+                
+                notification_channel_id = settings.get('stream_notification_channel_id')
+                if not notification_channel_id:
+                    print(f"[Webhook] ⚠️ No notification channel configured for server {discord_server_id}")
+                    return
+                
+                # Use configured kick_channel or broadcaster from webhook
+                streamer = settings.get('kick_channel') or broadcaster
+                
+                stream_url = f"https://kick.com/{streamer}"
+                embed_url = f"https://clkick.com/{streamer}"
+                
+                # Get custom settings
+                custom_title = settings.get('stream_notification_title')
+                custom_description = settings.get('stream_notification_description')
+                custom_link_text = settings.get('stream_notification_link_text')
+                link_small = settings.get('stream_notification_link_small') == 'true'
+                custom_footer = settings.get('stream_notification_footer')
+                
+                # Replace placeholders
+                def replace_placeholders(text):
+                    if not text:
+                        return text
+                    return text.replace('{streamer}', streamer).replace('{channel}', streamer)
+                
+                # Build message content
+                link_text = custom_link_text or "Watch Preview"
+                hidden_link = f"[{link_text}]({embed_url})"
+                if link_small:
+                    hidden_link = f"-# {hidden_link}"
+                
+                if custom_title:
+                    title_text = replace_placeholders(custom_title)
+                else:
+                    title_text = f"🔴 **{streamer}** is now LIVE on Kick!"
+                
+                if custom_description:
+                    desc_text = replace_placeholders(custom_description)
+                    message_content = f"{title_text}\n{desc_text}\n{hidden_link}"
+                else:
+                    message_content = f"{title_text}\n{hidden_link}"
+                
+                if custom_footer:
+                    message_content += f"\n\n{replace_placeholders(custom_footer)}"
+                
+                # Send to Discord via API
+                bot_token = os.getenv('DISCORD_TOKEN')
+                if not bot_token:
+                    print(f"[Webhook] ⚠️ DISCORD_TOKEN not set")
+                    return
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"https://discord.com/api/v10/channels/{notification_channel_id}/messages",
+                        headers={
+                            "Authorization": f"Bot {bot_token}",
+                            "Content-Type": "application/json"
+                        },
+                        json={"content": message_content}
+                    ) as resp:
+                        if resp.status == 200:
+                            print(f"[Webhook] ✅ Stream notification sent to channel {notification_channel_id}")
+                        else:
+                            error_text = await resp.text()
+                            print(f"[Webhook] ❌ Discord API error {resp.status}: {error_text[:200]}")
+                
+        except Exception as e:
+            print(f"[Webhook] ❌ Error handling livestream status: {e}")
+            import traceback
+            traceback.print_exc()
+
     @webhook_handler.set_default_handler
     async def default_webhook_handler(event_data):
         """Default handler logs all events for debugging new webhook types"""
@@ -192,12 +313,6 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
         event_type = event_data.get('_event_type', 'unknown')
         print(f"[Webhook] 📩 Unhandled event type: {event_type}")
         print(f"[Webhook] Event data: {json.dumps(event_data, indent=2, default=str)[:500]}")
-        
-        # TODO: Add handlers for additional webhook events when Kick supports them:
-        # - channel.subscription (regular subscriptions)
-        # - channel.subscription.gift (gifted subscriptions)  
-        # - channel.follow (new followers)
-        # - stream.online / stream.offline (stream status)
     
     # Register webhook routes with Flask app
     register_webhook_routes(app, webhook_handler)
