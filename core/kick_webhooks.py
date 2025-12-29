@@ -579,7 +579,7 @@ def create_discord_notifier(discord_bot, channel_id: int):
                             
                             # Build message content using Discord markdown hyperlink to hide URL
                             # Format: [Link Text](URL) - Discord may still show embed from oEmbed
-                            hidden_link = f"[🎬 Watch Preview]({embed_url})"
+                            hidden_link = f"[Watch Preview]({embed_url})"
                             
                             if custom_title:
                                 title_text = replace_placeholders(custom_title)
