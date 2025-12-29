@@ -277,8 +277,26 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
                 else:
                     message_content = f"{title_text}\n{hidden_link}"
                 
+                # Process footer separately (will be sent as follow-up)
+                footer_text = None
                 if custom_footer:
-                    message_content += f"\n\n{replace_placeholders(custom_footer)}"
+                    footer_text = replace_placeholders(custom_footer)
+                
+                # Discord button component for "Watch Stream"
+                components = [
+                    {
+                        "type": 1,
+                        "components": [
+                            {
+                                "type": 2,
+                                "style": 5,
+                                "label": "Watch Stream",
+                                "url": stream_url,
+                                "emoji": {"name": "🔴"}
+                            }
+                        ]
+                    }
+                ]
                 
                 # Send to Discord via API
                 bot_token = os.getenv('DISCORD_TOKEN')
@@ -286,6 +304,7 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
                     print(f"[Webhook] ⚠️ DISCORD_TOKEN not set")
                     return
                 
+                import asyncio
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
                         f"https://discord.com/api/v10/channels/{notification_channel_id}/messages",
@@ -293,10 +312,31 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
                             "Authorization": f"Bot {bot_token}",
                             "Content-Type": "application/json"
                         },
-                        json={"content": message_content}
+                        json={
+                            "content": message_content,
+                            "components": components
+                        },
+                        timeout=aiohttp.ClientTimeout(total=10)
                     ) as resp:
-                        if resp.status == 200:
+                        if resp.status in [200, 201]:
                             print(f"[Webhook] ✅ Stream notification sent to channel {notification_channel_id}")
+                            
+                            # Send footer as follow-up message if set
+                            if footer_text:
+                                await asyncio.sleep(0.5)
+                                async with session.post(
+                                    f"https://discord.com/api/v10/channels/{notification_channel_id}/messages",
+                                    headers={
+                                        "Authorization": f"Bot {bot_token}",
+                                        "Content-Type": "application/json"
+                                    },
+                                    json={"content": f"-# {footer_text}"},
+                                    timeout=aiohttp.ClientTimeout(total=10)
+                                ) as footer_resp:
+                                    if footer_resp.status in [200, 201]:
+                                        print(f"[Webhook] ✅ Footer sent")
+                                    else:
+                                        print(f"[Webhook] ⚠️ Failed to send footer: {footer_resp.status}")
                         else:
                             error_text = await resp.text()
                             print(f"[Webhook] ❌ Discord API error {resp.status}: {error_text[:200]}")
