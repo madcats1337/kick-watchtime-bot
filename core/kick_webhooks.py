@@ -564,9 +564,8 @@ def create_discord_notifier(discord_bot, channel_id: int):
                             notification_channel_id = settings['stream_notification_channel_id']
                             
                             stream_url = f"https://kick.com/{broadcaster}"
-                            # Live video clip URL - Discord will embed this as a playable video
-                            import time as time_module
-                            live_clip_url = f"https://lelebot.xyz/stream/live/{broadcaster}.mp4?t={int(time_module.time())}"
+                            # Use clkick.com for Discord video embed (proxy with proper oEmbed)
+                            embed_url = f"https://clkick.com/{broadcaster}"
                             
                             # Discord button component for "Watch Stream"
                             components = [
@@ -584,8 +583,8 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                 }
                             ]
                             
-                            # Message with live clip URL - Discord will auto-embed the video
-                            message_content = f"🔴 **{broadcaster}** is now LIVE on Kick!\n{live_clip_url}"
+                            # Message with clkick.com URL - Discord will auto-embed the video
+                            message_content = f"🔴 **{broadcaster}** is now LIVE on Kick!\n{embed_url}"
                             
                             bot_token = os.getenv('DISCORD_TOKEN')
                             if bot_token:

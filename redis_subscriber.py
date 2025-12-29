@@ -1130,8 +1130,8 @@ class RedisSubscriber:
             import time
             
             stream_url = f"https://kick.com/{streamer}"
-            # Live video clip URL - Discord will embed this as a playable video
-            live_clip_url = f"https://lelebot.xyz/stream/live/{streamer}.mp4?t={int(time.time())}"
+            # Use clkick.com for Discord video embed (proxy with proper oEmbed)
+            embed_url = f"https://clkick.com/{streamer}"
             
             bot_token = os.getenv('DISCORD_TOKEN')
             
@@ -1155,8 +1155,8 @@ class RedisSubscriber:
                 }
             ]
             
-            # Send message with live clip URL - Discord will auto-embed the video
-            message_content = f"🔴 **{streamer}** is now LIVE on Kick!\n{live_clip_url}"
+            # Send message with clkick.com URL - Discord will auto-embed the video
+            message_content = f"🔴 **{streamer}** is now LIVE on Kick!\n{embed_url}"
             
             async with aiohttp.ClientSession() as session:
                 async with session.post(
