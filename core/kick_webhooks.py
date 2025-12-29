@@ -384,6 +384,101 @@ def test_webhook_endpoint():
         "secret_configured": bool(WEBHOOK_SECRET)
     }), 200
 
+
+@kick_webhooks_bp.route('/webhooks/kick/simulate', methods=['POST'])
+def simulate_webhook_event():
+    """
+    Simulate a webhook event for testing purposes.
+    
+    This endpoint bypasses signature verification and directly triggers
+    the event handler as if a real webhook was received.
+    
+    Requires a secret test token to prevent abuse.
+    
+    Expected JSON body:
+    {
+        "test_token": "your-test-token",
+        "event_type": "livestream.status.updated",
+        "discord_server_id": "123456789",
+        "broadcaster_user_id": "152837",
+        "data": { ... event-specific data ... }
+    }
+    """
+    # Verify test token (use FLASK_SECRET_KEY or a dedicated test token)
+    test_token = os.getenv("WEBHOOK_TEST_TOKEN") or os.getenv("FLASK_SECRET_KEY", "")[:32]
+    
+    try:
+        body = request.get_json() or {}
+    except:
+        return jsonify({"error": "Invalid JSON"}), 400
+    
+    provided_token = body.get("test_token", "")
+    if not provided_token or not hmac.compare_digest(provided_token, test_token):
+        print(f"[Webhook Simulate] ❌ Invalid test token")
+        return jsonify({"error": "Invalid test token"}), 401
+    
+    event_type = body.get("event_type", "livestream.status.updated")
+    discord_server_id = body.get("discord_server_id")
+    broadcaster_user_id = body.get("broadcaster_user_id")
+    event_data = body.get("data", {})
+    
+    if not discord_server_id:
+        return jsonify({"error": "Missing discord_server_id"}), 400
+    
+    # Build simulated event data
+    if event_type == "livestream.status.updated":
+        # Build a realistic livestream.status.updated payload
+        simulated_data = {
+            "broadcaster": {
+                "is_live": True,
+                "user_id": int(broadcaster_user_id) if broadcaster_user_id else 0,
+                "slug": event_data.get("slug", "test_streamer")
+            },
+            "livestream": {
+                "id": f"test-{int(datetime.now().timestamp())}",
+                "session_title": event_data.get("title", "🧪 TEST - Simulated Stream Notification"),
+                "viewers": event_data.get("viewers", 100),
+                "category": {"name": event_data.get("category", "Just Chatting")}
+            },
+            "is_live": True,
+            "_server_id": discord_server_id,
+            "_broadcaster_user_id": broadcaster_user_id,
+            "_simulated": True
+        }
+    else:
+        # For other event types, just pass through the data with context
+        simulated_data = {
+            **event_data,
+            "_server_id": discord_server_id,
+            "_broadcaster_user_id": broadcaster_user_id,
+            "_simulated": True
+        }
+    
+    print(f"[Webhook Simulate] 🧪 Simulating {event_type} for server {discord_server_id}")
+    
+    # Handle the event
+    if _event_handler:
+        import asyncio
+        try:
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(_event_handler.handle(event_type, simulated_data))
+            loop.close()
+            return jsonify({
+                "status": "ok",
+                "message": f"Simulated {event_type} event processed",
+                "event_type": event_type,
+                "discord_server_id": discord_server_id
+            }), 200
+        except Exception as e:
+            print(f"[Webhook Simulate] ❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({"error": str(e)}), 500
+    else:
+        print(f"[Webhook Simulate] ⚠️ No event handler registered")
+        return jsonify({"error": "No event handler registered"}), 500
+
+
 def _log_event(event_type: str, event_data: Dict[str, Any]):
     """Log webhook event for debugging (used when no handler registered)"""
     print(f"[Webhook] Event Data:")
