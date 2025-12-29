@@ -3376,6 +3376,7 @@ async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, re
                     expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
                     with engine.begin() as conn:
+                        # Update kick_oauth_tokens table
                         conn.execute(text("""
                             UPDATE kick_oauth_tokens
                             SET access_token = :access_token,
@@ -3388,6 +3389,34 @@ async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, re
                             "refresh_token": new_refresh_token,
                             "expires_at": expires_at,
                             "user_id": user_id
+                        })
+                        
+                        # Also update bot_settings table if tokens exist there (legacy support)
+                        # This ensures both tables stay in sync
+                        conn.execute(text("""
+                            UPDATE bot_settings 
+                            SET value = :access_token, updated_at = CURRENT_TIMESTAMP
+                            WHERE key IN ('kick_oauth_token', 'kick_access_token')
+                            AND discord_server_id IN (
+                                SELECT DISTINCT discord_server_id FROM bot_settings 
+                                WHERE key = 'kick_channel' AND LOWER(value) = LOWER(:kick_username)
+                            )
+                        """), {
+                            "access_token": new_access_token,
+                            "kick_username": kick_username
+                        })
+                        
+                        conn.execute(text("""
+                            UPDATE bot_settings 
+                            SET value = :refresh_token, updated_at = CURRENT_TIMESTAMP
+                            WHERE key = 'kick_refresh_token'
+                            AND discord_server_id IN (
+                                SELECT DISTINCT discord_server_id FROM bot_settings 
+                                WHERE key = 'kick_channel' AND LOWER(value) = LOWER(:kick_username)
+                            )
+                        """), {
+                            "refresh_token": new_refresh_token,
+                            "kick_username": kick_username
                         })
 
                     return True
