@@ -1155,10 +1155,12 @@ class RedisSubscriber:
                 }
             ]
             
-            # Send message with clkick.com URL - Discord will auto-embed the video
+            # Message content without visible link - embed URL will be auto-embedded
+            # Using the embed URL at the end allows Discord to embed it while keeping message clean
             message_content = f"🔴 **{streamer}** is now LIVE on Kick!\n{embed_url}"
             
             async with aiohttp.ClientSession() as session:
+                # First, send message with the URL to trigger Discord's embed
                 async with session.post(
                     f"https://discord.com/api/v10/channels/{channel_id}/messages",
                     headers={
@@ -1172,6 +1174,29 @@ class RedisSubscriber:
                     timeout=aiohttp.ClientTimeout(total=10)
                 ) as resp:
                     if resp.status in [200, 201]:
+                        response_data = await resp.json()
+                        message_id = response_data.get('id')
+                        
+                        # Now edit the message to remove the URL but keep the embed
+                        if message_id:
+                            await asyncio.sleep(2)  # Wait for Discord to process embed
+                            async with session.patch(
+                                f"https://discord.com/api/v10/channels/{channel_id}/messages/{message_id}",
+                                headers={
+                                    "Authorization": f"Bot {bot_token}",
+                                    "Content-Type": "application/json"
+                                },
+                                json={
+                                    "content": f"🔴 **{streamer}** is now LIVE on Kick!",
+                                    "components": components
+                                },
+                                timeout=aiohttp.ClientTimeout(total=10)
+                            ) as edit_resp:
+                                if edit_resp.status in [200, 201]:
+                                    print(f"✅ Message edited to hide URL, embed preserved")
+                                else:
+                                    print(f"⚠️ Failed to edit message: {edit_resp.status}")
+                        
                         test_label = " (TEST)" if is_test else ""
                         print(f"✅ Discord stream notification sent to channel {channel_id}{test_label}")
                     else:

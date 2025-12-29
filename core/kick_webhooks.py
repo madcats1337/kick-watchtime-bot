@@ -589,6 +589,7 @@ def create_discord_notifier(discord_bot, channel_id: int):
                             bot_token = os.getenv('DISCORD_TOKEN')
                             if bot_token:
                                 async with aiohttp.ClientSession() as session:
+                                    # First send with URL to trigger embed
                                     async with session.post(
                                         f"https://discord.com/api/v10/channels/{notification_channel_id}/messages",
                                         headers={
@@ -599,10 +600,33 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                             "content": message_content,
                                             "components": components
                                         },
-                                        timeout=10
+                                        timeout=aiohttp.ClientTimeout(total=10)
                                     ) as resp:
                                         if resp.status in [200, 201]:
-                                            print(f"[Webhook] ✅ Discord stream notification sent to channel {notification_channel_id}")
+                                            response_data = await resp.json()
+                                            message_id = response_data.get('id')
+                                            
+                                            # Edit to remove URL but keep embed
+                                            if message_id:
+                                                await asyncio.sleep(2)
+                                                async with session.patch(
+                                                    f"https://discord.com/api/v10/channels/{notification_channel_id}/messages/{message_id}",
+                                                    headers={
+                                                        "Authorization": f"Bot {bot_token}",
+                                                        "Content-Type": "application/json"
+                                                    },
+                                                    json={
+                                                        "content": f"🔴 **{broadcaster}** is now LIVE on Kick!",
+                                                        "components": components
+                                                    },
+                                                    timeout=aiohttp.ClientTimeout(total=10)
+                                                ) as edit_resp:
+                                                    if edit_resp.status in [200, 201]:
+                                                        print(f"[Webhook] ✅ Discord notification sent, URL hidden, embed preserved")
+                                                    else:
+                                                        print(f"[Webhook] ⚠️ Edit failed: {edit_resp.status}")
+                                            else:
+                                                print(f"[Webhook] ✅ Discord stream notification sent to channel {notification_channel_id}")
                                         else:
                                             error_text = await resp.text()
                                             print(f"[Webhook] ⚠️ Failed to send Discord notification: {resp.status} - {error_text[:200]}")
