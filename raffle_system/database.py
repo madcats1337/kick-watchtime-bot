@@ -384,24 +384,12 @@ def create_new_period(engine, start_date, end_date, clear_tickets=True, discord_
             })
             period_id = result.scalar()
 
-            # Delete tickets only if requested (filter by server)
-            if clear_tickets:
-                # Delete tickets only for this server
-                if discord_server_id is not None:
-                    deleted_tickets = conn.execute(text("""
-                        DELETE FROM raffle_tickets 
-                        WHERE discord_server_id = :server_id
-                    """), {'server_id': discord_server_id}).rowcount
-                    logger.info(f"Deleted {deleted_tickets} ticket records for server {discord_server_id}")
-
-                    # DO NOT delete raffle_watchtime_converted - it's a historical log per period!
-                    # Deleting it causes watchtime to be re-awarded incorrectly
-                else:
-                    # Backward compatibility: delete all if no server_id
-                    deleted_tickets = conn.execute(text("DELETE FROM raffle_tickets")).rowcount
-                    logger.info(f"Deleted {deleted_tickets} ticket records from all periods")
-            else:
-                logger.info(f"Tickets preserved - remember to draw winner for old period before cleanup!")
+            # NEVER delete tickets - preserve all historical data!
+            # Tickets are tied to period_id so they don't interfere with new periods
+            # The clear_tickets parameter is now ignored for safety
+            if old_period:
+                logger.info(f"Period #{old_period[0]} closed. All {old_period[0]} tickets preserved for historical records.")
+            logger.info(f"New period #{period_id} created. Tickets are isolated by period_id.")
 
             # Snapshot current watchtime as "already converted" for new period
             # This prevents awarding tickets for watchtime earned before this period
