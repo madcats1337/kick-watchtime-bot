@@ -595,7 +595,9 @@ def simulate_real_webhook_event():
     message_timestamp = datetime.now().isoformat()
     
     # Call the REAL webhook endpoint
-    webhook_url = request.url_root.rstrip('/') + '/webhooks/kick'
+    # Use the bot's public URL to avoid redirect issues
+    bot_public_url = os.getenv('BOT_PUBLIC_URL', 'https://bot.lelebot.xyz')
+    webhook_url = f"{bot_public_url}/webhooks/kick"
     
     headers = {
         'Content-Type': 'application/json',
@@ -607,13 +609,15 @@ def simulate_real_webhook_event():
     }
     
     print(f"[Webhook Real Test] 🔬 Testing REAL webhook flow:")
+    print(f"  Webhook URL: {webhook_url}")
     print(f"  Subscription ID: {subscription_id}")
     print(f"  Event Type: {event_type}")
     print(f"  Server ID: {discord_server_id}")
     print(f"  Broadcaster: {broadcaster_user_id}")
     
     try:
-        resp = requests.post(webhook_url, json=payload, headers=headers, timeout=10)
+        # Don't follow redirects - POST can become GET on redirect
+        resp = requests.post(webhook_url, json=payload, headers=headers, timeout=10, allow_redirects=False)
         
         if resp.status_code == 200:
             return jsonify({
