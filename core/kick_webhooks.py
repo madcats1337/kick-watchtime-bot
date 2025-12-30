@@ -483,6 +483,163 @@ def simulate_webhook_event():
         return jsonify({"error": "No event handler registered"}), 500
 
 
+@kick_webhooks_bp.route('/webhooks/kick/simulate-real', methods=['POST'])
+def simulate_real_webhook_event():
+    """
+    Simulate a webhook event using the REAL subscription ID and signature verification.
+    
+    This tests the full webhook flow as if Kick actually sent it:
+    1. Looks up the real subscription ID from the database
+    2. Uses the stored webhook secret to generate a valid signature
+    3. Calls the real webhook endpoint with proper headers
+    
+    This verifies that subscription IDs are properly stored and signature verification works.
+    
+    Expected JSON body:
+    {
+        "test_token": "your-test-token",
+        "event_type": "livestream.status.updated",
+        "discord_server_id": "123456789",
+        "data": { ... optional event-specific data ... }
+    }
+    """
+    import requests
+    from datetime import datetime
+    
+    # Verify test token
+    test_token = os.getenv("WEBHOOK_TEST_TOKEN", "")
+    if not test_token:
+        return jsonify({"error": "WEBHOOK_TEST_TOKEN not configured on bot"}), 500
+    
+    try:
+        body = request.get_json() or {}
+    except:
+        return jsonify({"error": "Invalid JSON"}), 400
+    
+    provided_token = body.get("test_token", "")
+    if not provided_token or not hmac.compare_digest(provided_token, test_token):
+        return jsonify({"error": "Invalid test token"}), 401
+    
+    event_type = body.get("event_type", "livestream.status.updated")
+    discord_server_id = body.get("discord_server_id")
+    event_data = body.get("data", {})
+    
+    if not discord_server_id:
+        return jsonify({"error": "Missing discord_server_id"}), 400
+    
+    # Look up real subscription ID and secret from database
+    try:
+        from sqlalchemy import create_engine, text
+        db_url = os.getenv('DATABASE_URL')
+        if not db_url:
+            return jsonify({"error": "DATABASE_URL not configured"}), 500
+        
+        engine = create_engine(db_url, pool_pre_ping=True)
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT subscription_id, broadcaster_user_id, webhook_secret
+                FROM kick_webhook_subscriptions 
+                WHERE discord_server_id = :server_id 
+                AND event_type = :event_type
+                AND status = 'active'
+                LIMIT 1
+            """), {"server_id": discord_server_id, "event_type": event_type}).fetchone()
+            
+            if not result:
+                return jsonify({
+                    "error": f"No active subscription found for server {discord_server_id} and event {event_type}",
+                    "hint": "Run setup_webhooks.py to register webhooks"
+                }), 404
+            
+            subscription_id = result[0]
+            broadcaster_user_id = result[1]
+            webhook_secret = result[2]
+            
+            if not webhook_secret:
+                return jsonify({
+                    "error": "Subscription exists but has no webhook secret",
+                    "subscription_id": subscription_id
+                }), 500
+    
+    except Exception as db_err:
+        return jsonify({"error": f"Database error: {db_err}"}), 500
+    
+    # Build the simulated event payload
+    if event_type == "livestream.status.updated":
+        payload = {
+            "broadcaster": {
+                "is_live": True,
+                "user_id": int(broadcaster_user_id) if broadcaster_user_id else 0,
+                "slug": event_data.get("slug", "test_streamer")
+            },
+            "livestream": {
+                "id": f"test-real-{int(datetime.now().timestamp())}",
+                "session_title": event_data.get("title", "🔬 REAL TEST - Subscription ID Verified"),
+                "viewers": event_data.get("viewers", 100),
+                "category": {"name": event_data.get("category", "Just Chatting")}
+            },
+            "is_live": True
+        }
+    else:
+        payload = event_data
+    
+    # Generate valid signature using the stored webhook secret
+    payload_bytes = json.dumps(payload).encode('utf-8')
+    signature = hmac.new(
+        webhook_secret.encode('utf-8'),
+        payload_bytes,
+        hashlib.sha256
+    ).hexdigest()
+    
+    message_id = f"test-{int(datetime.now().timestamp())}"
+    message_timestamp = datetime.now().isoformat()
+    
+    # Call the REAL webhook endpoint
+    webhook_url = request.url_root.rstrip('/') + '/webhooks/kick'
+    
+    headers = {
+        'Content-Type': 'application/json',
+        'Kick-Event-Type': event_type,
+        'Kick-Event-Message-Id': message_id,
+        'Kick-Event-Message-Timestamp': message_timestamp,
+        'Kick-Event-Subscription-Id': subscription_id,
+        'Kick-Event-Signature': signature
+    }
+    
+    print(f"[Webhook Real Test] 🔬 Testing REAL webhook flow:")
+    print(f"  Subscription ID: {subscription_id}")
+    print(f"  Event Type: {event_type}")
+    print(f"  Server ID: {discord_server_id}")
+    print(f"  Broadcaster: {broadcaster_user_id}")
+    
+    try:
+        resp = requests.post(webhook_url, json=payload, headers=headers, timeout=10)
+        
+        if resp.status_code == 200:
+            return jsonify({
+                "success": True,
+                "message": "Real webhook test PASSED - subscription ID and signature verified!",
+                "subscription_id": subscription_id,
+                "broadcaster_user_id": broadcaster_user_id,
+                "event_type": event_type,
+                "webhook_response": resp.json()
+            }), 200
+        else:
+            return jsonify({
+                "success": False,
+                "error": f"Webhook returned {resp.status_code}",
+                "subscription_id": subscription_id,
+                "response": resp.text[:500]
+            }), 500
+            
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": f"Failed to call webhook: {e}",
+            "subscription_id": subscription_id
+        }), 500
+
+
 def _log_event(event_type: str, event_data: Dict[str, Any]):
     """Log webhook event for debugging (used when no handler registered)"""
     print(f"[Webhook] Event Data:")

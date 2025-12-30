@@ -243,46 +243,60 @@ async def setup_webhooks_for_server(discord_server_id: str):
                     secret=webhook_secret  # Same secret for all events
                 )
                 
-                # Webhook creation succeeded (HTTP 200/201/204)
-                # Response may be empty, list, or dict - all indicate success
-                # Extract subscription_id if available
-                subscription_id = None
-                if isinstance(response, dict):
-                    subscription_id = response.get('id') or response.get('subscription_id')
-                elif isinstance(response, list) and response:
-                    subscription_id = response[0].get('id') if isinstance(response[0], dict) else None
-                
-                # Use event name as fallback ID
-                if not subscription_id:
-                    subscription_id = f"{broadcaster_user_id}_{event_type}"
-                
-                print(f"   ✅ Webhook registered successfully (ID: {subscription_id})")
-                
-                # Store in database with the SAME secret
-                with engine.begin() as conn:
-                    conn.execute(text("""
-                        INSERT INTO kick_webhook_subscriptions 
-                        (subscription_id, discord_server_id, broadcaster_user_id, event_type, webhook_url, webhook_secret, status)
-                        VALUES (:sub_id, :server_id, :broadcaster_id, :event, :url, :secret, 'active')
-                        ON CONFLICT (subscription_id) 
-                        DO UPDATE SET 
-                            webhook_secret = EXCLUDED.webhook_secret,
-                            status = 'active',
-                            updated_at = NOW()
-                    """), {
-                        "sub_id": subscription_id,
-                        "server_id": discord_server_id,
-                        "broadcaster_id": broadcaster_user_id,
-                        "event": event_type,
-                        "url": WEBHOOK_URL,
-                        "secret": webhook_secret
-                    })
-                
-                print(f"   ✅ Stored in database")
+                print(f"   ✅ Webhook registered (API returned OK)")
                 registered_count += 1
                 
             except Exception as e:
                 print(f"   ❌ Failed to register: {e}")
+        
+        # Query Kick API to get actual subscription IDs
+        print(f"\n📋 Fetching subscription IDs from Kick API...")
+        try:
+            current_subs = await api.get_webhook_subscriptions()
+            
+            for sub in current_subs:
+                sub_dict = sub if isinstance(sub, dict) else (sub.__dict__ if hasattr(sub, '__dict__') else {})
+                sub_broadcaster = str(sub_dict.get('broadcaster_user_id', ''))
+                
+                if sub_broadcaster == str(broadcaster_user_id):
+                    sub_id = sub_dict.get('id')
+                    event = sub_dict.get('event')
+                    
+                    if sub_id and event in WEBHOOK_EVENTS:
+                        print(f"   📥 {event}: {sub_id}")
+                        
+                        # Store in database with the real subscription ID
+                        with engine.begin() as conn:
+                            # First, delete any fallback entries for this event
+                            fallback_id = f"{broadcaster_user_id}_{event}"
+                            conn.execute(text("""
+                                DELETE FROM kick_webhook_subscriptions 
+                                WHERE subscription_id = :fallback_id
+                            """), {"fallback_id": fallback_id})
+                            
+                            # Insert/update with real subscription ID
+                            conn.execute(text("""
+                                INSERT INTO kick_webhook_subscriptions 
+                                (subscription_id, discord_server_id, broadcaster_user_id, event_type, webhook_url, webhook_secret, status)
+                                VALUES (:sub_id, :server_id, :broadcaster_id, :event, :url, :secret, 'active')
+                                ON CONFLICT (subscription_id) 
+                                DO UPDATE SET 
+                                    webhook_secret = EXCLUDED.webhook_secret,
+                                    discord_server_id = EXCLUDED.discord_server_id,
+                                    status = 'active',
+                                    updated_at = NOW()
+                            """), {
+                                "sub_id": sub_id,
+                                "server_id": discord_server_id,
+                                "broadcaster_id": broadcaster_user_id,
+                                "event": event,
+                                "url": WEBHOOK_URL,
+                                "secret": webhook_secret
+                            })
+                        print(f"   ✅ Stored in database")
+        except Exception as fetch_err:
+            print(f"   ⚠️  Could not fetch subscription IDs: {fetch_err}")
+            print(f"   ⚠️  Webhooks registered but IDs not stored - may cause issues")
         
         print(f"\n{'='*60}")
         print(f"✅ Webhook setup complete for {username}!")
