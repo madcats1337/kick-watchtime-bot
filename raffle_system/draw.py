@@ -243,29 +243,44 @@ class RaffleDraw:
                     }
                 }))
                 
-                # Event 2: Spinning animation (3 seconds)
+                # Event 2: Spinning animation
                 redis_client.publish('raffle:draw:events', json_lib.dumps({
                     'type': 'draw_spinning',
                     'payload': {
                         'total_tickets': total_tickets,
-                        'duration': 3000
+                        'duration': 5000  # Default animation duration
                     }
                 }))
                 
-                # Event 3: Winner revealed (after spin duration)
+                # Event 3: Winner revealed (after countdown + animation)
+                # Default: 3s countdown + 5s animation = 8s total
+                # Use threading to avoid blocking the function return
+                import threading
                 import time
-                time.sleep(3)
-                redis_client.publish('raffle:draw:events', json_lib.dumps({
-                    'type': 'draw_complete',
-                    'payload': {
-                        'winning_ticket': winning_ticket,
-                        'winner_kick_name': winner['kick_name'],
-                        'winner_shuffle_name': shuffle_username,
-                        'winner_tickets': winner['ticket_count'],
-                        'total_tickets': total_tickets,
-                        'win_probability': result['win_probability']
-                    }
-                }))
+                
+                winner_payload = {
+                    'winning_ticket': winning_ticket,
+                    'winner_kick_name': winner['kick_name'],
+                    'winner_shuffle_name': shuffle_username,
+                    'winner_tickets': winner['ticket_count'],
+                    'total_tickets': total_tickets,
+                    'win_probability': result['win_probability']
+                }
+                
+                def publish_winner_event():
+                    time.sleep(8)
+                    try:
+                        redis_client.publish('raffle:draw:events', json_lib.dumps({
+                            'type': 'draw_complete',
+                            'payload': winner_payload
+                        }))
+                    except Exception as e:
+                        logger.warning(f"Failed to publish draw_complete event: {e}")
+                
+                timer = threading.Thread(target=publish_winner_event)
+                timer.daemon = True  # Don't block process shutdown
+                timer.start()
+                
             except Exception as e:
                 logger.warning(f"Failed to publish draw events to Redis: {e}")
 
