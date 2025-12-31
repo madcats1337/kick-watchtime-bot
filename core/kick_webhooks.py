@@ -88,6 +88,36 @@ def get_kick_public_key():
 # Create Flask Blueprint for webhook routes
 kick_webhooks_bp = Blueprint('kick_webhooks', __name__)
 
+# Track if tables have been initialized
+_tables_initialized = False
+
+def ensure_webhook_tables(engine):
+    """Ensure webhook-related tables exist"""
+    global _tables_initialized
+    if _tables_initialized:
+        return
+    
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS processed_webhook_messages (
+                    id SERIAL PRIMARY KEY,
+                    message_id VARCHAR(255) NOT NULL,
+                    broadcaster_user_id VARCHAR(50) NOT NULL,
+                    event_type VARCHAR(100),
+                    processed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                    CONSTRAINT unique_message_id UNIQUE (message_id)
+                )
+            """))
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_processed_webhook_messages_lookup 
+                ON processed_webhook_messages(message_id, broadcaster_user_id)
+            """))
+            print("[Webhook] ✅ Webhook tables initialized")
+        _tables_initialized = True
+    except Exception as e:
+        print(f"[Webhook] ⚠️ Could not initialize tables: {e}")
+
 # -------------------------
 # Signature Verification
 # -------------------------
@@ -278,6 +308,13 @@ def handle_kick_webhook():
     # 0️⃣ SKIP VERIFICATION FOR NON-POST REQUESTS (health checks, etc.)
     if request.method != "POST":
         return "", 204
+    
+    # 0.5️⃣ ENSURE TABLES EXIST
+    from sqlalchemy import create_engine
+    DATABASE_URL = os.getenv("DATABASE_URL")
+    if DATABASE_URL:
+        engine = create_engine(DATABASE_URL)
+        ensure_webhook_tables(engine)
     
     # 1️⃣ GET RAW BODY FIRST (CRITICAL: before ANY json parsing)
     raw_body: bytes = request.get_data(cache=True)
