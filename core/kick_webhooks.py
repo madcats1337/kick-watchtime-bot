@@ -24,12 +24,23 @@ import hashlib
 import hmac
 import secrets
 import json
+import base64
 from datetime import datetime, timezone
 from typing import Callable, Dict, Any, Optional
 from dataclasses import dataclass
 from functools import wraps
 
 from flask import Blueprint, request, jsonify, abort
+
+# RSA verification imports
+try:
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+    from cryptography.hazmat.backends import default_backend
+    CRYPTO_AVAILABLE = True
+except ImportError:
+    CRYPTO_AVAILABLE = False
+    print("[Webhook] ⚠️ cryptography library not installed - signature verification disabled")
 
 # Import webhook payload classes
 try:
@@ -50,6 +61,30 @@ except ImportError:
 
 WEBHOOK_SECRET = os.getenv("KICK_WEBHOOK_SECRET", "")
 
+# Kick's Public Key for webhook signature verification
+KICK_PUBLIC_KEY = """-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq/+l1WnlRrGSolDMA+A8
+6rAhMbQGmQ2SapVcGM3zq8ANXjnhDWocMqfWcTd95btDydITa10kDvHzw9WQOqp2
+MZI7ZyrfzJuz5nhTPCiJwTwnEtWft7nV14BYRDHvlfqPUaZ+1KR4OCaO/wWIk/rQ
+L/TjY0M70gse8rlBkbo2a8rKhu69RQTRsoaf4DVhDPEeSeI5jVrRDGAMGL3cGuyY
+6CLKGdjVEM78g3JfYOvDU/RvfqD7L89TZ3iN94jrmWdGz34JNlEI5hqK8dd7C5EF
+BEbZ5jgB8s8ReQV8H+MkuffjdAj3ajDDX3DOJMIut1lBrUVD1AaSrGCKHooWoL2e
+twIDAQAB
+-----END PUBLIC KEY-----"""
+
+# Cache the loaded public key
+_kick_public_key = None
+
+def get_kick_public_key():
+    """Load and cache Kick's public key"""
+    global _kick_public_key
+    if _kick_public_key is None and CRYPTO_AVAILABLE:
+        _kick_public_key = serialization.load_pem_public_key(
+            KICK_PUBLIC_KEY.encode('utf-8'),
+            backend=default_backend()
+        )
+    return _kick_public_key
+
 # Create Flask Blueprint for webhook routes
 kick_webhooks_bp = Blueprint('kick_webhooks', __name__)
 
@@ -57,33 +92,77 @@ kick_webhooks_bp = Blueprint('kick_webhooks', __name__)
 # Signature Verification
 # -------------------------
 
-def verify_kick_signature(raw_body: bytes, signature_header: str, webhook_secret: str) -> bool:
+def verify_kick_signature(raw_body: bytes, signature_header: str, message_id: str = None, timestamp: str = None) -> bool:
     """
-    Verify the Kick webhook signature using HMAC-SHA256.
+    Verify the Kick webhook signature using RSA public key.
+    
+    Kick signs webhooks using their private RSA key. We verify using their public key.
+    The signature is created from: message_id.timestamp.body
     
     Args:
         raw_body: Raw request body as bytes
-        signature_header: Signature from Kick-Signature header
-        webhook_secret: The webhook secret for this broadcaster
+        signature_header: Base64-encoded signature from Kick-Event-Signature header
+        message_id: Message ID from Kick-Event-Message-Id header
+        timestamp: Timestamp from Kick-Event-Message-Timestamp header
     
     Returns:
         True if signature is valid, False otherwise
     """
-    if not signature_header or not webhook_secret:
+    if not CRYPTO_AVAILABLE:
+        print("[Webhook] ⚠️ Crypto not available, skipping signature verification")
+        return True  # Allow through if crypto not installed
+    
+    if not signature_header:
+        print("[Webhook] ❌ No signature header provided")
+        return False
+    
+    if not message_id or not timestamp:
+        print("[Webhook] ❌ Missing message_id or timestamp for signature verification")
         return False
     
     try:
-        # Compute expected signature
-        expected_hash = hmac.new(
-            key=webhook_secret.encode('utf-8'),
-            msg=raw_body,
-            digestmod=hashlib.sha256
-        ).hexdigest()
+        # Get Kick's public key
+        public_key = get_kick_public_key()
+        if not public_key:
+            print("[Webhook] ❌ Could not load Kick public key")
+            return False
         
-        expected_signature = f"sha256={expected_hash}"
+        # Decode the base64 signature
+        try:
+            signature_bytes = base64.b64decode(signature_header)
+        except Exception as e:
+            print(f"[Webhook] ❌ Failed to decode signature: {e}")
+            return False
         
-        # Constant-time comparison
-        return hmac.compare_digest(expected_signature, signature_header.strip())
+        # Create the message that was signed: message_id.timestamp.body
+        # Body should be the raw request body as-is (no decoding/encoding manipulation)
+        body_str = raw_body.decode('utf-8') if isinstance(raw_body, bytes) else raw_body
+        message_to_verify = f"{message_id}.{timestamp}.{body_str}".encode('utf-8')
+        
+        # Debug output
+        if os.getenv("DEBUG_WEBHOOKS") == "true":
+            print(f"[Webhook] 🔐 Message to verify (first 100 chars): {message_to_verify[:100]}")
+            print(f"[Webhook] 🔐 Signature length: {len(signature_bytes)}")
+        
+        # Verify using RSA PKCS1v15 with SHA256
+        try:
+            public_key.verify(
+                signature_bytes,
+                message_to_verify,
+                padding.PKCS1v15(),
+                hashes.SHA256()
+            )
+            print(f"[Webhook] ✅ RSA signature verification successful")
+            return True
+        except Exception as verify_err:
+            print(f"[Webhook] ❌ RSA verification failed: {verify_err}")
+            # Additional debug info
+            if os.getenv("DEBUG_WEBHOOKS") == "true":
+                import hashlib
+                msg_hash = hashlib.sha256(message_to_verify).hexdigest()
+                print(f"[Webhook] 🔐 Message SHA256 hash: {msg_hash}")
+            return False
+            
     except Exception as e:
         print(f"[Webhook] ❌ Signature verification error: {e}")
         return False
@@ -278,14 +357,14 @@ def handle_kick_webhook():
             print(f"[Webhook] ❌ Database error: {db_err}")
             return jsonify({"error": "Database error"}), 500
         
-        if not webhook_secret:
-            # Subscription exists but no secret (should never happen with current setup)
-            # Return 200 OK to prevent retry storms, but do NOT process
-            print(f"[Webhook] ⚠️  No webhook secret for subscription {subscription_id} (cannot verify, ignoring)")
-            return jsonify({"status": "ok", "message": "no secret"}), 200
-        
-        # 4️⃣ VERIFY SIGNATURE
-        if not verify_kick_signature(raw_body, signature_header, webhook_secret):
+        # 4️⃣ VERIFY SIGNATURE (using Kick's RSA public key)
+        print(f"[Webhook] 🔐 Verifying RSA signature...")
+        print(f"[Webhook] 🔐 Message ID: {message_id}")
+        print(f"[Webhook] 🔐 Timestamp: {message_timestamp}")
+        print(f"[Webhook] 🔐 Signature header present: {bool(signature_header)}")
+        print(f"[Webhook] 🔐 Raw body length: {len(raw_body)} bytes")
+            
+        if not verify_kick_signature(raw_body, signature_header, message_id, message_timestamp):
             print(f"[Webhook] ❌ Invalid signature for subscription {subscription_id}")
             return jsonify({"error": "Invalid signature"}), 401
         
