@@ -239,6 +239,7 @@ class RaffleDraw:
                     'type': 'draw_started',
                     'payload': {
                         'period_id': period_id,
+                        'server_id': server_id,
                         'total_tickets': total_tickets
                     }
                 }))
@@ -247,6 +248,8 @@ class RaffleDraw:
                 redis_client.publish('raffle:draw:events', json_lib.dumps({
                     'type': 'draw_spinning',
                     'payload': {
+                        'period_id': period_id,
+                        'server_id': server_id,
                         'total_tickets': total_tickets,
                         'duration': 5000  # Default animation duration
                     }

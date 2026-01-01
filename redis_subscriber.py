@@ -613,11 +613,16 @@ class RedisSubscriber:
         elif action == 'animation_complete':
             # OBS widget animation finished for ONE winner - announce that winner now
             winner_kick_name = data.get('winner_kick_name')
-            print(f"🎬 [RAFFLE] Animation complete for winner: {winner_kick_name}")
+            server_id = data.get('server_id')
+            print(f"🎬 [RAFFLE] Animation complete for winner: {winner_kick_name} (server_id={server_id})")
             
             try:
-                # Search for any pending announcement queues
-                queue_keys = self.client.keys('raffle_announcement_queue:*')
+                # If server_id provided, use specific queue; otherwise search all (backwards compatibility)
+                if server_id:
+                    queue_keys = [f'raffle_announcement_queue:{server_id}']
+                else:
+                    queue_keys = self.client.keys('raffle_announcement_queue:*')
+                
                 for key in queue_keys:
                     queue_data = self.client.get(key)
                     if queue_data:
@@ -1311,20 +1316,6 @@ class RedisSubscriber:
             traceback.print_exc()
 
     async def announce_in_chat(self, message, guild_id=None):
-            # Kick channel was synced from dashboard - refresh to pick up new chatroom_id
-            kick_channel = data.get('kick_channel')
-            chatroom_id = data.get('chatroom_id')
-            broadcaster_user_id = data.get('broadcaster_user_id')
-            print(f"✅ Kick channel synced: {kick_channel} (chatroom: {chatroom_id}, broadcaster: {broadcaster_user_id})")
-
-            if hasattr(self.bot, 'settings_manager') and self.bot.settings_manager:
-                try:
-                    self.bot.settings_manager.refresh()
-                    print("✅ Bot settings refreshed after Kick sync")
-                except Exception as e:
-                    print(f"⚠️ Failed to refresh bot settings: {e}")
-
-    async def announce_in_chat(self, message, guild_id=None):
         """Send a message to the Kick chat"""
         try:
             if self.send_message_callback:
@@ -1360,19 +1351,29 @@ class RedisSubscriber:
             if len(winners) == 1:
                 winner = winners[0]
                 
+                # Safely get winner data with defaults
+                winner_discord_id = winner.get('winner_discord_id')
+                winner_kick_name = winner.get('winner_kick_name', 'Unknown')
+                winning_ticket = winner.get('winning_ticket', '?')
+                total_tickets = winner.get('total_tickets', 0)
+                win_probability = winner.get('win_probability', 0)
+                
                 # Try to mention winner
-                try:
-                    discord_user = await self.bot.fetch_user(winner['winner_discord_id'])
-                    mention = discord_user.mention
-                except:
-                    mention = f"Discord ID: {winner['winner_discord_id']}"
+                if winner_discord_id:
+                    try:
+                        discord_user = await self.bot.fetch_user(winner_discord_id)
+                        mention = discord_user.mention
+                    except:
+                        mention = f"Discord ID: {winner_discord_id}"
+                else:
+                    mention = "Unknown User"
 
                 message = f"""
 🎉 **RAFFLE WINNER DRAWN!** 🎉
 
-**Winner**: {winner['winner_kick_name']} ({mention})
-**Winning Ticket**: #{winner['winning_ticket']} out of {winner['total_tickets']:,}
-**Win Probability**: {winner['win_probability']:.2f}%
+**Winner**: {winner_kick_name} ({mention})
+**Winning Ticket**: #{winning_ticket} out of {total_tickets:,}
+**Win Probability**: {win_probability:.2f}%
 **Prize**: {prize_description or 'Monthly Raffle Prize'}
 
 Congratulations! Please contact an admin to claim your prize! 🎊
@@ -1385,14 +1386,24 @@ Congratulations! Please contact an admin to claim your prize! 🎊
                 message = f"🎉 **RAFFLE WINNERS DRAWN!** 🎉\n\n**Prize**: {prize_description or 'Monthly Raffle Prize'}\n\n"
                 
                 for i, winner in enumerate(winners, 1):
-                    try:
-                        discord_user = await self.bot.fetch_user(winner['winner_discord_id'])
-                        mention = discord_user.mention
-                    except:
-                        mention = f"Discord ID: {winner['winner_discord_id']}"
+                    # Safely get winner data with defaults
+                    winner_discord_id = winner.get('winner_discord_id')
+                    winner_kick_name = winner.get('winner_kick_name', 'Unknown')
+                    winning_ticket = winner.get('winning_ticket', '?')
+                    total_tickets = winner.get('total_tickets', 0)
+                    win_probability = winner.get('win_probability', 0)
                     
-                    message += f"**{i}. {winner['winner_kick_name']}** ({mention})\n"
-                    message += f"   • Ticket #{winner['winning_ticket']}/{winner['total_tickets']:,} ({winner['win_probability']:.2f}%)\n\n"
+                    if winner_discord_id:
+                        try:
+                            discord_user = await self.bot.fetch_user(winner_discord_id)
+                            mention = discord_user.mention
+                        except:
+                            mention = f"Discord ID: {winner_discord_id}"
+                    else:
+                        mention = "Unknown User"
+                    
+                    message += f"**{i}. {winner_kick_name}** ({mention})\n"
+                    message += f"   • Ticket #{winning_ticket}/{total_tickets:,} ({win_probability:.2f}%)\n\n"
                 
                 message += "Congratulations to all winners! Please contact an admin to claim your prizes! 🎊"
                 
