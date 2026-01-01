@@ -588,9 +588,19 @@ class RedisSubscriber:
                 self.client.setex(result_key, 30, json.dumps(result))  # Expire after 30 seconds
                 print(f"✅ Raffle draw completed, result stored in Redis")
 
-                # Announce winner(s) in Discord raffle announcement channel
+                # Store pending announcements as a QUEUE - each winner announced individually when their animation completes
                 if result.get('success'):
-                    await self.announce_raffle_winners(result.get('winners', []), prize_description)
+                    winners_list = result.get('winners', [])
+                    queue_key = f'raffle_announcement_queue:{server_id}'
+                    
+                    # Store winners as a list (queue) - each animation_complete pops one
+                    self.client.setex(queue_key, 600, json.dumps({
+                        'winners_queue': winners_list,
+                        'prize_description': prize_description,
+                        'total_winners': len(winners_list),
+                        'announced_count': 0
+                    }))  # Expire after 10 minutes (streamer may take time between draws)
+                    print(f"⏳ {len(winners_list)} winner(s) queued for announcement, waiting for animation(s) to complete...")
 
             except Exception as e:
                 print(f"❌ Raffle draw failed: {e}")
@@ -599,6 +609,49 @@ class RedisSubscriber:
                 result = {'success': False, 'error': str(e)}
                 result_key = f'raffle_draw_result:{request_id}'
                 self.client.setex(result_key, 30, json.dumps(result))
+
+        elif action == 'animation_complete':
+            # OBS widget animation finished for ONE winner - announce that winner now
+            winner_kick_name = data.get('winner_kick_name')
+            print(f"🎬 [RAFFLE] Animation complete for winner: {winner_kick_name}")
+            
+            try:
+                # Search for any pending announcement queues
+                queue_keys = self.client.keys('raffle_announcement_queue:*')
+                for key in queue_keys:
+                    queue_data = self.client.get(key)
+                    if queue_data:
+                        queue = json.loads(queue_data)
+                        winners_queue = queue.get('winners_queue', [])
+                        prize_description = queue.get('prize_description', '')
+                        
+                        if winners_queue:
+                            # Pop the first winner from queue and announce
+                            winner_to_announce = winners_queue.pop(0)
+                            announced_count = queue.get('announced_count', 0) + 1
+                            
+                            print(f"✅ Announcing winner {announced_count}/{queue['total_winners']}: {winner_to_announce.get('winner_kick_name')}")
+                            
+                            # Announce this single winner
+                            await self.announce_raffle_winners([winner_to_announce], prize_description)
+                            
+                            # Update queue in Redis
+                            if winners_queue:
+                                # More winners remaining
+                                queue['winners_queue'] = winners_queue
+                                queue['announced_count'] = announced_count
+                                self.client.setex(key, 300, json.dumps(queue))
+                            else:
+                                # All winners announced, delete queue
+                                self.client.delete(key)
+                                print(f"🎉 All {announced_count} winner(s) announced!")
+                            
+                            break  # Only announce one winner per animation_complete event
+                            
+            except Exception as e:
+                print(f"❌ Error handling animation_complete: {e}")
+                import traceback
+                traceback.print_exc()
 
     async def handle_commands_event(self, action, data):
         """Handle custom commands events from dashboard"""
