@@ -547,9 +547,19 @@ class SlotCallTracker:
 class SlotCallCommands(commands.Cog):
     """Discord commands for managing slot call tracking"""
 
-    def __init__(self, bot, tracker: SlotCallTracker):
+    def __init__(self, bot, tracker: SlotCallTracker = None):
         self.bot = bot
-        self.tracker = tracker
+        self.default_tracker = tracker  # Fallback for backwards compatibility
+
+    def _get_tracker_for_guild(self, guild_id: int) -> Optional[SlotCallTracker]:
+        """Get the correct tracker for a guild"""
+        # First try per-guild trackers
+        if hasattr(self.bot, 'slot_call_trackers_by_guild'):
+            tracker = self.bot.slot_call_trackers_by_guild.get(guild_id)
+            if tracker:
+                return tracker
+        # Fallback to default tracker
+        return self.default_tracker
 
     @commands.command(name='slotcalls')
     @commands.has_permissions(administrator=True)
@@ -558,22 +568,27 @@ class SlotCallCommands(commands.Cog):
         [ADMIN] Toggle slot call tracking on/off or check status
         Usage: !slotcalls [on|off|status]
         """
+        tracker = self._get_tracker_for_guild(ctx.guild.id)
+        if not tracker:
+            await ctx.send("❌ Slot call tracker not initialized for this server")
+            return
+        
         if action is None or action.lower() == "status":
-            status = "✅ **enabled**" if self.tracker.is_enabled() else "❌ **disabled**"
-            channel_id = self.tracker.discord_channel_id
+            status = "✅ **enabled**" if tracker.is_enabled() else "❌ **disabled**"
+            channel_id = tracker.discord_channel_id
             channel_mention = f"<#{channel_id}>" if channel_id else "Not configured"
 
             embed = discord.Embed(
                 title="🎰 Slot Call Tracker Status",
-                color=discord.Color.green() if self.tracker.is_enabled() else discord.Color.red()
+                color=discord.Color.green() if tracker.is_enabled() else discord.Color.red()
             )
             embed.add_field(name="Status", value=status, inline=True)
             embed.add_field(name="Channel", value=channel_mention, inline=True)
             embed.add_field(
                 name="🔒 Security",
-                value=f"• Rate limit: {self.tracker.cooldown_seconds}s cooldown per user\n"
-                      f"• Max username: {self.tracker.max_username_length} chars\n"
-                      f"• Max slot call: {self.tracker.max_slot_call_length} chars",
+                value=f"• Rate limit: {tracker.cooldown_seconds}s cooldown per user\n"
+                      f"• Max username: {tracker.max_username_length} chars\n"
+                      f"• Max slot call: {tracker.max_slot_call_length} chars",
                 inline=False
             )
             embed.add_field(
@@ -586,10 +601,10 @@ class SlotCallCommands(commands.Cog):
             return
 
         if action.lower() == "on":
-            await self.tracker.set_enabled(True)
+            await tracker.set_enabled(True)
             await ctx.send("✅ Slot call tracking **enabled**! Users can now use `!call <slot>` or `!sr <slot>` in Kick chat.")
         elif action.lower() == "off":
-            await self.tracker.set_enabled(False)
+            await tracker.set_enabled(False)
             await ctx.send("❌ Slot call tracking **disabled**. `!call` and `!sr` commands will be ignored.")
         else:
             await ctx.send("❌ Invalid action. Use `!slotcalls on`, `!slotcalls off`, or `!slotcalls status`")
@@ -601,21 +616,26 @@ class SlotCallCommands(commands.Cog):
         [ADMIN] Pick a random slot request from the list
         Usage: !pickslot
         """
-        if not self.tracker.engine:
+        tracker = self._get_tracker_for_guild(ctx.guild.id)
+        if not tracker:
+            await ctx.send("❌ Slot call tracker not initialized for this server")
+            return
+        
+        if not tracker.engine:
             await ctx.send("❌ Database not available")
             return
 
         try:
-            with self.tracker.engine.connect() as conn:
+            with tracker.engine.connect() as conn:
                 # Get a random unpicked slot request (filter by server_id if available)
-                if self.tracker.server_id:
+                if tracker.server_id:
                     result = conn.execute(text("""
                         SELECT id, kick_username, slot_call, requested_at
                         FROM slot_requests
                         WHERE picked = FALSE AND discord_server_id = :server_id
                         ORDER BY RANDOM()
                         LIMIT 1
-                    """), {"server_id": self.tracker.server_id}).fetchone()
+                    """), {"server_id": tracker.server_id}).fetchone()
                 else:
                     result = conn.execute(text("""
                         SELECT id, kick_username, slot_call, requested_at
@@ -632,7 +652,7 @@ class SlotCallCommands(commands.Cog):
                 request_id, username, slot_call, requested_at = result
 
                 # Mark as picked
-                with self.tracker.engine.begin() as update_conn:
+                with tracker.engine.begin() as update_conn:
                     update_conn.execute(text("""
                         UPDATE slot_requests
                         SET picked = TRUE, picked_at = CURRENT_TIMESTAMP
@@ -653,18 +673,18 @@ class SlotCallCommands(commands.Cog):
                 logger.info(f"Picked random slot: {slot_call} by {username}")
 
                 # Send message to Kick chat
-                if self.tracker.kick_send_callback:
+                if tracker.kick_send_callback:
                     try:
                         kick_message = f"🎰 Random slot picked: {slot_call} (requested by @{username})"
-                        await self.tracker.kick_send_callback(kick_message, guild_id=self.tracker.discord_server_id)
+                        await tracker.kick_send_callback(kick_message, guild_id=tracker.discord_server_id)
                         logger.info(f"Sent pick notification to Kick chat")
                     except Exception as kick_error:
                         logger.error(f"Failed to send pick notification to Kick: {kick_error}")
 
                 # Update panel if available
-                if self.tracker.panel:
+                if tracker.panel:
                     try:
-                        await self.tracker.panel.update_panel()
+                        await tracker.panel.update_panel()
                         logger.info("Updated slot request panel after pick")
                     except Exception as panel_error:
                         logger.error(f"Failed to update panel: {panel_error}")
@@ -680,26 +700,31 @@ class SlotCallCommands(commands.Cog):
         [ADMIN] Show statistics about slot requests
         Usage: !slotlist
         """
-        if not self.tracker.engine:
+        tracker = self._get_tracker_for_guild(ctx.guild.id)
+        if not tracker:
+            await ctx.send("❌ Slot call tracker not initialized for this server")
+            return
+        
+        if not tracker.engine:
             await ctx.send("❌ Database not available")
             return
 
         try:
-            with self.tracker.engine.connect() as conn:
+            with tracker.engine.connect() as conn:
                 # Get counts (filter by server_id if available)
-                if self.tracker.server_id:
+                if tracker.server_id:
                     total = conn.execute(text("""
                         SELECT COUNT(*) FROM slot_requests
                         WHERE discord_server_id = :server_id
-                    """), {"server_id": self.tracker.server_id}).fetchone()[0]
+                    """), {"server_id": tracker.server_id}).fetchone()[0]
                     unpicked = conn.execute(text("""
                         SELECT COUNT(*) FROM slot_requests
                         WHERE picked = FALSE AND discord_server_id = :server_id
-                    """), {"server_id": self.tracker.server_id}).fetchone()[0]
+                    """), {"server_id": tracker.server_id}).fetchone()[0]
                     picked = conn.execute(text("""
                         SELECT COUNT(*) FROM slot_requests
                         WHERE picked = TRUE AND discord_server_id = :server_id
-                    """), {"server_id": self.tracker.server_id}).fetchone()[0]
+                    """), {"server_id": tracker.server_id}).fetchone()[0]
                 else:
                     total = conn.execute(text("SELECT COUNT(*) FROM slot_requests")).fetchone()[0]
                     unpicked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = FALSE")).fetchone()[0]
@@ -731,24 +756,29 @@ class SlotCallCommands(commands.Cog):
         [ADMIN] Clear all slot requests (useful when starting a new hunt)
         Usage: !clearslots
         """
-        if not self.tracker.engine:
+        tracker = self._get_tracker_for_guild(ctx.guild.id)
+        if not tracker:
+            await ctx.send("❌ Slot call tracker not initialized for this server")
+            return
+        
+        if not tracker.engine:
             await ctx.send("❌ Database not available")
             return
 
         try:
-            with self.tracker.engine.begin() as conn:
-                if self.tracker.server_id:
+            with tracker.engine.begin() as conn:
+                if tracker.server_id:
                     # Delete slot_picks first (foreign key constraint)
                     conn.execute(text("""
                         DELETE FROM slot_picks WHERE slot_request_id IN 
                         (SELECT id FROM slot_requests WHERE discord_server_id = :server_id)
-                    """), {"server_id": self.tracker.server_id})
+                    """), {"server_id": tracker.server_id})
                     
                     # Now delete slot_requests
                     result = conn.execute(text("""
                         DELETE FROM slot_requests
                         WHERE discord_server_id = :server_id
-                    """), {"server_id": self.tracker.server_id})
+                    """), {"server_id": tracker.server_id})
                 else:
                     # Delete all slot_picks first
                     conn.execute(text("DELETE FROM slot_picks"))
@@ -768,19 +798,19 @@ class SlotCallCommands(commands.Cog):
             logger.info(f"Cleared {deleted_count} slot requests (manual clear by {ctx.author})")
 
             # Send message to Kick chat if callback available
-            if self.tracker.kick_send_callback:
+            if tracker.kick_send_callback:
                 try:
-                    await self.tracker.kick_send_callback(
+                    await tracker.kick_send_callback(
                         "🔄 Slot requests have been cleared! You can now make new requests with !call or !sr",
-                        guild_id=self.tracker.discord_server_id
+                        guild_id=tracker.discord_server_id
                     )
                 except Exception as e:
                     logger.error(f"Failed to send Kick notification: {e}")
 
             # Update panel if available
-            if self.tracker.panel:
+            if tracker.panel:
                 try:
-                    await self.tracker.panel.update_panel(force=True)
+                    await tracker.panel.update_panel(force=True)
                     logger.info("Updated slot request panel after clear")
                 except Exception as panel_error:
                     logger.error(f"Failed to update panel: {panel_error}")
