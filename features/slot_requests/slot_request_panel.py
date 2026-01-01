@@ -145,6 +145,7 @@ class SlotRequestPanel:
         self.engine = engine
         self.tracker = slot_call_tracker
         self.kick_send_callback = kick_send_callback
+        self.guild_id = slot_call_tracker.server_id if slot_call_tracker else None
         self.panel_message_id = None
         self.panel_channel_id = None
         self.last_update_time = None  # Track last update time for rate limiting
@@ -153,23 +154,23 @@ class SlotRequestPanel:
 
     def _load_panel_info(self):
         """Load panel message ID and channel from database"""
-        if not self.engine:
+        if not self.engine or not self.guild_id:
             return
 
         try:
             with self.engine.connect() as conn:
                 result = conn.execute(text("""
                     SELECT value FROM bot_settings
-                    WHERE key = 'slot_panel_message_id'
-                """)).fetchone()
+                    WHERE key = 'slot_panel_message_id' AND discord_server_id = :guild_id
+                """), {"guild_id": str(self.guild_id)}).fetchone()
 
                 if result:
                     self.panel_message_id = int(result[0])
 
                 result = conn.execute(text("""
                     SELECT value FROM bot_settings
-                    WHERE key = 'slot_panel_channel_id'
-                """)).fetchone()
+                    WHERE key = 'slot_panel_channel_id' AND discord_server_id = :guild_id
+                """), {"guild_id": str(self.guild_id)}).fetchone()
 
                 if result:
                     self.panel_channel_id = int(result[0])
@@ -179,7 +180,7 @@ class SlotRequestPanel:
 
     def _save_panel_info(self):
         """Save panel message ID and channel to database"""
-        if not self.engine:
+        if not self.engine or not self.guild_id:
             return
 
         try:
@@ -187,20 +188,20 @@ class SlotRequestPanel:
                 # Save message ID
                 if self.panel_message_id:
                     conn.execute(text("""
-                        INSERT INTO bot_settings (key, value, updated_at)
-                        VALUES ('slot_panel_message_id', :value, CURRENT_TIMESTAMP)
-                        ON CONFLICT (key)
+                        INSERT INTO bot_settings (key, value, discord_server_id, updated_at)
+                        VALUES ('slot_panel_message_id', :value, :guild_id, CURRENT_TIMESTAMP)
+                        ON CONFLICT (key, discord_server_id)
                         DO UPDATE SET value = :value, updated_at = CURRENT_TIMESTAMP
-                    """), {"value": str(self.panel_message_id)})
+                    """), {"value": str(self.panel_message_id), "guild_id": str(self.guild_id)})
 
                 # Save channel ID
                 if self.panel_channel_id:
                     conn.execute(text("""
-                        INSERT INTO bot_settings (key, value, updated_at)
-                        VALUES ('slot_panel_channel_id', :value, CURRENT_TIMESTAMP)
-                        ON CONFLICT (key)
+                        INSERT INTO bot_settings (key, value, discord_server_id, updated_at)
+                        VALUES ('slot_panel_channel_id', :value, :guild_id, CURRENT_TIMESTAMP)
+                        ON CONFLICT (key, discord_server_id)
                         DO UPDATE SET value = :value, updated_at = CURRENT_TIMESTAMP
-                    """), {"value": str(self.panel_channel_id)})
+                    """), {"value": str(self.panel_channel_id), "guild_id": str(self.guild_id)})
 
         except Exception as e:
             logger.error(f"Failed to save panel info: {e}")
