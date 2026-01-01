@@ -4,6 +4,7 @@ Shows statistics and allows picking random slots via buttons
 """
 
 import logging
+from typing import Optional
 import discord
 from discord.ext import commands, tasks
 from discord.ui import View, Button, Modal, TextInput
@@ -599,10 +600,20 @@ class SlotRequestPanel:
 class SlotRequestPanelCommands(commands.Cog):
     """Commands for managing the slot request panel"""
 
-    def __init__(self, bot, panel: SlotRequestPanel):
+    def __init__(self, bot, panel: SlotRequestPanel = None):
         self.bot = bot
-        self.panel = panel
+        self.default_panel = panel  # Fallback for backwards compatibility
         self.auto_update_task.start()
+
+    def _get_panel_for_guild(self, guild_id: int) -> Optional[SlotRequestPanel]:
+        """Get the correct panel for a guild"""
+        # First try per-guild panels
+        if hasattr(self.bot, 'slot_panels_by_guild'):
+            panel = self.bot.slot_panels_by_guild.get(guild_id)
+            if panel:
+                return panel
+        # Fallback to default panel
+        return self.default_panel
 
     def cog_unload(self):
         """Clean up when cog is unloaded"""
@@ -610,8 +621,16 @@ class SlotRequestPanelCommands(commands.Cog):
 
     @tasks.loop(minutes=3)
     async def auto_update_task(self):
-        """Auto-update panel every 3 minutes"""
-        await self.panel.update_panel()
+        """Auto-update panels every 3 minutes"""
+        # Update all guild panels
+        if hasattr(self.bot, 'slot_panels_by_guild'):
+            for guild_id, panel in self.bot.slot_panels_by_guild.items():
+                try:
+                    await panel.update_panel()
+                except Exception as e:
+                    logger.error(f"Failed to auto-update panel for guild {guild_id}: {e}")
+        elif self.default_panel:
+            await self.default_panel.update_panel()
 
     @auto_update_task.before_loop
     async def before_auto_update(self):
@@ -625,7 +644,12 @@ class SlotRequestPanelCommands(commands.Cog):
         [ADMIN] Create a slot request panel in this channel
         Usage: !slotpanel
         """
-        success = await self.panel.create_panel(ctx.channel)
+        panel = self._get_panel_for_guild(ctx.guild.id)
+        if not panel:
+            await ctx.send("❌ Slot panel not initialized for this server")
+            return
+        
+        success = await panel.create_panel(ctx.channel)
         if success:
             await ctx.send("✅ Slot request panel created! React with 🎲 to pick a random slot.")
         else:
@@ -634,7 +658,11 @@ class SlotRequestPanelCommands(commands.Cog):
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload):
         """Handle reactions on the panel"""
-        await self.panel.handle_reaction(payload)
+        if not payload.guild_id:
+            return
+        panel = self._get_panel_for_guild(payload.guild_id)
+        if panel:
+            await panel.handle_reaction(payload)
 
 async def setup_slot_panel(bot, engine, slot_call_tracker, kick_send_callback=None):
     """Setup the slot request panel system"""
