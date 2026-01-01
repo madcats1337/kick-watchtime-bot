@@ -98,6 +98,7 @@ def ensure_webhook_tables(engine):
         return
     
     try:
+        from sqlalchemy import text
         with engine.begin() as conn:
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS processed_webhook_messages (
@@ -423,9 +424,10 @@ def handle_kick_webhook():
         # Check if we've already processed this message_id
         if message_id:
             try:
+                from sqlalchemy import text as sql_text
                 with engine.begin() as conn:
                     # Check if this message was already processed
-                    existing = conn.execute(text("""
+                    existing = conn.execute(sql_text("""
                         SELECT id FROM processed_webhook_messages
                         WHERE message_id = :msg_id AND broadcaster_user_id = :broadcaster_id
                         LIMIT 1
@@ -437,7 +439,7 @@ def handle_kick_webhook():
                         return jsonify({"status": "ok", "message": "already processed"}), 200
                     
                     # Mark this message as processed (with expiry for cleanup)
-                    conn.execute(text("""
+                    conn.execute(sql_text("""
                         INSERT INTO processed_webhook_messages 
                         (message_id, broadcaster_user_id, event_type, processed_at)
                         VALUES (:msg_id, :broadcaster_id, :event_type, NOW())
