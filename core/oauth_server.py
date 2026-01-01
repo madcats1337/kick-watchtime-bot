@@ -1454,13 +1454,35 @@ def handle_user_linking_callback(code, code_verifier, state, discord_id, created
 
         # Link accounts in database
         with engine.begin() as conn:
-            # Use UPSERT with composite unique key (discord_id, discord_server_id)
-            conn.execute(text("""
-                INSERT INTO links (discord_id, kick_name, discord_server_id)
-                VALUES (:d, :k, :gid)
-                ON CONFLICT(discord_id, discord_server_id) DO UPDATE
-                SET kick_name = excluded.kick_name, linked_at = CURRENT_TIMESTAMP
-            """), {"d": discord_id, "k": kick_username.lower(), "gid": guild_id})
+            # First, try the proper multiserver upsert
+            try:
+                conn.execute(text("""
+                    INSERT INTO links (discord_id, kick_name, discord_server_id)
+                    VALUES (:d, :k, :gid)
+                    ON CONFLICT(discord_id, discord_server_id) DO UPDATE
+                    SET kick_name = excluded.kick_name, linked_at = CURRENT_TIMESTAMP
+                """), {"d": discord_id, "k": kick_username.lower(), "gid": guild_id})
+            except Exception as insert_error:
+                # If composite key doesn't exist yet (old schema), try alternative approach
+                error_str = str(insert_error).lower()
+                if 'unique constraint' in error_str or 'duplicate key' in error_str:
+                    print(f"⚠️ Falling back to DELETE+INSERT due to old schema: {insert_error}", flush=True)
+                    # Delete existing link for this user on this server
+                    conn.execute(text("""
+                        DELETE FROM links WHERE discord_id = :d AND discord_server_id = :gid
+                    """), {"d": discord_id, "gid": guild_id})
+                    # Also try deleting by discord_id only if server_id is 0 (legacy records)
+                    if guild_id != 0:
+                        conn.execute(text("""
+                            DELETE FROM links WHERE discord_id = :d AND (discord_server_id IS NULL OR discord_server_id = 0)
+                        """), {"d": discord_id})
+                    # Now insert fresh
+                    conn.execute(text("""
+                        INSERT INTO links (discord_id, kick_name, discord_server_id, linked_at)
+                        VALUES (:d, :k, :gid, CURRENT_TIMESTAMP)
+                    """), {"d": discord_id, "k": kick_username.lower(), "gid": guild_id})
+                else:
+                    raise
 
             # Clean up pending bio verifications if any
             conn.execute(text("DELETE FROM pending_links WHERE discord_id = :d"), {"d": discord_id})

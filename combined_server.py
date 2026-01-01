@@ -16,44 +16,115 @@ def run_database_migration():
         engine = create_engine(os.getenv('DATABASE_URL'))
 
         with engine.begin() as conn:
-            # Check if composite unique constraint exists
-            result = conn.execute(text("""
-                SELECT constraint_name
-                FROM information_schema.table_constraints
-                WHERE table_name = 'links'
-                AND constraint_type = 'UNIQUE'
-                AND constraint_name = 'links_discord_server_unique'
+            # First check if table exists
+            table_exists = conn.execute(text("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_name = 'links'
+                )
+            """)).scalar()
+            
+            if not table_exists:
+                print("   ℹ️ links table doesn't exist yet, will be created by bot.py", flush=True)
+                return
+            
+            # Check current primary key structure
+            pk_result = conn.execute(text("""
+                SELECT a.attname
+                FROM pg_index i
+                JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+                WHERE i.indrelid = 'links'::regclass AND i.indisprimary
+                ORDER BY a.attnum
             """))
-
-            if not result.fetchone():
-                print("   Adding unique constraint on (discord_id, discord_server_id)...", flush=True)
-
-                # Remove old single-column unique constraint if it exists
-                conn.execute(text("""
-                    ALTER TABLE links
-                    DROP CONSTRAINT IF EXISTS links_discord_id_key
-                """))
-
-                # Remove any duplicates, keeping most recent per (discord_id, discord_server_id)
-                # Note: links table uses composite PRIMARY KEY (discord_id, discord_server_id), no id column
+            pk_columns = [row[0] for row in pk_result]
+            print(f"   📊 Current primary key columns: {pk_columns}", flush=True)
+            
+            # If PK is only discord_id (old schema), we need to recreate it
+            if pk_columns == ['discord_id'] or 'discord_server_id' not in pk_columns:
+                print("   🔄 Migrating links table to composite primary key...", flush=True)
+                
+                # First, handle any NULL discord_server_id values
+                # Set them to 0 as a default server
+                null_count = conn.execute(text("""
+                    SELECT COUNT(*) FROM links WHERE discord_server_id IS NULL
+                """)).scalar()
+                if null_count > 0:
+                    print(f"   📝 Setting {null_count} NULL discord_server_id values to 0...", flush=True)
+                    conn.execute(text("""
+                        UPDATE links SET discord_server_id = 0 WHERE discord_server_id IS NULL
+                    """))
+                
+                # Remove duplicates - keep most recent link per discord_id + server combo
+                # For rows with same discord_id, keep the one with most recent linked_at
                 conn.execute(text("""
                     DELETE FROM links a
-                    WHERE a.linked_at < (
-                        SELECT MAX(b.linked_at)
+                    WHERE EXISTS (
+                        SELECT 1 FROM links b
+                        WHERE b.discord_id = a.discord_id
+                        AND b.discord_server_id = a.discord_server_id
+                        AND b.linked_at > a.linked_at
+                    )
+                """))
+                
+                # Also remove strict duplicates (same discord_id + server_id)
+                conn.execute(text("""
+                    DELETE FROM links a
+                    WHERE a.ctid <> (
+                        SELECT MIN(b.ctid)
                         FROM links b
                         WHERE b.discord_id = a.discord_id
                         AND b.discord_server_id = a.discord_server_id
                     )
                 """))
-
-                # Add composite unique constraint
+                
+                # Drop old primary key
                 conn.execute(text("""
-                    ALTER TABLE links
-                    ADD CONSTRAINT links_discord_server_unique
-                    UNIQUE (discord_id, discord_server_id)
+                    ALTER TABLE links DROP CONSTRAINT IF EXISTS links_pkey
                 """))
-
-                print("   ✅ Migration complete!", flush=True)
+                
+                # Make discord_server_id NOT NULL
+                conn.execute(text("""
+                    ALTER TABLE links ALTER COLUMN discord_server_id SET NOT NULL
+                """))
+                
+                # Add new composite primary key
+                conn.execute(text("""
+                    ALTER TABLE links ADD PRIMARY KEY (discord_id, discord_server_id)
+                """))
+                
+                print("   ✅ Primary key migrated to composite (discord_id, discord_server_id)!", flush=True)
+            
+            # Check if kick_name unique constraint exists
+            result = conn.execute(text("""
+                SELECT constraint_name
+                FROM information_schema.table_constraints
+                WHERE table_name = 'links'
+                AND constraint_type = 'UNIQUE'
+                AND constraint_name = 'links_kick_name_server_unique'
+            """))
+            
+            if not result.fetchone():
+                print("   Adding unique constraint on (kick_name, discord_server_id)...", flush=True)
+                
+                # Remove old single-column unique constraint if it exists
+                conn.execute(text("""
+                    ALTER TABLE links DROP CONSTRAINT IF EXISTS links_kick_name_key
+                """))
+                conn.execute(text("""
+                    ALTER TABLE links DROP CONSTRAINT IF EXISTS links_discord_id_key
+                """))
+                
+                # Add composite unique constraint for kick_name per server
+                try:
+                    conn.execute(text("""
+                        ALTER TABLE links
+                        ADD CONSTRAINT links_kick_name_server_unique
+                        UNIQUE (kick_name, discord_server_id)
+                    """))
+                except Exception as e:
+                    print(f"   ⚠️ Could not add kick_name constraint: {e}", flush=True)
+                
+                print("   ✅ Unique constraints configured!", flush=True)
             else:
                 print("   ✅ Database schema is up to date", flush=True)
 
