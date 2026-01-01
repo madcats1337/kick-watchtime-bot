@@ -7012,13 +7012,14 @@ class PointShopItemSelect(discord.ui.Select):
 
         # First, show the user their balance and item details
         discord_id = interaction.user.id
+        guild_id = interaction.guild.id if interaction.guild else None
 
         with engine.connect() as conn:
             # Get linked account
             link = conn.execute(text("""
                 SELECT kick_name FROM links
                 WHERE discord_id = :d AND discord_server_id = :s
-            """), {"d": discord_id, "s": interaction.guild.id}).fetchone()
+            """), {"d": discord_id, "s": guild_id}).fetchone()
 
             if not link:
                 await interaction.response.send_message(
@@ -7031,8 +7032,8 @@ class PointShopItemSelect(discord.ui.Select):
 
             # Get balance
             points_data = conn.execute(text("""
-                SELECT points FROM user_points WHERE kick_username = :k
-            """), {"k": kick_username}).fetchone()
+                SELECT points FROM user_points WHERE kick_username = :k AND discord_server_id = :s
+            """), {"k": kick_username, "s": guild_id}).fetchone()
 
             current_balance = points_data[0] if points_data else 0
 
@@ -7085,12 +7086,13 @@ class PointShopBalanceButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         """Show user's point balance"""
         discord_id = interaction.user.id
+        guild_id = interaction.guild.id if interaction.guild else None
 
         with engine.connect() as conn:
             link = conn.execute(text("""
                 SELECT kick_name FROM links
                 WHERE discord_id = :d AND discord_server_id = :s
-            """), {"d": discord_id, "s": interaction.guild.id}).fetchone()
+            """), {"d": discord_id, "s": guild_id}).fetchone()
 
             if not link:
                 await interaction.response.send_message(
@@ -7104,8 +7106,8 @@ class PointShopBalanceButton(discord.ui.Button):
             points_data = conn.execute(text("""
                 SELECT points, total_earned, total_spent
                 FROM user_points
-                WHERE kick_username = :k
-            """), {"k": kick_username}).fetchone()
+                WHERE kick_username = :k AND discord_server_id = :s
+            """), {"k": kick_username, "s": guild_id}).fetchone()
 
             if not points_data:
                 points, total_earned, total_spent = 0, 0, 0
