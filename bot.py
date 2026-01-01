@@ -5708,7 +5708,8 @@ async def on_ready():
                     bot,
                     engine,
                     gtb_managers[guild.id],
-                    kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
+                    kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None,
+                    guild_id=guild.id
                 )
                 if not hasattr(bot, 'gtb_panels_by_guild'):
                     bot.gtb_panels_by_guild = {}
