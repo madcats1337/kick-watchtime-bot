@@ -1115,12 +1115,12 @@ def auth_kick():
     # Build authorization URL with required scopes and PKCE
     redirect_uri = f"{OAUTH_BASE_URL}/auth/kick/callback"
 
-    # Request all necessary scopes for bot functionality
+    # Request minimal scopes for user account linking
+    # (User linking only needs to read their profile and channel info)
+    # Bot functionality (chat:write, events:subscribe) is handled separately via streamer dashboard
     scopes = [
-        'user:read',           # Read user profile
-        'chat:write',          # Send chat messages as bot
-        'events:subscribe',    # Subscribe to webhook events (chat messages, follows, subs)
-        'channel:read',        # Read channel information
+        'user:read',           # Read user profile (required for linking)
+        'channel:read',        # Read channel information (required for linking)
     ]
 
     auth_params = {
