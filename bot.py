@@ -819,11 +819,14 @@ class KickWebSocketManager:
                 print(f"[{guild_name}] 🎰 Detected slot command: {content_stripped[:50]}")
                 print(f"[{guild_name}] 🔍 Has slot_trackers: {hasattr(bot, 'slot_trackers')}")
                 
-                # Use guild-specific tracker
+                # Use guild-specific tracker (check both naming conventions)
                 tracker = None
-                if hasattr(bot, 'slot_trackers') and guild_id in bot.slot_trackers:
+                if hasattr(bot, 'slot_call_trackers_by_guild') and guild_id in bot.slot_call_trackers_by_guild:
+                    tracker = bot.slot_call_trackers_by_guild[guild_id]
+                    print(f"[{guild_name}] ✅ Found guild-specific tracker (slot_call_trackers_by_guild)")
+                elif hasattr(bot, 'slot_trackers') and guild_id in bot.slot_trackers:
                     tracker = bot.slot_trackers[guild_id]
-                    print(f"[{guild_name}] ✅ Found guild-specific tracker")
+                    print(f"[{guild_name}] ✅ Found guild-specific tracker (slot_trackers)")
                 elif hasattr(bot, 'slot_call_tracker'):
                     tracker = bot.slot_call_tracker
                     print(f"[{guild_name}] ⚠️ Using fallback global tracker")
@@ -1740,16 +1743,16 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                             
                             # !call / !sr commands (slot requests)
                             elif content_stripped.startswith(("!call", "!sr")):
-                                if hasattr(bot, 'slot_call_tracker') and bot.slot_call_tracker:
+                                # Use per-guild slot call tracker
+                                tracker = bot.slot_call_trackers_by_guild.get(guild_id) if hasattr(bot, 'slot_call_trackers_by_guild') else None
+                                if not tracker and hasattr(bot, 'slot_call_tracker'):
+                                    # Fallback to global tracker for backwards compatibility
+                                    tracker = bot.slot_call_tracker
+                                
+                                if tracker:
                                     slot_call = content_stripped[5:].strip()[:200] if content_stripped.startswith("!call") else content_stripped[3:].strip()[:200]
                                     if slot_call:
-                                        original_guild_id = getattr(bot.slot_call_tracker, 'discord_server_id', None)
-                                        bot.slot_call_tracker.discord_server_id = guild_id
-                                        try:
-                                            await bot.slot_call_tracker.handle_slot_call(username, slot_call)
-                                        finally:
-                                            if original_guild_id:
-                                                bot.slot_call_tracker.discord_server_id = original_guild_id
+                                        await tracker.handle_slot_call(username, slot_call)
                             
                             # !gtb command
                             elif content_stripped.lower().startswith("!gtb"):
@@ -2517,23 +2520,27 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
 
                                     # Handle slot call commands (!call or !sr)
                                     content_stripped = content_text.strip()
-                                    # Use bot.slot_call_tracker instead of global variable
-                                    if hasattr(bot, 'slot_call_tracker') and bot.slot_call_tracker and (content_stripped.startswith("!call") or content_stripped.startswith("!sr")):
+                                    # Use per-guild slot call tracker
+                                    tracker = bot.slot_call_trackers_by_guild.get(guild_id) if hasattr(bot, 'slot_call_trackers_by_guild') else None
+                                    if not tracker and hasattr(bot, 'slot_call_tracker'):
+                                        tracker = bot.slot_call_tracker  # Fallback for backwards compatibility
+                                    
+                                    if tracker and (content_stripped.startswith("!call") or content_stripped.startswith("!sr")):
                                         # Check if slot requests are enabled first
-                                        if not bot.slot_call_tracker.enabled:
+                                        if not tracker.enabled:
                                             await send_kick_message(f"@{username} Slot requests are not open at the moment.", guild_id=guild_id)
                                             continue
                                         
                                         # 🔒 SECURITY: Check if user is blacklisted (per-guild)
                                         is_blacklisted = False
                                         try:
-                                            guild_id = bot.slot_call_tracker.discord_server_id if hasattr(bot.slot_call_tracker, 'discord_server_id') else None
-                                            if guild_id:
+                                            tracker_guild_id = tracker.discord_server_id if hasattr(tracker, 'discord_server_id') else guild_id
+                                            if tracker_guild_id:
                                                 with engine.begin() as check_conn:
                                                     blacklist_check = check_conn.execute(text("""
                                                         SELECT 1 FROM slot_call_blacklist 
                                                         WHERE kick_username = :username AND discord_server_id = :guild_id
-                                                    """), {"username": username_lower, "guild_id": guild_id}).fetchone()
+                                                    """), {"username": username_lower, "guild_id": tracker_guild_id}).fetchone()
                                                     is_blacklisted = blacklist_check is not None
                                         except Exception as e:
                                             print(f"Error checking slot call blacklist: {e}")
@@ -2550,7 +2557,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                 slot_call = content_stripped[3:].strip()[:200]  # Remove "!sr"
 
                                             if slot_call:  # Only process if there's actually a call
-                                                await bot.slot_call_tracker.handle_slot_call(username, slot_call)
+                                                await tracker.handle_slot_call(username, slot_call)
                                             else:
                                                 # Send usage message when no content is provided (only to non-blacklisted users)
                                                 try:
