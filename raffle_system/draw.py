@@ -234,13 +234,16 @@ class RaffleDraw:
                 import json as json_lib
                 redis_client = redis.from_url(os.getenv('REDIS_URL', 'redis://localhost:6379'))
                 
+                # Convert server_id to string to avoid JavaScript precision loss with large integers
+                server_id_str = str(server_id)
+                
                 # Event 1: Draw started (include server_id at top level for filtering)
                 redis_client.publish('raffle:draw:events', json_lib.dumps({
                     'type': 'draw_started',
-                    'server_id': server_id,
+                    'server_id': server_id_str,
                     'payload': {
                         'period_id': period_id,
-                        'server_id': server_id,
+                        'server_id': server_id_str,
                         'total_tickets': total_tickets
                     }
                 }))
@@ -248,10 +251,10 @@ class RaffleDraw:
                 # Event 2: Spinning animation
                 redis_client.publish('raffle:draw:events', json_lib.dumps({
                     'type': 'draw_spinning',
-                    'server_id': server_id,
+                    'server_id': server_id_str,
                     'payload': {
                         'period_id': period_id,
-                        'server_id': server_id,
+                        'server_id': server_id_str,
                         'total_tickets': total_tickets,
                         'duration': 5000  # Default animation duration
                     }
@@ -264,7 +267,7 @@ class RaffleDraw:
                 import time
                 
                 winner_payload = {
-                    'server_id': server_id,
+                    'server_id': server_id_str,
                     'winning_ticket': winning_ticket,
                     'winner_kick_name': winner['kick_name'],
                     'winner_shuffle_name': shuffle_username,
@@ -278,7 +281,7 @@ class RaffleDraw:
                     try:
                         redis_client.publish('raffle:draw:events', json_lib.dumps({
                             'type': 'draw_complete',
-                            'server_id': server_id,
+                            'server_id': server_id_str,
                             'payload': winner_payload
                         }))
                     except Exception as e:
