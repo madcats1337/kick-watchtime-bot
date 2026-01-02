@@ -551,6 +551,75 @@ class SlotRequestPanel:
 
                 logger.info(f"[Server {guild_id}] Panel picked random slot: {slot_call} by {username} (provably fair)")
 
+                # Check for rewards from slot_rewards table
+                won_reward = False
+                reward_type = None
+                reward_amount = None
+                
+                try:
+                    with self.engine.connect() as reward_conn:
+                        # Get an enabled reward for this server
+                        reward_row = reward_conn.execute(text("""
+                            SELECT id, reward_type, reward_amount, reward_chance_percent
+                            FROM slot_rewards
+                            WHERE discord_server_id = :server_id
+                              AND enabled = TRUE
+                            ORDER BY RANDOM()
+                            LIMIT 1
+                        """), {"server_id": guild_id}).fetchone()
+                        
+                        if reward_row:
+                            reward_id = reward_row[0]
+                            reward_type = reward_row[1]
+                            reward_amount = float(reward_row[2])
+                            reward_chance = float(reward_row[3])
+                            
+                            # Check if user is linked (verified)
+                            link_check = reward_conn.execute(text("""
+                                SELECT 1 FROM links
+                                WHERE kick_name = :username AND discord_server_id = :server_id
+                                LIMIT 1
+                            """), {"username": username, "server_id": guild_id}).fetchone()
+                            is_linked = link_check is not None
+                            
+                            if is_linked and reward_chance > 0:
+                                # Use SAME provably fair result for reward outcome
+                                won_reward = result['random_value'] < reward_chance
+                                
+                                logger.info(f"[Server {guild_id}] Reward check - Random: {result['random_value']}, Chance: {reward_chance}, Won: {won_reward}, Linked: {is_linked}")
+                                
+                                # Record the pick in slot_picks table
+                                with self.engine.begin() as pick_conn:
+                                    pick_conn.execute(text("""
+                                        INSERT INTO slot_picks
+                                            (slot_request_id, discord_server_id, kick_username, slot_call,
+                                             reward_won, reward_type, reward_amount, reward_id,
+                                             server_seed, client_seed, nonce, proof_hash, random_value, chance_percent)
+                                        VALUES (:slot_request_id, :server_id, :username, :slot_call,
+                                                :reward_won, :reward_type, :reward_amount, :reward_id,
+                                                :server_seed, :client_seed, :nonce, :proof_hash, :random_value, :chance_percent)
+                                    """), {
+                                        "slot_request_id": request_id,
+                                        "server_id": guild_id,
+                                        "username": username,
+                                        "slot_call": slot_call,
+                                        "reward_won": won_reward,
+                                        "reward_type": reward_type if won_reward else None,
+                                        "reward_amount": reward_amount if won_reward else None,
+                                        "reward_id": reward_id if won_reward else None,
+                                        "server_seed": result['server_seed'],
+                                        "client_seed": result['client_seed'],
+                                        "nonce": result['nonce'],
+                                        "proof_hash": result['proof_hash'],
+                                        "random_value": result['random_value'],
+                                        "chance_percent": reward_chance
+                                    })
+                            else:
+                                if not is_linked:
+                                    logger.info(f"[Server {guild_id}] User {username} not linked - no reward eligibility")
+                except Exception as reward_error:
+                    logger.error(f"[Server {guild_id}] Error checking rewards: {reward_error}")
+
                 # Check if slot overlay is enabled in dashboard settings
                 overlay_delay_needed = False
                 if self.engine:
@@ -584,7 +653,11 @@ class SlotRequestPanel:
                 # Send message to Kick chat
                 if self.kick_send_callback:
                     try:
-                        kick_message = f"🎰 Random slot picked: {slot_call} (requested by @{username})"
+                        if won_reward and reward_type and reward_amount:
+                            reward_type_display = 'Bonus Buy' if reward_type == 'bonus_buy' else reward_type.capitalize()
+                            kick_message = f"🎰 PICKED: {slot_call} (requested by @{username}) 💰 WON ${reward_amount:.2f} {reward_type_display}!"
+                        else:
+                            kick_message = f"🎰 Random slot picked: {slot_call} (requested by @{username})"
                         await self.kick_send_callback(kick_message, guild_id=guild_id)
                     except Exception as kick_error:
                         logger.error(f"Failed to send pick notification to Kick: {kick_error}")
