@@ -140,8 +140,8 @@ def verify_kick_signature(raw_body: bytes, signature_header: str, message_id: st
         True if signature is valid, False otherwise
     """
     if not CRYPTO_AVAILABLE:
-        print("[Webhook] ⚠️ Crypto not available, skipping signature verification")
-        return True  # Allow through if crypto not installed
+        print("[Webhook] ❌ CRITICAL: Crypto library not available - rejecting webhook for security")
+        return False  # SECURITY: Fail-closed - reject if we can't verify
     
     if not signature_header:
         print("[Webhook] ❌ No signature header provided")

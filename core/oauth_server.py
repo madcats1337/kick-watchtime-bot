@@ -37,7 +37,7 @@ OAUTH_SECRET_KEY = os.getenv("FLASK_SECRET_KEY", secrets.token_hex(32))
 
 # Debug: Log secret key status at startup (don't log the actual key!)
 if os.getenv("FLASK_SECRET_KEY"):
-    print(f"[OAuth] FLASK_SECRET_KEY loaded: {len(OAUTH_SECRET_KEY)} chars, hash={hash(OAUTH_SECRET_KEY) % 10000}", flush=True)
+    print(f"[OAuth] FLASK_SECRET_KEY configured: YES", flush=True)
 else:
     print(f"[OAuth] WARNING: FLASK_SECRET_KEY not set, using random key!", flush=True)
 

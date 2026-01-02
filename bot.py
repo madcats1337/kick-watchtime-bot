@@ -184,7 +184,7 @@ if not OAUTH_SECRET_KEY:
     print("⚠️  Please set FLASK_SECRET_KEY in Railway environment variables.", flush=True)
     print("=" * 80, flush=True)
 else:
-    print(f"[Bot] FLASK_SECRET_KEY loaded: {len(OAUTH_SECRET_KEY)} chars, hash={hash(OAUTH_SECRET_KEY) % 10000}", flush=True)
+    print(f"[Bot] FLASK_SECRET_KEY configured: YES", flush=True)
 
 # -------------------------
 # 🔒 Security: OAuth URL Signing
@@ -531,7 +531,7 @@ class KickWebSocketManager:
                     if result and result[0]:
                         oauth_token = result[0]
                         api.access_token = oauth_token
-                        print(f"[{guild_name}] ✅ Loaded OAuth token: {oauth_token[:20]}...")
+                        print(f"[{guild_name}] ✅ OAuth token loaded successfully")
                     else:
                         print(f"[{guild_name}] ⚠️ No kick_oauth_token found - messages will fail!")
                         # Debug: Check what keys exist
@@ -577,7 +577,7 @@ class KickWebSocketManager:
                     print(f"[{guild_name}] 📤 Preparing to send message:")
                     print(f"[{guild_name}]    Message: {message[:100]}...")
                     print(f"[{guild_name}]    Channel ID: {channel_id}")
-                    print(f"[{guild_name}]    Token: {api.access_token[:20] if api.access_token else 'NONE'}...")
+                    print(f"[{guild_name}]    Token loaded: {'YES' if api.access_token else 'NO'}")
                     
                     # Send via direct HTTP request to Kick API
                     import aiohttp
