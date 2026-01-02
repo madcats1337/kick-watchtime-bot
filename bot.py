@@ -388,28 +388,44 @@ class KickWebSocketManager:
             # kickpython will fetch chatroom_id using PUBLIC API: /api/v2/channels/{channel}/chatroom
             # We only need token for SENDING messages (done in post_chat method)
             
-            # Now connect to chatroom (this will block)
-            # kickpython will: 1) Fetch chatroom_id via PUBLIC API 2) Connect WS for reading
-            print(f"[{guild_name}] 🔌 Connecting to websocket (blocking call)...")
-            await api.connect_to_chatroom(kick_username)
+            # Reconnection loop - keep trying to stay connected
+            reconnect_delay = 5
+            max_reconnect_delay = 60
             
-            # Save chatroom_id to database after successful connection
-            if hasattr(api, 'chatroom_id') and api.chatroom_id:
+            while True:
                 try:
-                    with engine.connect() as conn:
-                        conn.execute(text("""
-                            INSERT INTO bot_settings (key, value, discord_server_id)
-                            VALUES ('kick_chatroom_id', :chatroom_id, :guild_id)
-                            ON CONFLICT (key, discord_server_id) 
-                            DO UPDATE SET value = EXCLUDED.value
-                        """), {"chatroom_id": str(api.chatroom_id), "guild_id": guild_id})
-                        conn.commit()
-                    print(f"[{guild_name}] 💾 Saved chatroom_id {api.chatroom_id} to database")
+                    # Now connect to chatroom (this will block until disconnected)
+                    print(f"[{guild_name}] 🔌 Connecting to websocket...")
+                    await api.connect_to_chatroom(kick_username)
+                    
+                    # Save chatroom_id to database after successful connection
+                    if hasattr(api, 'chatroom_id') and api.chatroom_id:
+                        try:
+                            with engine.connect() as conn:
+                                conn.execute(text("""
+                                    INSERT INTO bot_settings (key, value, discord_server_id)
+                                    VALUES ('kick_chatroom_id', :chatroom_id, :guild_id)
+                                    ON CONFLICT (key, discord_server_id) 
+                                    DO UPDATE SET value = EXCLUDED.value
+                                """), {"chatroom_id": str(api.chatroom_id), "guild_id": guild_id})
+                                conn.commit()
+                            print(f"[{guild_name}] 💾 Saved chatroom_id {api.chatroom_id} to database")
+                        except Exception as e:
+                            print(f"[{guild_name}] ⚠️ Failed to save chatroom_id: {e}")
+                    
+                    # If we get here, connection was closed - try to reconnect
+                    print(f"[{guild_name}] ⚠️ WebSocket disconnected, reconnecting in {reconnect_delay}s...")
+                    await asyncio.sleep(reconnect_delay)
+                    reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
+                    
+                except asyncio.CancelledError:
+                    print(f"[{guild_name}] 🛑 Connection task cancelled")
+                    break
                 except Exception as e:
-                    print(f"[{guild_name}] ⚠️ Failed to save chatroom_id: {e}")
+                    print(f"[{guild_name}] ❌ WebSocket error: {e}, reconnecting in {reconnect_delay}s...")
+                    await asyncio.sleep(reconnect_delay)
+                    reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
             
-            # If we get here, connection was closed
-            print(f"[{guild_name}] ⚠️ Websocket connection closed")
             sender_task.cancel()
                     
         except Exception as e:
@@ -497,44 +513,50 @@ class KickWebSocketManager:
     
     async def _message_sender(self, guild_id: int, guild_name: str, api):
         """Process message queue and send via kickpython (multiserver support)"""
-        print(f"[{guild_name}] 📨 Message sender started")
+        print(f"[{guild_name}] 📨 Message sender task started!")
         
-        # Load OAuth 2.1 token ONCE at startup for performance
-        oauth_token = None
         try:
-            print(f"[{guild_name}] 🔍 Querying bot_settings for kick_oauth_token with discord_server_id={guild_id}")
-            with engine.connect() as conn:
-                result = conn.execute(text("""
-                    SELECT value FROM bot_settings 
-                    WHERE key = 'kick_oauth_token' 
-                    AND discord_server_id = :guild_id
-                    LIMIT 1
-                """), {"guild_id": guild_id}).fetchone()
-                
-                if result and result[0]:
-                    oauth_token = result[0]
-                    api.access_token = oauth_token
-                    print(f"[{guild_name}] 🤖 Loaded kick_oauth_token from bot_settings (OAuth 2.1)")
-                    print(f"[{guild_name}] 🔑 Token preview: {oauth_token[:20]}...")
-                else:
-                    print(f"[{guild_name}] ⚠️ No kick_oauth_token found in bot_settings for discord_server_id={guild_id}")
-                    # Debug: Check if ANY tokens exist for this guild
-                    all_keys = conn.execute(text("""
-                        SELECT key FROM bot_settings WHERE discord_server_id = :guild_id
-                    """), {"guild_id": guild_id}).fetchall()
-                    print(f"[{guild_name}] 🔍 Available keys in bot_settings: {[row[0] for row in all_keys]}")
-        except Exception as e:
-            print(f"[{guild_name}] ⚠️ Error loading OAuth token: {e}")
-            import traceback
-            traceback.print_exc()
-        
-        while True:
+            # Load OAuth 2.1 token ONCE at startup for performance
+            oauth_token = None
             try:
-                # Wait for message from queue
-                message, channel_id = await asyncio.wait_for(
-                    self.message_queues[guild_id].get(),
-                    timeout=5.0
-                )
+                print(f"[{guild_name}] 🔍 Loading kick_oauth_token from database...")
+                with engine.connect() as conn:
+                    result = conn.execute(text("""
+                        SELECT value FROM bot_settings 
+                        WHERE key = 'kick_oauth_token' 
+                        AND discord_server_id = :guild_id
+                        LIMIT 1
+                    """), {"guild_id": guild_id}).fetchone()
+                    
+                    if result and result[0]:
+                        oauth_token = result[0]
+                        api.access_token = oauth_token
+                        print(f"[{guild_name}] ✅ Loaded OAuth token: {oauth_token[:20]}...")
+                    else:
+                        print(f"[{guild_name}] ⚠️ No kick_oauth_token found - messages will fail!")
+                        # Debug: Check what keys exist
+                        all_keys = conn.execute(text("""
+                            SELECT key FROM bot_settings WHERE discord_server_id = :guild_id
+                        """), {"guild_id": guild_id}).fetchall()
+                        print(f"[{guild_name}] 🔍 Available keys: {[row[0] for row in all_keys]}")
+            except Exception as e:
+                print(f"[{guild_name}] ❌ Error loading OAuth token: {e}")
+                import traceback
+                traceback.print_exc()
+            
+            print(f"[{guild_name}] 🔄 Starting message processing loop...")
+            
+            while True:
+                try:
+                    # Wait for message from queue (timeout allows checking for cancellation)
+                    try:
+                        message, channel_id = await asyncio.wait_for(
+                            self.message_queues[guild_id].get(),
+                            timeout=5.0
+                        )
+                    except asyncio.TimeoutError:
+                        # No message in queue, keep waiting
+                        continue
                 
                 # Debug: Log what we're about to send
                 print(f"[{guild_name}] 📤 Preparing to send message:")
@@ -542,9 +564,7 @@ class KickWebSocketManager:
                 print(f"[{guild_name}]    Channel ID: {channel_id}")
                 print(f"[{guild_name}]    Token: {api.access_token[:20] if api.access_token else 'NONE'}...")
                 
-                # Token already set at startup - no need to reload every message
-                # Send via direct HTTP request instead of kickpython (kickpython doesn't send auth headers properly)
-                
+                # Send via direct HTTP request to Kick API
                 try:
                     import aiohttp
                     
@@ -561,29 +581,28 @@ class KickWebSocketManager:
                         'type': 'bot'  # bot mode instead of 'message'
                     }
                     
-                    url = 'https://api.kick.com/public/v1/chat'  # Correct endpoint from OpenAPI spec
+                    url = 'https://api.kick.com/public/v1/chat'
                     
                     async with aiohttp.ClientSession() as session:
                         async with session.post(url, headers=headers, json=payload, timeout=10) as resp:
                             response_text = await resp.text()
+                            print(f"[{guild_name}] 📡 Kick API Response: HTTP {resp.status}")
+                            print(f"[{guild_name}] 📡 Response body: {response_text[:500]}")
+                            
                             if resp.status in [200, 201]:
-                                # Log the actual response to see what Kick returns
-                                print(f"[{guild_name}] ✅ Kick API Response ({resp.status}): {response_text[:200]}")
-                                try:
-                                    response_json = json.loads(response_text) if response_text else {}
-                                    print(f"[{guild_name}] 📊 Response data: {response_json}")
-                                except:
-                                    pass
+                                print(f"[{guild_name}] ✅ Message sent successfully!")
+                            elif resp.status == 401:
+                                raise Exception(f"HTTP 401 Unauthorized - token may have expired")
                             else:
-                                # Don't log 401 errors as they trigger automatic token refresh
-                                if resp.status != 401:
-                                    print(f"[{guild_name}] ❌ HTTP {resp.status}: {response_text}")
-                                raise Exception(f"Failed to send message: HTTP {resp.status} - {response_text}")
+                                raise Exception(f"HTTP {resp.status}: {response_text}")
                     
                 except Exception as send_error:
-                    # If sending fails with current token, try refreshing it first
-                    if "Unauthorized" in str(send_error) or "401" in str(send_error):
-                        print(f"[{guild_name}] ⚠️ Token unauthorized, attempting refresh...")
+                    error_str = str(send_error)
+                    print(f"[{guild_name}] ⚠️ Send failed: {error_str}")
+                    
+                    # If sending fails with 401, try refreshing token
+                    if "401" in error_str or "Unauthorized" in error_str:
+                        print(f"[{guild_name}] 🔄 Token expired, attempting refresh...")
                         refreshed = await self._refresh_oauth_token(guild_id, guild_name)
                         if refreshed:
                             api.access_token = refreshed
@@ -597,47 +616,44 @@ class KickWebSocketManager:
                                 'Content-Type': 'application/json',
                                 'User-Agent': 'LeleBot/1.0'
                             }
-                            payload = {
-                                'content': message,
-                                'type': 'bot'
-                            }
+                            payload = {'content': message, 'type': 'bot'}
                             url = 'https://api.kick.com/public/v1/chat'
                             
                             async with aiohttp.ClientSession() as session:
                                 async with session.post(url, headers=headers, json=payload, timeout=10) as resp:
-                                    if resp.status in [200, 201]:
-                                        response_data = await resp.json()
-                                        print(f"[{guild_name}] ✅ Sent via refreshed token: {response_data}")
-                                    else:
-                                        error_text = await resp.text()
+                                    response_text = await resp.text()
+                                    print(f"[{guild_name}] 📡 Retry response: HTTP {resp.status} - {response_text[:200]}")
+                                    if resp.status not in [200, 201]:
                                         # Try streamer OAuth as final fallback
-                                        print(f"[{guild_name}] ⚠️ Refreshed token failed, trying streamer OAuth...")
+                                        print(f"[{guild_name}] ⚠️ Trying streamer OAuth as fallback...")
                                         from utils.kick_oauth import get_kick_token_for_server
                                         token_data = get_kick_token_for_server(engine, guild_id)
                                         if token_data and token_data.get('access_token'):
                                             api.access_token = token_data['access_token']
-                                            async with session.post(url, headers={'Authorization': f'Bearer {api.access_token}', 'Accept': 'application/json', 'Content-Type': 'application/json', 'User-Agent': 'LeleBot/1.0'}, json=payload, timeout=10) as fallback_resp:
-                                                if fallback_resp.status in [200, 201]:
-                                                    print(f"[{guild_name}] ✅ Sent via streamer OAuth")
-                                                else:
-                                                    raise Exception(f"All tokens failed: HTTP {fallback_resp.status}")
-                                        else:
-                                            raise Exception(f"Refresh failed: HTTP {resp.status} - {error_text}")
+                                            headers['Authorization'] = f'Bearer {api.access_token}'
+                                            async with session.post(url, headers=headers, json=payload, timeout=10) as fallback_resp:
+                                                fallback_text = await fallback_resp.text()
+                                                print(f"[{guild_name}] 📡 Streamer OAuth: HTTP {fallback_resp.status} - {fallback_text[:200]}")
                         else:
-                            raise send_error
+                            print(f"[{guild_name}] ❌ Token refresh failed")
                     else:
-                        raise send_error
+                        import traceback
+                        traceback.print_exc()
                 
-            except asyncio.TimeoutError:
-                # Keep connection alive with periodic checks
-                continue
-            except asyncio.CancelledError:
-                print(f"[{guild_name}] 🛑 Message sender cancelled")
-                break
-            except Exception as e:
-                print(f"[{guild_name}] ❌ Error sending message: {e}")
-                import traceback
-                traceback.print_exc()
+                except asyncio.CancelledError:
+                    print(f"[{guild_name}] 🛑 Message sender cancelled")
+                    break
+                except Exception as e:
+                    print(f"[{guild_name}] ❌ Error in message loop: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    
+        except asyncio.CancelledError:
+            print(f"[{guild_name}] 🛑 Message sender task cancelled")
+        except Exception as e:
+            print(f"[{guild_name}] ❌ FATAL: Message sender crashed: {e}")
+            import traceback
+            traceback.print_exc()
     
     async def send_message(self, message: str, guild_id: int, guild_name: str) -> bool:
         """Queue a message to be sent via websocket"""

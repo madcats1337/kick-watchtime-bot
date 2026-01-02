@@ -108,10 +108,17 @@ class RedisSubscriber:
                 if guild_id is None and hasattr(self.bot, 'guilds') and self.bot.guilds:
                     guild_id = self.bot.guilds[0].id
                 
+                # Ensure guild_id is an integer (may come as string from JSON)
+                if guild_id is not None:
+                    guild_id = int(guild_id)
+                
                 await self.send_message_callback(message, guild_id=guild_id)
                 print(f"💬 Sent to Kick chat: {message}")
             except Exception as e:
-                print(f"ℹ️  Kick chat message not sent (configure Kick channel in dashboard): {message}")
+                print(f"⚠️ Kick chat message not sent: {e}")
+                print(f"   Message was: {message}")
+                import traceback
+                traceback.print_exc()
         else:
             print(f"ℹ️  Kick chat disabled: {message}")
 
@@ -323,6 +330,10 @@ class RedisSubscriber:
         
         # Extract discord_server_id from event data
         guild_id = data.get('discord_server_id')
+        
+        # Convert guild_id to int (may come as string from JSON)
+        if guild_id is not None:
+            guild_id = int(guild_id)
 
         # Reload timed messages from database for the specific guild
         if hasattr(self.bot, 'timed_messages_managers') and guild_id:
@@ -1022,6 +1033,9 @@ class RedisSubscriber:
                 print("⚠️ No guild_id in giveaway event")
                 return
             
+            # Convert guild_id to int (may come as string from JSON)
+            guild_id = int(guild_id)
+            
             # Get giveaway manager for this guild
             if not hasattr(self.bot, 'giveaway_managers'):
                 print("⚠️ Giveaway managers not initialized on bot")
@@ -1030,6 +1044,7 @@ class RedisSubscriber:
             giveaway_manager = self.bot.giveaway_managers.get(guild_id)
             if not giveaway_manager:
                 print(f"⚠️ No giveaway manager found for guild {guild_id}")
+                print(f"   Available guilds: {list(self.bot.giveaway_managers.keys())}")
                 return
             
             guild = self.bot.get_guild(guild_id)
