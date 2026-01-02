@@ -234,9 +234,10 @@ class RaffleDraw:
                 import json as json_lib
                 redis_client = redis.from_url(os.getenv('REDIS_URL', 'redis://localhost:6379'))
                 
-                # Event 1: Draw started
+                # Event 1: Draw started (include server_id at top level for filtering)
                 redis_client.publish('raffle:draw:events', json_lib.dumps({
                     'type': 'draw_started',
+                    'server_id': server_id,
                     'payload': {
                         'period_id': period_id,
                         'server_id': server_id,
@@ -247,6 +248,7 @@ class RaffleDraw:
                 # Event 2: Spinning animation
                 redis_client.publish('raffle:draw:events', json_lib.dumps({
                     'type': 'draw_spinning',
+                    'server_id': server_id,
                     'payload': {
                         'period_id': period_id,
                         'server_id': server_id,
@@ -262,6 +264,7 @@ class RaffleDraw:
                 import time
                 
                 winner_payload = {
+                    'server_id': server_id,
                     'winning_ticket': winning_ticket,
                     'winner_kick_name': winner['kick_name'],
                     'winner_shuffle_name': shuffle_username,
@@ -275,6 +278,7 @@ class RaffleDraw:
                     try:
                         redis_client.publish('raffle:draw:events', json_lib.dumps({
                             'type': 'draw_complete',
+                            'server_id': server_id,
                             'payload': winner_payload
                         }))
                     except Exception as e:
