@@ -614,13 +614,15 @@ class RedisSubscriber:
                     queue_key = f'raffle_announcement_queue:{server_id}'
                     
                     # Store winners as a list (queue) - each animation_complete pops one
+                    # Include server_id in queue for multi-server announcement channel lookup
                     self.client.setex(queue_key, 600, json.dumps({
                         'winners_queue': winners_list,
                         'prize_description': prize_description,
                         'total_winners': len(winners_list),
-                        'announced_count': 0
+                        'announced_count': 0,
+                        'server_id': server_id  # Store server_id for channel lookup
                     }))  # Expire after 10 minutes (streamer may take time between draws)
-                    print(f"⏳ {len(winners_list)} winner(s) queued for announcement, waiting for animation(s) to complete...")
+                    print(f"⏳ {len(winners_list)} winner(s) queued for announcement (server_id={server_id}), waiting for animation(s) to complete...")
 
             except Exception as e:
                 print(f"❌ Raffle draw failed: {e}")
@@ -654,11 +656,12 @@ class RedisSubscriber:
                             # Pop the first winner from queue and announce
                             winner_to_announce = winners_queue.pop(0)
                             announced_count = queue.get('announced_count', 0) + 1
+                            queue_server_id = queue.get('server_id', server_id)  # Get server_id from queue
                             
-                            print(f"✅ Announcing winner {announced_count}/{queue['total_winners']}: {winner_to_announce.get('winner_kick_name')}")
+                            print(f"✅ Announcing winner {announced_count}/{queue['total_winners']}: {winner_to_announce.get('winner_kick_name')} (server_id={queue_server_id})")
                             
-                            # Announce this single winner
-                            await self.announce_raffle_winners([winner_to_announce], prize_description)
+                            # Announce this single winner (pass server_id for multi-server support)
+                            await self.announce_raffle_winners([winner_to_announce], prize_description, guild_id=queue_server_id)
                             
                             # Update queue in Redis
                             if winners_queue:
@@ -1353,23 +1356,49 @@ class RedisSubscriber:
         except Exception as e:
             print(f"❌ Error sending to Kick chat: {e}")
 
-    async def announce_raffle_winners(self, winners, prize_description):
-        """Announce raffle winner(s) to Discord raffle announcement channel"""
+    async def announce_raffle_winners(self, winners, prize_description, guild_id=None):
+        """Announce raffle winner(s) to Discord raffle announcement channel
+        
+        Args:
+            winners: List of winner data dicts
+            prize_description: Description of the prize
+            guild_id: Server ID for multi-server support (optional)
+        """
         try:
-            # Get announcement channel from bot settings
-            if not hasattr(self.bot, 'settings_manager'):
-                print("⚠️ Bot settings manager not available, cannot announce raffle winners")
-                return
-
-            channel_id = self.bot.settings_manager.raffle_announcement_channel_id
+            channel_id = None
+            
+            # Multi-server: Get channel from guild-specific settings
+            if guild_id:
+                try:
+                    # Import get_guild_settings directly from bot module
+                    from bot import get_guild_settings
+                    guild_settings = get_guild_settings(int(guild_id))
+                    if guild_settings:
+                        channel_id = guild_settings.get_int('raffle_announcement_channel_id')
+                        print(f"[Raffle] Got channel_id {channel_id} from guild settings for guild {guild_id}")
+                except ImportError as ie:
+                    print(f"[Raffle] Could not import get_guild_settings: {ie}")
+                except Exception as e:
+                    print(f"[Raffle] Error getting guild settings: {e}")
+            
+            # Fallback to global settings manager
+            if not channel_id and hasattr(self.bot, 'settings_manager'):
+                channel_id = self.bot.settings_manager.get_int('raffle_announcement_channel_id')
+                if channel_id:
+                    print(f"[Raffle] Got channel_id {channel_id} from global settings_manager")
+            
             if not channel_id:
-                print("⚠️ Raffle announcement channel not configured, skipping announcement")
+                print(f"⚠️ Raffle announcement channel not configured for server {guild_id}, skipping announcement")
                 return
 
             channel = self.bot.get_channel(channel_id)
             if not channel:
-                print(f"⚠️ Raffle announcement channel {channel_id} not found")
-                return
+                # Try to fetch the channel if not in cache
+                try:
+                    channel = await self.bot.fetch_channel(channel_id)
+                except Exception as e:
+                    print(f"⚠️ Raffle announcement channel {channel_id} not found: {e}")
+                    return
 
             # Single or multiple winners
             if len(winners) == 1:
