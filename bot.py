@@ -557,15 +557,14 @@ class KickWebSocketManager:
                     except asyncio.TimeoutError:
                         # No message in queue, keep waiting
                         continue
-                
-                # Debug: Log what we're about to send
-                print(f"[{guild_name}] 📤 Preparing to send message:")
-                print(f"[{guild_name}]    Message: {message[:100]}...")
-                print(f"[{guild_name}]    Channel ID: {channel_id}")
-                print(f"[{guild_name}]    Token: {api.access_token[:20] if api.access_token else 'NONE'}...")
-                
-                # Send via direct HTTP request to Kick API
-                try:
+                    
+                    # Debug: Log what we're about to send
+                    print(f"[{guild_name}] 📤 Preparing to send message:")
+                    print(f"[{guild_name}]    Message: {message[:100]}...")
+                    print(f"[{guild_name}]    Channel ID: {channel_id}")
+                    print(f"[{guild_name}]    Token: {api.access_token[:20] if api.access_token else 'NONE'}...")
+                    
+                    # Send via direct HTTP request to Kick API
                     import aiohttp
                     
                     headers = {
@@ -596,6 +595,9 @@ class KickWebSocketManager:
                             else:
                                 raise Exception(f"HTTP {resp.status}: {response_text}")
                     
+                except asyncio.CancelledError:
+                    print(f"[{guild_name}] 🛑 Message sender cancelled")
+                    break
                 except Exception as send_error:
                     error_str = str(send_error)
                     print(f"[{guild_name}] ⚠️ Send failed: {error_str}")
@@ -639,14 +641,6 @@ class KickWebSocketManager:
                     else:
                         import traceback
                         traceback.print_exc()
-                
-                except asyncio.CancelledError:
-                    print(f"[{guild_name}] 🛑 Message sender cancelled")
-                    break
-                except Exception as e:
-                    print(f"[{guild_name}] ❌ Error in message loop: {e}")
-                    import traceback
-                    traceback.print_exc()
                     
         except asyncio.CancelledError:
             print(f"[{guild_name}] 🛑 Message sender task cancelled")
