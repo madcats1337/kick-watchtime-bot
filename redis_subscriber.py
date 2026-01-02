@@ -537,8 +537,13 @@ class RedisSubscriber:
             prize_description = data.get('prize_description', '')
             drawn_by_discord_id = data.get('drawn_by_discord_id')
             server_id = data.get('server_id')
+            # Support for rerolls - exclude specific discord IDs
+            initial_excluded_ids = data.get('excluded_discord_ids', [])
+            is_reroll = data.get('is_reroll', False)
 
             print(f"🎲 Processing raffle draw request {request_id} for period {period_id}")
+            if is_reroll:
+                print(f"🔄 This is a REROLL - excluding IDs: {initial_excluded_ids}")
 
             try:
                 from sqlalchemy import create_engine
@@ -548,12 +553,16 @@ class RedisSubscriber:
                 engine = create_engine(database_url)
                 draw_handler = RaffleDraw(engine)
 
+                # Convert initial excluded IDs to integers
+                excluded_discord_ids = [int(eid) for eid in initial_excluded_ids if eid]
+
                 if winner_count == 1:
-                    # Single winner
+                    # Single winner (or reroll)
                     winner = draw_handler.draw_winner(
                         period_id=period_id,
                         drawn_by_discord_id=drawn_by_discord_id,
-                        prize_description=prize_description
+                        prize_description=prize_description,
+                        excluded_discord_ids=excluded_discord_ids if excluded_discord_ids else None
                     )
 
                     if not winner:
@@ -562,19 +571,19 @@ class RedisSubscriber:
                         result = {
                             'success': True,
                             'winner': winner,
-                            'winners': [winner]
+                            'winners': [winner],
+                            'is_reroll': is_reroll
                         }
                 else:
                     # Multiple winners
                     winners = []
-                    excluded_discord_ids = []
 
                     for i in range(winner_count):
                         winner = draw_handler.draw_winner(
                             period_id=period_id,
                             drawn_by_discord_id=drawn_by_discord_id,
                             prize_description=f"{prize_description} (Winner {i+1}/{winner_count})",
-                            excluded_discord_ids=excluded_discord_ids,
+                            excluded_discord_ids=excluded_discord_ids if excluded_discord_ids else None,
                             update_period=(i == 0)
                         )
 

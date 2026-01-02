@@ -558,6 +558,21 @@ class KickWebSocketManager:
                         # No message in queue, keep waiting
                         continue
                     
+                    # Reload token from database before each send (in case proactive refresh updated it)
+                    try:
+                        with engine.connect() as conn:
+                            result = conn.execute(text("""
+                                SELECT value FROM bot_settings 
+                                WHERE key = 'kick_oauth_token' 
+                                AND discord_server_id = :guild_id
+                                LIMIT 1
+                            """), {"guild_id": guild_id}).fetchone()
+                            
+                            if result and result[0]:
+                                api.access_token = result[0]
+                    except Exception as e:
+                        print(f"[{guild_name}] ⚠️ Error reloading token: {e}")
+                    
                     # Debug: Log what we're about to send
                     print(f"[{guild_name}] 📤 Preparing to send message:")
                     print(f"[{guild_name}]    Message: {message[:100]}...")
