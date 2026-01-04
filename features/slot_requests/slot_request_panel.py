@@ -4,18 +4,20 @@ Shows statistics and allows picking random slots via buttons
 """
 
 import logging
+from datetime import datetime
 from typing import Optional
+
 import discord
 from discord.ext import commands, tasks
-from discord.ui import View, Button, Modal, TextInput
+from discord.ui import Button, Modal, TextInput, View
 from sqlalchemy import text
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 # Emojis
 EMOJI_RANDOM = "🎲"  # Pick random slot
 EMOJI_REFRESH = "♻️"  # Refresh panel
+
 
 class SetMaxRequestsModal(Modal, title="Set Max Requests Per User"):
     """Modal for setting maximum requests per user"""
@@ -26,7 +28,7 @@ class SetMaxRequestsModal(Modal, title="Set Max Requests Per User"):
         required=True,
         min_length=1,
         max_length=2,
-        default="0"
+        default="0",
     )
 
     def __init__(self, panel):
@@ -43,10 +45,7 @@ class SetMaxRequestsModal(Modal, title="Set Max Requests Per User"):
             value = int(self.max_requests.value)
 
             if value < 0 or value > 10:
-                await interaction.response.send_message(
-                    "❌ Please enter a number between 0 and 10.",
-                    ephemeral=True
-                )
+                await interaction.response.send_message("❌ Please enter a number between 0 and 10.", ephemeral=True)
                 return
 
             # Set the limit
@@ -55,23 +54,19 @@ class SetMaxRequestsModal(Modal, title="Set Max Requests Per User"):
             if success:
                 limit_text = f"{value} request(s)" if value > 0 else "unlimited"
                 await interaction.response.send_message(
-                    f"✅ Max requests per user set to: **{limit_text}**",
-                    ephemeral=True
+                    f"✅ Max requests per user set to: **{limit_text}**", ephemeral=True
                 )
 
                 # Update the panel
                 await self.panel.update_panel(force=True)
             else:
                 await interaction.response.send_message(
-                    "❌ Failed to update the limit. Check logs for details.",
-                    ephemeral=True
+                    "❌ Failed to update the limit. Check logs for details.", ephemeral=True
                 )
 
         except ValueError:
-            await interaction.response.send_message(
-                "❌ Please enter a valid number.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("❌ Please enter a valid number.", ephemeral=True)
+
 
 class SlotPanelView(View):
     """Button view for slot request panel"""
@@ -81,36 +76,19 @@ class SlotPanelView(View):
         self.panel = panel
 
         # Add buttons
-        self.add_item(Button(
-            style=discord.ButtonStyle.primary,
-            label="Pick Random",
-            emoji="🎲",
-            custom_id="slot_pick_random"
-        ))
-        self.add_item(Button(
-            style=discord.ButtonStyle.secondary,
-            label="Refresh",
-            emoji="♻️",
-            custom_id="slot_refresh"
-        ))
-        self.add_item(Button(
-            style=discord.ButtonStyle.success,
-            label="Enable Requests",
-            emoji="✅",
-            custom_id="slot_enable"
-        ))
-        self.add_item(Button(
-            style=discord.ButtonStyle.danger,
-            label="Disable Requests",
-            emoji="❌",
-            custom_id="slot_disable"
-        ))
-        self.add_item(Button(
-            style=discord.ButtonStyle.secondary,
-            label="Set Limit",
-            emoji="🔢",
-            custom_id="slot_set_limit"
-        ))
+        self.add_item(
+            Button(style=discord.ButtonStyle.primary, label="Pick Random", emoji="🎲", custom_id="slot_pick_random")
+        )
+        self.add_item(Button(style=discord.ButtonStyle.secondary, label="Refresh", emoji="♻️", custom_id="slot_refresh"))
+        self.add_item(
+            Button(style=discord.ButtonStyle.success, label="Enable Requests", emoji="✅", custom_id="slot_enable")
+        )
+        self.add_item(
+            Button(style=discord.ButtonStyle.danger, label="Disable Requests", emoji="❌", custom_id="slot_disable")
+        )
+        self.add_item(
+            Button(style=discord.ButtonStyle.secondary, label="Set Limit", emoji="🔢", custom_id="slot_set_limit")
+        )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """Check if user has permission to use buttons"""
@@ -138,6 +116,7 @@ class SlotPanelView(View):
             if not interaction.response.is_done():
                 await interaction.response.send_message("❌ An error occurred.", ephemeral=True)
 
+
 class SlotRequestPanel:
     """Manages the slot request panel message"""
 
@@ -160,18 +139,28 @@ class SlotRequestPanel:
 
         try:
             with self.engine.connect() as conn:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT value FROM bot_settings
                     WHERE key = 'slot_panel_message_id' AND discord_server_id = :guild_id
-                """), {"guild_id": str(self.guild_id)}).fetchone()
+                """
+                    ),
+                    {"guild_id": str(self.guild_id)},
+                ).fetchone()
 
                 if result:
                     self.panel_message_id = int(result[0])
 
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT value FROM bot_settings
                     WHERE key = 'slot_panel_channel_id' AND discord_server_id = :guild_id
-                """), {"guild_id": str(self.guild_id)}).fetchone()
+                """
+                    ),
+                    {"guild_id": str(self.guild_id)},
+                ).fetchone()
 
                 if result:
                     self.panel_channel_id = int(result[0])
@@ -188,21 +177,31 @@ class SlotRequestPanel:
             with self.engine.begin() as conn:
                 # Save message ID
                 if self.panel_message_id:
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         INSERT INTO bot_settings (key, value, discord_server_id, updated_at)
                         VALUES ('slot_panel_message_id', :value, :guild_id, CURRENT_TIMESTAMP)
                         ON CONFLICT (key, discord_server_id)
                         DO UPDATE SET value = :value, updated_at = CURRENT_TIMESTAMP
-                    """), {"value": str(self.panel_message_id), "guild_id": str(self.guild_id)})
+                    """
+                        ),
+                        {"value": str(self.panel_message_id), "guild_id": str(self.guild_id)},
+                    )
 
                 # Save channel ID
                 if self.panel_channel_id:
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         INSERT INTO bot_settings (key, value, discord_server_id, updated_at)
                         VALUES ('slot_panel_channel_id', :value, :guild_id, CURRENT_TIMESTAMP)
                         ON CONFLICT (key, discord_server_id)
                         DO UPDATE SET value = :value, updated_at = CURRENT_TIMESTAMP
-                    """), {"value": str(self.panel_channel_id), "guild_id": str(self.guild_id)})
+                    """
+                        ),
+                        {"value": str(self.panel_channel_id), "guild_id": str(self.guild_id)},
+                    )
 
         except Exception as e:
             logger.error(f"Failed to save panel info: {e}")
@@ -221,39 +220,58 @@ class SlotRequestPanel:
             with self.engine.connect() as conn:
                 # Get counts - filter by server_id if available
                 if server_id:
-                    total = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE discord_server_id = :server_id"), {"server_id": server_id}).fetchone()[0]
-                    unpicked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = FALSE AND discord_server_id = :server_id"), {"server_id": server_id}).fetchone()[0]
-                    picked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = TRUE AND discord_server_id = :server_id"), {"server_id": server_id}).fetchone()[0]
+                    total = conn.execute(
+                        text("SELECT COUNT(*) FROM slot_requests WHERE discord_server_id = :server_id"),
+                        {"server_id": server_id},
+                    ).fetchone()[0]
+                    unpicked = conn.execute(
+                        text(
+                            "SELECT COUNT(*) FROM slot_requests WHERE picked = FALSE AND discord_server_id = :server_id"
+                        ),
+                        {"server_id": server_id},
+                    ).fetchone()[0]
+                    picked = conn.execute(
+                        text(
+                            "SELECT COUNT(*) FROM slot_requests WHERE picked = TRUE AND discord_server_id = :server_id"
+                        ),
+                        {"server_id": server_id},
+                    ).fetchone()[0]
 
                     # Get last picked slot for this server
-                    last_picked = conn.execute(text("""
+                    last_picked = conn.execute(
+                        text(
+                            """
                         SELECT kick_username, slot_call, picked_at
                         FROM slot_requests
                         WHERE picked = TRUE AND discord_server_id = :server_id
                         ORDER BY picked_at DESC
                         LIMIT 1
-                    """), {"server_id": server_id}).fetchone()
+                    """
+                        ),
+                        {"server_id": server_id},
+                    ).fetchone()
                 else:
                     # Fallback: show all servers
                     total = conn.execute(text("SELECT COUNT(*) FROM slot_requests")).fetchone()[0]
-                    unpicked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = FALSE")).fetchone()[0]
+                    unpicked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = FALSE")).fetchone()[
+                        0
+                    ]
                     picked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = TRUE")).fetchone()[0]
 
                     # Get last picked slot
-                    last_picked = conn.execute(text("""
+                    last_picked = conn.execute(
+                        text(
+                            """
                         SELECT kick_username, slot_call, picked_at
                         FROM slot_requests
                         WHERE picked = TRUE
                         ORDER BY picked_at DESC
                         LIMIT 1
-                    """)).fetchone()
+                    """
+                        )
+                    ).fetchone()
 
-                return {
-                    "total": total,
-                    "unpicked": unpicked,
-                    "picked": picked,
-                    "last_picked": last_picked
-                }
+                return {"total": total, "unpicked": unpicked, "picked": picked, "last_picked": last_picked}
         except Exception as e:
             logger.error(f"Failed to get slot stats: {e}")
             return None
@@ -264,9 +282,7 @@ class SlotRequestPanel:
 
         if not stats:
             embed = discord.Embed(
-                title="🎰 Slot Request Panel",
-                description="❌ Could not load statistics",
-                color=discord.Color.red()
+                title="🎰 Slot Request Panel", description="❌ Could not load statistics", color=discord.Color.red()
             )
             return embed
 
@@ -276,8 +292,8 @@ class SlotRequestPanel:
         desc_lines.append(f"**Available:** {stats['unpicked']}")
         desc_lines.append(f"**Already Picked:** {stats['picked']}")
 
-        if stats['last_picked']:
-            username, slot_call, picked_at = stats['last_picked']
+        if stats["last_picked"]:
+            username, slot_call, picked_at = stats["last_picked"]
             time_str = picked_at.strftime("%H:%M:%S") if picked_at else "Unknown"
             desc_lines.append(f"\n**Last Picked:**")
             desc_lines.append(f"• {slot_call}")
@@ -286,9 +302,7 @@ class SlotRequestPanel:
             desc_lines.append(f"\n**Last Picked:** None yet")
 
         embed = discord.Embed(
-            title="🎰 Slot Request Panel",
-            description="\n".join(desc_lines),
-            color=discord.Color.gold()
+            title="🎰 Slot Request Panel", description="\n".join(desc_lines), color=discord.Color.gold()
         )
 
         # Status indicator
@@ -301,11 +315,7 @@ class SlotRequestPanel:
         embed.add_field(name="Max Per User", value=limit_text, inline=True)
 
         # Instructions
-        embed.add_field(
-            name="How to use",
-            value="Use the buttons below to manage slot requests",
-            inline=False
-        )
+        embed.add_field(name="How to use", value="Use the buttons below to manage slot requests", inline=False)
 
         embed.set_footer(text=f"Last updated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
 
@@ -350,7 +360,9 @@ class SlotRequestPanel:
         if not force and self.last_update_time:
             time_since_last = (datetime.utcnow() - self.last_update_time).total_seconds()
             if time_since_last < self.update_cooldown:
-                logger.debug(f"Skipping panel update (cooldown: {self.update_cooldown - time_since_last:.1f}s remaining)")
+                logger.debug(
+                    f"Skipping panel update (cooldown: {self.update_cooldown - time_since_last:.1f}s remaining)"
+                )
                 return False
 
         try:
@@ -474,14 +486,15 @@ class SlotRequestPanel:
 
     async def _pick_random_slot(self, channel):
         """Pick a random slot request using provably fair algorithm - returns True if successful, False if no slots available"""
-        from utils.provably_fair import generate_provably_fair_result
         import secrets
-        
+
+        from utils.provably_fair import generate_provably_fair_result
+
         if not self.engine:
             return False
 
         # Get guild_id from channel
-        guild_id = channel.guild.id if hasattr(channel, 'guild') else None
+        guild_id = channel.guild.id if hasattr(channel, "guild") else None
         if not guild_id:
             logger.error("Cannot pick slot: no guild_id available")
             return False
@@ -489,50 +502,59 @@ class SlotRequestPanel:
         try:
             with self.engine.connect() as conn:
                 # Get ALL unpicked slot requests for this server (for provably fair selection)
-                results = conn.execute(text("""
+                results = conn.execute(
+                    text(
+                        """
                     SELECT id, kick_username, slot_call, requested_at
                     FROM slot_requests
                     WHERE picked = FALSE AND discord_server_id = :server_id
                     ORDER BY id ASC
-                """), {"server_id": guild_id}).fetchall()
+                """
+                    ),
+                    {"server_id": guild_id},
+                ).fetchall()
 
                 if not results:
                     # No slots available - just update panel
                     await self.update_panel()
                     return False
-                
+
                 # Use provably fair to select winner
                 total_requests = len(results)
-                
+
                 # Generate server seed
                 server_seed = secrets.token_hex(32)
-                
+
                 # Use first request as base for client seed
                 first_request = results[0]
                 client_seed = f"slot_picker:{guild_id}:{total_requests}"
-                
+
                 # Generate provably fair result
                 result = generate_provably_fair_result(
                     kick_username=client_seed,
                     slot_request_id=first_request[0],  # Use first request ID as nonce base
                     slot_call="random_pick",
-                    chance_percent=100.0  # Always "wins" to generate random value
+                    chance_percent=100.0,  # Always "wins" to generate random value
                 )
-                
+
                 # Use random_value to select from requests
-                winner_index = int((result['random_value'] / 100.0) * total_requests)
+                winner_index = int((result["random_value"] / 100.0) * total_requests)
                 winner_index = min(winner_index, total_requests - 1)  # Ensure within bounds
-                
+
                 selected_request = results[winner_index]
                 request_id, username, slot_call, requested_at = selected_request
-                
-                logger.info(f"[Server {guild_id}] Provably fair pick - Random: {result['random_value']}, Index: {winner_index}/{total_requests}, Winner: {username}")
+
+                logger.info(
+                    f"[Server {guild_id}] Provably fair pick - Random: {result['random_value']}, Index: {winner_index}/{total_requests}, Winner: {username}"
+                )
 
                 # Mark as picked and save provably fair data
                 with self.engine.begin() as update_conn:
-                    update_conn.execute(text("""
+                    update_conn.execute(
+                        text(
+                            """
                         UPDATE slot_requests
-                        SET picked = TRUE, 
+                        SET picked = TRUE,
                             picked_at = CURRENT_TIMESTAMP,
                             server_seed = :server_seed,
                             client_seed = :client_seed,
@@ -540,14 +562,17 @@ class SlotRequestPanel:
                             proof_hash = :proof_hash,
                             random_value = :random_value
                         WHERE id = :id
-                    """), {
-                        "id": request_id,
-                        "server_seed": result['server_seed'],
-                        "client_seed": result['client_seed'],
-                        "nonce": result['nonce'],
-                        "proof_hash": result['proof_hash'],
-                        "random_value": result['random_value']
-                    })
+                    """
+                        ),
+                        {
+                            "id": request_id,
+                            "server_seed": result["server_seed"],
+                            "client_seed": result["client_seed"],
+                            "nonce": result["nonce"],
+                            "proof_hash": result["proof_hash"],
+                            "random_value": result["random_value"],
+                        },
+                    )
 
                 logger.info(f"[Server {guild_id}] Panel picked random slot: {slot_call} by {username} (provably fair)")
 
@@ -555,42 +580,70 @@ class SlotRequestPanel:
                 won_reward = False
                 reward_type = None
                 reward_amount = None
-                
+                reward_id = None
+                reward_chance = 0
+
                 try:
                     with self.engine.connect() as reward_conn:
-                        # Get an enabled reward for this server
-                        reward_row = reward_conn.execute(text("""
+                        # Get ALL enabled rewards, ordered by amount DESC (highest reward checked first)
+                        all_rewards = reward_conn.execute(
+                            text(
+                                """
                             SELECT id, reward_type, reward_amount, reward_chance_percent
                             FROM slot_rewards
                             WHERE discord_server_id = :server_id
                               AND enabled = TRUE
-                            ORDER BY RANDOM()
-                            LIMIT 1
-                        """), {"server_id": guild_id}).fetchone()
-                        
-                        if reward_row:
-                            reward_id = reward_row[0]
-                            reward_type = reward_row[1]
-                            reward_amount = float(reward_row[2])
-                            reward_chance = float(reward_row[3])
-                            
+                            ORDER BY reward_amount DESC
+                        """
+                            ),
+                            {"server_id": guild_id},
+                        ).fetchall()
+
+                        if all_rewards:
                             # Check if user is linked (verified)
-                            link_check = reward_conn.execute(text("""
+                            link_check = reward_conn.execute(
+                                text(
+                                    """
                                 SELECT 1 FROM links
                                 WHERE kick_name = :username AND discord_server_id = :server_id
                                 LIMIT 1
-                            """), {"username": username, "server_id": guild_id}).fetchone()
+                            """
+                                ),
+                                {"username": username, "server_id": guild_id},
+                            ).fetchone()
                             is_linked = link_check is not None
-                            
-                            if is_linked and reward_chance > 0:
-                                # Use SAME provably fair result for reward outcome
-                                won_reward = result['random_value'] < reward_chance
+
+                            if is_linked:
+                                # Check each reward in order (highest amount first)
+                                for reward_row in all_rewards:
+                                    current_chance = float(reward_row[3])
+                                    
+                                    if current_chance > 0 and result["random_value"] < current_chance:
+                                        # Won this reward!
+                                        won_reward = True
+                                        reward_id = reward_row[0]
+                                        reward_type = reward_row[1]
+                                        reward_amount = float(reward_row[2])
+                                        reward_chance = current_chance
+                                        
+                                        logger.info(
+                                            f"[Server {guild_id}] WON! Random: {result['random_value']:.2f} < Chance: {current_chance}% = ${reward_amount} {reward_type}"
+                                        )
+                                        break
+                                    else:
+                                        logger.info(
+                                            f"[Server {guild_id}] No win - Random: {result['random_value']:.2f} >= Chance: {current_chance}%"
+                                        )
                                 
-                                logger.info(f"[Server {guild_id}] Reward check - Random: {result['random_value']}, Chance: {reward_chance}, Won: {won_reward}, Linked: {is_linked}")
-                                
+                                # If no reward won, use the first reward's chance for recording
+                                if not won_reward and all_rewards:
+                                    reward_chance = float(all_rewards[0][3])
+
                                 # Record the pick in slot_picks table
                                 with self.engine.begin() as pick_conn:
-                                    pick_conn.execute(text("""
+                                    pick_conn.execute(
+                                        text(
+                                            """
                                         INSERT INTO slot_picks
                                             (slot_request_id, discord_server_id, kick_username, slot_call,
                                              reward_won, reward_type, reward_amount, reward_id,
@@ -598,25 +651,29 @@ class SlotRequestPanel:
                                         VALUES (:slot_request_id, :server_id, :username, :slot_call,
                                                 :reward_won, :reward_type, :reward_amount, :reward_id,
                                                 :server_seed, :client_seed, :nonce, :proof_hash, :random_value, :chance_percent)
-                                    """), {
-                                        "slot_request_id": request_id,
-                                        "server_id": guild_id,
-                                        "username": username,
-                                        "slot_call": slot_call,
-                                        "reward_won": won_reward,
-                                        "reward_type": reward_type if won_reward else None,
-                                        "reward_amount": reward_amount if won_reward else None,
-                                        "reward_id": reward_id if won_reward else None,
-                                        "server_seed": result['server_seed'],
-                                        "client_seed": result['client_seed'],
-                                        "nonce": result['nonce'],
-                                        "proof_hash": result['proof_hash'],
-                                        "random_value": result['random_value'],
-                                        "chance_percent": reward_chance
-                                    })
+                                    """
+                                        ),
+                                        {
+                                            "slot_request_id": request_id,
+                                            "server_id": guild_id,
+                                            "username": username,
+                                            "slot_call": slot_call,
+                                            "reward_won": won_reward,
+                                            "reward_type": reward_type if won_reward else None,
+                                            "reward_amount": reward_amount if won_reward else None,
+                                            "reward_id": reward_id if won_reward else None,
+                                            "server_seed": result["server_seed"],
+                                            "client_seed": result["client_seed"],
+                                            "nonce": result["nonce"],
+                                            "proof_hash": result["proof_hash"],
+                                            "random_value": result["random_value"],
+                                            "chance_percent": reward_chance,
+                                        },
+                                    )
                             else:
-                                if not is_linked:
-                                    logger.info(f"[Server {guild_id}] User {username} not linked - no reward eligibility")
+                                logger.info(
+                                    f"[Server {guild_id}] User {username} not linked - no reward eligibility"
+                                )
                 except Exception as reward_error:
                     logger.error(f"[Server {guild_id}] Error checking rewards: {reward_error}")
 
@@ -626,35 +683,50 @@ class SlotRequestPanel:
                     try:
                         with self.engine.connect() as check_conn:
                             # Check if overlay is explicitly enabled
-                            overlay_setting = check_conn.execute(text("""
-                                SELECT value FROM bot_settings 
+                            overlay_setting = check_conn.execute(
+                                text(
+                                    """
+                                SELECT value FROM bot_settings
                                 WHERE key = 'slot_overlay_enabled' AND discord_server_id = :server_id
-                            """), {"server_id": guild_id}).fetchone()
-                            
+                            """
+                                ),
+                                {"server_id": guild_id},
+                            ).fetchone()
+
                             if overlay_setting:
-                                overlay_delay_needed = overlay_setting[0] == 'true'
+                                overlay_delay_needed = overlay_setting[0] == "true"
                                 logger.info(f"[Server {guild_id}] Slot overlay setting: {overlay_setting[0]}")
                             else:
                                 # Fallback: check if there are any unpicked slots (indicates overlay usage)
-                                remaining_slots = check_conn.execute(text("""
-                                    SELECT COUNT(*) FROM slot_requests 
+                                remaining_slots = check_conn.execute(
+                                    text(
+                                        """
+                                    SELECT COUNT(*) FROM slot_requests
                                     WHERE discord_server_id = :server_id AND picked = FALSE
-                                """), {"server_id": guild_id}).fetchone()[0]
+                                """
+                                    ),
+                                    {"server_id": guild_id},
+                                ).fetchone()[0]
                                 overlay_delay_needed = remaining_slots > 0
-                                logger.info(f"[Server {guild_id}] Fallback overlay check - {remaining_slots} unpicked slots")
+                                logger.info(
+                                    f"[Server {guild_id}] Fallback overlay check - {remaining_slots} unpicked slots"
+                                )
                     except Exception as delay_check_error:
                         logger.warning(f"Could not check overlay status: {delay_check_error}")
 
                 # Apply 9-second delay if overlay is being used (syncs with slot picker animation)
                 if overlay_delay_needed:
                     import asyncio
+
                     await asyncio.sleep(9)
 
                 # Send message to Kick chat
                 if self.kick_send_callback:
                     try:
                         if won_reward and reward_type and reward_amount:
-                            reward_type_display = 'Bonus Buy' if reward_type == 'bonus_buy' else reward_type.capitalize()
+                            reward_type_display = (
+                                "Bonus Buy" if reward_type == "bonus_buy" else reward_type.capitalize()
+                            )
                             kick_message = f"🎰 PICKED: {slot_call} (requested by @{username}) 💰 WON ${reward_amount:.2f} {reward_type_display}!"
                         else:
                             kick_message = f"🎰 Random slot picked: {slot_call} (requested by @{username})"
@@ -670,6 +742,7 @@ class SlotRequestPanel:
             logger.error(f"Failed to pick random slot from panel: {e}")
             return False
 
+
 class SlotRequestPanelCommands(commands.Cog):
     """Commands for managing the slot request panel"""
 
@@ -681,7 +754,7 @@ class SlotRequestPanelCommands(commands.Cog):
     def _get_panel_for_guild(self, guild_id: int) -> Optional[SlotRequestPanel]:
         """Get the correct panel for a guild"""
         # First try per-guild panels
-        if hasattr(self.bot, 'slot_panels_by_guild'):
+        if hasattr(self.bot, "slot_panels_by_guild"):
             panel = self.bot.slot_panels_by_guild.get(guild_id)
             if panel:
                 return panel
@@ -696,7 +769,7 @@ class SlotRequestPanelCommands(commands.Cog):
     async def auto_update_task(self):
         """Auto-update panels every 3 minutes"""
         # Update all guild panels
-        if hasattr(self.bot, 'slot_panels_by_guild'):
+        if hasattr(self.bot, "slot_panels_by_guild"):
             for guild_id, panel in self.bot.slot_panels_by_guild.items():
                 try:
                     await panel.update_panel()
@@ -710,7 +783,7 @@ class SlotRequestPanelCommands(commands.Cog):
         """Wait for bot to be ready"""
         await self.bot.wait_until_ready()
 
-    @commands.command(name='slotpanel')
+    @commands.command(name="slotpanel")
     @commands.has_permissions(administrator=True)
     async def create_slot_panel(self, ctx):
         """
@@ -721,7 +794,7 @@ class SlotRequestPanelCommands(commands.Cog):
         if not panel:
             await ctx.send("❌ Slot panel not initialized for this server")
             return
-        
+
         success = await panel.create_panel(ctx.channel)
         if success:
             await ctx.send("✅ Slot request panel created! React with 🎲 to pick a random slot.")
@@ -736,6 +809,7 @@ class SlotRequestPanelCommands(commands.Cog):
         panel = self._get_panel_for_guild(payload.guild_id)
         if panel:
             await panel.handle_reaction(payload)
+
 
 async def setup_slot_panel(bot, engine, slot_call_tracker, kick_send_callback=None):
     """Setup the slot request panel system"""
