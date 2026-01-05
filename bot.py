@@ -1,88 +1,102 @@
-import os
-import json
-import time
-import random
-import string
 import asyncio
-import aiohttp
-import ssl
-import requests
-import websockets
-import hmac
-import hashlib
 import base64
-import redis
-from typing import Optional
-from core.kick_api import USER_AGENTS
+import hashlib
+import hmac
+import json
+import logging
+import os
+import random
+import ssl
+import string
+import time
 from datetime import datetime, timedelta, timezone
 from functools import partial
+from typing import Optional
+
+import aiohttp
+import discord
+import redis
+import requests
+import websockets
+from discord.ext import commands, tasks
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, text  # type: ignore
+
+from core.kick_api import USER_AGENTS, KickAPI, check_stream_live, fetch_chatroom_id  # Consolidated Kick API module
 from redis_subscriber import start_redis_subscriber
 
-from dotenv import load_dotenv
-from sqlalchemy import create_engine, text # type: ignore
-from core.kick_api import fetch_chatroom_id, check_stream_live, KickAPI, USER_AGENTS  # Consolidated Kick API module
 # Clip service moved to Dashboard - bot now calls Dashboard API
 
-import discord
-from discord.ext import commands, tasks
-import logging
 
 # Disable Discord.py's default logging to reduce log spam
-logging.getLogger('discord').setLevel(logging.ERROR)
-logging.getLogger('discord.http').setLevel(logging.ERROR)
-logging.getLogger('discord.gateway').setLevel(logging.ERROR)
+logging.getLogger("discord").setLevel(logging.ERROR)
+logging.getLogger("discord.http").setLevel(logging.ERROR)
+logging.getLogger("discord.gateway").setLevel(logging.ERROR)
 
-# Raffle system imports
-from raffle_system.database import setup_raffle_database, get_current_period, create_new_period, migrate_add_created_at_to_shuffle_wagers, migrate_add_platform_to_wager_tables
-from raffle_system.migrations.add_provably_fair_to_draws import migrate_add_provably_fair_to_draws
-from raffle_system.watchtime_converter import setup_watchtime_converter
-from raffle_system.gifted_sub_tracker import setup_gifted_sub_handler
-from raffle_system.shuffle_tracker import setup_shuffle_tracker
-from raffle_system.auto_leaderboard import setup_auto_leaderboard
-from raffle_system.commands import setup as setup_raffle_commands
-from raffle_system.scheduler import setup_raffle_scheduler
-
-# Bot settings manager - loads settings from database with env var fallbacks
-from utils.bot_settings import BotSettingsManager
-
-# Slot call tracker import
-from features.slot_requests.slot_calls import setup_slot_call_tracker
-from features.slot_requests.slot_request_panel import setup_slot_panel
-
-# Timed messages import
-from features.messaging.timed_messages import setup_timed_messages
+# Custom commands import
+from features.custom_commands import CustomCommandsManager
+from features.games.gtb_panel import setup_gtb_panel
 
 # Guess the Balance import
 from features.games.guess_the_balance import GuessTheBalanceManager, parse_amount
-from features.games.gtb_panel import setup_gtb_panel
+
+# Giveaway system import
+from features.giveaway.giveaway_manager import GiveawayManager, setup_giveaway_managers
 
 # Link panel import
 from features.linking.link_panel import setup_link_panel_system
 
-# Custom commands import
-from features.custom_commands import CustomCommandsManager
+# Timed messages import
+from features.messaging.timed_messages import setup_timed_messages
 
-# Giveaway system import
-from features.giveaway.giveaway_manager import GiveawayManager, setup_giveaway_managers
+# Slot call tracker import
+from features.slot_requests.slot_calls import setup_slot_call_tracker
+from features.slot_requests.slot_request_panel import setup_slot_panel
+from raffle_system.auto_leaderboard import setup_auto_leaderboard
+from raffle_system.commands import setup as setup_raffle_commands
+
+# Raffle system imports
+from raffle_system.database import (
+    create_new_period,
+    get_current_period,
+    migrate_add_created_at_to_shuffle_wagers,
+    migrate_add_platform_to_wager_tables,
+    setup_raffle_database,
+)
+from raffle_system.gifted_sub_tracker import setup_gifted_sub_handler
+from raffle_system.migrations.add_provably_fair_to_draws import migrate_add_provably_fair_to_draws
+from raffle_system.scheduler import setup_raffle_scheduler
+from raffle_system.shuffle_tracker import setup_shuffle_tracker
+from raffle_system.watchtime_converter import setup_watchtime_converter
+
+# Bot settings manager - loads settings from database with env var fallbacks
+from utils.bot_settings import BotSettingsManager
+
 
 # -------------------------
 # Command checks and utils
 # -------------------------
 def in_guild():
     """Check if command is used in the configured guild."""
+
     async def predicate(ctx):
         if not DISCORD_GUILD_ID:
             return True
         return ctx.guild and ctx.guild.id == DISCORD_GUILD_ID
+
     return commands.check(predicate)
+
 
 def has_manage_roles():
     """Check if user has manage roles permission."""
+
     async def predicate(ctx):
         if not ctx.guild:
             return False
         return ctx.author.guild_permissions.manage_roles
+
     return commands.check(predicate)
+
 
 # -------------------------
 # Load config
@@ -113,7 +127,7 @@ REDIS_URL = os.getenv("REDIS_URL", "")
 redis_client = None
 if REDIS_URL:
     try:
-        _ru = REDIS_URL if '://' in REDIS_URL else f'redis://{REDIS_URL}'
+        _ru = REDIS_URL if "://" in REDIS_URL else f"redis://{REDIS_URL}"
         redis_client = redis.from_url(_ru, decode_responses=True)
         redis_client.ping()
         print("✅ Redis client connected for event publishing")
@@ -123,21 +137,19 @@ if REDIS_URL:
 else:
     print("⚠️  REDIS_URL not set, events will not be published")
 
+
 def publish_redis_event(channel: str, action: str, data: dict = None):
     """Publish an event to Redis for dashboard real-time updates"""
     if not redis_client:
         return False
     try:
-        payload = {
-            'action': action,
-            'data': data or {},
-            'timestamp': datetime.now(timezone.utc).isoformat()
-        }
+        payload = {"action": action, "data": data or {}, "timestamp": datetime.now(timezone.utc).isoformat()}
         redis_client.publish(channel, json.dumps(payload))
         return True
     except Exception as e:
         print(f"Failed to publish Redis event: {e}")
         return False
+
 
 if not DATABASE_URL:
     print("⚠️ WARNING: DATABASE_URL not set! Using in-memory SQLite database.")
@@ -163,7 +175,7 @@ SLOT_CALLS_CHANNEL_ID = int(os.getenv("SLOT_CALLS_CHANNEL_ID")) if os.getenv("SL
 # OAuth configuration
 OAUTH_BASE_URL = os.getenv("OAUTH_BASE_URL", "")  # e.g., https://your-app.up.railway.app
 # Ensure OAUTH_BASE_URL has https:// scheme
-if OAUTH_BASE_URL and not OAUTH_BASE_URL.startswith(('http://', 'https://')):
+if OAUTH_BASE_URL and not OAUTH_BASE_URL.startswith(("http://", "https://")):
     OAUTH_BASE_URL = f"https://{OAUTH_BASE_URL}"
 KICK_CLIENT_ID = os.getenv("KICK_CLIENT_ID", "")
 KICK_CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET", "")  # Used for both OAuth and Kick bot
@@ -186,6 +198,7 @@ if not OAUTH_SECRET_KEY:
 else:
     print(f"[Bot] FLASK_SECRET_KEY configured: YES", flush=True)
 
+
 # -------------------------
 # 🔒 Security: OAuth URL Signing
 # -------------------------
@@ -202,14 +215,11 @@ def generate_signed_oauth_url(discord_id: int, guild_id: int = None) -> str:
     # Include guild_id in signature to prevent tampering
     guild_id = guild_id or 0
     message = f"{discord_id}:{guild_id}:{timestamp}"
-    signature = hmac.new(
-        OAUTH_SECRET_KEY.encode(),
-        message.encode(),
-        hashlib.sha256
-    ).digest()
-    sig_encoded = base64.urlsafe_b64encode(signature).decode().rstrip('=')
+    signature = hmac.new(OAUTH_SECRET_KEY.encode(), message.encode(), hashlib.sha256).digest()
+    sig_encoded = base64.urlsafe_b64encode(signature).decode().rstrip("=")
 
     return f"{OAUTH_BASE_URL}/auth/kick?discord_id={discord_id}&guild_id={guild_id}&timestamp={timestamp}&signature={sig_encoded}"
+
 
 # URLs and Pusher config
 KICK_API_BASE = "https://kick.com"
@@ -232,17 +242,19 @@ BROWSER_CONFIG = {
         "Sec-Fetch-Site": "none",
         "Sec-Fetch-User": "?1",
         "Upgrade-Insecure-Requests": "1",
-        "Connection": "keep-alive"
+        "Connection": "keep-alive",
     }
 }
 
 PUSHER_CONFIG = {
     "key": "32cbd69e4b950bf97679",  # Updated Pusher key
     "cluster": "us2",
-    "version": "8.4.0",             # Updated version
+    "version": "8.4.0",  # Updated version
     "protocol": 7,
 }
-KICK_CHAT_WS = f"wss://ws-{PUSHER_CONFIG['cluster']}.pusher.com/app/{PUSHER_CONFIG['key']}"  # Standard Pusher WebSocket endpoint
+KICK_CHAT_WS = (
+    f"wss://ws-{PUSHER_CONFIG['cluster']}.pusher.com/app/{PUSHER_CONFIG['key']}"  # Standard Pusher WebSocket endpoint
+)
 
 # Role thresholds in minutes
 WATCHTIME_ROLES = [
@@ -277,67 +289,75 @@ BROWSER_HEADERS = {
 # -------------------------
 _kick_api = None
 
+
 async def get_kick_api():
     """Get or create a KickAPI instance."""
     global _kick_api
     if _kick_api is None:
         from core.kick_api import KickAPI
+
         _kick_api = KickAPI()
         await _kick_api.setup()
     return _kick_api
+
 
 # -------------------------
 # Kick WebSocket Manager for sending chat messages
 # -------------------------
 class KickWebSocketManager:
     """Manages persistent WebSocket connections for each guild using kickpython"""
-    
+
     def __init__(self):
         self.connections = {}  # guild_id -> KickAPI instance
         self.connection_tasks = {}  # guild_id -> asyncio.Task
         self.message_queues = {}  # guild_id -> asyncio.Queue
         self.connected_channels = {}  # guild_id -> kick channel username
-    
+
     async def ensure_connection(self, guild_id: int, guild_name: str) -> bool:
         """Ensure there's an active websocket connection for this guild"""
         from kickpython import KickAPI
-        
+
         # Check if already connected
         if guild_id in self.connections:
             return True
-        
+
         try:
             # Use bot token from environment (shared across all servers)
             bot_token = KICK_BOT_USER_TOKEN
-            
+
             if not bot_token:
                 print(f"[{guild_name}] ⚠️ KICK_BOT_USER_TOKEN not set")
                 return False
-            
+
             # Get channel username for websocket connection
             kick_username = None
             with engine.connect() as conn:
                 # Try bot_settings first
-                result = conn.execute(text("""
-                    SELECT value FROM bot_settings 
-                    WHERE key = 'kick_channel' 
+                result = conn.execute(
+                    text(
+                        """
+                    SELECT value FROM bot_settings
+                    WHERE key = 'kick_channel'
                     AND discord_server_id = :guild_id
                     LIMIT 1
-                """), {"guild_id": guild_id}).fetchone()
-                
+                """
+                    ),
+                    {"guild_id": guild_id},
+                ).fetchone()
+
                 if result and result[0]:
                     kick_username = result[0]
-            
+
             if not kick_username:
                 print(f"[{guild_name}] ⚠️ Kick channel username not configured in dashboard")
                 print(f"[{guild_name}] 💡 Please set the Kick channel name in the dashboard Settings page")
                 return False
-            
+
             # Initialize kickpython API WITHOUT any credentials for chatroom_id fetch
             # kickpython will use public non-OAuth API to fetch chatroom_id (more reliable)
             # We only need auth when SENDING messages (handled in _message_sender)
             api = KickAPI()
-            
+
             # DON'T set access_token or credentials here - let kickpython use public API
             # (OAuth tokens can expire, causing 401 errors during chatroom_id fetch)
             # We'll fetch fresh tokens in _message_sender when actually sending messages
@@ -348,76 +368,81 @@ class KickWebSocketManager:
                     await self._handle_incoming_message(guild_id, guild_name, msg)
                 except Exception as e:
                     print(f"[{guild_name}] ❌ Error in message handler: {e}")
+
             api.add_message_handler(_on_message)
-            
+
             # Create message queue for this guild
             self.message_queues[guild_id] = asyncio.Queue()
-            
+
             # Connect to chatroom via websocket
-            print(f"[{guild_name}] 🔌 Connecting to Kick websocket for channel: {kick_username} with BOT token from env...")
-            
-            # Start connection in background task
-            task = asyncio.create_task(
-                self._maintain_connection(guild_id, guild_name, api, kick_username)
+            print(
+                f"[{guild_name}] 🔌 Connecting to Kick websocket for channel: {kick_username} with BOT token from env..."
             )
-            
+
+            # Start connection in background task
+            task = asyncio.create_task(self._maintain_connection(guild_id, guild_name, api, kick_username))
+
             self.connections[guild_id] = api
             self.connection_tasks[guild_id] = task
             self.connected_channels[guild_id] = kick_username
-            
+
             print(f"[{guild_name}] ✅ Kick websocket connection task started")
             return True
-            
+
         except Exception as e:
             print(f"[{guild_name}] ❌ Failed to connect websocket: {e}")
             import traceback
+
             traceback.print_exc()
             return False
-    
+
     async def _maintain_connection(self, guild_id: int, guild_name: str, api, kick_username: str):
         """Maintain websocket connection and process message queue"""
         try:
             print(f"[{guild_name}] 🔌 Starting message sender task in background...")
-            
+
             # Start the message sender as a separate task
-            sender_task = asyncio.create_task(
-                self._message_sender(guild_id, guild_name, api)
-            )
-            
+            sender_task = asyncio.create_task(self._message_sender(guild_id, guild_name, api))
+
             # DON'T set access_token before connecting!
             # kickpython will fetch chatroom_id using PUBLIC API: /api/v2/channels/{channel}/chatroom
             # We only need token for SENDING messages (done in post_chat method)
-            
+
             # Reconnection loop - keep trying to stay connected
             reconnect_delay = 5
             max_reconnect_delay = 60
-            
+
             while True:
                 try:
                     # Now connect to chatroom (this will block until disconnected)
                     print(f"[{guild_name}] 🔌 Connecting to websocket...")
                     await api.connect_to_chatroom(kick_username)
-                    
+
                     # Save chatroom_id to database after successful connection
-                    if hasattr(api, 'chatroom_id') and api.chatroom_id:
+                    if hasattr(api, "chatroom_id") and api.chatroom_id:
                         try:
                             with engine.connect() as conn:
-                                conn.execute(text("""
+                                conn.execute(
+                                    text(
+                                        """
                                     INSERT INTO bot_settings (key, value, discord_server_id)
                                     VALUES ('kick_chatroom_id', :chatroom_id, :guild_id)
-                                    ON CONFLICT (key, discord_server_id) 
+                                    ON CONFLICT (key, discord_server_id)
                                     DO UPDATE SET value = EXCLUDED.value
-                                """), {"chatroom_id": str(api.chatroom_id), "guild_id": guild_id})
+                                """
+                                    ),
+                                    {"chatroom_id": str(api.chatroom_id), "guild_id": guild_id},
+                                )
                                 conn.commit()
                             print(f"[{guild_name}] 💾 Saved chatroom_id {api.chatroom_id} to database")
                         except Exception as e:
                             print(f"[{guild_name}] ⚠️ Failed to save chatroom_id: {e}")
-                    
+
                     # If we get here, connection was closed - try to reconnect
                     print(f"[{guild_name}] ⚠️ WebSocket disconnected, reconnecting in {reconnect_delay}s...")
                     await asyncio.sleep(reconnect_delay)
                     reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
-                    
+
                 except asyncio.CancelledError:
                     print(f"[{guild_name}] 🛑 Connection task cancelled")
                     break
@@ -425,12 +450,13 @@ class KickWebSocketManager:
                     print(f"[{guild_name}] ❌ WebSocket error: {e}, reconnecting in {reconnect_delay}s...")
                     await asyncio.sleep(reconnect_delay)
                     reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
-            
+
             sender_task.cancel()
-                    
+
         except Exception as e:
             print(f"[{guild_name}] ❌ Websocket connection lost: {e}")
             import traceback
+
             traceback.print_exc()
             # Clean up
             if guild_id in self.connections:
@@ -439,66 +465,82 @@ class KickWebSocketManager:
                 del self.connection_tasks[guild_id]
             if guild_id in self.connected_channels:
                 del self.connected_channels[guild_id]
-    
+
     async def _refresh_oauth_token(self, guild_id: int, guild_name: str) -> Optional[str]:
         """Refresh OAuth 2.1 token using refresh_token from bot_settings"""
         try:
-            import aiohttp
             import os
-            
+
+            import aiohttp
+
             # Get refresh_token from bot_settings
             with engine.connect() as conn:
-                result = conn.execute(text("""
-                    SELECT value FROM bot_settings 
-                    WHERE key = 'kick_refresh_token' 
+                result = conn.execute(
+                    text(
+                        """
+                    SELECT value FROM bot_settings
+                    WHERE key = 'kick_refresh_token'
                     AND discord_server_id = :guild_id
                     LIMIT 1
-                """), {"guild_id": guild_id}).fetchone()
-                
+                """
+                    ),
+                    {"guild_id": guild_id},
+                ).fetchone()
+
                 if not result or not result[0]:
                     print(f"[{guild_name}] ❌ No refresh_token found in bot_settings")
                     return None
-                
+
                 refresh_token = result[0]
-            
+
             # Refresh the token
-            client_id = os.getenv('KICK_CLIENT_ID')
-            client_secret = os.getenv('KICK_CLIENT_SECRET')
-            
+            client_id = os.getenv("KICK_CLIENT_ID")
+            client_secret = os.getenv("KICK_CLIENT_SECRET")
+
             data = {
-                'grant_type': 'refresh_token',
-                'client_id': client_id,
-                'client_secret': client_secret,
-                'refresh_token': refresh_token,
+                "grant_type": "refresh_token",
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
             }
-            
+
             print(f"[{guild_name}] 🔄 Refreshing OAuth 2.1 token...")
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    'https://id.kick.com/oauth/token',
+                    "https://id.kick.com/oauth/token",
                     data=data,
-                    headers={'Content-Type': 'application/x-www-form-urlencoded'},
-                    timeout=10
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    timeout=10,
                 ) as resp:
                     if resp.status == 200:
                         token_data = await resp.json()
-                        new_access_token = token_data['access_token']
-                        new_refresh_token = token_data.get('refresh_token', refresh_token)
-                        
+                        new_access_token = token_data["access_token"]
+                        new_refresh_token = token_data.get("refresh_token", refresh_token)
+
                         # Update both tokens in bot_settings
                         with engine.begin() as conn:
-                            conn.execute(text("""
+                            conn.execute(
+                                text(
+                                    """
                                 INSERT INTO bot_settings (discord_server_id, key, value)
                                 VALUES (:guild_id, 'kick_oauth_token', :token)
                                 ON CONFLICT (discord_server_id, key) DO UPDATE SET value = EXCLUDED.value
-                            """), {"guild_id": guild_id, "token": new_access_token})
-                            
-                            conn.execute(text("""
+                            """
+                                ),
+                                {"guild_id": guild_id, "token": new_access_token},
+                            )
+
+                            conn.execute(
+                                text(
+                                    """
                                 INSERT INTO bot_settings (discord_server_id, key, value)
                                 VALUES (:guild_id, 'kick_refresh_token', :token)
                                 ON CONFLICT (discord_server_id, key) DO UPDATE SET value = EXCLUDED.value
-                            """), {"guild_id": guild_id, "token": new_refresh_token})
-                        
+                            """
+                                ),
+                                {"guild_id": guild_id, "token": new_refresh_token},
+                            )
+
                         print(f"[{guild_name}] ✅ OAuth token refreshed successfully")
                         return new_access_token
                     else:
@@ -508,26 +550,32 @@ class KickWebSocketManager:
         except Exception as e:
             print(f"[{guild_name}] ❌ Error refreshing token: {e}")
             import traceback
+
             traceback.print_exc()
             return None
-    
+
     async def _message_sender(self, guild_id: int, guild_name: str, api):
         """Process message queue and send via kickpython (multiserver support)"""
         print(f"[{guild_name}] 📨 Message sender task started!")
-        
+
         try:
             # Load OAuth 2.1 token ONCE at startup for performance
             oauth_token = None
             try:
                 print(f"[{guild_name}] 🔍 Loading kick_oauth_token from database...")
                 with engine.connect() as conn:
-                    result = conn.execute(text("""
-                        SELECT value FROM bot_settings 
-                        WHERE key = 'kick_oauth_token' 
+                    result = conn.execute(
+                        text(
+                            """
+                        SELECT value FROM bot_settings
+                        WHERE key = 'kick_oauth_token'
                         AND discord_server_id = :guild_id
                         LIMIT 1
-                    """), {"guild_id": guild_id}).fetchone()
-                    
+                    """
+                        ),
+                        {"guild_id": guild_id},
+                    ).fetchone()
+
                     if result and result[0]:
                         oauth_token = result[0]
                         api.access_token = oauth_token
@@ -535,88 +583,93 @@ class KickWebSocketManager:
                     else:
                         print(f"[{guild_name}] ⚠️ No kick_oauth_token found - messages will fail!")
                         # Debug: Check what keys exist
-                        all_keys = conn.execute(text("""
+                        all_keys = conn.execute(
+                            text(
+                                """
                             SELECT key FROM bot_settings WHERE discord_server_id = :guild_id
-                        """), {"guild_id": guild_id}).fetchall()
+                        """
+                            ),
+                            {"guild_id": guild_id},
+                        ).fetchall()
                         print(f"[{guild_name}] 🔍 Available keys: {[row[0] for row in all_keys]}")
             except Exception as e:
                 print(f"[{guild_name}] ❌ Error loading OAuth token: {e}")
                 import traceback
+
                 traceback.print_exc()
-            
+
             print(f"[{guild_name}] 🔄 Starting message processing loop...")
-            
+
             while True:
                 try:
                     # Wait for message from queue (timeout allows checking for cancellation)
                     try:
-                        message, channel_id = await asyncio.wait_for(
-                            self.message_queues[guild_id].get(),
-                            timeout=5.0
-                        )
+                        message, channel_id = await asyncio.wait_for(self.message_queues[guild_id].get(), timeout=5.0)
                     except asyncio.TimeoutError:
                         # No message in queue, keep waiting
                         continue
-                    
+
                     # Reload token from database before each send (in case proactive refresh updated it)
                     try:
                         with engine.connect() as conn:
-                            result = conn.execute(text("""
-                                SELECT value FROM bot_settings 
-                                WHERE key = 'kick_oauth_token' 
+                            result = conn.execute(
+                                text(
+                                    """
+                                SELECT value FROM bot_settings
+                                WHERE key = 'kick_oauth_token'
                                 AND discord_server_id = :guild_id
                                 LIMIT 1
-                            """), {"guild_id": guild_id}).fetchone()
-                            
+                            """
+                                ),
+                                {"guild_id": guild_id},
+                            ).fetchone()
+
                             if result and result[0]:
                                 api.access_token = result[0]
                     except Exception as e:
                         print(f"[{guild_name}] ⚠️ Error reloading token: {e}")
-                    
+
                     # Debug: Log what we're about to send
                     print(f"[{guild_name}] 📤 Preparing to send message:")
                     print(f"[{guild_name}]    Message: {message[:100]}...")
                     print(f"[{guild_name}]    Channel ID: {channel_id}")
                     print(f"[{guild_name}]    Token loaded: {'YES' if api.access_token else 'NO'}")
-                    
+
                     # Send via direct HTTP request to Kick API
                     import aiohttp
-                    
+
                     headers = {
-                        'Authorization': f'Bearer {api.access_token}',
-                        'Accept': 'application/json',
-                        'Content-Type': 'application/json',
-                        'User-Agent': 'LeleBot/1.0'
+                        "Authorization": f"Bearer {api.access_token}",
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                        "User-Agent": "LeleBot/1.0",
                     }
-                    
+
                     # Use bot mode - broadcaster_user_id not needed, message sent to channel attached to token
-                    payload = {
-                        'content': message,
-                        'type': 'bot'  # bot mode instead of 'message'
-                    }
-                    
-                    url = 'https://api.kick.com/public/v1/chat'
-                    
+                    payload = {"content": message, "type": "bot"}  # bot mode instead of 'message'
+
+                    url = "https://api.kick.com/public/v1/chat"
+
                     async with aiohttp.ClientSession() as session:
                         async with session.post(url, headers=headers, json=payload, timeout=10) as resp:
                             response_text = await resp.text()
                             print(f"[{guild_name}] 📡 Kick API Response: HTTP {resp.status}")
                             print(f"[{guild_name}] 📡 Response body: {response_text[:500]}")
-                            
+
                             if resp.status in [200, 201]:
                                 print(f"[{guild_name}] ✅ Message sent successfully!")
                             elif resp.status == 401:
                                 raise Exception(f"HTTP 401 Unauthorized - token may have expired")
                             else:
                                 raise Exception(f"HTTP {resp.status}: {response_text}")
-                    
+
                 except asyncio.CancelledError:
                     print(f"[{guild_name}] 🛑 Message sender cancelled")
                     break
                 except Exception as send_error:
                     error_str = str(send_error)
                     print(f"[{guild_name}] ⚠️ Send failed: {error_str}")
-                    
+
                     # If sending fails with 401, try refreshing token
                     if "401" in error_str or "Unauthorized" in error_str:
                         print(f"[{guild_name}] 🔄 Token expired, attempting refresh...")
@@ -624,99 +677,116 @@ class KickWebSocketManager:
                         if refreshed:
                             api.access_token = refreshed
                             print(f"[{guild_name}] 🔄 Retrying with refreshed token...")
-                            
+
                             # Retry with refreshed token
                             import aiohttp
+
                             headers = {
-                                'Authorization': f'Bearer {api.access_token}',
-                                'Accept': 'application/json',
-                                'Content-Type': 'application/json',
-                                'User-Agent': 'LeleBot/1.0'
+                                "Authorization": f"Bearer {api.access_token}",
+                                "Accept": "application/json",
+                                "Content-Type": "application/json",
+                                "User-Agent": "LeleBot/1.0",
                             }
-                            payload = {'content': message, 'type': 'bot'}
-                            url = 'https://api.kick.com/public/v1/chat'
-                            
+                            payload = {"content": message, "type": "bot"}
+                            url = "https://api.kick.com/public/v1/chat"
+
                             async with aiohttp.ClientSession() as session:
                                 async with session.post(url, headers=headers, json=payload, timeout=10) as resp:
                                     response_text = await resp.text()
-                                    print(f"[{guild_name}] 📡 Retry response: HTTP {resp.status} - {response_text[:200]}")
+                                    print(
+                                        f"[{guild_name}] 📡 Retry response: HTTP {resp.status} - {response_text[:200]}"
+                                    )
                                     if resp.status not in [200, 201]:
                                         # Try streamer OAuth as final fallback
                                         print(f"[{guild_name}] ⚠️ Trying streamer OAuth as fallback...")
                                         from utils.kick_oauth import get_kick_token_for_server
+
                                         token_data = get_kick_token_for_server(engine, guild_id)
-                                        if token_data and token_data.get('access_token'):
-                                            api.access_token = token_data['access_token']
-                                            headers['Authorization'] = f'Bearer {api.access_token}'
-                                            async with session.post(url, headers=headers, json=payload, timeout=10) as fallback_resp:
+                                        if token_data and token_data.get("access_token"):
+                                            api.access_token = token_data["access_token"]
+                                            headers["Authorization"] = f"Bearer {api.access_token}"
+                                            async with session.post(
+                                                url, headers=headers, json=payload, timeout=10
+                                            ) as fallback_resp:
                                                 fallback_text = await fallback_resp.text()
-                                                print(f"[{guild_name}] 📡 Streamer OAuth: HTTP {fallback_resp.status} - {fallback_text[:200]}")
+                                                print(
+                                                    f"[{guild_name}] 📡 Streamer OAuth: HTTP {fallback_resp.status} - {fallback_text[:200]}"
+                                                )
                         else:
                             print(f"[{guild_name}] ❌ Token refresh failed")
                     else:
                         import traceback
+
                         traceback.print_exc()
-                    
+
         except asyncio.CancelledError:
             print(f"[{guild_name}] 🛑 Message sender task cancelled")
         except Exception as e:
             print(f"[{guild_name}] ❌ FATAL: Message sender crashed: {e}")
             import traceback
+
             traceback.print_exc()
-    
+
     async def send_message(self, message: str, guild_id: int, guild_name: str) -> bool:
         """Queue a message to be sent via websocket"""
         try:
             # Ensure connection exists
             if not await self.ensure_connection(guild_id, guild_name):
                 return False
-            
+
             # Get API instance
             api = self.connections.get(guild_id)
             if not api:
                 print(f"[{guild_name}] ⚠️ No API instance found")
                 return False
-            
+
             # Get chatroom ID - prioritize in-memory value from kickpython
             chatroom_id = None
-            
+
             # PRIORITY 1: Get from kickpython's in-memory chatroom_id (most reliable)
-            if hasattr(api, 'chatroom_id') and api.chatroom_id:
+            if hasattr(api, "chatroom_id") and api.chatroom_id:
                 chatroom_id = int(api.chatroom_id)
                 print(f"[{guild_name}] 📋 Using chatroom_id from kickpython: {chatroom_id}")
-            
+
             # PRIORITY 2: Fall back to database (for reconnections)
             if not chatroom_id:
                 with engine.connect() as conn:
-                    result = conn.execute(text("""
-                        SELECT value FROM bot_settings 
-                        WHERE key = 'kick_chatroom_id' 
+                    result = conn.execute(
+                        text(
+                            """
+                        SELECT value FROM bot_settings
+                        WHERE key = 'kick_chatroom_id'
                         AND discord_server_id = :guild_id
                         LIMIT 1
-                    """), {"guild_id": guild_id}).fetchone()
-                    
+                    """
+                        ),
+                        {"guild_id": guild_id},
+                    ).fetchone()
+
                     if result and result[0]:
                         try:
                             chatroom_id = int(result[0])
                             print(f"[{guild_name}] 📋 Using chatroom_id from database: {chatroom_id}")
-                            
+
                             # HOTFIX: 152837 is broadcaster_user_id, not chatroom_id!
                             if chatroom_id == 152837:
-                                print(f"[{guild_name}] ⚠️ Invalid chatroom_id (152837 is broadcaster_user_id, not chatroom_id)")
+                                print(
+                                    f"[{guild_name}] ⚠️ Invalid chatroom_id (152837 is broadcaster_user_id, not chatroom_id)"
+                                )
                                 chatroom_id = None
                         except (ValueError, TypeError):
                             print(f"[{guild_name}] ⚠️ Invalid chatroom_id format")
                             chatroom_id = None
-            
+
             if not chatroom_id:
                 print(f"[{guild_name}] ⚠️ Chatroom ID not configured")
                 return False
-            
+
             # Add to queue
             await self.message_queues[guild_id].put((message, chatroom_id))
             print(f"[{guild_name}] 📤 Queued message for websocket (chatroom: {chatroom_id})")
             return True
-            
+
         except Exception as e:
             print(f"[{guild_name}] ❌ Failed to queue message: {e}")
             return False
@@ -724,33 +794,33 @@ class KickWebSocketManager:
     async def _handle_incoming_message(self, guild_id: int, guild_name: str, msg: dict):
         """Handle inbound chat messages from kickpython websocket."""
         try:
-            username = msg.get('sender_username') or msg.get('username') or 'unknown'
-            content = msg.get('content') or ''
-            chat_id = msg.get('chat_id') or msg.get('id')
-            
+            username = msg.get("sender_username") or msg.get("username") or "unknown"
+            content = msg.get("content") or ""
+            chat_id = msg.get("chat_id") or msg.get("id")
+
             # Debug: Log every incoming message
             print(f"[{guild_name}] 💬 Received Kick message: {username}: {content[:100]}")
 
             # Update watchtime tracking (per-guild)
             now = datetime.now(timezone.utc)
             username_lower = username.lower()
-            
+
             # Initialize dicts if missing
-            if 'active_viewers_by_guild' not in globals():
-                globals()['active_viewers_by_guild'] = {}
-            if 'recent_chatters_by_guild' not in globals():
-                globals()['recent_chatters_by_guild'] = {}
-            if 'last_chat_activity_by_guild' not in globals():
-                globals()['last_chat_activity_by_guild'] = {}
+            if "active_viewers_by_guild" not in globals():
+                globals()["active_viewers_by_guild"] = {}
+            if "recent_chatters_by_guild" not in globals():
+                globals()["recent_chatters_by_guild"] = {}
+            if "last_chat_activity_by_guild" not in globals():
+                globals()["last_chat_activity_by_guild"] = {}
 
             # Update last chat activity
             last_chat_activity_by_guild[guild_id] = now
-            
+
             # Update active viewers (for watchtime tracking)
             guild_active_viewers = active_viewers_by_guild.get(guild_id, {})
             guild_active_viewers[username_lower] = now
             active_viewers_by_guild[guild_id] = guild_active_viewers
-            
+
             # Update recent chatters (for stream-live detection)
             guild_chatters = recent_chatters_by_guild.get(guild_id, {})
             guild_chatters[username_lower] = now
@@ -758,16 +828,16 @@ class KickWebSocketManager:
 
             # Publish to Redis for dashboard (optional)
             publish_redis_event(
-                channel='kick_chat',
-                action='message',
+                channel="kick_chat",
+                action="message",
                 data={
-                    'guild_id': guild_id,
-                    'channel': self.connected_channels.get(guild_id),
-                    'username': username,
-                    'content': content,
-                    'chat_id': chat_id,
-                    'timestamp': now.isoformat(),
-                }
+                    "guild_id": guild_id,
+                    "channel": self.connected_channels.get(guild_id),
+                    "username": username,
+                    "content": content,
+                    "chat_id": chat_id,
+                    "timestamp": now.isoformat(),
+                },
             )
 
             # 🎁 GIVEAWAY: Track messages for keyword and active chatter detection
@@ -775,17 +845,17 @@ class KickWebSocketManager:
                 giveaway_manager = giveaway_managers[guild_id]
                 if giveaway_manager.active_giveaway:
                     try:
-                        entry_method = giveaway_manager.active_giveaway['entry_method']
-                        
+                        entry_method = giveaway_manager.active_giveaway["entry_method"]
+
                         # Keyword detection - exact match only (no extra text)
-                        if entry_method == 'keyword':
-                            keyword = giveaway_manager.active_giveaway.get('keyword', '').lower()
+                        if entry_method == "keyword":
+                            keyword = giveaway_manager.active_giveaway.get("keyword", "").lower()
                             if keyword and content.strip().lower() == keyword:
-                                await giveaway_manager.add_entry(username, entry_method='keyword')
+                                await giveaway_manager.add_entry(username, entry_method="keyword")
                                 print(f"[{guild_name}] 🎁 Giveaway entry added: {username} (keyword: {keyword})")
-                        
+
                         # Active chatter tracking
-                        elif entry_method == 'active_chatter':
+                        elif entry_method == "active_chatter":
                             await giveaway_manager.track_message(username, content)
                     except Exception as e:
                         print(f"[{guild_name}] ⚠️ Giveaway tracking error: {e}")
@@ -793,87 +863,99 @@ class KickWebSocketManager:
             # Process commands from Kick chat
             content_stripped = content.strip()
             print(f"[{guild_name}] 🔍 Processing message: '{content_stripped[:50]}...'")
-            
+
             # Custom commands (from dashboard)
-            if hasattr(bot, 'custom_commands_managers') and guild_id in bot.custom_commands_managers:
+            if hasattr(bot, "custom_commands_managers") and guild_id in bot.custom_commands_managers:
                 try:
                     commands_manager = bot.custom_commands_managers[guild_id]
-                    original_guild_id = getattr(commands_manager, 'discord_server_id', None)
+                    original_guild_id = getattr(commands_manager, "discord_server_id", None)
                     commands_manager.discord_server_id = guild_id
                     commands_manager.send_message_callback = lambda msg: send_kick_message(msg, guild_id=guild_id)
-                    
+
                     handled = await commands_manager.handle_message(content, username)
-                    
+
                     commands_manager.discord_server_id = original_guild_id
                     if handled:
                         print(f"[{guild_name}] ✅ Custom command handled")
                         return  # Command was handled, don't process further
                 except Exception as e:
                     print(f"[{guild_name}] ⚠️ Custom command error: {e}")
-            
+
             # !points command
             if content_stripped.lower() == "!points":
                 print(f"[{guild_name}] 💰 Processing !points command from {username}")
                 try:
                     with engine.connect() as conn:
-                        result = conn.execute(text("""
+                        result = conn.execute(
+                            text(
+                                """
                             SELECT points FROM user_points
                             WHERE LOWER(kick_username) = :username AND discord_server_id = :guild_id
-                        """), {"username": username.lower(), "guild_id": guild_id}).fetchone()
-                        
+                        """
+                            ),
+                            {"username": username.lower(), "guild_id": guild_id},
+                        ).fetchone()
+
                         if result and result[0] is not None:
                             points_balance = int(result[0])
                             await send_kick_message(
-                                f"@{username}, You currently have {points_balance:,} points.",
-                                guild_id=guild_id
+                                f"@{username}, You currently have {points_balance:,} points.", guild_id=guild_id
                             )
                         else:
                             await send_kick_message(
                                 f"@{username}, You currently have 0 points. Start watching to earn points!",
-                                guild_id=guild_id
+                                guild_id=guild_id,
                             )
                 except Exception as e:
                     print(f"[{guild_name}] ❌ Error fetching points for {username}: {e}")
                     await send_kick_message(
-                        f"@{username}, Unable to retrieve points balance at this time.",
-                        guild_id=guild_id
+                        f"@{username}, Unable to retrieve points balance at this time.", guild_id=guild_id
                     )
-            
+
             # !call / !sr commands (slot requests)
             elif content_stripped.startswith(("!call", "!sr")):
                 print(f"[{guild_name}] 🎰 Detected slot command: {content_stripped[:50]}")
                 print(f"[{guild_name}] 🔍 Has slot_trackers: {hasattr(bot, 'slot_trackers')}")
-                
+
                 # Use guild-specific tracker (check both naming conventions)
                 tracker = None
-                if hasattr(bot, 'slot_call_trackers_by_guild') and guild_id in bot.slot_call_trackers_by_guild:
+                if hasattr(bot, "slot_call_trackers_by_guild") and guild_id in bot.slot_call_trackers_by_guild:
                     tracker = bot.slot_call_trackers_by_guild[guild_id]
                     print(f"[{guild_name}] ✅ Found guild-specific tracker (slot_call_trackers_by_guild)")
-                elif hasattr(bot, 'slot_trackers') and guild_id in bot.slot_trackers:
+                elif hasattr(bot, "slot_trackers") and guild_id in bot.slot_trackers:
                     tracker = bot.slot_trackers[guild_id]
                     print(f"[{guild_name}] ✅ Found guild-specific tracker (slot_trackers)")
-                elif hasattr(bot, 'slot_call_tracker'):
+                elif hasattr(bot, "slot_call_tracker"):
                     tracker = bot.slot_call_tracker
                     print(f"[{guild_name}] ⚠️ Using fallback global tracker")
-                
+
                 if tracker:
                     print(f"[{guild_name}] 🔍 Slot tracker enabled: {tracker.enabled}")
-                    print(f"[{guild_name}] 🔍 Slot tracker guild_id: {getattr(tracker, 'discord_server_id', 'NOT SET')}")
+                    print(
+                        f"[{guild_name}] 🔍 Slot tracker guild_id: {getattr(tracker, 'discord_server_id', 'NOT SET')}"
+                    )
                     # Check if slot requests are enabled first
                     if not tracker.enabled:
                         print(f"[{guild_name}] ❌ Slot requests disabled, sending rejection message")
-                        await send_kick_message(f"@{username} Slot requests are not open at the moment.", guild_id=guild_id)
+                        await send_kick_message(
+                            f"@{username} Slot requests are not open at the moment.", guild_id=guild_id
+                        )
                     else:
                         print(f"[{guild_name}] ✅ Slot requests enabled, processing command")
-                        slot_call = content_stripped[5:].strip()[:200] if content_stripped.startswith("!call") else content_stripped[3:].strip()[:200]
+                        slot_call = (
+                            content_stripped[5:].strip()[:200]
+                            if content_stripped.startswith("!call")
+                            else content_stripped[3:].strip()[:200]
+                        )
                         if slot_call:
                             # Fetch avatar from Kick API (same method as giveaway entries - proven to work!)
                             avatar_url = None
                             try:
                                 from core.kick_api import get_channel_info
+
                                 channel_data = await get_channel_info(username)
-                                if channel_data and 'user' in channel_data:
-                                    avatar_url = channel_data['user'].get('profile_pic')
+                                if channel_data and "user" in channel_data:
+                                    avatar_url = channel_data["user"].get("profile_pic")
                                     if avatar_url:
                                         print(f"✅ Fetched avatar from Kick API for {username}: {avatar_url}")
                                     else:
@@ -882,8 +964,8 @@ class KickWebSocketManager:
                                     print(f"⚠️ No user data in Kick API response for {username}")
                             except Exception as e:
                                 print(f"❌ Failed to fetch avatar for {username}: {e}")
-                            
-                            original_guild_id = getattr(tracker, 'discord_server_id', None)
+
+                            original_guild_id = getattr(tracker, "discord_server_id", None)
                             tracker.discord_server_id = guild_id
                             try:
                                 await tracker.handle_slot_call(username, slot_call, avatar_url=avatar_url)
@@ -895,7 +977,7 @@ class KickWebSocketManager:
                             await send_kick_message(f"@{username} Please specify a slot!", guild_id=guild_id)
                 else:
                     print(f"[{guild_name}] ❌ No slot tracker found for this guild")
-            
+
             # !gtb command
             elif content_stripped.lower().startswith("!gtb"):
                 print(f"[{guild_name}] 🎲 Processing !gtb command from {username}")
@@ -904,7 +986,9 @@ class KickWebSocketManager:
                     amount = parse_amount(parts[1])
                     if amount is not None:
                         # Use per-guild GTB manager
-                        gtb_mgr = bot.gtb_managers_by_guild.get(guild_id) if hasattr(bot, 'gtb_managers_by_guild') else None
+                        gtb_mgr = (
+                            bot.gtb_managers_by_guild.get(guild_id) if hasattr(bot, "gtb_managers_by_guild") else None
+                        )
                         if gtb_mgr:
                             success, message = gtb_mgr.add_guess(username, amount)
                             response = f"@{username} {message}" + (" Good luck! 🎰" if success else "")
@@ -917,7 +1001,7 @@ class KickWebSocketManager:
                         await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount>", guild_id=guild_id)
                 else:
                     await send_kick_message(f"@{username} Usage: !gtb <amount> (e.g., !gtb 1234.56)", guild_id=guild_id)
-            
+
             # !clip command
             elif content_stripped.lower().startswith("!clip"):
                 clip_title = content_stripped[5:].strip()  # Remove "!clip" and trim
@@ -925,9 +1009,9 @@ class KickWebSocketManager:
                     # No title provided - generate default
                     timestamp = datetime.now().strftime("%b %d, %Y %H:%M")
                     clip_title = f"Clip by {username} - {timestamp}"
-                
+
                 print(f"[{guild_name}] 🎬 {username} requested clip: {clip_title}")
-                
+
                 # Create clip via Dashboard API (background task)
                 async def create_clip_background(user: str, title: str):
                     try:
@@ -936,127 +1020,157 @@ class KickWebSocketManager:
                         if not kick_channel:
                             print(f"[Clip] ❌ No channel configured")
                             return
-                        
+
                         # Check if stream is live FIRST
                         stream_status = check_stream_live(kick_channel)
-                        if not stream_status.get('is_live'):
+                        if not stream_status.get("is_live"):
                             print(f"[Clip] ❌ Stream is offline")
-                            await send_kick_message(f"@{user} Stream is not live! Can't create clip when offline.", guild_id=guild_id)
+                            await send_kick_message(
+                                f"@{user} Stream is not live! Can't create clip when offline.", guild_id=guild_id
+                            )
                             return
-                        
+
                         # Get settings from bot_settings
                         dashboard_url = None
                         api_key = None
                         clip_duration = 30
-                        
+
                         with engine.connect() as conn:
-                            settings_result = conn.execute(text("""
-                                SELECT key, value FROM bot_settings 
-                                WHERE discord_server_id = :guild_id 
+                            settings_result = conn.execute(
+                                text(
+                                    """
+                                SELECT key, value FROM bot_settings
+                                WHERE discord_server_id = :guild_id
                                 AND key IN ('dashboard_url', 'bot_api_key', 'clip_duration')
-                            """), {"guild_id": guild_id}).fetchall()
-                            
+                            """
+                                ),
+                                {"guild_id": guild_id},
+                            ).fetchall()
+
                             for key, value in settings_result:
-                                if key == 'dashboard_url':
+                                if key == "dashboard_url":
                                     dashboard_url = value
-                                elif key == 'bot_api_key':
+                                elif key == "bot_api_key":
                                     api_key = value
-                                elif key == 'clip_duration':
+                                elif key == "clip_duration":
                                     clip_duration = int(value) if value else 30
-                        
+
                         if not dashboard_url or not api_key:
                             print(f"[Clip] ❌ Dashboard URL or API key not configured")
                             await send_kick_message(f"@{user} Clip service not configured!", guild_id=guild_id)
                             return
-                        
+
                         # Call Dashboard API
                         import aiohttp
+
                         async with aiohttp.ClientSession() as session:
                             async with session.post(
                                 f"{dashboard_url}/api/clips/create",
-                                headers={'X-API-Key': api_key, 'Content-Type': 'application/json'},
-                                json={'channel': kick_channel, 'duration': clip_duration, 'username': user, 'title': title, 'discord_server_id': guild_id},
-                                timeout=10
+                                headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+                                json={
+                                    "channel": kick_channel,
+                                    "duration": clip_duration,
+                                    "username": user,
+                                    "title": title,
+                                    "discord_server_id": guild_id,
+                                },
+                                timeout=10,
                             ) as resp:
                                 if resp.status == 200:
                                     result = await resp.json()
                                     print(f"[Clip] ✅ Clip created for {user}")
-                                    clip_url = result.get('clip_url', '')
+                                    clip_url = result.get("clip_url", "")
                                     await send_kick_message(f"@{user} Clip created! 🎬 {clip_url}", guild_id=guild_id)
                                 else:
                                     error_data = await resp.json()
-                                    error_msg = error_data.get('message', 'Unknown error')
+                                    error_msg = error_data.get("message", "Unknown error")
                                     print(f"[Clip] ❌ Failed: HTTP {resp.status} - {error_msg}")
-                                    
+
                                     # Provide helpful error messages
-                                    if 'no_buffer' in error_msg or 'not_recording' in error_msg:
-                                        await send_kick_message(f"@{user} Clip buffer is starting up, try again in 30 seconds!", guild_id=guild_id)
-                                    elif 'no_segments' in error_msg:
-                                        await send_kick_message(f"@{user} Buffer still filling, try again in a few seconds!", guild_id=guild_id)
+                                    if "no_buffer" in error_msg or "not_recording" in error_msg:
+                                        await send_kick_message(
+                                            f"@{user} Clip buffer is starting up, try again in 30 seconds!",
+                                            guild_id=guild_id,
+                                        )
+                                    elif "no_segments" in error_msg:
+                                        await send_kick_message(
+                                            f"@{user} Buffer still filling, try again in a few seconds!",
+                                            guild_id=guild_id,
+                                        )
                                     else:
                                         await send_kick_message(f"@{user} Clip failed: {error_msg}", guild_id=guild_id)
                     except Exception as e:
                         print(f"[Clip] ❌ Error: {e}")
                         await send_kick_message(f"@{user} Clip error: {str(e)}", guild_id=guild_id)
-                
+
                 asyncio.create_task(create_clip_background(username, clip_title))
-            
+
             # !tickets command
             elif content_stripped.lower() == "!tickets":
                 print(f"[{guild_name}] 🎟️ Processing !tickets command from {username}")
                 try:
                     with engine.connect() as conn:
                         # Check if user is linked
-                        link_result = conn.execute(text("""
+                        link_result = conn.execute(
+                            text(
+                                """
                             SELECT discord_id FROM links
                             WHERE LOWER(kick_name) = :username AND discord_server_id = :guild_id
-                        """), {"username": username.lower(), "guild_id": guild_id}).fetchone()
-                        
+                        """
+                            ),
+                            {"username": username.lower(), "guild_id": guild_id},
+                        ).fetchone()
+
                         if not link_result:
                             await send_kick_message(
                                 f"@{username}, You need to link your account first! Use !link in Discord.",
-                                guild_id=guild_id
+                                guild_id=guild_id,
                             )
                         else:
                             discord_id = link_result[0]
-                            
+
                             # Get current raffle period
-                            period_result = conn.execute(text("""
+                            period_result = conn.execute(
+                                text(
+                                    """
                                 SELECT id FROM raffle_periods
                                 WHERE status = 'active' AND discord_server_id = :guild_id
                                 LIMIT 1
-                            """), {"guild_id": guild_id}).fetchone()
-                            
+                            """
+                                ),
+                                {"guild_id": guild_id},
+                            ).fetchone()
+
                             if not period_result:
                                 await send_kick_message(
-                                    f"@{username}, No active raffle period right now.",
-                                    guild_id=guild_id
+                                    f"@{username}, No active raffle period right now.", guild_id=guild_id
                                 )
                             else:
                                 period_id = period_result[0]
-                                
+
                                 # Get ticket balance
-                                ticket_result = conn.execute(text("""
-                                    SELECT 
+                                ticket_result = conn.execute(
+                                    text(
+                                        """
+                                    SELECT
                                         total_tickets,
                                         watchtime_tickets,
                                         gifted_sub_tickets,
                                         shuffle_wager_tickets,
                                         bonus_tickets
                                     FROM raffle_tickets
-                                    WHERE period_id = :period_id 
-                                    AND discord_id = :discord_id 
+                                    WHERE period_id = :period_id
+                                    AND discord_id = :discord_id
                                     AND discord_server_id = :guild_id
-                                """), {
-                                    "period_id": period_id,
-                                    "discord_id": discord_id,
-                                    "guild_id": guild_id
-                                }).fetchone()
-                                
+                                """
+                                    ),
+                                    {"period_id": period_id, "discord_id": discord_id, "guild_id": guild_id},
+                                ).fetchone()
+
                                 if not ticket_result or ticket_result[0] == 0:
                                     await send_kick_message(
                                         f"@{username}, You currently have 0 raffle tickets. Watch streams, gift subs, or wager to earn tickets!",
-                                        guild_id=guild_id
+                                        guild_id=guild_id,
                                     )
                                 else:
                                     total_tickets = ticket_result[0] or 0
@@ -1064,44 +1178,50 @@ class KickWebSocketManager:
                                     gifted_subs = ticket_result[2] or 0
                                     wager = ticket_result[3] or 0
                                     bonus = ticket_result[4] or 0
-                                    
+
                                     # Calculate win probability
-                                    total_pool = conn.execute(text("""
+                                    total_pool = conn.execute(
+                                        text(
+                                            """
                                         SELECT COALESCE(SUM(total_tickets), 0)
                                         FROM raffle_tickets
                                         WHERE period_id = :period_id AND discord_server_id = :guild_id
-                                    """), {"period_id": period_id, "guild_id": guild_id}).scalar()
-                                    
+                                    """
+                                        ),
+                                        {"period_id": period_id, "guild_id": guild_id},
+                                    ).scalar()
+
                                     win_prob = (total_tickets / total_pool * 100) if total_pool > 0 else 0
-                                    
+
                                     await send_kick_message(
                                         f"@{username}, You have {int(total_tickets):,} tickets "
                                         f"(Watch: {int(watchtime)} | Subs: {int(gifted_subs)} | Wager: {int(wager)} | Bonus: {int(bonus)}) "
                                         f"Win chance: {win_prob:.2f}% 🎟️",
-                                        guild_id=guild_id
+                                        guild_id=guild_id,
                                     )
                                     print(f"[{guild_name}] ✅ Sent ticket balance to {username}")
                 except Exception as e:
                     print(f"[{guild_name}] ❌ Error fetching tickets for {username}: {e}")
                     await send_kick_message(
-                        f"@{username}, Unable to retrieve ticket balance at this time.",
-                        guild_id=guild_id
+                        f"@{username}, Unable to retrieve ticket balance at this time.", guild_id=guild_id
                     )
 
         except Exception as e:
             print(f"[{guild_name}] ❌ Error handling incoming message: {e}")
 
+
 # Global websocket manager instance
 kick_ws_manager = KickWebSocketManager()
+
 
 async def send_kick_message(message: str, guild_id: int = None) -> bool:
     """
     Send a message to Kick chat using kickpython message queue.
-    
+
     Args:
         message: The message to send
         guild_id: Discord server ID (for multiserver support)
-        
+
     Returns:
         True if message queued successfully, False otherwise
     """
@@ -1110,7 +1230,7 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
     if guild_id:
         guild = bot.get_guild(guild_id)
         guild_name = guild.name if guild else str(guild_id)
-    
+
     try:
         # Check if kickpython connection exists for this guild, auto-connect if not
         if guild_id not in kick_ws_manager.message_queues:
@@ -1121,41 +1241,50 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
                 print(f"[{guild_name}] ❌ Failed to auto-connect kickpython")
                 return False
             print(f"[{guild_name}] ✅ Auto-connected kickpython successfully")
-        
+
         # Get broadcaster_user_id (channel_id for kickpython)
         with engine.connect() as conn:
-            result = conn.execute(text("""
-                SELECT value FROM bot_settings 
-                WHERE key = 'kick_broadcaster_user_id' 
+            result = conn.execute(
+                text(
+                    """
+                SELECT value FROM bot_settings
+                WHERE key = 'kick_broadcaster_user_id'
                 AND discord_server_id = :guild_id
                 LIMIT 1
-            """), {"guild_id": guild_id}).fetchone()
-            
+            """
+                ),
+                {"guild_id": guild_id},
+            ).fetchone()
+
             if not result or not result[0]:
                 print(f"[{guild_name}] ⚠️ broadcaster_user_id not configured - use Sync button in dashboard")
                 return False
-            
+
             channel_id = int(result[0])
-        
+
         # Queue message for kickpython to send
         print(f"[{guild_name}] 📨 Queueing message via kickpython: {message[:50]}...")
         await kick_ws_manager.message_queues[guild_id].put((message, channel_id))
         print(f"[{guild_name}] ✅ Message queued")
         return True
-        
+
     except Exception as e:
         print(f"[{guild_name}] ❌ Failed to queue message: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 # -------------------------
 # -------------------------
 # Database setup and utilities
 # -------------------------
 
+
 class DBConnection:
     """Context manager for safe database connections."""
+
     def __init__(self):
         self.conn = None
 
@@ -1175,33 +1304,40 @@ class DBConnection:
         if self.conn:
             self.conn.close()
 
+
 # -------------------------
 # Database setup
 # -------------------------
 engine = create_engine(
     DATABASE_URL,
     future=True,
-    pool_pre_ping=True,     # Detect disconnections
-    pool_recycle=1800,      # Recycle connections after 30 minutes (Railway timeout)
-    pool_size=10,           # 🔒 SECURITY: Increased from 3 to 10 to prevent connection exhaustion
-    max_overflow=10,        # 🔒 SECURITY: Increased from 5 to 10 for better availability
-    pool_timeout=30,        # Wait up to 30 seconds for a connection
-    echo=False,             # Don't log all SQL
-    echo_pool=False,        # Disable pool logging to reduce noise
-    pool_use_lifo=True,     # Last In First Out for better performance
-    connect_args={
-        "connect_timeout": 10,           # Connection timeout
-        "keepalives": 1,                 # Enable TCP keepalives
-        "keepalives_idle": 30,           # Start keepalives after 30s idle
-        "keepalives_interval": 10,       # Send keepalive every 10s
-        "keepalives_count": 5            # Drop connection after 5 failed keepalives
-    } if DATABASE_URL.startswith('postgresql') else {}
+    pool_pre_ping=True,  # Detect disconnections
+    pool_recycle=1800,  # Recycle connections after 30 minutes (Railway timeout)
+    pool_size=10,  # 🔒 SECURITY: Increased from 3 to 10 to prevent connection exhaustion
+    max_overflow=10,  # 🔒 SECURITY: Increased from 5 to 10 for better availability
+    pool_timeout=30,  # Wait up to 30 seconds for a connection
+    echo=False,  # Don't log all SQL
+    echo_pool=False,  # Disable pool logging to reduce noise
+    pool_use_lifo=True,  # Last In First Out for better performance
+    connect_args=(
+        {
+            "connect_timeout": 10,  # Connection timeout
+            "keepalives": 1,  # Enable TCP keepalives
+            "keepalives_idle": 30,  # Start keepalives after 30s idle
+            "keepalives_interval": 10,  # Send keepalive every 10s
+            "keepalives_count": 5,  # Drop connection after 5 failed keepalives
+        }
+        if DATABASE_URL.startswith("postgresql")
+        else {}
+    ),
 )
 
 try:
     with engine.begin() as conn:
         # Create watchtime table (multiserver-aware)
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
         CREATE TABLE IF NOT EXISTS watchtime (
             username TEXT,
             minutes INTEGER DEFAULT 0,
@@ -1209,14 +1345,18 @@ try:
             discord_server_id BIGINT,
             PRIMARY KEY (username, discord_server_id)
         );
-        """))
+        """
+            )
+        )
 
         # Create links table (multi-server aware)
         # New columns:
         # - discord_server_id: isolates links per guild
         # - linked_at: timestamp for link creation
         # Backwards compatibility: migrate existing schema if needed
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
         CREATE TABLE IF NOT EXISTS links (
             discord_id BIGINT,
             kick_name TEXT,
@@ -1225,20 +1365,28 @@ try:
             PRIMARY KEY (discord_id, discord_server_id),
             UNIQUE (kick_name, discord_server_id)
         );
-        """))
+        """
+            )
+        )
 
         # Create pending_links table
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
         CREATE TABLE IF NOT EXISTS pending_links (
             discord_id BIGINT PRIMARY KEY,
             kick_name TEXT,
             code TEXT,
             timestamp TEXT
         );
-        """))
+        """
+            )
+        )
 
         # Create oauth_notifications table
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
         CREATE TABLE IF NOT EXISTS oauth_notifications (
             id SERIAL PRIMARY KEY,
             discord_id BIGINT NOT NULL,
@@ -1248,10 +1396,14 @@ try:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             processed BOOLEAN DEFAULT FALSE
         );
-        """))
+        """
+            )
+        )
 
         # Create link_panels table for reaction-based OAuth linking
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
         CREATE TABLE IF NOT EXISTS link_panels (
             id SERIAL PRIMARY KEY,
             guild_id BIGINT NOT NULL,
@@ -1261,10 +1413,14 @@ try:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(guild_id, channel_id, message_id)
         );
-        """))
+        """
+            )
+        )
 
         # Create timer_panels table for reaction-based timer management
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
         CREATE TABLE IF NOT EXISTS timer_panels (
             id SERIAL PRIMARY KEY,
             guild_id BIGINT NOT NULL,
@@ -1273,10 +1429,14 @@ try:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(guild_id, channel_id, message_id)
         );
-        """))
+        """
+            )
+        )
 
         # Create bot_settings table for persistent configuration
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
         CREATE TABLE IF NOT EXISTS bot_settings (
             key TEXT NOT NULL,
             value TEXT NOT NULL,
@@ -1284,10 +1444,14 @@ try:
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (key, discord_server_id)
         );
-        """))
+        """
+            )
+        )
 
         # Create link_logs_config table for Discord logging configuration
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
         CREATE TABLE IF NOT EXISTS link_logs_config (
             guild_id BIGINT PRIMARY KEY,
             channel_id BIGINT NOT NULL,
@@ -1295,10 +1459,14 @@ try:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        """))
+        """
+            )
+        )
 
         # Create watchtime_roles table for configurable role thresholds
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
         CREATE TABLE IF NOT EXISTS watchtime_roles (
             id SERIAL PRIMARY KEY,
             role_name TEXT NOT NULL,
@@ -1308,21 +1476,30 @@ try:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        """))
+        """
+            )
+        )
 
         # Insert default roles if table is empty
         role_count = conn.execute(text("SELECT COUNT(*) FROM watchtime_roles")).fetchone()[0]
         if role_count == 0:
             print("📝 Initializing default watchtime roles...")
             for idx, role in enumerate(WATCHTIME_ROLES, 1):
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     INSERT INTO watchtime_roles (role_name, minutes_required, display_order, enabled)
                     VALUES (:name, :minutes, :order, TRUE)
-                """), {"name": role["name"], "minutes": role["minutes"], "order": idx})
+                """
+                    ),
+                    {"name": role["name"], "minutes": role["minutes"], "order": idx},
+                )
             print("✅ Default watchtime roles created")
 
         # Create Guess the Balance tables
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
         CREATE TABLE IF NOT EXISTS gtb_sessions (
             id SERIAL PRIMARY KEY,
             opened_by TEXT NOT NULL,
@@ -1332,9 +1509,13 @@ try:
             status TEXT DEFAULT 'open' CHECK (status IN ('open', 'closed', 'completed')),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        """))
+        """
+            )
+        )
 
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
         CREATE TABLE IF NOT EXISTS gtb_guesses (
             id SERIAL PRIMARY KEY,
             session_id INTEGER NOT NULL REFERENCES gtb_sessions(id) ON DELETE CASCADE,
@@ -1344,9 +1525,13 @@ try:
             discord_server_id BIGINT,
             UNIQUE(session_id, kick_username)
         );
-        """))
+        """
+            )
+        )
 
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
         CREATE TABLE IF NOT EXISTS gtb_winners (
             id SERIAL PRIMARY KEY,
             session_id INTEGER NOT NULL REFERENCES gtb_sessions(id) ON DELETE CASCADE,
@@ -1357,9 +1542,13 @@ try:
             difference NUMERIC(12, 2) NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        """))
+        """
+            )
+        )
 
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
         CREATE TABLE IF NOT EXISTS clips (
             id SERIAL PRIMARY KEY,
             kick_username TEXT NOT NULL,
@@ -1370,16 +1559,22 @@ try:
             kick_channel TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        """))
-        
+        """
+            )
+        )
+
         # Add multiserver columns to clips table if they don't exist
         try:
-            conn.execute(text("""
-                ALTER TABLE clips 
+            conn.execute(
+                text(
+                    """
+                ALTER TABLE clips
                 ADD COLUMN IF NOT EXISTS discord_server_id BIGINT,
                 ADD COLUMN IF NOT EXISTS kick_channel TEXT,
                 ADD COLUMN IF NOT EXISTS clip_title TEXT;
-            """))
+            """
+                )
+            )
         except Exception:
             pass  # Columns may already exist
 
@@ -1388,7 +1583,9 @@ try:
         # -------------------------
 
         # Points balance for each user
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
         CREATE TABLE IF NOT EXISTS user_points (
             id SERIAL PRIMARY KEY,
             kick_username TEXT NOT NULL,
@@ -1399,10 +1596,14 @@ try:
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(kick_username)
         );
-        """))
+        """
+            )
+        )
 
         # Track watchtime already converted to points (similar to raffle system)
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
         CREATE TABLE IF NOT EXISTS points_watchtime_converted (
             id SERIAL PRIMARY KEY,
             kick_username TEXT NOT NULL,
@@ -1410,10 +1611,14 @@ try:
             points_awarded INTEGER NOT NULL,
             converted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        """))
+        """
+            )
+        )
 
         # Point shop items
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
         CREATE TABLE IF NOT EXISTS point_shop_items (
             id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
@@ -1425,10 +1630,14 @@ try:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        """))
+        """
+            )
+        )
 
         # Point shop sales/purchases
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
         CREATE TABLE IF NOT EXISTS point_sales (
             id SERIAL PRIMARY KEY,
             item_id INTEGER REFERENCES point_shop_items(id),
@@ -1441,16 +1650,22 @@ try:
             notes TEXT,
             purchased_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        """))
+        """
+            )
+        )
 
         # Point system settings
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
         CREATE TABLE IF NOT EXISTS point_settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        """))
+        """
+            )
+        )
 
     print("✅ Database tables initialized successfully")
 except Exception as e:
@@ -1470,14 +1685,15 @@ print("   Each Discord server configures via Dashboard → Profile Settings")
 # Dictionary to store per-guild settings managers
 guild_settings_managers = {}
 
+
 def get_guild_settings(guild_id: int) -> BotSettingsManager:
     """
     Get settings manager for a specific guild.
     REQUIRED for all guild-specific operations.
-    
+
     Args:
         guild_id: Discord guild/server ID
-        
+
     Returns:
         BotSettingsManager instance for the guild
     """
@@ -1485,8 +1701,9 @@ def get_guild_settings(guild_id: int) -> BotSettingsManager:
     if guild_id not in guild_settings_managers:
         guild_settings_managers[guild_id] = BotSettingsManager(engine, guild_id=guild_id)
         print(f"✅ Loaded settings for guild {guild_id}")
-    
+
     return guild_settings_managers[guild_id]
+
 
 # Multiserver: No global KICK_CHANNEL or SLOT_CALLS_CHANNEL_ID
 # All features must use get_guild_settings(guild.id) to access per-guild configuration
@@ -1498,11 +1715,16 @@ async def ensure_chatroom_id(guild_id: int, guild_name: str) -> None:
     try:
         # Check existing setting
         with engine.connect() as conn:
-            row = conn.execute(text("""
+            row = conn.execute(
+                text(
+                    """
                 SELECT value FROM bot_settings
                 WHERE key = 'kick_chatroom_id' AND discord_server_id = :gid
                 LIMIT 1
-            """), {"gid": guild_id}).fetchone()
+            """
+                ),
+                {"gid": guild_id},
+            ).fetchone()
             if row and row[0]:
                 print(f"[{guild_name}] 📦 chatroom_id already set: {row[0]}")
                 return
@@ -1510,11 +1732,16 @@ async def ensure_chatroom_id(guild_id: int, guild_name: str) -> None:
         # Need to resolve: get channel username
         kick_username = None
         with engine.connect() as conn:
-            row = conn.execute(text("""
+            row = conn.execute(
+                text(
+                    """
                 SELECT value FROM bot_settings
                 WHERE key = 'kick_channel' AND discord_server_id = :gid
                 LIMIT 1
-            """), {"gid": guild_id}).fetchone()
+            """
+                ),
+                {"gid": guild_id},
+            ).fetchone()
             if row and row[0]:
                 kick_username = str(row[0]).strip()
 
@@ -1524,6 +1751,7 @@ async def ensure_chatroom_id(guild_id: int, guild_name: str) -> None:
 
         print(f"[{guild_name}] 🔎 Resolving chatroom_id for {kick_username} via core.fetch_chatroom_id()...")
         from core.kick_api import fetch_chatroom_id as core_fetch_chatroom_id
+
         chatroom_id = await core_fetch_chatroom_id(kick_username)
         if not chatroom_id:
             print(f"[{guild_name}] ❌ Failed to resolve chatroom_id for {kick_username}")
@@ -1531,19 +1759,26 @@ async def ensure_chatroom_id(guild_id: int, guild_name: str) -> None:
 
         # Save to DB
         with engine.begin() as conn:
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 INSERT INTO bot_settings (key, value, discord_server_id)
                 VALUES ('kick_chatroom_id', :val, :gid)
                 ON CONFLICT (key, discord_server_id)
                 DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP
-            """), {"val": str(chatroom_id), "gid": guild_id})
+            """
+                ),
+                {"val": str(chatroom_id), "gid": guild_id},
+            )
         print(f"[{guild_name}] ✅ Stored chatroom_id: {chatroom_id}")
     except Exception as e:
         print(f"[{guild_name}] ⚠️ ensure_chatroom_id error: {e}")
 
+
 # -------------------------
 # Pusher WebSocket for direct chat message reading
 # -------------------------
+
 
 async def kick_chat_loop(channel_slug: str, guild_id: int):
     """
@@ -1552,51 +1787,62 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
     """
     guild = bot.get_guild(guild_id)
     guild_name = guild.name if guild else str(guild_id)
-    
+
     # Get chatroom_id from database or fetch it
     chatroom_id = None
     try:
         with engine.connect() as conn:
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 SELECT value FROM bot_settings
                 WHERE key = 'kick_chatroom_id' AND discord_server_id = :guild_id
                 LIMIT 1
-            """), {"guild_id": guild_id}).fetchone()
+            """
+                ),
+                {"guild_id": guild_id},
+            ).fetchone()
             if result and result[0]:
                 chatroom_id = int(result[0])
                 print(f"[{guild_name}] 📦 Loaded chatroom_id from database: {chatroom_id}")
-                
+
                 # HOTFIX: 152837 is broadcaster_user_id, not chatroom_id!
                 # Clear it and refetch the correct one
                 if chatroom_id == 152837:
                     print(f"[{guild_name}] ⚠️ Invalid chatroom_id detected (152837 is broadcaster_user_id)")
                     print(f"[{guild_name}] 🔄 Clearing and refetching correct chatroom_id...")
-                    conn.execute(text("""
-                        DELETE FROM bot_settings 
+                    conn.execute(
+                        text(
+                            """
+                        DELETE FROM bot_settings
                         WHERE key = 'kick_chatroom_id' AND discord_server_id = :guild_id
-                    """), {"guild_id": guild_id})
+                    """
+                        ),
+                        {"guild_id": guild_id},
+                    )
                     conn.commit()
                     chatroom_id = None
     except Exception as e:
         print(f"[{guild_name}] ⚠️ Error loading chatroom_id from database: {e}")
         import traceback
+
         traceback.print_exc()
-    
+
     # Fetch chatroom_id if not in database using kickpython
     if not chatroom_id:
         print(f"[{guild_name}] 🔍 No chatroom_id in database, fetching for channel: {channel_slug}")
         try:
             # Use kickpython to fetch chatroom_id
             from kickpython import KickAPI as KickPyAPI
-            
+
             access_token = os.getenv("KICK_BOT_USER_TOKEN") or os.getenv("KICK_USER_TOKEN")
             client_id = os.getenv("KICK_CLIENT_ID")
             client_secret = os.getenv("KICK_CLIENT_SECRET")
             redirect_uri = os.getenv("OAUTH_BASE_URL")
-            
+
             if redirect_uri and not redirect_uri.startswith(("http://", "https://")):
                 redirect_uri = f"https://{redirect_uri}"
-            
+
             api = KickPyAPI(
                 client_id=client_id,
                 client_secret=client_secret,
@@ -1604,47 +1850,52 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
             )
             if access_token:
                 api.access_token = access_token
-            
+
             print(f"[{guild_name}] 🔌 Resolving chatroom_id via kickpython...")
-            
+
             # Create task to connect
             connect_task = asyncio.create_task(api.connect_to_chatroom(channel_slug))
-            
+
             # Wait for chatroom_id to be discovered (kickpython sets this automatically)
             timeout = 15
             start_time = asyncio.get_event_loop().time()
-            
+
             while asyncio.get_event_loop().time() - start_time < timeout:
                 await asyncio.sleep(0.3)
-                
+
                 # Check if chatroom_id was discovered
-                if hasattr(api, 'chatroom_id') and api.chatroom_id:
+                if hasattr(api, "chatroom_id") and api.chatroom_id:
                     chatroom_id = int(api.chatroom_id)
                     print(f"[{guild_name}] ✅ kickpython found chatroom_id: {chatroom_id}")
-                    
+
                     # Cancel the connection task since we only needed the ID
                     connect_task.cancel()
                     try:
                         await connect_task
                     except asyncio.CancelledError:
                         pass
-                    
+
                     # Save to database
                     with engine.begin() as conn:
-                        conn.execute(text("""
+                        conn.execute(
+                            text(
+                                """
                             INSERT INTO bot_settings (key, value, discord_server_id, updated_at)
                             VALUES ('kick_chatroom_id', :cid, :guild_id, CURRENT_TIMESTAMP)
                             ON CONFLICT (key, discord_server_id)
                             DO UPDATE SET value = :cid, updated_at = CURRENT_TIMESTAMP
-                        """), {"cid": str(chatroom_id), "guild_id": guild_id})
+                        """
+                            ),
+                            {"cid": str(chatroom_id), "guild_id": guild_id},
+                        )
                     print(f"[{guild_name}] 💾 Saved chatroom_id to database")
                     break
-                
+
                 # Log progress every 3 seconds
                 elapsed = asyncio.get_event_loop().time() - start_time
                 if int(elapsed) % 3 == 0 and int(elapsed) > 0:
                     print(f"[{guild_name}] ⏳ Waiting for chatroom_id... ({int(elapsed)}s)")
-            
+
             # Cleanup
             if not chatroom_id:
                 connect_task.cancel()
@@ -1652,11 +1903,11 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                     await connect_task
                 except asyncio.CancelledError:
                     pass
-                
+
                 print(f"[{guild_name}] ❌ Timeout after {timeout}s - kickpython couldn't resolve chatroom_id")
                 print(f"[{guild_name}] 💡 Verify channel name: '{channel_slug}'")
                 return
-                
+
         except ImportError as e:
             print(f"[{guild_name}] ❌ kickpython not installed: {e}")
             print(f"[{guild_name}] 💡 Install with: pip install kickpython")
@@ -1664,125 +1915,139 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
         except Exception as e:
             print(f"[{guild_name}] ❌ Error fetching chatroom_id: {type(e).__name__}: {e}")
             import traceback
+
             traceback.print_exc()
             return
-    
+
     if not chatroom_id:
         print(f"[{guild_name}] ❌ No chatroom_id available - cannot start WebSocket")
         return
-    
+
     channel_name = f"chatrooms.{chatroom_id}.v2"
     print(f"[{guild_name}] 🔌 Connecting to Pusher WebSocket...")
     print(f"[{guild_name}]    Kick Channel: {channel_slug}")
     print(f"[{guild_name}]    Chatroom ID: {chatroom_id}")
     print(f"[{guild_name}]    Pusher Channel: {channel_name}")
-    
+
     while True:
         try:
             async with websockets.connect(KICK_CHAT_WS) as ws:
                 # Subscribe to chatroom
-                subscribe_msg = json.dumps({
-                    "event": "pusher:subscribe",
-                    "data": {"channel": channel_name}
-                })
+                subscribe_msg = json.dumps({"event": "pusher:subscribe", "data": {"channel": channel_name}})
                 await ws.send(subscribe_msg)
                 print(f"[{guild_name}] ✅ Connected to Pusher WebSocket")
-                
+
                 async for message in ws:
                     try:
                         data = json.dumps(message)
                         event_type = data.get("event")
-                        
+
                         # Skip chat messages if kickpython is handling them
                         # Only process subscription events from Pusher when kickpython is enabled
                         if KICK_USE_KICKPYTHON_WS and event_type == "App\\Events\\ChatMessageEvent":
                             continue  # kickpython handles chat messages
-                        
+
                         # Handle chat messages (only when kickpython is disabled)
                         if event_type == "App\\Events\\ChatMessageEvent":
                             payload = json.loads(data.get("data", "{}"))
                             username = payload.get("sender", {}).get("username", "Unknown")
                             content = payload.get("content", "")
-                            
+
                             print(f"[{guild_name}] 💬 {username}: {content}")
-                            
+
                             # Update watchtime tracking
                             now = datetime.now(timezone.utc)
                             username_lower = username.lower()
-                            
+
                             last_chat_activity_by_guild[guild_id] = now
                             guild_active_viewers = active_viewers_by_guild.get(guild_id, {})
                             guild_active_viewers[username_lower] = now
                             active_viewers_by_guild[guild_id] = guild_active_viewers
-                            
+
                             guild_recent_chatters = recent_chatters_by_guild.get(guild_id, {})
                             guild_recent_chatters[username_lower] = now
                             recent_chatters_by_guild[guild_id] = guild_recent_chatters
-                            
+
                             # 🎁 GIVEAWAY: Track messages for keyword and active chatter detection
                             if guild_id in giveaway_managers:
                                 giveaway_manager = giveaway_managers[guild_id]
                                 if giveaway_manager.active_giveaway:
                                     try:
-                                        entry_method = giveaway_manager.active_giveaway['entry_method']
-                                        
+                                        entry_method = giveaway_manager.active_giveaway["entry_method"]
+
                                         # Keyword detection - exact match only (no extra text)
-                                        if entry_method == 'keyword':
-                                            keyword = giveaway_manager.active_giveaway.get('keyword', '').lower()
+                                        if entry_method == "keyword":
+                                            keyword = giveaway_manager.active_giveaway.get("keyword", "").lower()
                                             if keyword and content_stripped.lower() == keyword:
-                                                await giveaway_manager.add_entry(username, entry_method='keyword')
-                                                print(f"[{guild_name}] 🎁 Giveaway entry added: {username} (keyword: {keyword})")
-                                        
+                                                await giveaway_manager.add_entry(username, entry_method="keyword")
+                                                print(
+                                                    f"[{guild_name}] 🎁 Giveaway entry added: {username} (keyword: {keyword})"
+                                                )
+
                                         # Active chatter tracking
-                                        elif entry_method == 'active_chatter':
+                                        elif entry_method == "active_chatter":
                                             await giveaway_manager.track_message(username, content)
                                     except Exception as e:
                                         print(f"[{guild_name}] ⚠️ Giveaway tracking error: {e}")
-                            
+
                             # Process commands
                             content_stripped = content.strip()
-                            
+
                             # Custom commands
-                            if hasattr(bot, 'custom_commands_manager') and bot.custom_commands_manager:
+                            if hasattr(bot, "custom_commands_manager") and bot.custom_commands_manager:
                                 try:
-                                    original_guild_id = getattr(bot.custom_commands_manager, 'discord_server_id', None)
+                                    original_guild_id = getattr(bot.custom_commands_manager, "discord_server_id", None)
                                     bot.custom_commands_manager.discord_server_id = guild_id
-                                    bot.custom_commands_manager.send_message_callback = lambda msg: send_kick_message(msg, guild_id=guild_id)
-                                    
+                                    bot.custom_commands_manager.send_message_callback = lambda msg: send_kick_message(
+                                        msg, guild_id=guild_id
+                                    )
+
                                     handled = await bot.custom_commands_manager.handle_message(content, username)
-                                    
+
                                     bot.custom_commands_manager.discord_server_id = original_guild_id
                                     if handled:
                                         continue
                                 except Exception as e:
                                     print(f"[{guild_name}] ⚠️ Custom command error: {e}")
-                            
+
                             # !raffle command
                             if content_stripped.lower() == "!raffle":
                                 await send_kick_message(
                                     "Do you want to win a $100 super buy on Sweet Bonanza 1000? "
                                     "All you gotta do is join my discord, verify with lelebot and follow the instructions -> "
                                     "https://discord.gg/k7CXJtfrPY",
-                                    guild_id=guild_id
+                                    guild_id=guild_id,
                                 )
-                            
+
                             # !call / !sr commands (slot requests)
                             elif content_stripped.startswith(("!call", "!sr")):
                                 # Use per-guild slot call tracker
-                                tracker = bot.slot_call_trackers_by_guild.get(guild_id) if hasattr(bot, 'slot_call_trackers_by_guild') else None
-                                if not tracker and hasattr(bot, 'slot_call_tracker'):
+                                tracker = (
+                                    bot.slot_call_trackers_by_guild.get(guild_id)
+                                    if hasattr(bot, "slot_call_trackers_by_guild")
+                                    else None
+                                )
+                                if not tracker and hasattr(bot, "slot_call_tracker"):
                                     # Fallback to global tracker for backwards compatibility
                                     tracker = bot.slot_call_tracker
-                                
+
                                 if tracker:
-                                    slot_call = content_stripped[5:].strip()[:200] if content_stripped.startswith("!call") else content_stripped[3:].strip()[:200]
+                                    slot_call = (
+                                        content_stripped[5:].strip()[:200]
+                                        if content_stripped.startswith("!call")
+                                        else content_stripped[3:].strip()[:200]
+                                    )
                                     if slot_call:
                                         await tracker.handle_slot_call(username, slot_call)
-                            
+
                             # !gtb command
                             elif content_stripped.lower().startswith("!gtb"):
                                 # Use per-guild GTB manager
-                                gtb_mgr = bot.gtb_managers_by_guild.get(guild_id) if hasattr(bot, 'gtb_managers_by_guild') else None
+                                gtb_mgr = (
+                                    bot.gtb_managers_by_guild.get(guild_id)
+                                    if hasattr(bot, "gtb_managers_by_guild")
+                                    else None
+                                )
                                 if gtb_mgr:
                                     parts = content_stripped.split(maxsplit=1)
                                     if len(parts) == 2:
@@ -1791,21 +2056,22 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                                             success, message = gtb_mgr.add_guess(username, amount)
                                             response = f"@{username} {message}" + (" Good luck! 🎰" if success else "")
                                             await send_kick_message(response, guild_id=guild_id)
-                        
+
                         # Connection health
                         elif event_type == "pusher:connection_established":
                             print(f"[{guild_name}] ✅ Pusher connection established")
                         elif event_type == "pusher_internal:subscription_succeeded":
                             print(f"[{guild_name}] ✅ Subscribed to channel: {channel_name}")
-                        
+
                     except json.JSONDecodeError:
                         pass  # Ignore non-JSON messages
                     except Exception as e:
                         print(f"[{guild_name}] ⚠️ Error processing message: {e}")
-                
+
         except Exception as e:
             print(f"[{guild_name}] ❌ WebSocket error: {e}, reconnecting in 5s...")
             await asyncio.sleep(5)
+
 
 # -------------------------
 # Discord bot setup
@@ -1852,11 +2118,15 @@ watchtime_debug_enabled = True  # Admin can toggle this
 # Load tracking_force_override from database
 try:
     with engine.connect() as conn:
-        result = conn.execute(text("""
+        result = conn.execute(
+            text(
+                """
             SELECT value FROM bot_settings WHERE key = 'tracking_force_override'
-        """)).fetchone()
+        """
+            )
+        ).fetchone()
         if result:
-            tracking_force_override = result[0].lower() == 'true'
+            tracking_force_override = result[0].lower() == "true"
             print(f"🔧 Loaded tracking_force_override from database: {tracking_force_override}")
 except Exception as e:
     print(f"ℹ️ Could not load tracking_force_override from database (using default): {e}")
@@ -1885,32 +2155,31 @@ gtb_manager = None
 MIN_UNIQUE_CHATTERS = 2  # Require at least 2 different people chatting to consider stream "live"
 CHAT_ACTIVITY_WINDOW_MINUTES = 5  # Look back 5 minutes for unique chatters
 
+
 # -------------------------
 # Helper functions
 # -------------------------
 def get_active_chatters_count(guild_id: Optional[int] = None):
     """Get the number of active chatters in the recent window for a specific guild"""
     from datetime import datetime, timedelta, timezone
+
     now = datetime.now(timezone.utc)
     chat_cutoff = now - timedelta(minutes=CHAT_ACTIVITY_WINDOW_MINUTES)
 
     if guild_id is None:
         # Legacy: use global recent_chatters
         active_chatters = {
-            username: timestamp
-            for username, timestamp in recent_chatters.items()
-            if timestamp >= chat_cutoff
+            username: timestamp for username, timestamp in recent_chatters.items() if timestamp >= chat_cutoff
         }
     else:
         # Multiserver: use per-guild tracking
         guild_chatters = recent_chatters_by_guild.get(guild_id, {})
         active_chatters = {
-            username: timestamp
-            for username, timestamp in guild_chatters.items()
-            if timestamp >= chat_cutoff
+            username: timestamp for username, timestamp in guild_chatters.items() if timestamp >= chat_cutoff
         }
 
     return len(active_chatters)
+
 
 # -------------------------
 # Role configuration helper
@@ -1919,12 +2188,16 @@ def load_watchtime_roles():
     """Load watchtime role configuration from database."""
     try:
         with engine.connect() as conn:
-            roles = conn.execute(text("""
+            roles = conn.execute(
+                text(
+                    """
                 SELECT role_name, minutes_required
                 FROM watchtime_roles
                 WHERE enabled = TRUE
                 ORDER BY display_order ASC
-            """)).fetchall()
+            """
+                )
+            ).fetchall()
 
             if roles:
                 role_list = [{"name": r[0], "minutes": r[1]} for r in roles]
@@ -1937,6 +2210,7 @@ def load_watchtime_roles():
         print(f"⚠️ Could not load roles from database: {e}")
         return WATCHTIME_ROLES
 
+
 # -------------------------
 # Link logging helper
 # -------------------------
@@ -1948,10 +2222,15 @@ async def log_link_attempt(discord_user, kick_username: str, success: bool, erro
 
     try:
         with engine.connect() as conn:
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 SELECT channel_id, enabled FROM link_logs_config
                 WHERE guild_id = :guild_id
-            """), {"guild_id": DISCORD_GUILD_ID}).fetchone()
+            """
+                ),
+                {"guild_id": DISCORD_GUILD_ID},
+            ).fetchone()
 
             if not result or not result[1]:  # Not configured or disabled
                 return
@@ -1967,7 +2246,7 @@ async def log_link_attempt(discord_user, kick_username: str, success: bool, erro
         embed = discord.Embed(
             title="🔗 Account Link Attempt" if success else "❌ Account Link Failed",
             color=0x53FC18 if success else 0xFF0000,
-            timestamp=datetime.now(timezone.utc)
+            timestamp=datetime.now(timezone.utc),
         )
 
         embed.add_field(name="Discord User", value=f"{discord_user.mention} ({discord_user})", inline=False)
@@ -1983,6 +2262,7 @@ async def log_link_attempt(discord_user, kick_username: str, success: bool, erro
 
     except Exception as e:
         print(f"⚠️ Failed to log link attempt: {e}")
+
 
 # -------------------------
 # Kick chat message sending
@@ -2005,15 +2285,9 @@ async def get_kick_bot_token() -> Optional[str]:
         token_url = "https://id.kick.com/oauth/token"
 
         # Must be form-encoded, not JSON
-        payload = {
-            "grant_type": "client_credentials",
-            "client_id": KICK_CLIENT_ID,
-            "client_secret": KICK_CLIENT_SECRET
-        }
+        payload = {"grant_type": "client_credentials", "client_id": KICK_CLIENT_ID, "client_secret": KICK_CLIENT_SECRET}
 
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
         async with aiohttp.ClientSession() as session:
             async with session.post(token_url, data=payload, headers=headers, timeout=10) as response:
@@ -2032,9 +2306,11 @@ async def get_kick_bot_token() -> Optional[str]:
         print(f"[Kick Bot] ❌ Error getting token: {e}")
         return None
 
+
 # -------------------------
 # Kick Chat Messaging
 # -------------------------
+
 
 async def refresh_kick_oauth_token() -> bool:
     """
@@ -2050,10 +2326,14 @@ async def refresh_kick_oauth_token() -> bool:
     try:
         # Get refresh token from kick_oauth_tokens table
         with engine.connect() as conn:
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 SELECT refresh_token, kick_username FROM kick_oauth_tokens
                 ORDER BY updated_at DESC LIMIT 1
-            """)).fetchone()
+            """
+                )
+            ).fetchone()
 
             if not result or not result[0]:
                 print("[Kick] ❌ No refresh token available in kick_oauth_tokens table")
@@ -2070,7 +2350,7 @@ async def refresh_kick_oauth_token() -> bool:
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
             "client_id": KICK_CLIENT_ID,
-            "client_secret": KICK_CLIENT_SECRET
+            "client_secret": KICK_CLIENT_SECRET,
         }
 
         async with aiohttp.ClientSession() as session:
@@ -2092,19 +2372,24 @@ async def refresh_kick_oauth_token() -> bool:
 
                     # Update tokens in kick_oauth_tokens table
                     with engine.begin() as conn:
-                        conn.execute(text("""
+                        conn.execute(
+                            text(
+                                """
                             UPDATE kick_oauth_tokens
                             SET access_token = :access_token,
                                 refresh_token = :refresh_token,
                                 expires_at = :expires_at,
                                 updated_at = CURRENT_TIMESTAMP
                             WHERE kick_username = :kick_username
-                        """), {
-                            "access_token": new_access_token,
-                            "refresh_token": new_refresh_token,
-                            "expires_at": expires_at,
-                            "kick_username": kick_username
-                        })
+                        """
+                            ),
+                            {
+                                "access_token": new_access_token,
+                                "refresh_token": new_refresh_token,
+                                "expires_at": expires_at,
+                                "kick_username": kick_username,
+                            },
+                        )
 
                     print(f"[Kick] ✅ OAuth token refreshed successfully for {kick_username}!")
                     return True
@@ -2116,8 +2401,10 @@ async def refresh_kick_oauth_token() -> bool:
     except Exception as e:
         print(f"[Kick] ❌ Error refreshing token: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 # -------------------------
 # Kick listener functions
@@ -2132,17 +2419,18 @@ BROWSER_HEADERS = {
     "Pragma": "no-cache",
     "Connection": "keep-alive",
     "Host": "kick.com",
-    "Origin": "https://kick.com"
+    "Origin": "https://kick.com",
 }
+
 
 async def kick_chat_loop(channel_name: str, guild_id: int):
     """Connect to Kick's Pusher WebSocket to read ALL chat messages and events (no webhooks)."""
     global kick_chatroom_id_global
-    
+
     # Get guild name for logging
     guild = bot.get_guild(guild_id)
     guild_name = guild.name if guild else str(guild_id)
-    
+
     # Initialize per-guild tracking dictionaries if they don't exist
     if guild_id not in active_viewers_by_guild:
         active_viewers_by_guild[guild_id] = {}
@@ -2154,7 +2442,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
     # Track current channel and chatroom to detect changes
     current_channel = channel_name
     current_chatroom_id = None
-    
+
     # Get guild settings
     guild_settings = get_guild_settings(guild_id)
 
@@ -2162,7 +2450,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
         try:
             # Refresh settings to detect changes
             guild_settings.refresh()
-            
+
             # Check if channel has been updated in settings (allow hot-reload on reconnect)
             new_channel = guild_settings.kick_channel
             if new_channel and new_channel != current_channel:
@@ -2191,47 +2479,56 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                     access_token = None
                     try:
                         from utils.kick_oauth import get_kick_token_for_server
+
                         token_data = get_kick_token_for_server(engine, guild_id)
                         if token_data:
-                            access_token = token_data.get('access_token')
+                            access_token = token_data.get("access_token")
                             print(f"[Kick] Using OAuth token for API request")
                     except Exception as e:
                         print(f"[Kick] Could not get OAuth token: {e}")
-                    
+
                     async with aiohttp.ClientSession() as session:
                         headers = {
-                            'User-Agent': random.choice(USER_AGENTS),
-                            'Accept': 'application/json',
+                            "User-Agent": random.choice(USER_AGENTS),
+                            "Accept": "application/json",
                         }
-                        
+
                         if access_token:
                             # Use official API with authentication
-                            headers['Authorization'] = f'Bearer {access_token}'
-                            url = f'https://api.kick.com/public/v1/channels'
-                            params = {'slug': channel_to_use.lower()}
-                            async with session.get(url, headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                            headers["Authorization"] = f"Bearer {access_token}"
+                            url = f"https://api.kick.com/public/v1/channels"
+                            params = {"slug": channel_to_use.lower()}
+                            async with session.get(
+                                url, headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=10)
+                            ) as response:
                                 if response.status == 200:
                                     data = await response.json()
-                                    channels = data.get('data', [])
+                                    channels = data.get("data", [])
                                     if channels:
                                         channel_data = channels[0]
-                                        channel_id = str(channel_data.get('id', ''))
+                                        channel_id = str(channel_data.get("id", ""))
                                         # Try to get chatroom from official API
-                                        if 'chatroom' in channel_data:
-                                            chatroom_id = str(channel_data['chatroom'].get('id', ''))
-                                            print(f"[Kick] ✅ Official API - chatroom ID: {chatroom_id}, channel ID: {channel_id}")
+                                        if "chatroom" in channel_data:
+                                            chatroom_id = str(channel_data["chatroom"].get("id", ""))
+                                            print(
+                                                f"[Kick] ✅ Official API - chatroom ID: {chatroom_id}, channel ID: {channel_id}"
+                                            )
                                         else:
-                                            print(f"[Kick] ✅ Official API - channel ID: {channel_id} (no chatroom in response)")
+                                            print(
+                                                f"[Kick] ✅ Official API - channel ID: {channel_id} (no chatroom in response)"
+                                            )
                                 else:
                                     print(f"[Kick] ⚠️ Official API error: HTTP {response.status}")
                         else:
                             # Fallback to unofficial API without auth (may be blocked)
-                            headers['Referer'] = 'https://kick.com/'
-                            url = f'https://kick.com/api/v2/channels/{channel_to_use}'
-                            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                            headers["Referer"] = "https://kick.com/"
+                            url = f"https://kick.com/api/v2/channels/{channel_to_use}"
+                            async with session.get(
+                                url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
+                            ) as response:
                                 if response.status == 200:
                                     data = await response.json()
-                                    channel_id = str(data.get('id'))
+                                    channel_id = str(data.get("id"))
                                     print(f"[Kick] ✅ Fetched channel ID: {channel_id}")
                                 else:
                                     print(f"[Kick] ⚠️ Could not fetch channel ID (HTTP {response.status})")
@@ -2241,12 +2538,12 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                 # Fetch full channel data to get both chatroom_id and channel_id
                 chatroom_id = None
                 channel_id = None
-                
+
                 try:
                     # Try Client Credentials OAuth first for channel_id (needed for subscription events on Pusher)
                     # Subscription events require authenticated Pusher channels
                     access_token = None
-                    
+
                     # Try Client Credentials flow (KICK_CLIENT_ID + KICK_CLIENT_SECRET)
                     if KICK_CLIENT_ID and KICK_CLIENT_SECRET:
                         try:
@@ -2255,13 +2552,13 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                 payload = {
                                     "grant_type": "client_credentials",
                                     "client_id": KICK_CLIENT_ID,
-                                    "client_secret": KICK_CLIENT_SECRET
+                                    "client_secret": KICK_CLIENT_SECRET,
                                 }
                                 async with session.post(
                                     "https://id.kick.com/oauth/token",
                                     data=payload,
                                     headers={"Content-Type": "application/x-www-form-urlencoded"},
-                                    timeout=aiohttp.ClientTimeout(total=10)
+                                    timeout=aiohttp.ClientTimeout(total=10),
                                 ) as resp:
                                     if resp.status == 200:
                                         token_data = await resp.json()
@@ -2271,43 +2568,48 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                         print(f"[Kick] ⚠️ Client Credentials failed: HTTP {resp.status}")
                         except Exception as e:
                             print(f"[Kick] ⚠️ Could not get Client Credentials token: {e}")
-                    
+
                     # Fallback: Try getting streamer's OAuth token from database
                     if not access_token:
                         try:
                             from utils.kick_oauth import get_kick_token_for_server
+
                             token_data = get_kick_token_for_server(engine, guild_id)
                             if token_data:
-                                access_token = token_data.get('access_token')
+                                access_token = token_data.get("access_token")
                                 print(f"[Kick] Using streamer OAuth token for channel lookup")
                         except Exception as e:
                             print(f"[Kick] Could not get streamer OAuth token: {e}")
-                    
+
                     async with aiohttp.ClientSession() as session:
                         headers = {
-                            'User-Agent': random.choice(USER_AGENTS),
-                            'Accept': 'application/json',
+                            "User-Agent": random.choice(USER_AGENTS),
+                            "Accept": "application/json",
                         }
-                        
+
                         if access_token:
                             # Use official authenticated API (required for subscription event channels)
-                            headers['Authorization'] = f'Bearer {access_token}'
-                            url = f'https://api.kick.com/public/v1/channels'
-                            params = {'slug': channel_to_use.lower()}
-                            async with session.get(url, headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                            headers["Authorization"] = f"Bearer {access_token}"
+                            url = f"https://api.kick.com/public/v1/channels"
+                            params = {"slug": channel_to_use.lower()}
+                            async with session.get(
+                                url, headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=10)
+                            ) as response:
                                 if response.status == 200:
                                     data = await response.json()
-                                    channels = data.get('data', [])
+                                    channels = data.get("data", [])
                                     if channels:
                                         channel_data = channels[0]
-                                        channel_id = str(channel_data.get('id', ''))
+                                        channel_id = str(channel_data.get("id", ""))
                                         # Get chatroom ID from authenticated API
-                                        if 'chatroom' in channel_data and channel_data['chatroom']:
-                                            chatroom_id = str(channel_data['chatroom'].get('id', ''))
-                                        
+                                        if "chatroom" in channel_data and channel_data["chatroom"]:
+                                            chatroom_id = str(channel_data["chatroom"].get("id", ""))
+
                                         if chatroom_id:
                                             kick_chatroom_ids[guild_id] = chatroom_id
-                                            print(f"[Kick] ✅ Authenticated API - chatroom: {chatroom_id}, channel: {channel_id}")
+                                            print(
+                                                f"[Kick] ✅ Authenticated API - chatroom: {chatroom_id}, channel: {channel_id}"
+                                            )
                                         else:
                                             print(f"[Kick] ⚠️ Got channel ID {channel_id} but no chatroom ID")
                                     else:
@@ -2318,21 +2620,23 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                     access_token = None
                                 else:
                                     print(f"[Kick] ⚠️ Authenticated API failed: HTTP {response.status}")
-                        
+
                         # Fallback to public API if no auth or auth failed
                         if not access_token or not chatroom_id:
                             print(f"[Kick] 🔍 Falling back to public API (subscription events may not work)")
                             headers = {
-                                'User-Agent': random.choice(USER_AGENTS),
-                                'Accept': 'application/json',
-                                'Referer': 'https://kick.com/'
+                                "User-Agent": random.choice(USER_AGENTS),
+                                "Accept": "application/json",
+                                "Referer": "https://kick.com/",
                             }
-                            url = f'https://kick.com/api/v2/channels/{channel_to_use}'
-                            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                            url = f"https://kick.com/api/v2/channels/{channel_to_use}"
+                            async with session.get(
+                                url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
+                            ) as response:
                                 if response.status == 200:
                                     data = await response.json()
-                                    chatroom_id = str(data.get('chatroom', {}).get('id'))
-                                    channel_id = str(data.get('id'))
+                                    chatroom_id = str(data.get("chatroom", {}).get("id"))
+                                    channel_id = str(data.get("id"))
                                     kick_chatroom_ids[guild_id] = chatroom_id
                                     print(f"[Kick] ✅ Public API - chatroom: {chatroom_id}, channel: {channel_id}")
                                     print(f"[Kick] ⚠️ Note: Subscription events may not work without authentication")
@@ -2345,17 +2649,20 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                 except Exception as e:
                     print(f"[Kick] Error fetching channel data: {e}")
                     import traceback
+
                     traceback.print_exc()
 
                 if not chatroom_id:
                     print(f"[Kick] Could not obtain chatroom id for {channel_to_use}. Retrying in 30s.")
                     await asyncio.sleep(30)
                     continue
-            
+
             # Check if chatroom_id has changed (hot-reload support)
             if current_chatroom_id and chatroom_id != current_chatroom_id:
-                print(f"[{guild_name}] 🔄 Pusher: Chatroom ID changed from {current_chatroom_id} to {chatroom_id} - reconnecting...")
-            
+                print(
+                    f"[{guild_name}] 🔄 Pusher: Chatroom ID changed from {current_chatroom_id} to {chatroom_id} - reconnecting..."
+                )
+
             # Store current chatroom_id for change detection
             current_chatroom_id = chatroom_id
 
@@ -2386,7 +2693,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                     "User-Agent": BROWSER_HEADERS["User-Agent"],
                     "Origin": "https://kick.com",
                     "Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits",
-                }
+                },
             ) as ws:
                 print("[Kick] WebSocket connected, waiting for server response...")
 
@@ -2409,50 +2716,46 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                     print(f"[Kick] Got socket_id: {socket_id}")
 
                     # Subscribe to the chatroom channel (for chat messages)
-                    subscribe_msg = json.dumps({
-                    "event": "pusher:subscribe",
-                    "data": {
-                        "auth": "",
-                        "channel": f"chatrooms.{chatroom_id}.v2"
-                    }
-                })
+                    subscribe_msg = json.dumps(
+                        {"event": "pusher:subscribe", "data": {"auth": "", "channel": f"chatrooms.{chatroom_id}.v2"}}
+                    )
                 await ws.send(subscribe_msg)
                 print(f"[Kick] ✅ Subscribed to chatrooms.{chatroom_id}.v2")
 
                 # Subscribe to channel events (for subscriptions, raids, follows, etc.)
                 if channel_id:
-                    channel_events_msg = json.dumps({
-                        "event": "pusher:subscribe",
-                        "data": {
-                            "auth": "",
-                            "channel": f"channel.{channel_id}"
-                        }
-                    })
+                    channel_events_msg = json.dumps(
+                        {"event": "pusher:subscribe", "data": {"auth": "", "channel": f"channel.{channel_id}"}}
+                    )
                     await ws.send(channel_events_msg)
                     print(f"[Kick] ✅ Subscribed to channel.{channel_id} (for subscription events)")
                 else:
                     print(f"[Kick] ⚠️ Channel ID not available - subscription events may not be received")
 
-                                # Initialize last_chat_activity to assume stream is live when we connect
+                    # Initialize last_chat_activity to assume stream is live when we connect
                 last_chat_activity_by_guild[guild_id] = datetime.now(timezone.utc)
                 print(f"[{guild_name}] Pusher: Initialized chat activity tracking")
 
                 # Listen for messages
                 last_settings_check = datetime.now(timezone.utc)
                 settings_check_interval = 30  # Check for settings changes every 30 seconds
-                
+
                 while True:
                     try:
                         msg = await asyncio.wait_for(ws.recv(), timeout=30)
-                        
+
                         # Periodically check if chatroom_id has changed in settings
                         now = datetime.now(timezone.utc)
                         if (now - last_settings_check).total_seconds() >= settings_check_interval:
                             guild_settings.refresh()
                             new_chatroom_id = guild_settings.kick_chatroom_id or KICK_CHATROOM_ID
                             if new_chatroom_id and new_chatroom_id != current_chatroom_id:
-                                print(f"[Kick][Guild {guild_id}] 🔄 Detected chatroom ID change for THIS GUILD: {current_chatroom_id} → {new_chatroom_id}")
-                                print(f"[Kick][Guild {guild_id}] Breaking connection to reconnect with new chatroom (other guilds unaffected)...")
+                                print(
+                                    f"[Kick][Guild {guild_id}] 🔄 Detected chatroom ID change for THIS GUILD: {current_chatroom_id} → {new_chatroom_id}"
+                                )
+                                print(
+                                    f"[Kick][Guild {guild_id}] Breaking connection to reconnect with new chatroom (other guilds unaffected)..."
+                                )
                                 break  # Break inner loop to reconnect with new chatroom_id
                             last_settings_check = now
 
@@ -2463,21 +2766,31 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                         try:
                             data = json.loads(msg)
                             event_type = data.get("event")
-                            
+
                             # DEBUG: Log ALL events to see what's coming through
                             if event_type not in ["pusher:ping", "pusher:pong"]:
                                 print(f"[KICK EVENT DEBUG] Type: {event_type}, Channel: {data.get('channel', 'N/A')}")
-                                if data.get('data'):
+                                if data.get("data"):
                                     try:
-                                        event_data = json.loads(data.get('data', '{}'))
-                                        print(f"[KICK EVENT DEBUG] Data keys: {list(event_data.keys())[:5]}")  # Show first 5 keys
+                                        event_data = json.loads(data.get("data", "{}"))
+                                        print(
+                                            f"[KICK EVENT DEBUG] Data keys: {list(event_data.keys())[:5]}"
+                                        )  # Show first 5 keys
                                     except:
-                                        print(f"[KICK EVENT DEBUG] Raw data (first 100 chars): {str(data.get('data'))[:100]}")
+                                        print(
+                                            f"[KICK EVENT DEBUG] Raw data (first 100 chars): {str(data.get('data'))[:100]}"
+                                        )
 
                             # DEBUG: Log ALL event types (except ping/pong and chat) to catch subscription events
-                            if event_type and event_type not in ["pusher:ping", "pusher:pong", "App\\Events\\ChatMessageEvent"]:
+                            if event_type and event_type not in [
+                                "pusher:ping",
+                                "pusher:pong",
+                                "App\\Events\\ChatMessageEvent",
+                            ]:
                                 print(f"[KICK EVENT] Type: {event_type}")
-                                print(f"[KICK EVENT] Data keys: {list(json.loads(data.get('data', '{}')).keys()) if data.get('data') else 'No data'}")
+                                print(
+                                    f"[KICK EVENT] Data keys: {list(json.loads(data.get('data', '{}')).keys()) if data.get('data') else 'No data'}"
+                                )
 
                             # Respond to ping
                             if event_type == "pusher:ping":
@@ -2488,56 +2801,56 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                             # Only process subscription events from Pusher when kickpython is enabled
                             if KICK_USE_KICKPYTHON_WS and event_type == "App\\Events\\ChatMessageEvent":
                                 continue  # kickpython handles chat messages
-                            
+
                             # Handle chat message (only when kickpython is disabled)
                             # Process ALL chat messages directly from Pusher (no webhooks)
                             if event_type == "App\\Events\\ChatMessageEvent":
                                 event_data = json.loads(data.get("data", "{}"))
                                 message_type = event_data.get("type")
-                                
+
                                 # Check if this is a subscription-related message
-                                is_sub_message = (
-                                    message_type and (
-                                        "gift" in str(message_type).lower() or
-                                        "subscription" in str(message_type).lower() or
-                                        "sub" in str(message_type).lower()
-                                    )
+                                is_sub_message = message_type and (
+                                    "gift" in str(message_type).lower()
+                                    or "subscription" in str(message_type).lower()
+                                    or "sub" in str(message_type).lower()
                                 )
-                                
+
                                 # Process regular chat messages (not just subscriptions)
                                 if not is_sub_message:
                                     # Regular chat message - process it!
                                     content_text = event_data.get("content", "")
                                     username = event_data.get("sender", {}).get("username", "")
                                     username_lower = username.lower() if username else ""
-                                    
+
                                     if not username or not content_text:
                                         continue
-                                    
+
                                     # Update watchtime tracking
                                     now = datetime.now(timezone.utc)
                                     last_chat_activity_by_guild[guild_id] = now
-                                    
+
                                     guild_active_viewers = active_viewers_by_guild.get(guild_id, {})
                                     guild_active_viewers[username_lower] = now
                                     active_viewers_by_guild[guild_id] = guild_active_viewers
-                                    
+
                                     guild_recent_chatters = recent_chatters_by_guild.get(guild_id, {})
                                     guild_recent_chatters[username_lower] = now
                                     recent_chatters_by_guild[guild_id] = guild_recent_chatters
-                                    
+
                                     print(f"[{guild_name}] 💬 {username}: {content_text}")
 
                                     # Check for custom commands first (they get priority)
-                                    if hasattr(bot, 'custom_commands_manager') and bot.custom_commands_manager:
+                                    if hasattr(bot, "custom_commands_manager") and bot.custom_commands_manager:
                                         try:
                                             # Create a wrapper that includes guild_id
                                             async def send_message_with_guild(msg):
                                                 return await send_kick_message(msg, guild_id=guild_id)
-                                            
+
                                             # Temporarily set the callback with guild context
                                             bot.custom_commands_manager.send_message_callback = send_message_with_guild
-                                            handled = await bot.custom_commands_manager.handle_message(content_text, username)
+                                            handled = await bot.custom_commands_manager.handle_message(
+                                                content_text, username
+                                            )
                                             if handled:
                                                 continue  # Command was handled, skip other processing
                                         except Exception as e:
@@ -2546,26 +2859,44 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                     # Handle slot call commands (!call or !sr)
                                     content_stripped = content_text.strip()
                                     # Use per-guild slot call tracker
-                                    tracker = bot.slot_call_trackers_by_guild.get(guild_id) if hasattr(bot, 'slot_call_trackers_by_guild') else None
-                                    if not tracker and hasattr(bot, 'slot_call_tracker'):
+                                    tracker = (
+                                        bot.slot_call_trackers_by_guild.get(guild_id)
+                                        if hasattr(bot, "slot_call_trackers_by_guild")
+                                        else None
+                                    )
+                                    if not tracker and hasattr(bot, "slot_call_tracker"):
                                         tracker = bot.slot_call_tracker  # Fallback for backwards compatibility
-                                    
-                                    if tracker and (content_stripped.startswith("!call") or content_stripped.startswith("!sr")):
+
+                                    if tracker and (
+                                        content_stripped.startswith("!call") or content_stripped.startswith("!sr")
+                                    ):
                                         # Check if slot requests are enabled first
                                         if not tracker.enabled:
-                                            await send_kick_message(f"@{username} Slot requests are not open at the moment.", guild_id=guild_id)
+                                            await send_kick_message(
+                                                f"@{username} Slot requests are not open at the moment.",
+                                                guild_id=guild_id,
+                                            )
                                             continue
-                                        
+
                                         # 🔒 SECURITY: Check if user is blacklisted (per-guild)
                                         is_blacklisted = False
                                         try:
-                                            tracker_guild_id = tracker.discord_server_id if hasattr(tracker, 'discord_server_id') else guild_id
+                                            tracker_guild_id = (
+                                                tracker.discord_server_id
+                                                if hasattr(tracker, "discord_server_id")
+                                                else guild_id
+                                            )
                                             if tracker_guild_id:
                                                 with engine.begin() as check_conn:
-                                                    blacklist_check = check_conn.execute(text("""
-                                                        SELECT 1 FROM slot_call_blacklist 
+                                                    blacklist_check = check_conn.execute(
+                                                        text(
+                                                            """
+                                                        SELECT 1 FROM slot_call_blacklist
                                                         WHERE kick_username = :username AND discord_server_id = :guild_id
-                                                    """), {"username": username_lower, "guild_id": tracker_guild_id}).fetchone()
+                                                    """
+                                                        ),
+                                                        {"username": username_lower, "guild_id": tracker_guild_id},
+                                                    ).fetchone()
                                                     is_blacklisted = blacklist_check is not None
                                         except Exception as e:
                                             print(f"Error checking slot call blacklist: {e}")
@@ -2586,7 +2917,9 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                             else:
                                                 # Send usage message when no content is provided (only to non-blacklisted users)
                                                 try:
-                                                    await send_kick_message(f"@{username} Please specify a slot!", guild_id=guild_id)
+                                                    await send_kick_message(
+                                                        f"@{username} Please specify a slot!", guild_id=guild_id
+                                                    )
                                                     print(f"[Slot Call] Sent usage instructions to {username}")
                                                 except Exception as e:
                                                     print(f"Failed to send usage message to {username}: {e}")
@@ -2605,7 +2938,11 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                     elif content_stripped.lower().startswith("!gtb"):
                                         print(f"[GTB] {username} issued !gtb command")
                                         # Use per-guild GTB manager
-                                        gtb_mgr = bot.gtb_managers_by_guild.get(guild_id) if hasattr(bot, 'gtb_managers_by_guild') else None
+                                        gtb_mgr = (
+                                            bot.gtb_managers_by_guild.get(guild_id)
+                                            if hasattr(bot, "gtb_managers_by_guild")
+                                            else None
+                                        )
                                         if gtb_mgr:
                                             gtb_parts = content_stripped.split(maxsplit=1)
                                             if len(gtb_parts) == 2:
@@ -2621,15 +2958,25 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                         print(f"[GTB] {username} guessed ${amount:,.2f}")
                                                     else:
                                                         # Send error message to Kick chat
-                                                        await send_kick_message(f"@{username} {message}", guild_id=guild_id)
+                                                        await send_kick_message(
+                                                            f"@{username} {message}", guild_id=guild_id
+                                                        )
                                                         print(f"[GTB] Failed guess from {username}: {message}")
                                                 else:
-                                                    await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount> (e.g., !gtb 1234.56)", guild_id=guild_id)
+                                                    await send_kick_message(
+                                                        f"@{username} Invalid amount. Use: !gtb <amount> (e.g., !gtb 1234.56)",
+                                                        guild_id=guild_id,
+                                                    )
                                             else:
-                                                await send_kick_message(f"@{username} Usage: !gtb <amount> (e.g., !gtb 1234.56)", guild_id=guild_id)
+                                                await send_kick_message(
+                                                    f"@{username} Usage: !gtb <amount> (e.g., !gtb 1234.56)",
+                                                    guild_id=guild_id,
+                                                )
                                         else:
                                             print(f"[GTB] GTB manager not found for guild {guild_id}")
-                                            await send_kick_message(f"@{username} GTB system not initialized", guild_id=guild_id)
+                                            await send_kick_message(
+                                                f"@{username} GTB system not initialized", guild_id=guild_id
+                                            )
 
                                     # Handle !clip command - Create a clip of the livestream
                                     if content_stripped.lower().startswith("!clip"):
@@ -2637,9 +2984,13 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                         clip_duration = 30
                                         try:
                                             with engine.connect() as conn:
-                                                result = conn.execute(text("""
+                                                result = conn.execute(
+                                                    text(
+                                                        """
                                                     SELECT value FROM bot_settings WHERE key = 'clip_duration'
-                                                """)).fetchone()
+                                                """
+                                                    )
+                                                ).fetchone()
                                                 if result:
                                                     clip_duration = int(result[0])
                                         except Exception as e:
@@ -2647,14 +2998,16 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
 
                                         # Everything after !clip is the title
                                         clip_title = content_stripped[5:].strip()  # Remove "!clip" and trim
-                                        
+
                                         if not clip_title:
                                             # No title provided - generate default
                                             timestamp = datetime.now().strftime("%b %d, %Y %H:%M")
                                             clip_title = f"Clip by {username} - {timestamp}"
 
                                         # Use background task for clip creation (non-blocking)
-                                        print(f"[Clip] {username} requested a clip ({clip_duration}s) - Title: {clip_title}")
+                                        print(
+                                            f"[Clip] {username} requested a clip ({clip_duration}s) - Title: {clip_title}"
+                                        )
 
                                         async def create_clip_background(user: str, duration: int, title: str):
                                             """Background task to create clip via Dashboard API"""
@@ -2670,56 +3023,69 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                 print(f"[Clip] DEBUG - bot_api_key exists: {bool(api_key)}")
 
                                                 if not dashboard_url:
-                                                    print(f"[Clip] ❌ Dashboard URL not configured in bot_settings table")
-                                                    await send_kick_message(f"@{user} Clip service not configured - contact admin!")
+                                                    print(
+                                                        f"[Clip] ❌ Dashboard URL not configured in bot_settings table"
+                                                    )
+                                                    await send_kick_message(
+                                                        f"@{user} Clip service not configured - contact admin!"
+                                                    )
                                                     return
 
                                                 # Create clip via Dashboard API
                                                 async with aiohttp.ClientSession() as http_session:
-                                                    headers = {
-                                                        'Content-Type': 'application/json',
-                                                        'X-API-Key': api_key
-                                                    }
+                                                    headers = {"Content-Type": "application/json", "X-API-Key": api_key}
                                                     payload = {
-                                                        'channel': KICK_CHANNEL,
-                                                        'duration': duration,
-                                                        'username': user,
-                                                        'title': title
+                                                        "channel": KICK_CHANNEL,
+                                                        "duration": duration,
+                                                        "username": user,
+                                                        "title": title,
                                                     }
 
                                                     async with http_session.post(
                                                         f"{dashboard_url}/api/clips/create",
                                                         json=payload,
                                                         headers=headers,
-                                                        timeout=aiohttp.ClientTimeout(total=60)
+                                                        timeout=aiohttp.ClientTimeout(total=60),
                                                     ) as response:
                                                         clip_result = await response.json()
 
                                                         print(f"[Clip] Dashboard API response: {clip_result}")
 
-                                                        if response.status == 200 and clip_result.get('success'):
+                                                        if response.status == 200 and clip_result.get("success"):
                                                             # Success - extract clip URL
-                                                            clip_url = clip_result.get('clip_url', '')
-                                                            clip_filename = clip_result.get('filename', '')
-                                                            file_size_mb = clip_result.get('file_size_mb', clip_result.get('file_size', 0) / 1024 / 1024)
-                                                            actual_duration = clip_result.get('duration', duration)
+                                                            clip_url = clip_result.get("clip_url", "")
+                                                            clip_filename = clip_result.get("filename", "")
+                                                            file_size_mb = clip_result.get(
+                                                                "file_size_mb",
+                                                                clip_result.get("file_size", 0) / 1024 / 1024,
+                                                            )
+                                                            actual_duration = clip_result.get("duration", duration)
 
-                                                            await send_kick_message(f"@{user} Your clip is ready! ({actual_duration}s, {file_size_mb:.1f}MB) {clip_url}")
+                                                            await send_kick_message(
+                                                                f"@{user} Your clip is ready! ({actual_duration}s, {file_size_mb:.1f}MB) {clip_url}"
+                                                            )
                                                             print(f"[Clip] ✅ Clip created for {user}: {clip_filename}")
 
                                                             # Save clip data to database
                                                             try:
                                                                 with engine.connect() as conn:
-                                                                    conn.execute(text("""
+                                                                    conn.execute(
+                                                                        text(
+                                                                            """
                                                                         INSERT INTO clips (kick_username, clip_duration, clip_url, filename, file_size)
                                                                         VALUES (:username, :duration, :url, :filename, :file_size)
-                                                                    """), {
-                                                                        "username": user,
-                                                                        "duration": actual_duration,
-                                                                        "url": clip_url,
-                                                                        "filename": clip_filename,
-                                                                        "file_size": clip_result.get('file_size', 0)
-                                                                    })
+                                                                    """
+                                                                        ),
+                                                                        {
+                                                                            "username": user,
+                                                                            "duration": actual_duration,
+                                                                            "url": clip_url,
+                                                                            "filename": clip_filename,
+                                                                            "file_size": clip_result.get(
+                                                                                "file_size", 0
+                                                                            ),
+                                                                        },
+                                                                    )
                                                                     conn.commit()
                                                                 print(f"[Clip] 💾 Saved clip data for {user}")
                                                             except Exception as db_err:
@@ -2729,9 +3095,13 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                             try:
                                                                 clip_channel_id = None
                                                                 with engine.connect() as conn:
-                                                                    result = conn.execute(text("""
+                                                                    result = conn.execute(
+                                                                        text(
+                                                                            """
                                                                         SELECT value FROM bot_settings WHERE key = 'clip_channel_id'
-                                                                    """)).fetchone()
+                                                                    """
+                                                                        )
+                                                                    ).fetchone()
                                                                     if result and result[0]:
                                                                         clip_channel_id = int(result[0])
 
@@ -2742,32 +3112,73 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                                             title=f"🎬 {title}",
                                                                             description=f"New clip created by **{user}** in Kick chat!",
                                                                             color=0x53FC18,
-                                                                            url=clip_url if clip_url.startswith('http') else None,
-                                                                            timestamp=datetime.now(timezone.utc)
+                                                                            url=(
+                                                                                clip_url
+                                                                                if clip_url.startswith("http")
+                                                                                else None
+                                                                            ),
+                                                                            timestamp=datetime.now(timezone.utc),
                                                                         )
-                                                                        clip_embed.add_field(name="Duration", value=f"{actual_duration} seconds", inline=True)
-                                                                        clip_embed.add_field(name="Created by", value=user, inline=True)
-                                                                        clip_embed.add_field(name="Size", value=f"{file_size_mb:.1f} MB", inline=True)
+                                                                        clip_embed.add_field(
+                                                                            name="Duration",
+                                                                            value=f"{actual_duration} seconds",
+                                                                            inline=True,
+                                                                        )
+                                                                        clip_embed.add_field(
+                                                                            name="Created by", value=user, inline=True
+                                                                        )
+                                                                        clip_embed.add_field(
+                                                                            name="Size",
+                                                                            value=f"{file_size_mb:.1f} MB",
+                                                                            inline=True,
+                                                                        )
                                                                         if clip_url:
-                                                                            clip_embed.add_field(name="🔗 Watch Clip", value=f"[Click here]({clip_url})" if clip_url.startswith('http') else clip_url, inline=False)
-                                                                        clip_embed.set_footer(text=f"Kick Channel: {KICK_CHANNEL}")
+                                                                            clip_embed.add_field(
+                                                                                name="🔗 Watch Clip",
+                                                                                value=(
+                                                                                    f"[Click here]({clip_url})"
+                                                                                    if clip_url.startswith("http")
+                                                                                    else clip_url
+                                                                                ),
+                                                                                inline=False,
+                                                                            )
+                                                                        clip_embed.set_footer(
+                                                                            text=f"Kick Channel: {KICK_CHANNEL}"
+                                                                        )
                                                                         await discord_channel.send(embed=clip_embed)
-                                                                        print(f"[Clip] 📢 Posted clip to Discord channel {clip_channel_id}")
+                                                                        print(
+                                                                            f"[Clip] 📢 Posted clip to Discord channel {clip_channel_id}"
+                                                                        )
                                                             except Exception as discord_err:
-                                                                print(f"[Clip] ⚠️ Failed to post clip to Discord: {discord_err}")
+                                                                print(
+                                                                    f"[Clip] ⚠️ Failed to post clip to Discord: {discord_err}"
+                                                                )
                                                         else:
                                                             # Handle error from Dashboard API
-                                                            error_type = clip_result.get('error', 'unknown')
-                                                            error_msg = clip_result.get('message', 'Unknown error')
+                                                            error_type = clip_result.get("error", "unknown")
+                                                            error_msg = clip_result.get("message", "Unknown error")
 
-                                                            if error_type == 'not_live' or error_type == 'not_recording':
-                                                                await send_kick_message(f"@{user} Stream must be live to create clips!")
-                                                            elif error_type == 'no_segments' or error_type == 'no_buffer':
-                                                                await send_kick_message(f"@{user} Buffer still loading - try again in 30 seconds!")
+                                                            if (
+                                                                error_type == "not_live"
+                                                                or error_type == "not_recording"
+                                                            ):
+                                                                await send_kick_message(
+                                                                    f"@{user} Stream must be live to create clips!"
+                                                                )
+                                                            elif (
+                                                                error_type == "no_segments" or error_type == "no_buffer"
+                                                            ):
+                                                                await send_kick_message(
+                                                                    f"@{user} Buffer still loading - try again in 30 seconds!"
+                                                                )
                                                             else:
-                                                                await send_kick_message(f"@{user} Couldn't create clip - {error_msg}")
+                                                                await send_kick_message(
+                                                                    f"@{user} Couldn't create clip - {error_msg}"
+                                                                )
 
-                                                            print(f"[Clip] ❌ Clip creation failed for {user}: {error_type}")
+                                                            print(
+                                                                f"[Clip] ❌ Clip creation failed for {user}: {error_type}"
+                                                            )
 
                                             except Exception as e:
                                                 print(f"[Clip] ❌ Background clip error: {e}")
@@ -2782,7 +3193,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                 "App\\Events\\GiftedSubscriptionsEvent",
                                 "App\\Events\\LuckyUsersWhoGotGiftSubscriptionsEvent",
                                 "App\\Events\\SubscriptionEvent",
-                                "App\\Events\\ChatMessageEvent"  # Sometimes subs come as special chat messages
+                                "App\\Events\\ChatMessageEvent",  # Sometimes subs come as special chat messages
                             ]
 
                             # DEBUG: Check if event type should match
@@ -2817,17 +3228,18 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                 # Check if this is any type of subscription
                                 message_type = event_data.get("type")
                                 is_subscription = (
-                                    event_type == "App\\Events\\LuckyUsersWhoGotGiftSubscriptionsEvent" or
-                                    event_type == "App\\Events\\GiftedSubscriptionsEvent" or
-                                    event_type == "App\\Events\\SubscriptionEvent" or
-                                    "gift" in str(message_type).lower() or
-                                    "subscription" in str(message_type).lower() or
-                                    "sub" in str(message_type).lower() or
-                                    event_data.get("gifted_usernames") is not None or
-                                    event_data.get("usernames") is not None or  # LuckyUsersWhoGotGiftSubscriptionsEvent
-                                    event_data.get("gifter_username") is not None or  # LuckyUsersWhoGotGiftSubscriptionsEvent
-                                    event_data.get("gift_count") is not None or
-                                    event_data.get("months") is not None  # Regular subs often have months field
+                                    event_type == "App\\Events\\LuckyUsersWhoGotGiftSubscriptionsEvent"
+                                    or event_type == "App\\Events\\GiftedSubscriptionsEvent"
+                                    or event_type == "App\\Events\\SubscriptionEvent"
+                                    or "gift" in str(message_type).lower()
+                                    or "subscription" in str(message_type).lower()
+                                    or "sub" in str(message_type).lower()
+                                    or event_data.get("gifted_usernames") is not None
+                                    or event_data.get("usernames") is not None  # LuckyUsersWhoGotGiftSubscriptionsEvent
+                                    or event_data.get("gifter_username")
+                                    is not None  # LuckyUsersWhoGotGiftSubscriptionsEvent
+                                    or event_data.get("gift_count") is not None
+                                    or event_data.get("months") is not None  # Regular subs often have months field
                                 )
 
                                 if is_subscription:
@@ -2842,12 +3254,16 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                     result = await gifted_sub_tracker.handle_gifted_sub_event(event_data)
                                     print(f"[{guild_name}] Raffle result: {result}")
 
-                                    if result['status'] == 'success':
-                                        sub_type = "gifted" if result.get('gift_count', 1) > 1 else "subscribed"
-                                        print(f"[{guild_name}] 🎁 {result['gifter']} {sub_type} → +{result['tickets_awarded']} tickets")
-                                    elif result['status'] == 'not_linked':
-                                        print(f"[{guild_name}] 🎁 {result['kick_name']} subscribed but account not linked")
-                                    elif result['status'] == 'duplicate':
+                                    if result["status"] == "success":
+                                        sub_type = "gifted" if result.get("gift_count", 1) > 1 else "subscribed"
+                                        print(
+                                            f"[{guild_name}] 🎁 {result['gifter']} {sub_type} → +{result['tickets_awarded']} tickets"
+                                        )
+                                    elif result["status"] == "not_linked":
+                                        print(
+                                            f"[{guild_name}] 🎁 {result['kick_name']} subscribed but account not linked"
+                                        )
+                                    elif result["status"] == "duplicate":
                                         # Already processed, silent skip
                                         pass
                                     else:
@@ -2865,10 +3281,14 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                         guild_settings.refresh()
                         new_chatroom_id = guild_settings.kick_chatroom_id or KICK_CHATROOM_ID
                         if new_chatroom_id and new_chatroom_id != current_chatroom_id:
-                            print(f"[Kick][Guild {guild_id}] 🔄 Detected chatroom ID change during timeout for THIS GUILD: {current_chatroom_id} → {new_chatroom_id}")
-                            print(f"[Kick][Guild {guild_id}] Breaking connection to reconnect with new chatroom (other guilds unaffected)...")
+                            print(
+                                f"[Kick][Guild {guild_id}] 🔄 Detected chatroom ID change during timeout for THIS GUILD: {current_chatroom_id} → {new_chatroom_id}"
+                            )
+                            print(
+                                f"[Kick][Guild {guild_id}] Breaking connection to reconnect with new chatroom (other guilds unaffected)..."
+                            )
                             break  # Break inner loop to reconnect
-                        
+
                         # Send ping to keep connection alive
                         try:
                             await ws.send(json.dumps({"event": "pusher:ping"}))
@@ -2882,6 +3302,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
             print(f"[Kick] Connection error: {e}. Reconnecting in 10s.")
             await asyncio.sleep(10)
 
+
 # -------------------------
 # Point Reward System
 # -------------------------
@@ -2890,7 +3311,7 @@ async def award_points_for_watchtime(active_usernames: list, guild_id: Optional[
     Award points to users based on their new watchtime.
     Similar to raffle ticket system but tracks points separately.
     Only awards points for NEW watchtime since last conversion.
-    
+
     Args:
         active_usernames: List of usernames to award points to
         guild_id: Discord guild/server ID for multi-server support
@@ -2901,24 +3322,29 @@ async def award_points_for_watchtime(active_usernames: list, guild_id: Optional[
             print("[Points] ⚠️ No guild_id provided for award_points")
             return
         server_id = guild_id
-            
+
         # Get point settings from database
         points_per_5min = 1  # Default: 1 point per 5 minutes
         sub_points_per_5min = 2  # Default: 2 points per 5 minutes for subs
 
         with engine.connect() as conn:
             # Load settings (multiserver: filter by server_id)
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 SELECT key, value FROM point_settings
                 WHERE key IN ('points_per_5min', 'sub_points_per_5min')
                 AND (discord_server_id = :sid OR discord_server_id IS NULL)
                 ORDER BY discord_server_id NULLS FIRST
-            """), {"sid": server_id}).fetchall()
+            """
+                ),
+                {"sid": server_id},
+            ).fetchall()
 
             for key, value in result:
-                if key == 'points_per_5min':
+                if key == "points_per_5min":
                     points_per_5min = int(value)
-                elif key == 'sub_points_per_5min':
+                elif key == "sub_points_per_5min":
                     sub_points_per_5min = int(value)
 
         if points_per_5min == 0 and sub_points_per_5min == 0:
@@ -2928,10 +3354,15 @@ async def award_points_for_watchtime(active_usernames: list, guild_id: Optional[
             for username in active_usernames:
                 try:
                     # Get current total watchtime for user (multiserver: filter by server_id)
-                    result = conn.execute(text("""
-                        SELECT minutes FROM watchtime 
+                    result = conn.execute(
+                        text(
+                            """
+                        SELECT minutes FROM watchtime
                         WHERE username = :u AND discord_server_id = :sid
-                    """), {"u": username, "sid": server_id}).fetchone()
+                    """
+                        ),
+                        {"u": username, "sid": server_id},
+                    ).fetchone()
 
                     if not result:
                         continue
@@ -2939,19 +3370,29 @@ async def award_points_for_watchtime(active_usernames: list, guild_id: Optional[
                     total_minutes = result[0]
 
                     # Get how many minutes have already been converted to points (multiserver)
-                    converted_result = conn.execute(text("""
+                    converted_result = conn.execute(
+                        text(
+                            """
                         SELECT COALESCE(SUM(minutes_converted), 0)
                         FROM points_watchtime_converted
                         WHERE kick_username = :u AND discord_server_id = :sid
-                    """), {"u": username, "sid": server_id}).fetchone()
+                    """
+                        ),
+                        {"u": username, "sid": server_id},
+                    ).fetchone()
 
                     minutes_already_converted = converted_result[0] if converted_result else 0
 
                     # Get discord_id to write to permanent log later
-                    link_result = conn.execute(text("""
-                        SELECT discord_id FROM links 
+                    link_result = conn.execute(
+                        text(
+                            """
+                        SELECT discord_id FROM links
                         WHERE LOWER(kick_name) = LOWER(:u) AND discord_server_id = :sid
-                    """), {"u": username, "sid": server_id}).fetchone()
+                    """
+                        ),
+                        {"u": username, "sid": server_id},
+                    ).fetchone()
                     discord_id = link_result[0] if link_result else None
 
                     # Calculate new minutes since last conversion
@@ -2971,7 +3412,9 @@ async def award_points_for_watchtime(active_usernames: list, guild_id: Optional[
                             # discord_id already retrieved above for verification
 
                             # Update or insert user points (multiserver: composite PK with discord_server_id)
-                            conn.execute(text("""
+                            conn.execute(
+                                text(
+                                    """
                                 INSERT INTO user_points (kick_username, discord_id, points, total_earned, discord_server_id, last_updated)
                                 VALUES (:u, :d, :p, :p, :sid, CURRENT_TIMESTAMP)
                                 ON CONFLICT(kick_username, discord_server_id) DO UPDATE SET
@@ -2979,31 +3422,46 @@ async def award_points_for_watchtime(active_usernames: list, guild_id: Optional[
                                     total_earned = user_points.total_earned + :p,
                                     discord_id = COALESCE(:d, user_points.discord_id),
                                     last_updated = CURRENT_TIMESTAMP
-                            """), {"u": username, "d": discord_id, "p": points_to_award, "sid": server_id})
+                            """
+                                ),
+                                {"u": username, "d": discord_id, "p": points_to_award, "sid": server_id},
+                            )
 
                             # Log the conversion (multiserver: add discord_server_id)
-                            conn.execute(text("""
+                            conn.execute(
+                                text(
+                                    """
                                 INSERT INTO points_watchtime_converted
                                 (kick_username, minutes_converted, points_awarded, discord_server_id)
                                 VALUES (:u, :m, :p, :sid)
-                            """), {"u": username, "m": minutes_to_convert, "p": points_to_award, "sid": server_id})
+                            """
+                                ),
+                                {"u": username, "m": minutes_to_convert, "p": points_to_award, "sid": server_id},
+                            )
 
                             # ALSO log to permanent watchtime_conversion_logs (NEVER deleted)
                             if discord_id:
-                                conn.execute(text("""
+                                conn.execute(
+                                    text(
+                                        """
                                     INSERT INTO watchtime_conversion_logs
                                         (discord_id, kick_name, discord_server_id, raffle_minutes, points_minutes, converted_at)
                                     VALUES
                                         (:discord_id, :kick_name, :server_id, 0, :minutes, NOW())
-                                """), {
-                                    'discord_id': discord_id,
-                                    'kick_name': username,
-                                    'server_id': server_id,
-                                    'minutes': minutes_to_convert
-                                })
+                                """
+                                    ),
+                                    {
+                                        "discord_id": discord_id,
+                                        "kick_name": username,
+                                        "server_id": server_id,
+                                        "minutes": minutes_to_convert,
+                                    },
+                                )
 
                             if watchtime_debug_enabled:
-                                print(f"[Points] ✅ {username}: +{points_to_award} points ({minutes_to_convert} min converted)")
+                                print(
+                                    f"[Points] ✅ {username}: +{points_to_award} points ({minutes_to_convert} min converted)"
+                                )
 
                 except Exception as e:
                     print(f"[Points] ⚠️ Error awarding points to {username}: {e}")
@@ -3011,6 +3469,7 @@ async def award_points_for_watchtime(active_usernames: list, guild_id: Optional[
 
     except Exception as e:
         print(f"[Points] ⚠️ Error in points award task: {e}")
+
 
 # -------------------------
 # Watchtime updater task
@@ -3031,7 +3490,7 @@ async def update_watchtime_task():
         # Multiserver: Process each guild independently
         for guild in bot.guilds:
             server_id = guild.id
-            
+
             # 🔒 SECURITY: Per-guild multi-factor stream-live detection
             if not tracking_force_override:
                 # Check last chat activity for THIS GUILD
@@ -3045,7 +3504,9 @@ async def update_watchtime_task():
                 time_since_last_chat = (now - guild_last_activity).total_seconds() / 60
                 if time_since_last_chat > CHAT_ACTIVITY_WINDOW_MINUTES:
                     if watchtime_debug_enabled:
-                        print(f"[Security][Guild {guild.name}] No chat activity for {time_since_last_chat:.1f} minutes - stream likely offline")
+                        print(
+                            f"[Security][Guild {guild.name}] No chat activity for {time_since_last_chat:.1f} minutes - stream likely offline"
+                        )
                     continue
 
                 # Check 2: Count unique chatters in the recent window FOR THIS GUILD
@@ -3061,27 +3522,37 @@ async def update_watchtime_task():
 
                 if unique_chatter_count < MIN_UNIQUE_CHATTERS:
                     if watchtime_debug_enabled:
-                        print(f"[Security][Guild {guild.name}] Only {unique_chatter_count} unique chatter(s) in last {CHAT_ACTIVITY_WINDOW_MINUTES} min (need {MIN_UNIQUE_CHATTERS})")
-                        print(f"[Security][Guild {guild.name}] Stream might be offline or being farmed - skipping watchtime update")
-                        print(f"[Security][Guild {guild.name}] Tip: Use '!tracking force on' to override if stream has low chat activity")
+                        print(
+                            f"[Security][Guild {guild.name}] Only {unique_chatter_count} unique chatter(s) in last {CHAT_ACTIVITY_WINDOW_MINUTES} min (need {MIN_UNIQUE_CHATTERS})"
+                        )
+                        print(
+                            f"[Security][Guild {guild.name}] Stream might be offline or being farmed - skipping watchtime update"
+                        )
+                        print(
+                            f"[Security][Guild {guild.name}] Tip: Use '!tracking force on' to override if stream has low chat activity"
+                        )
                     continue
 
                 if watchtime_debug_enabled:
-                    print(f"[Security][Guild {guild.name}] ✅ Stream appears live: {unique_chatter_count} unique chatters in last {CHAT_ACTIVITY_WINDOW_MINUTES} min")
+                    print(
+                        f"[Security][Guild {guild.name}] ✅ Stream appears live: {unique_chatter_count} unique chatters in last {CHAT_ACTIVITY_WINDOW_MINUTES} min"
+                    )
             else:
                 if watchtime_debug_enabled:
-                    print(f"[Security][Guild {guild.name}] Force override enabled - skipping multi-factor live detection")
+                    print(
+                        f"[Security][Guild {guild.name}] Force override enabled - skipping multi-factor live detection"
+                    )
 
             # Get active viewers for this guild
             guild_active_viewers = active_viewers_by_guild.get(server_id, {})
-            
+
             # Filter to active users (seen in last 5 minutes)
             active_users = {
                 user: last_seen
                 for user, last_seen in list(guild_active_viewers.items())
                 if (datetime.now(timezone.utc) - last_seen).total_seconds() < (WATCH_INTERVAL_SECONDS + 60)
             }
-            
+
             if not active_users:
                 continue
 
@@ -3089,18 +3560,18 @@ async def update_watchtime_task():
             with engine.begin() as conn:
                 for user, last_seen in active_users.items():
                     try:
-                        conn.execute(text("""
+                        conn.execute(
+                            text(
+                                """
                             INSERT INTO watchtime (username, minutes, last_active, discord_server_id)
                             VALUES (:u, :m, :t, :sid)
                             ON CONFLICT(username, discord_server_id) DO UPDATE SET
                                 minutes = watchtime.minutes + :m,
                                 last_active = :t
-                        """), {
-                            "u": user,
-                            "m": minutes_to_add,
-                            "t": last_seen.isoformat(),
-                            "sid": server_id
-                        })
+                        """
+                            ),
+                            {"u": user, "m": minutes_to_add, "t": last_seen.isoformat(), "sid": server_id},
+                        )
                     except Exception as e:
                         print(f"⚠️ Error updating watchtime for {user}: {e}")
                         continue  # Skip this user but continue with others
@@ -3111,19 +3582,24 @@ async def update_watchtime_task():
     except Exception as e:
         print(f"⚠️ Error in watchtime update task: {e}")
         import traceback
+
         traceback.print_exc()
+
 
 @update_watchtime_task.before_loop
 async def before_watchtime_task():
     """Wait for bot to be ready before starting watchtime updates."""
     await bot.wait_until_ready()
 
+
 @update_watchtime_task.error
 async def update_watchtime_task_error(error):
     """Handle errors in the watchtime task loop."""
     print(f"❌ Watchtime task encountered an error: {error}")
     import traceback
+
     traceback.print_exc()
+
 
 # -------------------------
 # Role updater task
@@ -3154,12 +3630,17 @@ async def update_roles_task():
 
                 # Get linked users with watchtime for this guild
                 with engine.connect() as conn:
-                    rows = conn.execute(text("""
+                    rows = conn.execute(
+                        text(
+                            """
                         SELECT l.discord_id, w.minutes, l.kick_name
                         FROM links l
                         JOIN watchtime w ON l.kick_name = w.username AND l.discord_server_id = w.discord_server_id
                         WHERE l.discord_server_id = :sid
-                    """), {"sid": guild.id}).fetchall()
+                    """
+                        ),
+                        {"sid": guild.id},
+                    ).fetchall()
 
                 # Update roles for each user
                 for discord_id, minutes, kick_name in rows:
@@ -3173,7 +3654,9 @@ async def update_roles_task():
                         if role and minutes >= role_info["minutes"] and role not in member.roles:
                             try:
                                 await member.add_roles(role, reason=f"Reached {role_info['minutes']} min watchtime")
-                                print(f"[Guild {guild.name}] Assigned {role.name} to {member.display_name} ({kick_name})")
+                                print(
+                                    f"[Guild {guild.name}] Assigned {role.name} to {member.display_name} ({kick_name})"
+                                )
 
                                 # Send DM notification to user
                                 try:
@@ -3181,17 +3664,17 @@ async def update_roles_task():
                                     embed = discord.Embed(
                                         title="🎉 New Role Unlocked!",
                                         description=f"Congratulations! You've earned the **{role.name}** role!",
-                                        color=0x53FC18
+                                        color=0x53FC18,
                                     )
                                     embed.add_field(
                                         name="Your Watchtime",
                                         value=f"{minutes:.0f} minutes ({hours:.1f} hours)",
-                                        inline=False
+                                        inline=False,
                                     )
                                     embed.add_field(
                                         name="Keep Watching",
                                         value="Continue watching to unlock more exclusive roles!",
-                                        inline=False
+                                        inline=False,
                                     )
                                     embed.set_footer(text=f"Kick: {kick_name}")
 
@@ -3209,11 +3692,13 @@ async def update_roles_task():
 
             except Exception as guild_error:
                 print(f"⚠️ [Guild {guild.name}] Role update error: {guild_error}")
-                
+
     except Exception as e:
         print(f"⚠️ Error in role update task: {e}")
         import traceback
+
         traceback.print_exc()
+
 
 # -------------------------
 # Cleanup expired verification codes and old chat data
@@ -3224,15 +3709,19 @@ async def check_oauth_notifications_task():
     try:
         with engine.begin() as conn:
             # Get unprocessed notifications
-            notifications = conn.execute(text("""
-                SELECT id, discord_id, kick_username, channel_id, message_id
+            notifications = conn.execute(
+                text(
+                    """
+                SELECT id, discord_id, kick_username, channel_id, message_id, discord_server_id
                 FROM oauth_notifications
                 WHERE processed = FALSE AND kick_username != ''
                 ORDER BY created_at ASC
                 LIMIT 10
-            """)).fetchall()
+            """
+                )
+            ).fetchall()
 
-            for notification_id, discord_id, kick_username, channel_id, message_id in notifications:
+            for notification_id, discord_id, kick_username, channel_id, message_id, guild_id in notifications:
                 try:
                     # Check if this is a failed attempt (kick_username starts with "FAILED:")
                     is_failed = kick_username.startswith("FAILED:")
@@ -3272,16 +3761,22 @@ async def check_oauth_notifications_task():
                         if is_failed:
                             # Send failure message via DM
                             try:
-                                await user.send(f"❌ **Link Failed**\n\n{error_message}\n\nKick account: **{actual_kick_username}**")
+                                await user.send(
+                                    f"❌ **Link Failed**\n\n{error_message}\n\nKick account: **{actual_kick_username}**"
+                                )
                             except discord.Forbidden:
                                 pass  # User has DMs disabled
 
                             # Log the failed attempt
-                            await log_link_attempt(user, actual_kick_username, success=False, error_message=error_message)
+                            await log_link_attempt(
+                                user, actual_kick_username, success=False, error_message=error_message
+                            )
                         else:
                             # Send success message via DM
                             try:
-                                await user.send(f"✅ **Verification Successful!**\n\nYour Discord account has been linked to Kick account **{actual_kick_username}**.")
+                                await user.send(
+                                    f"✅ **Verification Successful!**\n\nYour Discord account has been linked to Kick account **{actual_kick_username}**."
+                                )
                             except discord.Forbidden:
                                 # If DM fails, try to find a guild channel
                                 # Multiserver: Try all guilds where the user is a member
@@ -3292,35 +3787,86 @@ async def check_oauth_notifications_task():
                                         if member:
                                             # Try to send in the same channel as original message, or system channel
                                             target_channel = bot.get_channel(int(channel_id)) if channel_id else None
-                                            if not target_channel or not target_channel.permissions_for(guild.me).send_messages:
-                                                target_channel = guild.system_channel or next((ch for ch in guild.text_channels if ch.permissions_for(guild.me).send_messages), None)
+                                            if (
+                                                not target_channel
+                                                or not target_channel.permissions_for(guild.me).send_messages
+                                            ):
+                                                target_channel = guild.system_channel or next(
+                                                    (
+                                                        ch
+                                                        for ch in guild.text_channels
+                                                        if ch.permissions_for(guild.me).send_messages
+                                                    ),
+                                                    None,
+                                                )
 
                                             if target_channel:
-                                                await target_channel.send(f"{member.mention} ✅ **Verification Successful!** Your account has been linked to Kick **{actual_kick_username}**.")
+                                                await target_channel.send(
+                                                    f"{member.mention} ✅ **Verification Successful!** Your account has been linked to Kick **{actual_kick_username}**."
+                                                )
 
                             # Log the successful link attempt
                             await log_link_attempt(user, actual_kick_username, success=True)
+                            
+                            # Grant linked role if configured
+                            if guild_id:
+                                try:
+                                    guild = bot.get_guild(int(guild_id))
+                                    if guild:
+                                        member = guild.get_member(int(discord_id))
+                                        if member:
+                                            # Get linked role ID from bot_settings
+                                            linked_role_id = conn.execute(
+                                                text("""
+                                                    SELECT value FROM bot_settings 
+                                                    WHERE key = 'kick_linked_role_id' AND discord_server_id = :guild_id
+                                                """),
+                                                {"guild_id": guild_id}
+                                            ).scalar()
+                                            
+                                            if linked_role_id and linked_role_id.strip():
+                                                role = guild.get_role(int(linked_role_id))
+                                                if role:
+                                                    if role not in member.roles:
+                                                        await member.add_roles(role, reason=f"Linked Kick account: {actual_kick_username}")
+                                                        print(f"✅ Granted role '{role.name}' to {member.display_name} for Kick link", flush=True)
+                                                else:
+                                                    print(f"⚠️ Linked role ID {linked_role_id} not found in guild {guild.name}", flush=True)
+                                except Exception as role_error:
+                                    print(f"⚠️ Error granting linked role: {role_error}", flush=True)
 
                     # Mark as processed
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         UPDATE oauth_notifications
                         SET processed = TRUE
                         WHERE id = :id
-                    """), {"id": notification_id})
+                    """
+                        ),
+                        {"id": notification_id},
+                    )
 
                     print(f"✅ Sent OAuth notification to Discord {discord_id}", flush=True)
 
                 except Exception as e:
                     print(f"⚠️ Error sending OAuth notification to {discord_id}: {e}", flush=True)
                     # Mark as processed anyway to avoid retry loops
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         UPDATE oauth_notifications
                         SET processed = TRUE
                         WHERE id = :id
-                    """), {"id": notification_id})
+                    """
+                        ),
+                        {"id": notification_id},
+                    )
 
     except Exception as e:
         print(f"⚠️ Error in OAuth notifications task: {e}", flush=True)
+
+
 @tasks.loop(minutes=30)  # Check every 30 minutes for faster response
 async def proactive_token_refresh_task():
     """Proactively refresh OAuth tokens before they expire."""
@@ -3329,15 +3875,19 @@ async def proactive_token_refresh_task():
 
     try:
         print("[Kick] 🔄 Running proactive token refresh check...")
-        
+
         # Check ALL tokens that might expire soon
         with engine.connect() as conn:
-            results = conn.execute(text("""
-                SELECT user_id, kick_username, refresh_token, expires_at 
+            results = conn.execute(
+                text(
+                    """
+                SELECT user_id, kick_username, refresh_token, expires_at
                 FROM kick_oauth_tokens
                 WHERE refresh_token IS NOT NULL
                 ORDER BY expires_at ASC
-            """)).fetchall()
+            """
+                )
+            ).fetchall()
 
             if not results:
                 print("[Kick] ℹ️  No OAuth tokens in database")
@@ -3346,7 +3896,7 @@ async def proactive_token_refresh_task():
             now = datetime.now(timezone.utc)
             refreshed = 0
             failed = 0
-            
+
             for user_id, kick_username, refresh_token, expires_at in results:
                 if not expires_at:
                     print(f"[Kick] ⚠️  No expiration time for {kick_username} - skipping")
@@ -3361,7 +3911,9 @@ async def proactive_token_refresh_task():
 
                 # Refresh if token expires in less than 30 minutes
                 if minutes_until_expiry < 30:
-                    print(f"[Kick] ⚠️  Token for {kick_username} expires in {minutes_until_expiry:.1f} minutes - refreshing...")
+                    print(
+                        f"[Kick] ⚠️  Token for {kick_username} expires in {minutes_until_expiry:.1f} minutes - refreshing..."
+                    )
                     if await refresh_kick_oauth_token_for_user(user_id, kick_username, refresh_token):
                         refreshed += 1
                         print(f"[Kick] ✅ Token refreshed for {kick_username}")
@@ -3373,13 +3925,14 @@ async def proactive_token_refresh_task():
                 else:
                     hours = minutes_until_expiry / 60
                     print(f"[Kick] ✓ Token for {kick_username} valid for {hours:.1f} more hours")
-            
+
             if refreshed > 0 or failed > 0:
                 print(f"[Kick] Token refresh complete - Refreshed: {refreshed}, Failed: {failed}")
 
     except Exception as e:
         print(f"[Kick] ❌ Error in proactive token refresh: {e}")
         import traceback
+
         traceback.print_exc()
 
 
@@ -3391,7 +3944,7 @@ async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, re
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
             "client_id": KICK_CLIENT_ID,
-            "client_secret": KICK_CLIENT_SECRET
+            "client_secret": KICK_CLIENT_SECRET,
         }
 
         async with aiohttp.ClientSession() as session:
@@ -3409,47 +3962,56 @@ async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, re
 
                     with engine.begin() as conn:
                         # Update kick_oauth_tokens table
-                        conn.execute(text("""
+                        conn.execute(
+                            text(
+                                """
                             UPDATE kick_oauth_tokens
                             SET access_token = :access_token,
                                 refresh_token = :refresh_token,
                                 expires_at = :expires_at,
                                 updated_at = CURRENT_TIMESTAMP
                             WHERE user_id = :user_id
-                        """), {
-                            "access_token": new_access_token,
-                            "refresh_token": new_refresh_token,
-                            "expires_at": expires_at,
-                            "user_id": user_id
-                        })
-                        
+                        """
+                            ),
+                            {
+                                "access_token": new_access_token,
+                                "refresh_token": new_refresh_token,
+                                "expires_at": expires_at,
+                                "user_id": user_id,
+                            },
+                        )
+
                         # Also update bot_settings table if tokens exist there (legacy support)
                         # This ensures both tables stay in sync
-                        conn.execute(text("""
-                            UPDATE bot_settings 
+                        conn.execute(
+                            text(
+                                """
+                            UPDATE bot_settings
                             SET value = :access_token, updated_at = CURRENT_TIMESTAMP
                             WHERE key IN ('kick_oauth_token', 'kick_access_token')
                             AND discord_server_id IN (
-                                SELECT DISTINCT discord_server_id FROM bot_settings 
+                                SELECT DISTINCT discord_server_id FROM bot_settings
                                 WHERE key = 'kick_channel' AND LOWER(value) = LOWER(:kick_username)
                             )
-                        """), {
-                            "access_token": new_access_token,
-                            "kick_username": kick_username
-                        })
-                        
-                        conn.execute(text("""
-                            UPDATE bot_settings 
+                        """
+                            ),
+                            {"access_token": new_access_token, "kick_username": kick_username},
+                        )
+
+                        conn.execute(
+                            text(
+                                """
+                            UPDATE bot_settings
                             SET value = :refresh_token, updated_at = CURRENT_TIMESTAMP
                             WHERE key = 'kick_refresh_token'
                             AND discord_server_id IN (
-                                SELECT DISTINCT discord_server_id FROM bot_settings 
+                                SELECT DISTINCT discord_server_id FROM bot_settings
                                 WHERE key = 'kick_channel' AND LOWER(value) = LOWER(:kick_username)
                             )
-                        """), {
-                            "refresh_token": new_refresh_token,
-                            "kick_username": kick_username
-                        })
+                        """
+                            ),
+                            {"refresh_token": new_refresh_token, "kick_username": kick_username},
+                        )
 
                     return True
                 else:
@@ -3472,23 +4034,19 @@ async def cleanup_pending_links_task():
     # 🔒 SECURITY: Clean up old chatter data to prevent memory leak
     chat_cutoff = now - timedelta(minutes=CHAT_ACTIVITY_WINDOW_MINUTES * 2)  # Keep 2x window for safety
     recent_chatters = {
-        username: timestamp
-        for username, timestamp in recent_chatters.items()
-        if timestamp >= chat_cutoff
+        username: timestamp for username, timestamp in recent_chatters.items() if timestamp >= chat_cutoff
     }
 
     expiry_cutoff = now - timedelta(minutes=CODE_EXPIRY_MINUTES)
 
     with engine.begin() as conn:
-        rows = conn.execute(text(
-            "SELECT discord_id FROM pending_links WHERE timestamp < :t"
-        ), {"t": expiry_cutoff.isoformat()}).fetchall()
+        rows = conn.execute(
+            text("SELECT discord_id FROM pending_links WHERE timestamp < :t"), {"t": expiry_cutoff.isoformat()}
+        ).fetchall()
 
         expired_ids = [r[0] for r in rows]
 
-        conn.execute(text(
-            "DELETE FROM pending_links WHERE timestamp < :t"
-        ), {"t": expiry_cutoff.isoformat()})
+        conn.execute(text("DELETE FROM pending_links WHERE timestamp < :t"), {"t": expiry_cutoff.isoformat()})
 
     # Notify users their codes expired
     for discord_id in expired_ids:
@@ -3497,23 +4055,23 @@ async def cleanup_pending_links_task():
             if user:
                 try:
                     await user.send(
-                        "⏰ Your Kick verification code expired. "
-                        "Use `!link <kick_username>` to generate a new one."
+                        "⏰ Your Kick verification code expired. " "Use `!link <kick_username>` to generate a new one."
                     )
                 except discord.Forbidden:
                     pass
         except Exception:
             pass
 
+
 @tasks.loop(minutes=5)  # Fallback check every 5 minutes (PRIMARY: webhooks)
 async def clip_buffer_management_task():
     """
     FALLBACK: Monitor stream status per guild and manage clip buffers on Dashboard.
-    
+
     PRIMARY METHOD: Kick webhooks (livestream.status.updated) in kick_webhooks.py
     - Instant response when stream goes live/offline
     - Triggers clip buffer start/stop automatically
-    
+
     FALLBACK: This polling task runs every 5 minutes in case:
     - Webhooks aren't registered for a server
     - Webhook delivery fails
@@ -3528,28 +4086,33 @@ async def clip_buffer_management_task():
     for guild in bot.guilds:
         guild_id = guild.id
         guild_name = guild.name
-        
+
         try:
             # Get per-guild settings from database
             kick_channel = None
             dashboard_url = None
             bot_api_key = None
-            
+
             with engine.connect() as conn:
-                settings = conn.execute(text("""
-                    SELECT key, value FROM bot_settings 
-                    WHERE discord_server_id = :guild_id 
+                settings = conn.execute(
+                    text(
+                        """
+                    SELECT key, value FROM bot_settings
+                    WHERE discord_server_id = :guild_id
                     AND key IN ('kick_channel', 'dashboard_url', 'bot_api_key')
-                """), {"guild_id": guild_id}).fetchall()
-                
+                """
+                    ),
+                    {"guild_id": guild_id},
+                ).fetchall()
+
                 for key, value in settings:
-                    if key == 'kick_channel':
+                    if key == "kick_channel":
                         kick_channel = value
-                    elif key == 'dashboard_url':
+                    elif key == "dashboard_url":
                         dashboard_url = value
-                    elif key == 'bot_api_key':
+                    elif key == "bot_api_key":
                         bot_api_key = value
-            
+
             # Skip guilds without required configuration
             if not kick_channel:
                 continue
@@ -3557,7 +4120,7 @@ async def clip_buffer_management_task():
                 if guild_id not in clip_buffer_active_by_guild:  # Only log once
                     print(f"[Clip Buffer][{guild_name}] ⚠️ Missing dashboard_url or bot_api_key")
                 continue
-            
+
             # Get per-guild state
             clip_buffer_active = clip_buffer_active_by_guild.get(guild_id, False)
             last_stream_live_state = last_stream_live_state_by_guild.get(guild_id)
@@ -3566,7 +4129,9 @@ async def clip_buffer_management_task():
             try:
                 is_live = await check_stream_live(kick_channel)
                 if last_stream_live_state != is_live:  # Only log state changes
-                    print(f"[Clip Buffer][{guild_name}] Stream live check for '{kick_channel}': {is_live} | Last state: {last_stream_live_state} | Buffer active: {clip_buffer_active}")
+                    print(
+                        f"[Clip Buffer][{guild_name}] Stream live check for '{kick_channel}': {is_live} | Last state: {last_stream_live_state} | Buffer active: {clip_buffer_active}"
+                    )
             except Exception as e:
                 # Cloudflare block or other error - skip this guild
                 if "403" not in str(e) and "Cloudflare" not in str(e):
@@ -3591,31 +4156,35 @@ async def clip_buffer_management_task():
                 try:
                     async with aiohttp.ClientSession() as session:
                         async with session.get(
-                            f'{dashboard_url}/api/clips/buffer/status?channel={kick_channel}',
-                            timeout=aiohttp.ClientTimeout(total=10)
+                            f"{dashboard_url}/api/clips/buffer/status?channel={kick_channel}",
+                            timeout=aiohttp.ClientTimeout(total=10),
                         ) as response:
                             if response.status == 404:
                                 # No buffer exists, need to start it
-                                print(f"[Clip Buffer][{guild_name}] 🔄 Stream is live but no buffer running, starting...")
+                                print(
+                                    f"[Clip Buffer][{guild_name}] 🔄 Stream is live but no buffer running, starting..."
+                                )
                                 should_start_buffer = True
                             elif response.status == 200:
                                 status = await response.json()
-                                if status.get('is_recording'):
+                                if status.get("is_recording"):
                                     clip_buffer_active_by_guild[guild_id] = True
                                     print(f"[Clip Buffer][{guild_name}] ℹ️ Buffer already running")
                                 else:
-                                    print(f"[Clip Buffer][{guild_name}] ⚠️ Buffer exists but not recording, restarting...")
+                                    print(
+                                        f"[Clip Buffer][{guild_name}] ⚠️ Buffer exists but not recording, restarting..."
+                                    )
                                     should_start_buffer = True
                 except Exception as e:
                     print(f"[Clip Buffer][{guild_name}] ⚠️ Error checking buffer status: {e}")
-            
+
             # Periodic verification: Even if we think buffer is active, verify with dashboard
             elif is_live and clip_buffer_active:
                 try:
                     async with aiohttp.ClientSession() as session:
                         async with session.get(
-                            f'{dashboard_url}/api/clips/buffer/status?channel={kick_channel}',
-                            timeout=aiohttp.ClientTimeout(total=10)
+                            f"{dashboard_url}/api/clips/buffer/status?channel={kick_channel}",
+                            timeout=aiohttp.ClientTimeout(total=10),
                         ) as response:
                             if response.status == 404:
                                 # Buffer disappeared (dashboard restarted?)
@@ -3624,7 +4193,7 @@ async def clip_buffer_management_task():
                                 should_start_buffer = True
                             elif response.status == 200:
                                 status = await response.json()
-                                if not status.get('is_recording'):
+                                if not status.get("is_recording"):
                                     print(f"[Clip Buffer][{guild_name}] ⚠️ Buffer stopped recording! Restarting...")
                                     clip_buffer_active_by_guild[guild_id] = False
                                     should_start_buffer = True
@@ -3635,15 +4204,16 @@ async def clip_buffer_management_task():
             if (is_live and not last_stream_live_state) or should_start_buffer:
                 if not should_start_buffer:
                     print(f"[Clip Buffer][{guild_name}] 🟢 Stream went LIVE! Starting clip buffer...")
-                
+
                 # Use the robust playback URL fetcher with caching and validation
                 playback_url: Optional[str] = None
                 try:
                     from core.kick_api import get_playback_url
+
                     # Force refresh if this is a new live transition (not a retry)
                     force_refresh = not should_start_buffer
                     playback_url = await get_playback_url(kick_channel, force_refresh=force_refresh)
-                    
+
                     if playback_url:
                         print(f"[Clip Buffer][{guild_name}] 📺 Obtained playback URL: {playback_url[:80]}...")
                     else:
@@ -3653,19 +4223,16 @@ async def clip_buffer_management_task():
 
                 try:
                     async with aiohttp.ClientSession() as session:
-                        headers = {
-                            'X-API-Key': bot_api_key,
-                            'Content-Type': 'application/json'
-                        }
-                        payload = {'channel': kick_channel}
+                        headers = {"X-API-Key": bot_api_key, "Content-Type": "application/json"}
+                        payload = {"channel": kick_channel}
                         if playback_url:
-                            payload['playback_url'] = playback_url
-                        
+                            payload["playback_url"] = playback_url
+
                         async with session.post(
-                            f'{dashboard_url}/api/clips/buffer/start',
+                            f"{dashboard_url}/api/clips/buffer/start",
                             headers=headers,
                             json=payload,
-                            timeout=aiohttp.ClientTimeout(total=30)
+                            timeout=aiohttp.ClientTimeout(total=30),
                         ) as response:
                             if response.status == 200:
                                 result = await response.json()
@@ -3673,7 +4240,9 @@ async def clip_buffer_management_task():
                                 print(f"[Clip Buffer][{guild_name}] ✅ Buffer started: {result.get('message', 'OK')}")
                             else:
                                 response_text = await response.text()
-                                print(f"[Clip Buffer][{guild_name}] ❌ Failed to start buffer: HTTP {response.status} - {response_text}")
+                                print(
+                                    f"[Clip Buffer][{guild_name}] ❌ Failed to start buffer: HTTP {response.status} - {response_text}"
+                                )
                 except Exception as e:
                     print(f"[Clip Buffer][{guild_name}] ❌ Error starting buffer: {e}")
 
@@ -3682,15 +4251,12 @@ async def clip_buffer_management_task():
                 print(f"[Clip Buffer][{guild_name}] 🔴 Stream went OFFLINE! Stopping clip buffer...")
                 try:
                     async with aiohttp.ClientSession() as session:
-                        headers = {
-                            'X-API-Key': bot_api_key,
-                            'Content-Type': 'application/json'
-                        }
+                        headers = {"X-API-Key": bot_api_key, "Content-Type": "application/json"}
                         async with session.post(
-                            f'{dashboard_url}/api/clips/buffer/stop',
+                            f"{dashboard_url}/api/clips/buffer/stop",
                             headers=headers,
-                            json={'channel': kick_channel},
-                            timeout=aiohttp.ClientTimeout(total=30)
+                            json={"channel": kick_channel},
+                            timeout=aiohttp.ClientTimeout(total=30),
                         ) as response:
                             if response.status == 200:
                                 result = await response.json()
@@ -3698,7 +4264,9 @@ async def clip_buffer_management_task():
                                 print(f"[Clip Buffer][{guild_name}] ✅ Buffer stopped: {result.get('message', 'OK')}")
                             else:
                                 error = await response.text()
-                                print(f"[Clip Buffer][{guild_name}] ⚠️ Failed to stop buffer: HTTP {response.status} - {error}")
+                                print(
+                                    f"[Clip Buffer][{guild_name}] ⚠️ Failed to stop buffer: HTTP {response.status} - {error}"
+                                )
                 except Exception as e:
                     print(f"[Clip Buffer][{guild_name}] ⚠️ Error stopping buffer: {e}")
 
@@ -3708,6 +4276,7 @@ async def clip_buffer_management_task():
         except Exception as e:
             print(f"[Clip Buffer][{guild_name}] ❌ Error in buffer management task: {e}")
 
+
 @clip_buffer_management_task.before_loop
 async def before_clip_buffer_task():
     """Wait for bot to be ready before starting clip buffer management."""
@@ -3715,12 +4284,15 @@ async def before_clip_buffer_task():
     # Initial delay to allow settings to load
     await asyncio.sleep(10)
     print("[Clip Buffer] 🎬 Starting clip buffer management task...")
-    print(f"[Clip Buffer] Settings manager initialized: {hasattr(bot, 'settings_manager') and bot.settings_manager is not None}")
-    if hasattr(bot, 'settings_manager') and bot.settings_manager:
+    print(
+        f"[Clip Buffer] Settings manager initialized: {hasattr(bot, 'settings_manager') and bot.settings_manager is not None}"
+    )
+    if hasattr(bot, "settings_manager") and bot.settings_manager:
         bot.settings_manager.refresh()
         print(f"[Clip Buffer] dashboard_url: {bool(bot.settings_manager.dashboard_url)}")
         print(f"[Clip Buffer] bot_api_key: {bool(bot.settings_manager.bot_api_key)}")
         print(f"[Clip Buffer] kick_channel: {bot.settings_manager.kick_channel}")
+
 
 # -------------------------
 # Command cooldowns and checks
@@ -3728,13 +4300,19 @@ async def before_clip_buffer_task():
 # Progressive cooldown tracking: {user_id: {command: attempt_count}}
 progressive_cooldown_attempts = {}
 
+
 class CommandCooldowns:
     # Cooldown settings (base values, will increase progressively)
-    LINK_COOLDOWN = commands.CooldownMapping.from_cooldown(1, 10, commands.BucketType.user)  # Start at 10s, +10s per attempt
-    VERIFY_COOLDOWN = commands.CooldownMapping.from_cooldown(3, 300, commands.BucketType.user)  # 🔒 SECURITY: Max 3 attempts per 5 minutes
+    LINK_COOLDOWN = commands.CooldownMapping.from_cooldown(
+        1, 10, commands.BucketType.user
+    )  # Start at 10s, +10s per attempt
+    VERIFY_COOLDOWN = commands.CooldownMapping.from_cooldown(
+        3, 300, commands.BucketType.user
+    )  # 🔒 SECURITY: Max 3 attempts per 5 minutes
     LEADERBOARD_COOLDOWN = commands.CooldownMapping.from_cooldown(1, 30, commands.BucketType.channel)
     WATCHTIME_COOLDOWN = commands.CooldownMapping.from_cooldown(1, 15, commands.BucketType.user)
     UNLINK_COOLDOWN = commands.CooldownMapping.from_cooldown(1, 300, commands.BucketType.user)
+
 
 def progressive_cooldown(base_seconds: int, increment_seconds: int, max_seconds: int):
     """
@@ -3747,6 +4325,7 @@ def progressive_cooldown(base_seconds: int, increment_seconds: int, max_seconds:
 
     Example: 10s -> 20s -> 30s -> 40s -> 50s -> 60s (capped)
     """
+
     async def predicate(ctx):
         # 🔒 ADMIN BYPASS: Admins skip cooldowns for testing
         if ctx.guild and ctx.author.guild_permissions.administrator:
@@ -3760,36 +4339,35 @@ def progressive_cooldown(base_seconds: int, increment_seconds: int, max_seconds:
             progressive_cooldown_attempts[user_id] = {}
 
         if command_name not in progressive_cooldown_attempts[user_id]:
-            progressive_cooldown_attempts[user_id][command_name] = {
-                'count': 0,
-                'last_use': None
-            }
+            progressive_cooldown_attempts[user_id][command_name] = {"count": 0, "last_use": None}
 
         tracking = progressive_cooldown_attempts[user_id][command_name]
         now = datetime.now(timezone.utc)
 
         # Reset count if enough time has passed (2x max cooldown = full reset)
-        if tracking['last_use']:
-            time_since_last = (now - tracking['last_use']).total_seconds()
+        if tracking["last_use"]:
+            time_since_last = (now - tracking["last_use"]).total_seconds()
             if time_since_last > (max_seconds * 2):
-                tracking['count'] = 0
+                tracking["count"] = 0
 
         # Calculate progressive cooldown
-        current_cooldown = min(base_seconds + (tracking['count'] * increment_seconds), max_seconds)
+        current_cooldown = min(base_seconds + (tracking["count"] * increment_seconds), max_seconds)
 
         # Check if user is still on cooldown
-        if tracking['last_use']:
-            time_since_last = (now - tracking['last_use']).total_seconds()
+        if tracking["last_use"]:
+            time_since_last = (now - tracking["last_use"]).total_seconds()
             if time_since_last < current_cooldown:
                 retry_after = current_cooldown - time_since_last
                 raise commands.CommandOnCooldown(None, retry_after, commands.BucketType.user)
 
         # Update tracking
-        tracking['count'] += 1
-        tracking['last_use'] = now
+        tracking["count"] += 1
+        tracking["last_use"] = now
 
         return True
+
     return commands.check(predicate)
+
 
 def dynamic_cooldown(cooldown_mapping):
     async def predicate(ctx):
@@ -3802,13 +4380,16 @@ def dynamic_cooldown(cooldown_mapping):
         if retry_after:
             raise commands.CommandOnCooldown(bucket, retry_after, cooldown_mapping._type)
         return True
+
     return commands.check(predicate)
+
 
 # -------------------------
 # Commands
 # -------------------------
 # Note: Commands now work in all guilds (multiserver support)
 # Each guild has its own settings loaded dynamically
+
 
 @bot.command(name="link")
 @progressive_cooldown(base_seconds=10, increment_seconds=10, max_seconds=60)
@@ -3824,9 +4405,10 @@ async def cmd_link(ctx):
 
     # Check if already linked
     with engine.connect() as conn:
-        existing = conn.execute(text(
-            "SELECT kick_name FROM links WHERE discord_id = :d AND discord_server_id = :g"
-        ), {"d": discord_id, "g": guild_id}).fetchone()
+        existing = conn.execute(
+            text("SELECT kick_name FROM links WHERE discord_id = :d AND discord_server_id = :g"),
+            {"d": discord_id, "g": guild_id},
+        ).fetchone()
 
         if existing:
             await ctx.send(
@@ -3841,23 +4423,18 @@ async def cmd_link(ctx):
     embed = discord.Embed(
         title="🔗 Link with Kick OAuth",
         description="Click the button below to securely link your Kick account.",
-        color=0x53FC18
+        color=0x53FC18,
     )
     embed.add_field(
         name="📝 Instructions",
         value="1. Click the link below\n2. Log in to Kick (if needed)\n3. Authorize the connection\n4. You're done!",
-        inline=False
+        inline=False,
     )
     embed.set_footer(text="Link expires in 10 minutes")
 
     # Create a view with a button
     view = discord.ui.View()
-    button = discord.ui.Button(
-        label="Link with Kick",
-        style=discord.ButtonStyle.link,
-        url=oauth_url,
-        emoji="🎮"
-    )
+    button = discord.ui.Button(label="Link with Kick", style=discord.ButtonStyle.link, url=oauth_url, emoji="🎮")
     view.add_item(button)
 
     message = await ctx.send(embed=embed, view=view)
@@ -3865,17 +4442,27 @@ async def cmd_link(ctx):
     # Store message info for later deletion
     with engine.begin() as conn:
         # Delete any existing pending OAuth for this user in this guild
-        conn.execute(text("DELETE FROM oauth_notifications WHERE discord_id = :d AND discord_server_id = :g AND processed = FALSE"), {"d": discord_id, "g": guild_id})
+        conn.execute(
+            text(
+                "DELETE FROM oauth_notifications WHERE discord_id = :d AND discord_server_id = :g AND processed = FALSE"
+            ),
+            {"d": discord_id, "g": guild_id},
+        )
 
         # Store message info (will be updated with kick_username when OAuth completes)
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
             INSERT INTO oauth_notifications (discord_id, kick_username, channel_id, message_id, processed, discord_server_id)
             VALUES (:d, '', :c, :m, FALSE, :g)
-        """), {"d": discord_id, "c": ctx.channel.id, "m": message.id, "g": guild_id})
+        """
+            ),
+            {"d": discord_id, "c": ctx.channel.id, "m": message.id, "g": guild_id},
+        )
+
 
 @bot.command(name="unlink")
 @commands.has_permissions(manage_guild=True)
-
 async def cmd_unlink(ctx, member: discord.Member = None):
     """Admin command to unlink a user's Kick account from Discord.
 
@@ -3893,9 +4480,10 @@ async def cmd_unlink(ctx, member: discord.Member = None):
 
     # Check if user has a linked account
     with engine.connect() as conn:
-        existing = conn.execute(text(
-            "SELECT kick_name FROM links WHERE discord_id = :d AND discord_server_id = :guild_id"
-        ), {"d": discord_id, "guild_id": guild_id}).fetchone()
+        existing = conn.execute(
+            text("SELECT kick_name FROM links WHERE discord_id = :d AND discord_server_id = :guild_id"),
+            {"d": discord_id, "guild_id": guild_id},
+        ).fetchone()
 
     if not existing:
         await ctx.send(f"❌ {member.mention} doesn't have a linked Kick account.")
@@ -3905,18 +4493,28 @@ async def cmd_unlink(ctx, member: discord.Member = None):
 
     # Unlink without confirmation (admin action)
     with engine.begin() as conn:
-        conn.execute(text("DELETE FROM links WHERE discord_id = :d AND discord_server_id = :guild_id"), {"d": discord_id, "guild_id": guild_id})
+        conn.execute(
+            text("DELETE FROM links WHERE discord_id = :d AND discord_server_id = :guild_id"),
+            {"d": discord_id, "guild_id": guild_id},
+        )
 
         # Also clean up any pending OAuth notifications
-        conn.execute(text("DELETE FROM oauth_notifications WHERE discord_id = :d AND discord_server_id = :guild_id"), {"d": discord_id, "guild_id": guild_id})
+        conn.execute(
+            text("DELETE FROM oauth_notifications WHERE discord_id = :d AND discord_server_id = :guild_id"),
+            {"d": discord_id, "guild_id": guild_id},
+        )
 
         # Clean up pending verifications
-        conn.execute(text("DELETE FROM pending_links WHERE discord_id = :d AND discord_server_id = :guild_id"), {"d": discord_id, "guild_id": guild_id})
+        conn.execute(
+            text("DELETE FROM pending_links WHERE discord_id = :d AND discord_server_id = :guild_id"),
+            {"d": discord_id, "guild_id": guild_id},
+        )
 
     await ctx.send(
         f"🔓 Admin action: {member.mention}'s Kick account **{kick_name}** has been unlinked.\n"
         f"Their watchtime has been preserved."
     )
+
 
 @cmd_unlink.error
 async def unlink_error(ctx, error):
@@ -3924,6 +4522,7 @@ async def unlink_error(ctx, error):
         await ctx.send("❌ This command is admin-only. Regular users cannot unlink accounts to prevent abuse.")
     elif isinstance(error, commands.BadArgument):
         await ctx.send("❌ Invalid user. Usage: `!unlink @user`")
+
 
 @bot.command(name="leaderboard")
 async def cmd_leaderboard(ctx, top: int = 10):
@@ -3933,35 +4532,30 @@ async def cmd_leaderboard(ctx, top: int = 10):
 
     guild_id = ctx.guild.id if ctx.guild else None
     with engine.connect() as conn:
-        rows = conn.execute(text(
-            "SELECT username, minutes FROM watchtime WHERE discord_server_id = :guild_id ORDER BY minutes DESC LIMIT :n"
-        ), {"n": top, "guild_id": guild_id}).fetchall()
+        rows = conn.execute(
+            text(
+                "SELECT username, minutes FROM watchtime WHERE discord_server_id = :guild_id ORDER BY minutes DESC LIMIT :n"
+            ),
+            {"n": top, "guild_id": guild_id},
+        ).fetchall()
 
     if not rows:
         await ctx.send("📊 No watchtime data yet. Start watching to appear on the leaderboard!")
         return
 
-    embed = discord.Embed(
-        title="🏆 Kick Watchtime Leaderboard",
-        description=f"Top {len(rows)} viewers",
-        color=0x53FC18
-    )
+    embed = discord.Embed(title="🏆 Kick Watchtime Leaderboard", description=f"Top {len(rows)} viewers", color=0x53FC18)
 
     medals = ["🥇", "🥈", "🥉"]
     for i, (username, minutes) in enumerate(rows, start=1):
-        medal = medals[i-1] if i <= 3 else f"#{i}"
+        medal = medals[i - 1] if i <= 3 else f"#{i}"
         hours = minutes / 60
-        embed.add_field(
-            name=f"{medal} {username}",
-            value=f"⏱️ {minutes:.0f} min ({hours:.1f} hrs)",
-            inline=False
-        )
+        embed.add_field(name=f"{medal} {username}", value=f"⏱️ {minutes:.0f} min ({hours:.1f} hrs)", inline=False)
 
     await ctx.send(embed=embed)
 
+
 @bot.command(name="watchtime")
 @dynamic_cooldown(CommandCooldowns.WATCHTIME_COOLDOWN)
-
 async def cmd_watchtime(ctx, kick_username: str = None):
     """
     Check watchtime for yourself or another user.
@@ -3980,38 +4574,35 @@ async def cmd_watchtime(ctx, kick_username: str = None):
 
             # Admin lookup by Kick username
             kick_name = kick_username.lower()
-            watchtime = conn.execute(text(
-                "SELECT minutes FROM watchtime WHERE username = :u AND discord_server_id = :guild_id"
-            ), {"u": kick_name, "guild_id": guild_id}).fetchone()
+            watchtime = conn.execute(
+                text("SELECT minutes FROM watchtime WHERE username = :u AND discord_server_id = :guild_id"),
+                {"u": kick_name, "guild_id": guild_id},
+            ).fetchone()
 
             if not watchtime or watchtime[0] == 0:
-                await ctx.send(
-                    f"⏱️ No watchtime recorded for **{kick_name}**."
-                )
+                await ctx.send(f"⏱️ No watchtime recorded for **{kick_name}**.")
                 return
         else:
             # Regular user checking their own watchtime
-            link = conn.execute(text(
-                "SELECT kick_name FROM links WHERE discord_id = :d AND discord_server_id = :guild_id"
-            ), {"d": discord_id, "guild_id": guild_id}).fetchone()
+            link = conn.execute(
+                text("SELECT kick_name FROM links WHERE discord_id = :d AND discord_server_id = :guild_id"),
+                {"d": discord_id, "guild_id": guild_id},
+            ).fetchone()
 
             if not link:
-                await ctx.send(
-                    "❌ You haven't linked your Kick account yet."
-                )
+                await ctx.send("❌ You haven't linked your Kick account yet.")
                 return
 
             kick_name = link[0]
 
             # Get watchtime
-            watchtime = conn.execute(text(
-                "SELECT minutes FROM watchtime WHERE username = :u AND discord_server_id = :guild_id"
-            ), {"u": kick_name, "guild_id": guild_id}).fetchone()
+            watchtime = conn.execute(
+                text("SELECT minutes FROM watchtime WHERE username = :u AND discord_server_id = :guild_id"),
+                {"u": kick_name, "guild_id": guild_id},
+            ).fetchone()
 
             if not watchtime or watchtime[0] == 0:
-                await ctx.send(
-                    f"⏱️ No watchtime recorded yet for **{kick_name}**. Start watching to earn time!"
-                )
+                await ctx.send(f"⏱️ No watchtime recorded yet for **{kick_name}**. Start watching to earn time!")
                 return
 
     minutes = watchtime[0]
@@ -4026,10 +4617,7 @@ async def cmd_watchtime(ctx, kick_username: str = None):
         if minutes >= role_info["minutes"]:
             earned_roles.append(role_info["name"])
 
-    embed = discord.Embed(
-        title=f"⏱️ Watchtime for {kick_name}",
-        color=0x53FC18
-    )
+    embed = discord.Embed(title=f"⏱️ Watchtime for {kick_name}", color=0x53FC18)
     embed.add_field(name="Total Time", value=f"{minutes:.0f} minutes ({hours:.1f} hours)", inline=False)
 
     if earned_roles:
@@ -4040,20 +4628,19 @@ async def cmd_watchtime(ctx, kick_username: str = None):
             if minutes < role_info["minutes"]:
                 remaining = role_info["minutes"] - minutes
                 embed.add_field(
-                    name="Next Role",
-                    value=f"**{role_info['name']}** in {remaining:.0f} more minutes",
-                    inline=False
+                    name="Next Role", value=f"**{role_info['name']}** in {remaining:.0f} more minutes", inline=False
                 )
                 break
 
     await ctx.send(embed=embed)
+
 
 # -------------------------
 # Admin Commands
 # -------------------------
 @bot.command(name="tracking")
 @commands.has_permissions(administrator=True)
-  # 🔒 SECURITY: Ensure command only works in the configured guild
+# 🔒 SECURITY: Ensure command only works in the configured guild
 async def toggle_tracking(ctx, action: str = None, subaction: str = None):
     """
     Admin command to control watchtime tracking.
@@ -4068,7 +4655,9 @@ async def toggle_tracking(ctx, action: str = None, subaction: str = None):
         status = "🟢 ENABLED" if stream_tracking_enabled else "🔴 DISABLED"
         force_status = "🟢 FORCE ON" if tracking_force_override else "🔴 FORCE OFF"
         debug_status = "🟢 DEBUG ON" if watchtime_debug_enabled else "🔴 DEBUG OFF"
-        await ctx.send(f"**Watchtime Tracking Status:** {status}\n**Force override:** {force_status}\n**Debug logging:** {debug_status}")
+        await ctx.send(
+            f"**Watchtime Tracking Status:** {status}\n**Force override:** {force_status}\n**Debug logging:** {debug_status}"
+        )
         return
 
     if action.lower() == "on":
@@ -4087,28 +4676,42 @@ async def toggle_tracking(ctx, action: str = None, subaction: str = None):
             tracking_force_override = True
             # Save to database
             with engine.begin() as conn:
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     INSERT INTO bot_settings (key, value, discord_server_id, updated_at)
                     VALUES ('tracking_force_override', 'true', :guild_id, CURRENT_TIMESTAMP)
                     ON CONFLICT (key, discord_server_id) DO UPDATE SET
                         value = 'true',
                         updated_at = CURRENT_TIMESTAMP
-                """), {"guild_id": ctx.guild.id})
-            await ctx.send("🔒 **Watchtime FORCE override ENABLED**\nWatchtime updates will run regardless of live-detection checks.")
+                """
+                    ),
+                    {"guild_id": ctx.guild.id},
+                )
+            await ctx.send(
+                "🔒 **Watchtime FORCE override ENABLED**\nWatchtime updates will run regardless of live-detection checks."
+            )
         elif subaction.lower() == "off":
             tracking_force_override = False
             # Save to database
             with engine.begin() as conn:
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     INSERT INTO bot_settings (key, value, discord_server_id, updated_at)
                     VALUES ('tracking_force_override', 'false', :guild_id, CURRENT_TIMESTAMP)
                     ON CONFLICT (key, discord_server_id) DO UPDATE SET
                         value = 'false',
                         updated_at = CURRENT_TIMESTAMP
-                """), {"guild_id": ctx.guild.id})
+                """
+                    ),
+                    {"guild_id": ctx.guild.id},
+                )
             await ctx.send("🔓 **Watchtime FORCE override DISABLED**\nLive-detection checks will be enforced again.")
         else:
-            await ctx.send("❌ Invalid force option. Use: `!tracking force on` or `!tracking force off` or `!tracking force status`")
+            await ctx.send(
+                "❌ Invalid force option. Use: `!tracking force on` or `!tracking force off` or `!tracking force status`"
+            )
     elif action.lower() == "debug":
         if subaction is None or subaction.lower() == "status":
             debug_status = "🟢 DEBUG ON" if watchtime_debug_enabled else "🔴 DEBUG OFF"
@@ -4122,18 +4725,23 @@ async def toggle_tracking(ctx, action: str = None, subaction: str = None):
             watchtime_debug_enabled = False
             await ctx.send("🔇 **Watchtime DEBUG logging DISABLED**\nDebug messages will be suppressed.")
         else:
-            await ctx.send("❌ Invalid debug option. Use: `!tracking debug on` or `!tracking debug off` or `!tracking debug status`")
+            await ctx.send(
+                "❌ Invalid debug option. Use: `!tracking debug on` or `!tracking debug off` or `!tracking debug status`"
+            )
     else:
-        await ctx.send("❌ Invalid option. Use: `!tracking on`, `!tracking off`, `!tracking status`, or `!tracking force/debug ...`")
+        await ctx.send(
+            "❌ Invalid option. Use: `!tracking on`, `!tracking off`, `!tracking status`, or `!tracking force/debug ...`"
+        )
+
 
 @toggle_tracking.error
 async def tracking_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need administrator permissions to use this command.")
 
+
 @bot.command(name="linklogs")
 @commands.has_permissions(administrator=True)
-
 async def link_logs_toggle(ctx, action: str = None):
     """
     Admin command to configure link attempt logging to Discord channel.
@@ -4148,13 +4756,20 @@ async def link_logs_toggle(ctx, action: str = None):
     if action is None or action.lower() == "status":
         # Check current status
         with engine.connect() as conn:
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 SELECT channel_id, enabled FROM link_logs_config
                 WHERE guild_id = :guild_id
-            """), {"guild_id": guild_id}).fetchone()
+            """
+                ),
+                {"guild_id": guild_id},
+            ).fetchone()
 
             if not result:
-                await ctx.send("📊 **Link Logging Status:** 🔴 NOT CONFIGURED\nUse `!linklogs on` to enable logging in this channel.")
+                await ctx.send(
+                    "📊 **Link Logging Status:** 🔴 NOT CONFIGURED\nUse `!linklogs on` to enable logging in this channel."
+                )
                 return
 
             log_channel = bot.get_channel(result[0])
@@ -4166,14 +4781,19 @@ async def link_logs_toggle(ctx, action: str = None):
     if action.lower() == "on":
         # Enable logging in current channel
         with engine.begin() as conn:
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 INSERT INTO link_logs_config (guild_id, channel_id, enabled, updated_at)
                 VALUES (:guild_id, :channel_id, TRUE, CURRENT_TIMESTAMP)
                 ON CONFLICT (guild_id) DO UPDATE SET
                     channel_id = :channel_id,
                     enabled = TRUE,
                     updated_at = CURRENT_TIMESTAMP
-            """), {"guild_id": guild_id, "channel_id": channel_id})
+            """
+                ),
+                {"guild_id": guild_id, "channel_id": channel_id},
+            )
 
         await ctx.send(
             f"✅ **Link logging ENABLED** in {ctx.channel.mention}\n\n"
@@ -4188,25 +4808,31 @@ async def link_logs_toggle(ctx, action: str = None):
     elif action.lower() == "off":
         # Disable logging
         with engine.begin() as conn:
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 UPDATE link_logs_config
                 SET enabled = FALSE, updated_at = CURRENT_TIMESTAMP
                 WHERE guild_id = :guild_id
-            """), {"guild_id": guild_id})
+            """
+                ),
+                {"guild_id": guild_id},
+            )
 
         await ctx.send("⏸️ **Link logging DISABLED**\nAccount linking attempts will no longer be logged.")
 
     else:
         await ctx.send("❌ Invalid option. Use: `!linklogs on`, `!linklogs off`, or `!linklogs status`")
 
+
 @link_logs_toggle.error
 async def link_logs_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need administrator permissions to use this command.")
 
+
 @bot.command(name="callblacklist", aliases=["srblacklist", "blockslotcall"])
 @commands.has_permissions(administrator=True)
-
 async def slot_call_blacklist(ctx, action: str = None, kick_username: str = None, *, reason: str = None):
     """
     Admin command to blacklist Kick users from using !call/!sr commands.
@@ -4236,24 +4862,34 @@ async def slot_call_blacklist(ctx, action: str = None, kick_username: str = None
 
         with engine.begin() as conn:
             # Check if already blacklisted
-            existing = conn.execute(text("""
+            existing = conn.execute(
+                text(
+                    """
                 SELECT 1 FROM slot_call_blacklist WHERE kick_username = :username AND discord_server_id = :guild_id
-            """), {"username": kick_username_lower, "guild_id": ctx.guild.id}).fetchone()
+            """
+                ),
+                {"username": kick_username_lower, "guild_id": ctx.guild.id},
+            ).fetchone()
 
             if existing:
                 await ctx.send(f"⚠️ User `{kick_username}` is already blacklisted.")
                 return
 
             # Add to blacklist
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 INSERT INTO slot_call_blacklist (kick_username, reason, blacklisted_by, discord_server_id)
                 VALUES (:username, :reason, :admin_id, :guild_id)
-            """), {
-                "username": kick_username_lower,
-                "reason": reason or "No reason provided",
-                "admin_id": ctx.author.id,
-                "guild_id": ctx.guild.id
-            })
+            """
+                ),
+                {
+                    "username": kick_username_lower,
+                    "reason": reason or "No reason provided",
+                    "admin_id": ctx.author.id,
+                    "guild_id": ctx.guild.id,
+                },
+            )
 
         await ctx.send(
             f"✅ **User blacklisted from !call/!sr**\n"
@@ -4270,9 +4906,14 @@ async def slot_call_blacklist(ctx, action: str = None, kick_username: str = None
         kick_username_lower = kick_username.lower()
 
         with engine.begin() as conn:
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 DELETE FROM slot_call_blacklist WHERE kick_username = :username AND discord_server_id = :guild_id
-            """), {"username": kick_username_lower, "guild_id": ctx.guild.id})
+            """
+                ),
+                {"username": kick_username_lower, "guild_id": ctx.guild.id},
+            )
 
             if result.rowcount == 0:
                 await ctx.send(f"⚠️ User `{kick_username}` is not blacklisted.")
@@ -4282,12 +4923,17 @@ async def slot_call_blacklist(ctx, action: str = None, kick_username: str = None
 
     elif action.lower() == "list":
         with engine.connect() as conn:
-            results = conn.execute(text("""
+            results = conn.execute(
+                text(
+                    """
                 SELECT kick_username, reason, created_at
                 FROM slot_call_blacklist
                 WHERE discord_server_id = :guild_id
                 ORDER BY created_at DESC
-            """), {"guild_id": ctx.guild.id}).fetchall()
+            """
+                ),
+                {"guild_id": ctx.guild.id},
+            ).fetchall()
 
             if not results:
                 await ctx.send("📋 No users are currently blacklisted from !call/!sr commands.")
@@ -4296,14 +4942,14 @@ async def slot_call_blacklist(ctx, action: str = None, kick_username: str = None
             embed = discord.Embed(
                 title="🚫 Slot Call Blacklist",
                 description=f"**{len(results)}** blacklisted user(s)",
-                color=discord.Color.red()
+                color=discord.Color.red(),
             )
 
             for username, reason, created_at in results[:25]:  # Limit to 25 for embed
                 embed.add_field(
                     name=f"👤 {username}",
                     value=f"**Reason:** {reason}\n**Added:** {created_at.strftime('%Y-%m-%d')}",
-                    inline=False
+                    inline=False,
                 )
 
             if len(results) > 25:
@@ -4319,11 +4965,16 @@ async def slot_call_blacklist(ctx, action: str = None, kick_username: str = None
         kick_username_lower = kick_username.lower()
 
         with engine.connect() as conn:
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 SELECT reason, blacklisted_by, created_at
                 FROM slot_call_blacklist
                 WHERE kick_username = :username AND discord_server_id = :guild_id
-            """), {"username": kick_username_lower, "guild_id": ctx.guild.id}).fetchone()
+            """
+                ),
+                {"username": kick_username_lower, "guild_id": ctx.guild.id},
+            ).fetchone()
 
             if not result:
                 await ctx.send(f"✅ User `{kick_username}` is **NOT** blacklisted.")
@@ -4339,14 +4990,15 @@ async def slot_call_blacklist(ctx, action: str = None, kick_username: str = None
                 f"**Date:** {created_at.strftime('%Y-%m-%d %H:%M UTC')}"
             )
 
+
 @slot_call_blacklist.error
 async def slot_call_blacklist_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need administrator permissions to use this command.")
 
+
 @bot.command(name="roles")
 @commands.has_permissions(administrator=True)
-
 async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: int = None):
     """
     Admin command to manage watchtime role thresholds.
@@ -4365,12 +5017,17 @@ async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: 
         # Show current configuration
         guild_id = ctx.guild.id if ctx.guild else None
         with engine.connect() as conn:
-            roles = conn.execute(text("""
+            roles = conn.execute(
+                text(
+                    """
                 SELECT role_name, minutes_required, enabled, display_order
                 FROM watchtime_roles
                 WHERE discord_server_id = :guild_id
                 ORDER BY display_order ASC
-            """), {"guild_id": guild_id}).fetchall()
+            """
+                ),
+                {"guild_id": guild_id},
+            ).fetchall()
 
         if not roles:
             await ctx.send("📋 No roles configured.")
@@ -4379,7 +5036,7 @@ async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: 
         embed = discord.Embed(
             title="🎯 Watchtime Role Configuration",
             description="Current role thresholds for automatic role assignment",
-            color=0x53FC18
+            color=0x53FC18,
         )
 
         for role_name, minutes, enabled, order in roles:
@@ -4388,7 +5045,7 @@ async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: 
             embed.add_field(
                 name=f"{order}. {role_name}",
                 value=f"**{minutes:,} minutes** ({hours:.1f} hours)\n{status}",
-                inline=False
+                inline=False,
             )
 
         embed.set_footer(text="Use !roles add/update/remove to modify • Changes take effect immediately")
@@ -4397,20 +5054,30 @@ async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: 
 
     if action.lower() == "add":
         if not role_name or minutes is None:
-            await ctx.send("❌ Usage: `!roles add <role_name> <minutes>`\nExample: `!roles add \"Tier 4\" 5000`")
+            await ctx.send('❌ Usage: `!roles add <role_name> <minutes>`\nExample: `!roles add "Tier 4" 5000`')
             return
 
         try:
             guild_id = ctx.guild.id if ctx.guild else None
             with engine.begin() as conn:
                 # Get highest display order for this guild
-                max_order = conn.execute(text("SELECT COALESCE(MAX(display_order), 0) FROM watchtime_roles WHERE discord_server_id = :guild_id"), {"guild_id": guild_id}).fetchone()[0]
+                max_order = conn.execute(
+                    text(
+                        "SELECT COALESCE(MAX(display_order), 0) FROM watchtime_roles WHERE discord_server_id = :guild_id"
+                    ),
+                    {"guild_id": guild_id},
+                ).fetchone()[0]
 
                 # Insert new role
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     INSERT INTO watchtime_roles (role_name, minutes_required, display_order, enabled, discord_server_id)
                     VALUES (:name, :minutes, :order, TRUE, :guild_id)
-                """), {"name": role_name, "minutes": minutes, "order": max_order + 1, "guild_id": guild_id})
+                """
+                    ),
+                    {"name": role_name, "minutes": minutes, "order": max_order + 1, "guild_id": guild_id},
+                )
 
             await ctx.send(f"✅ Added role **{role_name}** at **{minutes:,} minutes** ({minutes/60:.1f} hours)")
         except Exception as e:
@@ -4418,18 +5085,23 @@ async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: 
 
     elif action.lower() == "update":
         if not role_name or minutes is None:
-            await ctx.send("❌ Usage: `!roles update <role_name> <minutes>`\nExample: `!roles update \"Tier 1\" 180`")
+            await ctx.send('❌ Usage: `!roles update <role_name> <minutes>`\nExample: `!roles update "Tier 1" 180`')
             return
 
         try:
             guild_id = ctx.guild.id if ctx.guild else None
             with engine.begin() as conn:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     UPDATE watchtime_roles
                     SET minutes_required = :minutes, updated_at = CURRENT_TIMESTAMP
                     WHERE role_name = :name AND discord_server_id = :guild_id
                     RETURNING id
-                """), {"name": role_name, "minutes": minutes, "guild_id": guild_id}).fetchone()
+                """
+                    ),
+                    {"name": role_name, "minutes": minutes, "guild_id": guild_id},
+                ).fetchone()
 
                 if not result:
                     await ctx.send(f"❌ Role **{role_name}** not found.")
@@ -4441,17 +5113,22 @@ async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: 
 
     elif action.lower() == "remove":
         if not role_name:
-            await ctx.send("❌ Usage: `!roles remove <role_name>`\nExample: `!roles remove \"Tier 4\"`")
+            await ctx.send('❌ Usage: `!roles remove <role_name>`\nExample: `!roles remove "Tier 4"`')
             return
 
         try:
             guild_id = ctx.guild.id if ctx.guild else None
             with engine.begin() as conn:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     DELETE FROM watchtime_roles
                     WHERE role_name = :name AND discord_server_id = :guild_id
                     RETURNING id
-                """), {"name": role_name, "guild_id": guild_id}).fetchone()
+                """
+                    ),
+                    {"name": role_name, "guild_id": guild_id},
+                ).fetchone()
 
                 if not result:
                     await ctx.send(f"❌ Role **{role_name}** not found.")
@@ -4470,12 +5147,17 @@ async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: 
         try:
             guild_id = ctx.guild.id if ctx.guild else None
             with engine.begin() as conn:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     UPDATE watchtime_roles
                     SET enabled = :enabled, updated_at = CURRENT_TIMESTAMP
                     WHERE role_name = :name AND discord_server_id = :guild_id
                     RETURNING id
-                """), {"name": role_name, "enabled": enabled, "guild_id": guild_id}).fetchone()
+                """
+                    ),
+                    {"name": role_name, "enabled": enabled, "guild_id": guild_id},
+                ).fetchone()
 
                 if not result:
                     await ctx.send(f"❌ Role **{role_name}** not found.")
@@ -4488,7 +5170,7 @@ async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: 
 
     elif action.lower() == "members":
         if not role_name:
-            await ctx.send("❌ Usage: `!roles members <role_name>`\nExample: `!roles members \"Tier 1\"`")
+            await ctx.send('❌ Usage: `!roles members <role_name>`\nExample: `!roles members "Tier 1"`')
             return
 
         # Find the Discord role
@@ -4510,16 +5192,16 @@ async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: 
         with engine.connect() as conn:
             for member in members[:50]:  # Check up to 50, but only show linked ones
                 # Try to get their watchtime
-                link = conn.execute(text(
-                    "SELECT kick_name FROM links WHERE discord_id = :d"
-                ), {"d": member.id}).fetchone()
+                link = conn.execute(
+                    text("SELECT kick_name FROM links WHERE discord_id = :d"), {"d": member.id}
+                ).fetchone()
 
                 if link:  # Only add linked members
                     linked_count += 1
                     kick_name = link[0]
-                    watchtime = conn.execute(text(
-                        "SELECT minutes FROM watchtime WHERE username = :u"
-                    ), {"u": kick_name}).fetchone()
+                    watchtime = conn.execute(
+                        text("SELECT minutes FROM watchtime WHERE username = :u"), {"u": kick_name}
+                    ).fetchone()
 
                     if watchtime:
                         minutes = watchtime[0]
@@ -4540,17 +5222,21 @@ async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: 
         embed = discord.Embed(
             title=f"👥 Linked Members with {role_name}",
             description=f"Showing **{len(member_list)}** linked member{'s' if len(member_list) != 1 else ''} (Total with role: {len(members)})",
-            color=role.color if role.color != discord.Color.default() else 0x53FC18
+            color=role.color if role.color != discord.Color.default() else 0x53FC18,
         )
 
         # Split into chunks if too many
         chunk_size = 20
         for i in range(0, len(member_list), chunk_size):
-            chunk = member_list[i:i+chunk_size]
+            chunk = member_list[i : i + chunk_size]
             embed.add_field(
-                name=f"Members {i+1}-{min(i+chunk_size, len(member_list))}" if len(member_list) > chunk_size else "Members",
+                name=(
+                    f"Members {i+1}-{min(i+chunk_size, len(member_list))}"
+                    if len(member_list) > chunk_size
+                    else "Members"
+                ),
                 value="\n".join(chunk),
-                inline=False
+                inline=False,
             )
 
         if linked_count >= 25 and len(members) > linked_count:
@@ -4569,14 +5255,15 @@ async def manage_roles(ctx, action: str = None, role_name: str = None, minutes: 
             "• `!roles members <name>` - List members with a role"
         )
 
+
 @manage_roles.error
 async def manage_roles_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need administrator permissions to use this command.")
 
+
 @bot.command(name="testsub")
 @commands.has_permissions(administrator=True)
-
 async def test_subscription(ctx, kick_username: str = None, sub_count: int = 1):
     """
     [ADMIN/DEBUG] Simulate a subscription event to test raffle ticket awarding
@@ -4587,16 +5274,18 @@ async def test_subscription(ctx, kick_username: str = None, sub_count: int = 1):
     if not guild_id:
         await ctx.send("❌ This command must be used in a server.")
         return
-    
+
     gifted_sub_tracker = gifted_sub_trackers.get(guild_id)
 
     if not gifted_sub_tracker:
-        await ctx.send("❌ **Gifted sub tracker not initialized for this server!**\n\n"
-                       "**Possible reasons:**\n"
-                       "• Bot is still starting up (wait a few seconds)\n"
-                       "• Database connection failed\n"
-                       "• Raffle system initialization error\n\n"
-                       "Check the bot console for error messages.")
+        await ctx.send(
+            "❌ **Gifted sub tracker not initialized for this server!**\n\n"
+            "**Possible reasons:**\n"
+            "• Bot is still starting up (wait a few seconds)\n"
+            "• Database connection failed\n"
+            "• Raffle system initialization error\n\n"
+            "Check the bot console for error messages."
+        )
         return
 
     if not kick_username:
@@ -4606,17 +5295,16 @@ async def test_subscription(ctx, kick_username: str = None, sub_count: int = 1):
     # Create a fake subscription event that matches Kick's structure
     fake_event = {
         "id": f"test_{int(datetime.now().timestamp())}",
-        "sender": {
-            "username": kick_username,
-            "id": 99999
-        },
+        "sender": {"username": kick_username, "id": 99999},
         "gift_count": sub_count if sub_count > 1 else None,
-        "months": 1 if sub_count == 1 else None
+        "months": 1 if sub_count == 1 else None,
     }
 
-    await ctx.send(f"🧪 **Testing subscription event...**\n"
-                   f"User: `{kick_username}`\n"
-                   f"Type: {'Gifted ' + str(sub_count) + ' subs' if sub_count > 1 else 'Regular subscription'}")
+    await ctx.send(
+        f"🧪 **Testing subscription event...**\n"
+        f"User: `{kick_username}`\n"
+        f"Type: {'Gifted ' + str(sub_count) + ' subs' if sub_count > 1 else 'Regular subscription'}"
+    )
 
     # Process the fake event
     result = await gifted_sub_tracker.handle_gifted_sub_event(fake_event)
@@ -4624,24 +5312,24 @@ async def test_subscription(ctx, kick_username: str = None, sub_count: int = 1):
     # Show results
     embed = discord.Embed(
         title="🧪 Test Subscription Result",
-        color=discord.Color.green() if result['status'] == 'success' else discord.Color.red(),
-        timestamp=datetime.utcnow()
+        color=discord.Color.green() if result["status"] == "success" else discord.Color.red(),
+        timestamp=datetime.utcnow(),
     )
 
-    embed.add_field(name="Status", value=result['status'], inline=True)
+    embed.add_field(name="Status", value=result["status"], inline=True)
     embed.add_field(name="Kick Username", value=kick_username, inline=True)
     embed.add_field(name="Sub Count", value=str(sub_count), inline=True)
 
-    if result['status'] == 'success':
-        embed.add_field(name="✅ Tickets Awarded", value=str(result['tickets_awarded']), inline=True)
-        embed.add_field(name="Discord ID", value=str(result['discord_id']), inline=True)
+    if result["status"] == "success":
+        embed.add_field(name="✅ Tickets Awarded", value=str(result["tickets_awarded"]), inline=True)
+        embed.add_field(name="Discord ID", value=str(result["discord_id"]), inline=True)
         embed.description = f"Successfully awarded **{result['tickets_awarded']} tickets** to {result['gifter']}"
-    elif result['status'] == 'not_linked':
+    elif result["status"] == "not_linked":
         embed.description = f"❌ User `{kick_username}` is not linked to a Discord account.\nThey need to use `!link` to connect their accounts."
         embed.add_field(name="Note", value="Sub was logged but no tickets awarded", inline=False)
-    elif result['status'] == 'duplicate':
+    elif result["status"] == "duplicate":
         embed.description = f"⚠️ This event was already processed (duplicate)"
-    elif result['status'] == 'no_active_period':
+    elif result["status"] == "no_active_period":
         embed.description = f"❌ No active raffle period found.\nUse raffle commands to create a new period."
     else:
         embed.description = f"❌ Error: {result.get('error', 'Unknown error')}"
@@ -4649,14 +5337,15 @@ async def test_subscription(ctx, kick_username: str = None, sub_count: int = 1):
     embed.set_footer(text=f"Test performed by {ctx.author.name}")
     await ctx.send(embed=embed)
 
+
 @test_subscription.error
 async def test_subscription_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need administrator permissions to use this command.")
 
+
 @bot.command(name="convertwatchtime")
 @commands.has_permissions(administrator=True)
-
 async def convert_watchtime_manual(ctx):
     """
     [ADMIN/DEBUG] Manually trigger watchtime to tickets conversion
@@ -4670,29 +5359,32 @@ async def convert_watchtime_manual(ctx):
 
     try:
         from raffle_system.watchtime_converter import WatchtimeConverter
+
         converter = WatchtimeConverter(engine)
         result = await converter.convert_watchtime_to_tickets()
 
         embed = discord.Embed(
             title="🎟️ Watchtime Conversion Result",
-            color=discord.Color.blue() if result['status'] == 'success' else discord.Color.red(),
-            timestamp=datetime.utcnow()
+            color=discord.Color.blue() if result["status"] == "success" else discord.Color.red(),
+            timestamp=datetime.utcnow(),
         )
 
-        embed.add_field(name="Status", value=result['status'], inline=True)
-        embed.add_field(name="Users Converted", value=str(result.get('conversions', 0)), inline=True)
+        embed.add_field(name="Status", value=result["status"], inline=True)
+        embed.add_field(name="Users Converted", value=str(result.get("conversions", 0)), inline=True)
 
-        if result['status'] == 'success' and result.get('details'):
-            details_text = "\n".join([
-                f"• **{d['kick_name']}**: {d['hours_converted']}h → {d['tickets_awarded']} tickets"
-                for d in result['details'][:10]
-            ])
+        if result["status"] == "success" and result.get("details"):
+            details_text = "\n".join(
+                [
+                    f"• **{d['kick_name']}**: {d['hours_converted']}h → {d['tickets_awarded']} tickets"
+                    for d in result["details"][:10]
+                ]
+            )
             embed.add_field(name="Conversions", value=details_text or "None", inline=False)
-        elif result['status'] == 'no_active_period':
+        elif result["status"] == "no_active_period":
             embed.description = "❌ No active raffle period found"
-        elif result['status'] == 'no_users':
+        elif result["status"] == "no_users":
             embed.description = "ℹ️ No linked users with convertible watchtime (need 60+ minutes)"
-        elif result['status'] == 'error':
+        elif result["status"] == "error":
             embed.description = f"❌ Error: {result.get('error', 'Unknown')}"
 
         await ctx.send(embed=embed)
@@ -4700,14 +5392,15 @@ async def convert_watchtime_manual(ctx):
     except Exception as e:
         await ctx.send(f"❌ Error: {str(e)}")
 
+
 @convert_watchtime_manual.error
 async def convert_watchtime_manual_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need administrator permissions to use this command.")
 
+
 @bot.command(name="fixwatchtime")
 @commands.has_permissions(administrator=True)
-
 async def fix_watchtime_for_current_period(ctx):
     """
     [ADMIN] Fix watchtime tracking for current period by snapshotting existing totals
@@ -4729,11 +5422,13 @@ async def fix_watchtime_for_current_period(ctx):
             await ctx.send("❌ No active raffle period found!")
             return
 
-        period_id = period['id']
+        period_id = period["id"]
 
         with engine.begin() as conn:
             # First, get list of users who don't have a snapshot yet
-            users_to_snapshot = conn.execute(text("""
+            users_to_snapshot = conn.execute(
+                text(
+                    """
                 SELECT w.username, w.minutes
                 FROM watchtime w
                 WHERE w.minutes > 0
@@ -4742,22 +5437,30 @@ async def fix_watchtime_for_current_period(ctx):
                     WHERE c.period_id = :period_id
                     AND LOWER(c.kick_name) = LOWER(w.username)
                 )
-            """), {'period_id': period_id}).fetchall()
+            """
+                ),
+                {"period_id": period_id},
+            ).fetchall()
 
             # Insert snapshots for users without one
             affected = 0
             for username, minutes in users_to_snapshot:
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     INSERT INTO raffle_watchtime_converted (period_id, kick_name, minutes_converted, tickets_awarded)
                     VALUES (:period_id, :username, :minutes, 0)
-                """), {'period_id': period_id, 'username': username, 'minutes': minutes})
+                """
+                    ),
+                    {"period_id": period_id, "username": username, "minutes": minutes},
+                )
                 affected += 1
 
         embed = discord.Embed(
             title="✅ Watchtime Tracking Fixed",
             description=f"Snapshotted current watchtime for period #{period_id}",
             color=discord.Color.green(),
-            timestamp=datetime.utcnow()
+            timestamp=datetime.utcnow(),
         )
 
         embed.add_field(name="Users Updated", value=str(affected), inline=True)
@@ -4768,13 +5471,14 @@ async def fix_watchtime_for_current_period(ctx):
     except Exception as e:
         await ctx.send(f"❌ Error: {str(e)}")
 
+
 @fix_watchtime_for_current_period.error
 async def fix_watchtime_for_current_period_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need administrator permissions to use this command.")
 
-@bot.command(name="checkwatchtime")
 
+@bot.command(name="checkwatchtime")
 async def check_watchtime_conversion(ctx, kick_username: str = None):
     """
     Check watchtime conversion status for a user
@@ -4788,10 +5492,15 @@ async def check_watchtime_conversion(ctx, kick_username: str = None):
     if not kick_username:
         try:
             with engine.connect() as conn:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT kick_name FROM links
                     WHERE discord_id = :discord_id AND discord_server_id = :guild_id
-                """), {'discord_id': ctx.author.id, 'guild_id': ctx.guild.id})
+                """
+                    ),
+                    {"discord_id": ctx.author.id, "guild_id": ctx.guild.id},
+                )
                 row = result.fetchone()
                 if row:
                     kick_username = row[0]
@@ -4804,6 +5513,7 @@ async def check_watchtime_conversion(ctx, kick_username: str = None):
 
     try:
         from raffle_system.watchtime_converter import WatchtimeConverter
+
         converter = WatchtimeConverter(engine)
         info = converter.get_unconverted_watchtime(kick_username)
 
@@ -4812,21 +5522,27 @@ async def check_watchtime_conversion(ctx, kick_username: str = None):
             return
 
         embed = discord.Embed(
-            title=f"⏱️ Watchtime Status: {kick_username}",
-            color=discord.Color.blue(),
-            timestamp=datetime.utcnow()
+            title=f"⏱️ Watchtime Status: {kick_username}", color=discord.Color.blue(), timestamp=datetime.utcnow()
         )
 
-        total_hours = info['total_minutes'] / 60
-        converted_hours = info['converted_minutes'] / 60
-        unconverted_hours = info['unconverted_minutes'] / 60
+        total_hours = info["total_minutes"] / 60
+        converted_hours = info["converted_minutes"] / 60
+        unconverted_hours = info["unconverted_minutes"] / 60
 
         embed.add_field(name="Total Watchtime", value=f"{total_hours:.1f}h ({info['total_minutes']} min)", inline=False)
-        embed.add_field(name="Already Converted", value=f"{converted_hours:.1f}h ({info['converted_minutes']} min)", inline=True)
-        embed.add_field(name="Not Yet Converted", value=f"{unconverted_hours:.1f}h ({info['unconverted_minutes']} min)", inline=True)
-        embed.add_field(name="Convertible Now", value=f"{info['convertible_hours']}h → {info['potential_tickets']} tickets", inline=False)
+        embed.add_field(
+            name="Already Converted", value=f"{converted_hours:.1f}h ({info['converted_minutes']} min)", inline=True
+        )
+        embed.add_field(
+            name="Not Yet Converted", value=f"{unconverted_hours:.1f}h ({info['unconverted_minutes']} min)", inline=True
+        )
+        embed.add_field(
+            name="Convertible Now",
+            value=f"{info['convertible_hours']}h → {info['potential_tickets']} tickets",
+            inline=False,
+        )
 
-        if info['unconverted_minutes'] < 60:
+        if info["unconverted_minutes"] < 60:
             embed.set_footer(text=f"Need {60 - info['unconverted_minutes']} more minutes to convert next hour")
         else:
             embed.set_footer(text="Watchtime converts automatically every 10 minutes")
@@ -4836,8 +5552,8 @@ async def check_watchtime_conversion(ctx, kick_username: str = None):
     except Exception as e:
         await ctx.send(f"❌ Error: {str(e)}")
 
-@bot.command(name="commandlist", aliases=["commands"])
 
+@bot.command(name="commandlist", aliases=["commands"])
 async def command_list(ctx):
     """
     Show available bot commands for regular users
@@ -4847,17 +5563,14 @@ async def command_list(ctx):
         title="📋 User Commands",
         description="Commands available to everyone",
         color=discord.Color.blue(),
-        timestamp=datetime.utcnow()
+        timestamp=datetime.utcnow(),
     )
 
     # Account Linking
     embed.add_field(
         name="🔗 Account Linking",
-        value=(
-            "`!link <kick_username>` - Link your Kick account\n"
-            "`!unlink` - Unlink your Kick account"
-        ),
-        inline=False
+        value=("`!link <kick_username>` - Link your Kick account\n" "`!unlink` - Unlink your Kick account"),
+        inline=False,
     )
 
     # Watchtime & Stats
@@ -4868,7 +5581,7 @@ async def command_list(ctx):
             "`!leaderboard` - View watchtime leaderboard\n"
             "`!checkwatchtime [kick_username]` - Check watchtime conversion status"
         ),
-        inline=False
+        inline=False,
     )
 
     # Raffle System
@@ -4880,16 +5593,16 @@ async def command_list(ctx):
             "`!raffleinfo` - View raffle period information\n"
             "`!linkshuffle <username>` - Link gambling account for wager tracking"
         ),
-        inline=False
+        inline=False,
     )
 
     embed.set_footer(text="Admins: Use !admincommands to see administrator commands")
 
     await ctx.send(embed=embed)
 
+
 @bot.command(name="admincommands", aliases=["adminhelp"])
 @commands.has_permissions(administrator=True)
-
 async def admin_command_list(ctx):
     """
     Show all available administrator commands
@@ -4899,7 +5612,7 @@ async def admin_command_list(ctx):
         title="🔧 Administrator Commands",
         description="Commands available to server administrators",
         color=discord.Color.red(),
-        timestamp=datetime.utcnow()
+        timestamp=datetime.utcnow(),
     )
 
     # Tracking Control
@@ -4911,7 +5624,7 @@ async def admin_command_list(ctx):
             "`!tracking debug [on|off]` - Toggle debug mode\n"
             "`!linklogs` - View recent account links"
         ),
-        inline=False
+        inline=False,
     )
 
     # Role Management
@@ -4925,7 +5638,7 @@ async def admin_command_list(ctx):
             "`!roles enable/disable <name>` - Toggle role\n"
             "`!roles members <name>` - List members with role"
         ),
-        inline=False
+        inline=False,
     )
 
     # Raffle Management
@@ -4942,7 +5655,7 @@ async def admin_command_list(ctx):
             "`!convertwatchtime` - Manually convert watchtime\n"
             "`!fixwatchtime` - Fix watchtime tracking"
         ),
-        inline=False
+        inline=False,
     )
 
     # Slot Requests
@@ -4954,7 +5667,7 @@ async def admin_command_list(ctx):
             "`!callblacklist remove <username>` - Unblock user\n"
             "`!callblacklist list` - View blacklisted users"
         ),
-        inline=False
+        inline=False,
     )
 
     # Testing & Debug
@@ -4965,26 +5678,25 @@ async def admin_command_list(ctx):
             "`!systemstatus` - Check system initialization\n"
             "`!health` - Bot health check"
         ),
-        inline=False
+        inline=False,
     )
 
     # Setup Commands
     embed.add_field(
         name="⚙️ Setup",
         value=(
-            "`!createlinkpanel` - Create button-based linking panel\n"
-            "`!post_link_info` - Post linking instructions"
+            "`!createlinkpanel` - Create button-based linking panel\n" "`!post_link_info` - Post linking instructions"
         ),
-        inline=False
+        inline=False,
     )
 
     embed.set_footer(text="Regular users: Use !commandlist to see user commands")
 
     await ctx.send(embed=embed)
 
+
 @bot.command(name="systemstatus")
 @commands.has_permissions(administrator=True)
-
 async def raffle_system_info(ctx):
     """
     [ADMIN/DEBUG] Check raffle system initialization status
@@ -4994,17 +5706,13 @@ async def raffle_system_info(ctx):
     if not guild_id:
         await ctx.send("❌ This command must be used in a server.")
         return
-    
+
     # Get guild-specific trackers
     gifted_sub_tracker = gifted_sub_trackers.get(guild_id)
     shuffle_tracker = shuffle_trackers.get(guild_id)
     slot_call_tracker = slot_call_trackers.get(guild_id)
 
-    embed = discord.Embed(
-        title="🎰 Raffle System Status",
-        color=discord.Color.blue(),
-        timestamp=datetime.utcnow()
-    )
+    embed = discord.Embed(title="🎰 Raffle System Status", color=discord.Color.blue(), timestamp=datetime.utcnow())
 
     # Check each component
     sub_status = "✅ Initialized" if gifted_sub_tracker else "❌ Not initialized"
@@ -5033,18 +5741,21 @@ async def raffle_system_info(ctx):
         except Exception as e:
             embed.add_field(name="Current Raffle Period", value=f"❌ Error: {str(e)[:100]}", inline=False)
 
-    embed.set_footer(text=f"Bot uptime: {datetime.now() - bot.uptime_start if hasattr(bot, 'uptime_start') else 'Unknown'}")
+    embed.set_footer(
+        text=f"Bot uptime: {datetime.now() - bot.uptime_start if hasattr(bot, 'uptime_start') else 'Unknown'}"
+    )
 
     await ctx.send(embed=embed)
+
 
 @raffle_system_info.error
 async def raffle_system_info_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need administrator permissions to use this command.")
 
+
 @bot.command(name="setup_link_panel")
 @commands.has_permissions(manage_guild=True)
-
 async def setup_link_panel(ctx, emoji: str = "🔗"):
     """
     Admin command to create a pinned message for reaction-based OAuth linking.
@@ -5065,7 +5776,7 @@ async def setup_link_panel(ctx, emoji: str = "🔗"):
     embed = discord.Embed(
         title="🎮 Link Your Kick Account",
         description=f"React with {emoji} below to link your Discord account with your Kick account!",
-        color=0x53FC18
+        color=0x53FC18,
     )
     embed.set_footer(text="Contact an admin if you need to unlink your account")
 
@@ -5086,27 +5797,38 @@ async def setup_link_panel(ctx, emoji: str = "🔗"):
     # Store in database
     with engine.begin() as conn:
         # Remove any existing link panel for this channel (only one per channel)
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
             DELETE FROM link_panels
             WHERE guild_id = :g AND channel_id = :c
-        """), {"g": ctx.guild.id, "c": ctx.channel.id})
+        """
+            ),
+            {"g": ctx.guild.id, "c": ctx.channel.id},
+        )
 
         # Insert new link panel
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
             INSERT INTO link_panels (guild_id, channel_id, message_id, emoji)
             VALUES (:g, :c, :m, :e)
-        """), {"g": ctx.guild.id, "c": ctx.channel.id, "m": message.id, "e": emoji})
+        """
+            ),
+            {"g": ctx.guild.id, "c": ctx.channel.id, "m": message.id, "e": emoji},
+        )
 
     await ctx.send(f"✅ Link panel created! Users can now react with {emoji} to start the OAuth linking process.")
+
 
 @setup_link_panel.error
 async def setup_link_panel_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need 'Manage Server' permission to use this command.")
 
+
 @bot.command(name="post_link_info")
 @commands.has_permissions(manage_guild=True)
-
 async def post_link_info(ctx):
     """
     Admin command to post an informational embed explaining why users should link their accounts.
@@ -5119,37 +5841,33 @@ async def post_link_info(ctx):
     embed = discord.Embed(
         title="🔗 Link Your Kick Account to Discord!",
         description="Connect your Kick account to unlock exclusive benefits in Maikelele's community!",
-        color=0x53FC18
+        color=0x53FC18,
     )
 
-    embed.add_field(
-        name="📝 Why Link Your Account?",
-        value="** **",  # Spacer
-        inline=False
-    )
+    embed.add_field(name="📝 Why Link Your Account?", value="** **", inline=False)  # Spacer
 
     embed.add_field(
         name="🎁 Enter Giveaways",
         value="• Only linked accounts can participate\n• Ensures fair distribution to real viewers\n• No alt accounts allowed",
-        inline=False
+        inline=False,
     )
 
     embed.add_field(
         name="🏆 Automatic Role Rewards",
         value="• Earn roles based on Kick chat activity\n• Get recognized for your watch time",
-        inline=False
+        inline=False,
     )
 
     embed.add_field(
         name="🛡️ Verified Member Status",
         value="• Prove you're a real supporter\n• Stand out in the community\n• Help keep the server authentic",
-        inline=False
+        inline=False,
     )
 
     embed.add_field(
         name="⚡ How to Link (Easy!)",
         value="React with 🔗 on the pinned message above!\n\n1. Click the 🔗 reaction\n2. Check your DMs for a secure link\n3. Authorize with your Kick account\n4. Done! Your accounts are now linked\n\n*Note: Contact an admin if you need to unlink*",
-        inline=False
+        inline=False,
     )
 
     embed.set_footer(text="🔒 Your data is secure • Takes less than 30 seconds")
@@ -5165,14 +5883,15 @@ async def post_link_info(ctx):
     except discord.HTTPException:
         pass
 
+
 @post_link_info.error
 async def post_link_info_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need 'Manage Server' permission to use this command.")
 
+
 @bot.command(name="health")
 @commands.has_permissions(manage_guild=True)
-
 async def health_check(ctx):
     """
     Admin command to check if all bot systems are functioning correctly.
@@ -5187,11 +5906,7 @@ async def health_check(ctx):
     - WebSocket connection
     """
 
-    embed = discord.Embed(
-        title="🏥 System Health Check",
-        description="Checking all bot systems...",
-        color=0x3498db
-    )
+    embed = discord.Embed(title="🏥 System Health Check", description="Checking all bot systems...", color=0x3498DB)
 
     status_msg = await ctx.send(embed=embed)
 
@@ -5230,11 +5945,11 @@ async def health_check(ctx):
     try:
         guild_id = ctx.guild.id if ctx.guild else None
         guild_settings = get_guild_settings(guild_id) if guild_id else None
-        
+
         if guild_settings:
             kick_channel = guild_settings.kick_channel
             kick_chatroom_id = guild_settings.kick_chatroom_id
-            
+
             if kick_chatroom_id:
                 checks.append(f"✅ **Kick Chatroom ID**: Configured ({kick_chatroom_id})")
             elif kick_channel:
@@ -5313,17 +6028,24 @@ async def health_check(ctx):
             tables_check = []
 
             # Check watchtime table for this guild
-            result = conn.execute(text("SELECT COUNT(*) FROM watchtime WHERE discord_server_id = :guild_id"), {"guild_id": guild_id})
+            result = conn.execute(
+                text("SELECT COUNT(*) FROM watchtime WHERE discord_server_id = :guild_id"), {"guild_id": guild_id}
+            )
             watchtime_count = result.fetchone()[0]
             tables_check.append(f"{watchtime_count} viewers")
 
             # Check links table for this guild
-            result = conn.execute(text("SELECT COUNT(*) FROM links WHERE discord_server_id = :guild_id"), {"guild_id": guild_id})
+            result = conn.execute(
+                text("SELECT COUNT(*) FROM links WHERE discord_server_id = :guild_id"), {"guild_id": guild_id}
+            )
             links_count = result.fetchone()[0]
             tables_check.append(f"{links_count} linked accounts")
 
             # Check watchtime_roles table for this guild
-            result = conn.execute(text("SELECT COUNT(*) FROM watchtime_roles WHERE enabled = true AND discord_server_id = :guild_id"), {"guild_id": guild_id})
+            result = conn.execute(
+                text("SELECT COUNT(*) FROM watchtime_roles WHERE enabled = true AND discord_server_id = :guild_id"),
+                {"guild_id": guild_id},
+            )
             roles_count = result.fetchone()[0]
             tables_check.append(f"{roles_count} active roles")
 
@@ -5333,14 +6055,14 @@ async def health_check(ctx):
         has_warnings = True
 
     # 7. WebSocket Status
-    if hasattr(bot, 'ws') and bot.ws:
+    if hasattr(bot, "ws") and bot.ws:
         checks.append(f"✅ **WebSocket**: Connected")
     else:
         checks.append(f"⚠️ **WebSocket**: Not connected")
         has_warnings = True
 
     # 8. Uptime
-    if hasattr(bot, 'uptime_start'):
+    if hasattr(bot, "uptime_start"):
         uptime = datetime.now() - bot.uptime_start
         hours, remainder = divmod(int(uptime.total_seconds()), 3600)
         minutes, seconds = divmod(remainder, 60)
@@ -5349,20 +6071,17 @@ async def health_check(ctx):
     # Determine overall status
     if has_errors:
         overall_status = "❌ System Issues Detected"
-        color = 0xe74c3c  # Red
+        color = 0xE74C3C  # Red
     elif has_warnings:
         overall_status = "⚠️ System Operational with Warnings"
-        color = 0xf39c12  # Orange
+        color = 0xF39C12  # Orange
     else:
         overall_status = "✅ All Systems Operational"
-        color = 0x2ecc71  # Green
+        color = 0x2ECC71  # Green
 
     # Update embed
     embed = discord.Embed(
-        title="🏥 System Health Check",
-        description=overall_status,
-        color=color,
-        timestamp=datetime.now()
+        title="🏥 System Health Check", description=overall_status, color=color, timestamp=datetime.now()
     )
 
     for check in checks:
@@ -5372,10 +6091,12 @@ async def health_check(ctx):
 
     await status_msg.edit(embed=embed)
 
+
 @health_check.error
 async def health_check_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You need 'Manage Server' permission to use this command.")
+
 
 # -------------------------
 # Helper Functions
@@ -5392,12 +6113,17 @@ async def sync_shuffle_role_on_startup(bot, engine):
 
             # Get all verified Shuffle links for this guild
             with engine.begin() as conn:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT DISTINCT discord_id
                     FROM raffle_shuffle_links
                     WHERE verified = TRUE
                         AND (discord_server_id IS NULL OR discord_server_id = :guild_id)
-                """), {"guild_id": guild.id})
+                """
+                    ),
+                    {"guild_id": guild.id},
+                )
                 verified_discord_ids = {row[0] for row in result.fetchall()}
 
             if not verified_discord_ids:
@@ -5432,13 +6158,14 @@ async def sync_shuffle_role_on_startup(bot, engine):
     except Exception as e:
         print(f"⚠️ Error syncing Shuffle roles on startup: {e}")
 
+
 # -------------------------
 # Bot events
 # -------------------------
 @bot.event
 async def on_ready():
     # Track bot uptime for health checks
-    if not hasattr(bot, 'uptime_start'):
+    if not hasattr(bot, "uptime_start"):
         bot.uptime_start = datetime.now()
 
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
@@ -5453,16 +6180,21 @@ async def on_ready():
             kick_channel = None
             try:
                 with engine.connect() as conn:
-                    row = conn.execute(text("""
+                    row = conn.execute(
+                        text(
+                            """
                         SELECT value FROM bot_settings
                         WHERE key = 'kick_channel' AND discord_server_id = :gid
                         LIMIT 1
-                    """), {"gid": guild.id}).fetchone()
+                    """
+                        ),
+                        {"gid": guild.id},
+                    ).fetchone()
                     if row and row[0]:
                         kick_channel = row[0]
             except Exception as e:
                 print(f"[{guild.name}] ⚠️ Error loading kick_channel: {e}")
-            
+
             if kick_channel:
                 await kick_ws_manager.ensure_connection(guild.id, guild.name)
                 print(f"[{guild.name}] ✅ kickpython WebSocket started: {kick_channel}")
@@ -5475,16 +6207,21 @@ async def on_ready():
             kick_channel = None
             try:
                 with engine.connect() as conn:
-                    row = conn.execute(text("""
+                    row = conn.execute(
+                        text(
+                            """
                         SELECT value FROM bot_settings
                         WHERE key = 'kick_channel' AND discord_server_id = :gid
                         LIMIT 1
-                    """), {"gid": guild.id}).fetchone()
+                    """
+                        ),
+                        {"gid": guild.id},
+                    ).fetchone()
                     if row and row[0]:
                         kick_channel = row[0]
             except Exception as e:
                 print(f"[{guild.name}] ⚠️ Error loading kick_channel: {e}")
-            
+
             if kick_channel:
                 asyncio.create_task(kick_chat_loop(kick_channel, guild.id))
                 print(f"[{guild.name}] ✅ Pusher WebSocket started: {kick_channel}")
@@ -5516,7 +6253,9 @@ async def on_ready():
             with engine.begin() as conn:
                 # Create slot_call_blacklist table if missing
                 print("🔄 Checking slot_call_blacklist table...")
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     CREATE TABLE IF NOT EXISTS slot_call_blacklist (
                         kick_username TEXT,
                         discord_server_id BIGINT,
@@ -5525,31 +6264,41 @@ async def on_ready():
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         PRIMARY KEY (kick_username, discord_server_id)
                     )
-                """))
+                """
+                    )
+                )
                 print("✅ slot_call_blacklist table ready")
-                
+
                 # Add provably fair columns to giveaways table
                 print("🔄 Checking provably fair columns in giveaways table...")
-                conn.execute(text("""
-                    ALTER TABLE giveaways 
+                conn.execute(
+                    text(
+                        """
+                    ALTER TABLE giveaways
                     ADD COLUMN IF NOT EXISTS server_seed TEXT,
                     ADD COLUMN IF NOT EXISTS client_seed TEXT,
                     ADD COLUMN IF NOT EXISTS nonce TEXT,
                     ADD COLUMN IF NOT EXISTS proof_hash TEXT,
                     ADD COLUMN IF NOT EXISTS random_value NUMERIC(5,2)
-                """))
+                """
+                    )
+                )
                 print("✅ Provably fair columns added to giveaways table")
-                
+
                 # Add provably fair columns to slot_requests table
                 print("🔄 Checking provably fair columns in slot_requests table...")
-                conn.execute(text("""
-                    ALTER TABLE slot_requests 
+                conn.execute(
+                    text(
+                        """
+                    ALTER TABLE slot_requests
                     ADD COLUMN IF NOT EXISTS server_seed TEXT,
                     ADD COLUMN IF NOT EXISTS client_seed TEXT,
                     ADD COLUMN IF NOT EXISTS nonce TEXT,
                     ADD COLUMN IF NOT EXISTS proof_hash TEXT,
                     ADD COLUMN IF NOT EXISTS random_value NUMERIC(5,2)
-                """))
+                """
+                    )
+                )
                 print("✅ Provably fair columns added to slot_requests table")
         except Exception as e:
             print(f"⚠️ Database migration check failed: {e}")
@@ -5560,7 +6309,7 @@ async def on_ready():
             me = guild.me
             if not me.guild_permissions.manage_roles:
                 print(f"⚠️ [Guild {guild.name}] Bot lacks manage_roles permission!")
-            
+
             # Validate roles exist
             current_roles = load_watchtime_roles()
             existing_roles = {role.name for role in guild.roles}
@@ -5610,13 +6359,13 @@ async def on_ready():
             for guild in bot.guilds:
                 print(f"[Init] Loading settings for guild {guild.name} ({guild.id})...")
                 guild_settings = get_guild_settings(guild.id)
-                
+
                 # Debug: Print loaded settings
                 print(f"[Init] Guild {guild.name} loaded {len(guild_settings._cache)} settings:")
                 print(f"  - kick_channel: '{guild_settings.kick_channel}'")
                 print(f"  - slot_calls_channel_id: {guild_settings.slot_calls_channel_id}")
                 print(f"  - raffle_announcement_channel_id: {guild_settings.raffle_announcement_channel_id}")
-                
+
                 # Ensure this guild has an active raffle period
                 current_period = get_current_period(engine, discord_server_id=guild.id)
                 if not current_period:
@@ -5631,9 +6380,11 @@ async def on_ready():
                     print(f"✅ [Guild {guild.name}] Created initial raffle period #{period_id}")
                 else:
                     print(f"✅ [Guild {guild.name}] Active raffle period found (#{current_period['id']})")
-                
+
                 # Setup gifted sub tracker for this guild
-                gifted_sub_trackers[guild.id] = setup_gifted_sub_handler(engine, server_id=guild.id, bot_settings=guild_settings)
+                gifted_sub_trackers[guild.id] = setup_gifted_sub_handler(
+                    engine, server_id=guild.id, bot_settings=guild_settings
+                )
                 print(f"✅ [Guild {guild.name}] Gifted sub tracker initialized")
 
                 # Setup watchtime converter for this guild (runs every 10 minutes)
@@ -5641,13 +6392,15 @@ async def on_ready():
                 print(f"✅ [Guild {guild.name}] Watchtime converter initialized")
 
                 # Setup Shuffle wager tracker for this guild
-                shuffle_trackers[guild.id] = await setup_shuffle_tracker(bot, engine, server_id=guild.id, bot_settings=guild_settings)
+                shuffle_trackers[guild.id] = await setup_shuffle_tracker(
+                    bot, engine, server_id=guild.id, bot_settings=guild_settings
+                )
                 print(f"✅ [Guild {guild.name}] Shuffle tracker initialized")
 
                 # Setup auto-updating leaderboard for this guild
                 leaderboard_channel_id = guild_settings.raffle_leaderboard_channel_id
                 auto_leaderboard = await setup_auto_leaderboard(bot, engine, leaderboard_channel_id, server_id=guild.id)
-                if not hasattr(bot, 'auto_leaderboards'):
+                if not hasattr(bot, "auto_leaderboards"):
                     bot.auto_leaderboards = {}
                 bot.auto_leaderboards[guild.id] = auto_leaderboard
                 print(f"📊 [Guild {guild.name}] Leaderboard channel: {leaderboard_channel_id or 'Not configured'}")
@@ -5660,40 +6413,45 @@ async def on_ready():
                     engine=engine,
                     auto_draw=raffle_auto_draw,
                     announcement_channel_id=raffle_channel_id,
-                    discord_server_id=guild.id
+                    discord_server_id=guild.id,
                 )
                 print(f"✅ [Guild {guild.name}] Raffle system initialized (auto-draw: {raffle_auto_draw})")
 
                 # Create slot call tracker for this guild (but don't register cog yet)
                 from features.slot_requests.slot_calls import SlotCallTracker
+
                 slot_calls_channel_id = guild_settings.slot_calls_channel_id
                 slot_call_trackers[guild.id] = SlotCallTracker(
                     bot=bot,
                     discord_channel_id=slot_calls_channel_id,
                     kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None,
                     engine=engine,
-                    server_id=guild.id
+                    server_id=guild.id,
                 )
-                if not hasattr(bot, 'slot_call_trackers_by_guild'):
+                if not hasattr(bot, "slot_call_trackers_by_guild"):
                     bot.slot_call_trackers_by_guild = {}
                 bot.slot_call_trackers_by_guild[guild.id] = slot_call_trackers[guild.id]
-                print(f"✅ [Guild {guild.name}] Slot call tracker initialized (channel: {slot_calls_channel_id or 'Not configured'})")
+                print(
+                    f"✅ [Guild {guild.name}] Slot call tracker initialized (channel: {slot_calls_channel_id or 'Not configured'})"
+                )
 
                 # Setup Guess the Balance manager for this guild
                 gtb_managers[guild.id] = GuessTheBalanceManager(engine, guild.id)
-                if not hasattr(bot, 'gtb_managers_by_guild'):
+                if not hasattr(bot, "gtb_managers_by_guild"):
                     bot.gtb_managers_by_guild = {}
                 bot.gtb_managers_by_guild[guild.id] = gtb_managers[guild.id]
                 print(f"✅ [Guild {guild.name}] GTB system initialized")
-                
+
                 # Setup Custom Commands manager for this guild
                 custom_commands_manager = CustomCommandsManager(
                     bot=bot,
-                    send_message_callback=lambda msg, gid=guild.id: asyncio.create_task(send_kick_message(msg, guild_id=gid)),
-                    discord_server_id=guild.id
+                    send_message_callback=lambda msg, gid=guild.id: asyncio.create_task(
+                        send_kick_message(msg, guild_id=gid)
+                    ),
+                    discord_server_id=guild.id,
                 )
                 await custom_commands_manager.start()  # Load commands from database
-                if not hasattr(bot, 'custom_commands_managers'):
+                if not hasattr(bot, "custom_commands_managers"):
                     bot.custom_commands_managers = {}
                 bot.custom_commands_managers[guild.id] = custom_commands_manager
                 print(f"✅ [Guild {guild.name}] Custom commands system initialized")
@@ -5705,6 +6463,7 @@ async def on_ready():
             # These cogs will use the per-guild trackers from bot.slot_call_trackers_by_guild
             if slot_call_trackers:
                 from features.slot_requests.slot_calls import SlotCallCommands
+
                 first_tracker = list(slot_call_trackers.values())[0]  # Use first guild's tracker for cog
                 await bot.add_cog(SlotCallCommands(bot, first_tracker))
                 print(f"✅ Slot call commands cog registered")
@@ -5714,41 +6473,44 @@ async def on_ready():
             for guild in bot.guilds:
                 # Create panel instances
                 from features.slot_requests.slot_request_panel import SlotRequestPanel
+
                 slot_panel = SlotRequestPanel(
-                    bot, 
-                    engine, 
+                    bot,
+                    engine,
                     slot_call_trackers[guild.id],
-                    kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
+                    kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None,
                 )
                 slot_call_trackers[guild.id].panel = slot_panel
-                
-                if not hasattr(bot, 'slot_panels_by_guild'):
+
+                if not hasattr(bot, "slot_panels_by_guild"):
                     bot.slot_panels_by_guild = {}
                 bot.slot_panels_by_guild[guild.id] = slot_panel
                 print(f"✅ [Guild {guild.name}] Slot request panel initialized")
 
                 # Setup GTB panel for this guild (just the instance, no commands)
                 from features.games.gtb_panel import GTBPanel
+
                 gtb_panel = GTBPanel(
                     bot,
                     engine,
                     gtb_managers[guild.id],
                     kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None,
-                    guild_id=guild.id
+                    guild_id=guild.id,
                 )
-                if not hasattr(bot, 'gtb_panels_by_guild'):
+                if not hasattr(bot, "gtb_panels_by_guild"):
                     bot.gtb_panels_by_guild = {}
                 bot.gtb_panels_by_guild[guild.id] = gtb_panel
                 print(f"✅ [Guild {guild.name}] GTB panel initialized")
-                
+
                 # Add cogs only once on first iteration
                 if first_guild:
                     from features.slot_requests.slot_request_panel import SlotRequestPanelCommands
+
                     await bot.add_cog(SlotRequestPanelCommands(bot, slot_panel))
                     print(f"✅ Slot request panel commands cog registered")
-                    
+
                     # Add GTB panel command (only once)
-                    @bot.command(name='creategtbpanel')
+                    @bot.command(name="creategtbpanel")
                     @commands.has_permissions(administrator=True)
                     async def create_gtb_panel_cmd(ctx):
                         """[ADMIN] Create the GTB panel in this channel"""
@@ -5761,7 +6523,7 @@ async def on_ready():
                             await ctx.send("✅ GTB panel created!")
                         else:
                             await ctx.send("❌ Failed to create GTB panel.")
-                    
+
                     print(f"✅ GTB panel commands registered")
                     first_guild = False
 
@@ -5769,7 +6531,7 @@ async def on_ready():
             # Setup raffle commands (global cog)
             await setup_raffle_commands(bot, engine)
             print("✅ Raffle commands setup complete")
-            
+
             # Set legacy global references (use first guild for backward compatibility)
             if bot.guilds:
                 first_guild_id = bot.guilds[0].id
@@ -5784,45 +6546,38 @@ async def on_ready():
 
             print("📝 About to setup link panel...")
             # Setup link panel with per-guild instances
-            link_panels = await setup_link_panel_system(
-                bot,
-                engine,
-                generate_signed_oauth_url
-            )
+            link_panels = await setup_link_panel_system(bot, engine, generate_signed_oauth_url)
             # Store as bot attribute
             bot.link_panels = link_panels
-            
+
             # Legacy single panel reference (use first guild for backwards compatibility)
             if link_panels:
                 bot.link_panel = next(iter(link_panels.values()))
-            
+
             print(f"✅ Link panel system initialized ({len(link_panels)} guilds)")
 
             # Setup timed messages system with per-guild instances
             timed_messages_managers = await setup_timed_messages(
-                bot,
-                engine,
-                kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
+                bot, engine, kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
             )
             # Store as bot attribute for Redis subscriber and commands
             bot.timed_messages_managers = timed_messages_managers
-            
+
             # Legacy single manager reference (use first guild for backwards compatibility)
             if timed_messages_managers:
                 bot.timed_messages_manager = next(iter(timed_messages_managers.values()))
 
             if KICK_BOT_USER_TOKEN:
                 total_messages = sum(len(mgr.messages) for mgr in timed_messages_managers.values())
-                print(f"✅ Timed messages system initialized ({len(timed_messages_managers)} guilds, {total_messages} total messages)")
+                print(
+                    f"✅ Timed messages system initialized ({len(timed_messages_managers)} guilds, {total_messages} total messages)"
+                )
             else:
                 print("ℹ️  Timed messages disabled (set KICK_BOT_USER_TOKEN to enable)")
 
             # Setup custom commands manager
             if KICK_BOT_USER_TOKEN:
-                custom_commands_manager = CustomCommandsManager(
-                    bot,
-                    send_message_callback=send_kick_message
-                )
+                custom_commands_manager = CustomCommandsManager(bot, send_message_callback=send_kick_message)
                 await custom_commands_manager.start()
                 # Store as bot attribute for Redis subscriber
                 bot.custom_commands_manager = custom_commands_manager
@@ -5839,6 +6594,7 @@ async def on_ready():
         except Exception as e:
             print(f"⚠️ Failed to initialize raffle system: {e}")
             import traceback
+
             traceback.print_exc()
 
     except Exception as e:
@@ -5848,8 +6604,8 @@ async def on_ready():
     # DUAL MODE: Webhooks for chat + Pusher for subscription events
     # Webhooks handle: chat messages, commands, watchtime
     # Pusher handles: gifted subs, subscriptions (not available as webhooks yet)
-    use_dual_mode = os.getenv('USE_DUAL_MODE', 'true').lower() == 'true'
-    
+    use_dual_mode = os.getenv("USE_DUAL_MODE", "true").lower() == "true"
+
     if use_dual_mode:
         if KICK_USE_KICKPYTHON_WS:
             print(f"✅ Running in DUAL MODE: Webhooks + kickpython WebSocket")
@@ -5860,12 +6616,12 @@ async def on_ready():
             print(f"✅ Running in DUAL MODE: Webhooks + Pusher")
             print(f"   • Webhooks: chat.message.sent (registered via OAuth)")
             print(f"   • Pusher: subscription events (no webhook support yet)")
-            
+
             for guild in bot.guilds:
                 try:
                     guild_settings = get_guild_settings(guild.id)
                     kick_channel = guild_settings.kick_channel
-                    
+
                     if kick_channel and kick_channel.strip():
                         bot.loop.create_task(kick_chat_loop(kick_channel, guild.id))
                         print(f"✅ [{guild.name}] Pusher listener started for subscription events → {kick_channel}")
@@ -5878,25 +6634,26 @@ async def on_ready():
         print(f"✅ Using webhooks only (Pusher disabled)")
         print(f"   ⚠️ WARNING: Gifted sub raffle tracking will not work!")
         print(f"   Set USE_DUAL_MODE=true to enable Pusher for subscription events")
-    
+
     # ========== MERGED CODE FROM SECOND ON_READY ==========
     # Additional slot tracker initialization with backwards compatibility
-    print('\n⚙️  Ensuring slot tracker backwards compatibility...')
-    if not hasattr(bot, 'slot_trackers'):
+    print("\n⚙️  Ensuring slot tracker backwards compatibility...")
+    if not hasattr(bot, "slot_trackers"):
         bot.slot_trackers = {}
-    
+
     # Set default slot_call_tracker for backwards compatibility (use first guild)
-    if slot_call_trackers and not hasattr(bot, 'slot_call_tracker'):
+    if slot_call_trackers and not hasattr(bot, "slot_call_tracker"):
         first_guild_id = list(slot_call_trackers.keys())[0] if slot_call_trackers else None
         if first_guild_id:
             bot.slot_call_tracker = slot_call_trackers[first_guild_id]
             bot.slot_trackers = slot_call_trackers  # Also expose as slot_trackers
-            print(f'✅ Backwards compatibility attributes set')
-    
+            print(f"✅ Backwards compatibility attributes set")
+
     print(f'\n{"="*60}')
-    print('🎉 Bot initialization complete - ready to receive commands!')
+    print("🎉 Bot initialization complete - ready to receive commands!")
     print(f'{"="*60}\n')
     # ========== END MERGED CODE ==========
+
 
 async def handle_timer_panel_reaction(payload):
     """Handle reactions on timer panel messages."""
@@ -5914,10 +6671,7 @@ async def handle_timer_panel_reaction(payload):
     if not member.guild_permissions.administrator:
         channel = bot.get_channel(payload.channel_id)
         if channel:
-            await channel.send(
-                f"❌ {member.mention} Only administrators can use the timer panel!",
-                delete_after=5
-            )
+            await channel.send(f"❌ {member.mention} Only administrators can use the timer panel!", delete_after=5)
         # Remove reaction
         try:
             message = await channel.fetch_message(payload.message_id)
@@ -5943,19 +6697,17 @@ async def handle_timer_panel_reaction(payload):
         embed = discord.Embed(
             title="⏰ Timed Messages Control Panel",
             description="React to this message to manage timers:\n\n"
-                       " - Refresh panel\n"
-                       "📋 - Show list of timers\n"
-                       "❌ - Disable timer (will ask for ID)\n"
-                       "✅ - Enable timer (will ask for ID)",
+            " - Refresh panel\n"
+            "📋 - Show list of timers\n"
+            "❌ - Disable timer (will ask for ID)\n"
+            "✅ - Enable timer (will ask for ID)",
             color=discord.Color.blue(),
-            timestamp=datetime.utcnow()
+            timestamp=datetime.utcnow(),
         )
 
         if not messages:
             embed.add_field(
-                name="📭 No Timers",
-                value="Use `!addtimer <minutes> <message>` to create one!",
-                inline=False
+                name="📭 No Timers", value="Use `!addtimer <minutes> <message>` to create one!", inline=False
             )
         else:
             enabled_count = sum(1 for m in messages if m.enabled)
@@ -5969,7 +6721,7 @@ async def handle_timer_panel_reaction(payload):
 
             for i, msg in enumerate(messages[:10], 1):
                 status_emoji = "✅" if msg.enabled else "❌"
-                last_sent = msg.last_sent.strftime('%H:%M') if msg.last_sent else "Never"
+                last_sent = msg.last_sent.strftime("%H:%M") if msg.last_sent else "Never"
 
                 if msg.enabled and msg.last_sent:
                     next_send = msg.last_sent + timedelta(minutes=msg.interval_minutes)
@@ -5993,7 +6745,7 @@ async def handle_timer_panel_reaction(payload):
                 embed.add_field(
                     name="ℹ️ More Timers",
                     value=f"Showing 10 of {len(messages)}. Use `!listtimers` to see all.",
-                    inline=False
+                    inline=False,
                 )
 
         embed.add_field(
@@ -6002,25 +6754,21 @@ async def handle_timer_panel_reaction(payload):
                 "`!addtimer <min> <msg>` • `!removetimer <id>`\n"
                 "`!toggletimer <id> on/off` • `!updatetimer <id> <min>`"
             ),
-            inline=False
+            inline=False,
         )
         embed.set_footer(text=f"Checks every 1 minute • React to manage")
 
         await message.edit(embed=embed)
 
     elif reaction_emoji == "📋":  # Show list of timers
-        embed = discord.Embed(
-            title="📋 All Timers",
-            color=discord.Color.blue(),
-            timestamp=datetime.utcnow()
-        )
+        embed = discord.Embed(title="📋 All Timers", color=discord.Color.blue(), timestamp=datetime.utcnow())
 
         if not messages:
             embed.description = "No timers configured"
         else:
             for msg in messages[:20]:  # Show up to 20
                 status_emoji = "✅" if msg.enabled else "❌"
-                last_sent = msg.last_sent.strftime('%H:%M') if msg.last_sent else "Never"
+                last_sent = msg.last_sent.strftime("%H:%M") if msg.last_sent else "Never"
 
                 if msg.enabled and msg.last_sent:
                     next_send = msg.last_sent + timedelta(minutes=msg.interval_minutes)
@@ -6036,11 +6784,13 @@ async def handle_timer_panel_reaction(payload):
                 embed.add_field(
                     name=f"{status_emoji} Timer ID: {msg.message_id}",
                     value=f"**Every:** {msg.interval_minutes}m | **Next:** {next_info}\n{msg.message[:80]}{'...' if len(msg.message) > 80 else ''}",
-                    inline=False
+                    inline=False,
                 )
 
             if len(messages) > 20:
-                embed.set_footer(text=f"Showing 20 of {len(messages)} • Use !listtimers to see all • React 🔄 to go back")
+                embed.set_footer(
+                    text=f"Showing 20 of {len(messages)} • Use !listtimers to see all • React 🔄 to go back"
+                )
             else:
                 embed.set_footer(text=f"{len(messages)} total • React  to go back")
 
@@ -6050,13 +6800,18 @@ async def handle_timer_panel_reaction(payload):
         embed = discord.Embed(
             title="❌ Disable Timer",
             description=f"{member.mention}, please reply with the **Timer ID** you want to disable.\n\nYou have 30 seconds to respond.",
-            color=discord.Color.red()
+            color=discord.Color.red(),
         )
 
         if messages:
             enabled = [m for m in messages if m.enabled]
             if enabled:
-                timer_list = "\n".join([f"• **ID {m.message_id}**: {m.message[:50]}{'...' if len(m.message) > 50 else ''}" for m in enabled[:10]])
+                timer_list = "\n".join(
+                    [
+                        f"• **ID {m.message_id}**: {m.message[:50]}{'...' if len(m.message) > 50 else ''}"
+                        for m in enabled[:10]
+                    ]
+                )
                 embed.add_field(name="Enabled Timers:", value=timer_list, inline=False)
             else:
                 embed.description = "No enabled timers to disable!"
@@ -6069,9 +6824,9 @@ async def handle_timer_panel_reaction(payload):
             return m.author.id == member.id and m.channel.id == channel.id
 
         try:
-            response = await bot.wait_for('message', timeout=30.0, check=check)
+            response = await bot.wait_for("message", timeout=30.0, check=check)
 
-            if response.content.lower() == 'cancel':
+            if response.content.lower() == "cancel":
                 await response.delete()
                 await channel.send(f"❌ {member.mention} Cancelled.", delete_after=3)
                 # Refresh panel
@@ -6090,7 +6845,9 @@ async def handle_timer_panel_reaction(payload):
                         await channel.send(f"ℹ️ {member.mention} Timer {timer_id} is already disabled.", delete_after=5)
                     else:
                         manager.toggle_message(timer_id, False)
-                        await channel.send(f"✅ {member.mention} Timer {timer_id} has been **disabled**!", delete_after=5)
+                        await channel.send(
+                            f"✅ {member.mention} Timer {timer_id} has been **disabled**!", delete_after=5
+                        )
                 else:
                     await channel.send(f"❌ {member.mention} Timer ID {timer_id} not found.", delete_after=5)
 
@@ -6114,13 +6871,18 @@ async def handle_timer_panel_reaction(payload):
         embed = discord.Embed(
             title="✅ Enable Timer",
             description=f"{member.mention}, please reply with the **Timer ID** you want to enable.\n\nYou have 30 seconds to respond.",
-            color=discord.Color.green()
+            color=discord.Color.green(),
         )
 
         if messages:
             disabled = [m for m in messages if not m.enabled]
             if disabled:
-                timer_list = "\n".join([f"• **ID {m.message_id}**: {m.message[:50]}{'...' if len(m.message) > 50 else ''}" for m in disabled[:10]])
+                timer_list = "\n".join(
+                    [
+                        f"• **ID {m.message_id}**: {m.message[:50]}{'...' if len(m.message) > 50 else ''}"
+                        for m in disabled[:10]
+                    ]
+                )
                 embed.add_field(name="Disabled Timers:", value=timer_list, inline=False)
             else:
                 embed.description = "No disabled timers to enable!"
@@ -6133,9 +6895,9 @@ async def handle_timer_panel_reaction(payload):
             return m.author.id == member.id and m.channel.id == channel.id
 
         try:
-            response = await bot.wait_for('message', timeout=30.0, check=check)
+            response = await bot.wait_for("message", timeout=30.0, check=check)
 
-            if response.content.lower() == 'cancel':
+            if response.content.lower() == "cancel":
                 await response.delete()
                 await channel.send(f"❌ {member.mention} Cancelled.", delete_after=3)
                 # Refresh panel
@@ -6154,7 +6916,9 @@ async def handle_timer_panel_reaction(payload):
                         await channel.send(f"ℹ️ {member.mention} Timer {timer_id} is already enabled.", delete_after=5)
                     else:
                         manager.toggle_message(timer_id, True)
-                        await channel.send(f"✅ {member.mention} Timer {timer_id} has been **enabled**!", delete_after=5)
+                        await channel.send(
+                            f"✅ {member.mention} Timer {timer_id} has been **enabled**!", delete_after=5
+                        )
                 else:
                     await channel.send(f"❌ {member.mention} Timer ID {timer_id} not found.", delete_after=5)
 
@@ -6180,6 +6944,7 @@ async def handle_timer_panel_reaction(payload):
     except:
         pass
 
+
 @bot.event
 async def on_raw_reaction_add(payload):
     """Handle reactions to link panel and timer panel messages."""
@@ -6190,10 +6955,15 @@ async def on_raw_reaction_add(payload):
 
     # Check if this reaction is on a timer panel message
     with engine.connect() as conn:
-        timer_panel = conn.execute(text("""
+        timer_panel = conn.execute(
+            text(
+                """
             SELECT id FROM timer_panels
             WHERE guild_id = :g AND channel_id = :c AND message_id = :m
-        """), {"g": payload.guild_id, "c": payload.channel_id, "m": payload.message_id}).fetchone()
+        """
+            ),
+            {"g": payload.guild_id, "c": payload.channel_id, "m": payload.message_id},
+        ).fetchone()
 
         if timer_panel:
             # Handle timer panel reactions
@@ -6202,10 +6972,15 @@ async def on_raw_reaction_add(payload):
 
     # Check if this reaction is on a link panel message
     with engine.connect() as conn:
-        result = conn.execute(text("""
+        result = conn.execute(
+            text(
+                """
             SELECT emoji FROM link_panels
             WHERE guild_id = :g AND channel_id = :c AND message_id = :m
-        """), {"g": payload.guild_id, "c": payload.channel_id, "m": payload.message_id}).fetchone()
+        """
+            ),
+            {"g": payload.guild_id, "c": payload.channel_id, "m": payload.message_id},
+        ).fetchone()
 
         if not result:
             return  # Not a link panel or timer panel message
@@ -6231,9 +7006,10 @@ async def on_raw_reaction_add(payload):
 
     # Check if already linked
     with engine.connect() as conn:
-        existing = conn.execute(text(
-            "SELECT kick_name FROM links WHERE discord_id = :d AND discord_server_id = :g"
-        ), {"d": discord_id, "g": guild_id}).fetchone()
+        existing = conn.execute(
+            text("SELECT kick_name FROM links WHERE discord_id = :d AND discord_server_id = :g"),
+            {"d": discord_id, "g": guild_id},
+        ).fetchone()
 
         if existing:
             # Send message in channel instead of DM
@@ -6241,7 +7017,7 @@ async def on_raw_reaction_add(payload):
             if channel:
                 await channel.send(
                     f"✅ {member.mention} You are already linked to **{existing[0]}**!",
-                    delete_after=8  # Auto-delete after 8 seconds
+                    delete_after=8,  # Auto-delete after 8 seconds
                 )
 
             # Remove the reaction
@@ -6265,23 +7041,18 @@ async def on_raw_reaction_add(payload):
     embed = discord.Embed(
         title="🔗 Link with Kick OAuth",
         description="Click the button below to securely link your Kick account.",
-        color=0x53FC18
+        color=0x53FC18,
     )
     embed.add_field(
         name="📝 Instructions",
         value="1. Click the link below\n2. Log in to Kick (if needed)\n3. Authorize the connection\n4. You're done!",
-        inline=False
+        inline=False,
     )
     embed.set_footer(text="Link expires in 10 minutes")
 
     # Create a view with a button
     view = discord.ui.View()
-    button = discord.ui.Button(
-        label="Link with Kick",
-        style=discord.ButtonStyle.link,
-        url=oauth_url,
-        emoji="🎮"
-    )
+    button = discord.ui.Button(label="Link with Kick", style=discord.ButtonStyle.link, url=oauth_url, emoji="🎮")
     view.add_item(button)
 
     # Try to DM the user
@@ -6292,8 +7063,7 @@ async def on_raw_reaction_add(payload):
         channel = bot.get_channel(payload.channel_id)
         if channel:
             confirmation = await channel.send(
-                f"✅ {member.mention} Check your DMs for the OAuth link!",
-                delete_after=5  # Auto-delete after 5 seconds
+                f"✅ {member.mention} Check your DMs for the OAuth link!", delete_after=5  # Auto-delete after 5 seconds
             )
 
         # Remove the reaction immediately after sending DM
@@ -6314,13 +7084,23 @@ async def on_raw_reaction_add(payload):
         # Store the DM message info for later deletion
         with engine.begin() as conn:
             # Delete any existing pending OAuth for this user in this guild
-            conn.execute(text("DELETE FROM oauth_notifications WHERE discord_id = :d AND discord_server_id = :g AND processed = FALSE"), {"d": discord_id, "g": guild_id})
+            conn.execute(
+                text(
+                    "DELETE FROM oauth_notifications WHERE discord_id = :d AND discord_server_id = :g AND processed = FALSE"
+                ),
+                {"d": discord_id, "g": guild_id},
+            )
 
             # Store DM message info (will be updated with kick_username when OAuth completes)
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 INSERT INTO oauth_notifications (discord_id, kick_username, channel_id, message_id, processed, discord_server_id)
                 VALUES (:d, '', :c, :m, FALSE, :g)
-            """), {"d": discord_id, "c": dm_message.channel.id, "m": dm_message.id, "g": guild_id})
+            """
+                ),
+                {"d": discord_id, "c": dm_message.channel.id, "m": dm_message.id, "g": guild_id},
+            )
 
     except discord.Forbidden:
         # User has DMs disabled, send in channel instead
@@ -6330,7 +7110,7 @@ async def on_raw_reaction_add(payload):
                 f"{member.mention} Check your DMs for the OAuth link! (If you don't see it, make sure DMs are enabled)",
                 embed=embed,
                 view=view,
-                delete_after=60  # Auto-delete after 1 minute
+                delete_after=60,  # Auto-delete after 1 minute
             )
 
             # Remove the reaction immediately after sending message
@@ -6348,16 +7128,27 @@ async def on_raw_reaction_add(payload):
             # Store the channel message info
             with engine.begin() as conn:
                 # Delete any existing pending OAuth for this user in this guild
-                conn.execute(text("DELETE FROM oauth_notifications WHERE discord_id = :d AND discord_server_id = :g AND processed = FALSE"), {"d": discord_id, "g": guild_id})
+                conn.execute(
+                    text(
+                        "DELETE FROM oauth_notifications WHERE discord_id = :d AND discord_server_id = :g AND processed = FALSE"
+                    ),
+                    {"d": discord_id, "g": guild_id},
+                )
 
                 # Store channel message info
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     INSERT INTO oauth_notifications (discord_id, kick_username, channel_id, message_id, processed, discord_server_id)
                     VALUES (:d, '', :c, :m, FALSE, :g)
-                """), {"d": discord_id, "c": channel_message.channel.id, "m": channel_message.id, "g": guild_id})
+                """
+                    ),
+                    {"d": discord_id, "c": channel_message.channel.id, "m": channel_message.id, "g": guild_id},
+                )
 
         except Exception as e:
             print(f"Failed to send OAuth link to {member}: {e}")
+
 
 @bot.event
 async def on_command_error(ctx, error):
@@ -6381,7 +7172,9 @@ async def on_command_error(ctx, error):
                 minutes = seconds // 60
                 remaining_seconds = seconds % 60
                 if remaining_seconds > 0:
-                    await ctx.send(f"⏳ Please wait **{minutes}m {remaining_seconds}s** before using this command again.")
+                    await ctx.send(
+                        f"⏳ Please wait **{minutes}m {remaining_seconds}s** before using this command again."
+                    )
                 else:
                     await ctx.send(f"⏳ Please wait **{minutes} minutes** before using this command again.")
         elif isinstance(error, commands.CheckFailure):
@@ -6409,11 +7202,13 @@ async def on_command_error(ctx, error):
         # Catch any other errors to prevent crash
         print(f"[Critical Error in error handler] {e}")
 
+
 # -------------------------
 # Admin Commands: Links Table Management
 # -------------------------
 
-@bot.group(name='fixlinks', invoke_without_command=True)
+
+@bot.group(name="fixlinks", invoke_without_command=True)
 @commands.has_permissions(administrator=True)
 async def fixlinks(ctx):
     """[ADMIN] Fix and manage links table. Use subcommands for specific actions."""
@@ -6426,31 +7221,42 @@ async def fixlinks(ctx):
         "• `resolve <kick_name> <keep_server_id>` - Resolve duplicate by keeping one server"
     )
 
-@fixlinks.command(name='check')
+
+@fixlinks.command(name="check")
 @commands.has_permissions(administrator=True)
 async def fixlinks_check(ctx):
     """[ADMIN] Run diagnostics on links table."""
     try:
         with engine.connect() as conn:
             # Check for missing discord_server_id
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 SELECT COUNT(*) as cnt
                 FROM links
                 WHERE discord_server_id IS NULL OR discord_server_id = 0
-            """)).fetchone()
+            """
+                )
+            ).fetchone()
             missing_count = result[0] if result else 0
 
             # Get distribution by server
-            dist_result = conn.execute(text("""
+            dist_result = conn.execute(
+                text(
+                    """
                 SELECT COALESCE(discord_server_id, 0) as server_id, COUNT(*) as cnt
                 FROM links
                 GROUP BY COALESCE(discord_server_id, 0)
                 ORDER BY cnt DESC
                 LIMIT 10
-            """)).fetchall()
+            """
+                )
+            ).fetchall()
 
             # Check for duplicates
-            dup_result = conn.execute(text("""
+            dup_result = conn.execute(
+                text(
+                    """
                 SELECT kick_name, COUNT(DISTINCT discord_server_id) as server_count
                 FROM links
                 WHERE discord_server_id IS NOT NULL AND discord_server_id != 0
@@ -6458,53 +7264,38 @@ async def fixlinks_check(ctx):
                 HAVING COUNT(DISTINCT discord_server_id) > 1
                 ORDER BY server_count DESC
                 LIMIT 10
-            """)).fetchall()
+            """
+                )
+            ).fetchall()
 
-            embed = discord.Embed(
-                title="🔍 Links Table Diagnostics",
-                color=0x3498db
-            )
+            embed = discord.Embed(title="🔍 Links Table Diagnostics", color=0x3498DB)
 
             if missing_count > 0:
                 embed.add_field(
                     name="⚠️ Missing Server IDs",
                     value=f"{missing_count} rows need backfill\nRun `!fixlinks backfill` to fix",
-                    inline=False
+                    inline=False,
                 )
             else:
-                embed.add_field(
-                    name="✅ Server IDs",
-                    value="All rows have valid discord_server_id",
-                    inline=False
-                )
+                embed.add_field(name="✅ Server IDs", value="All rows have valid discord_server_id", inline=False)
 
             # Server distribution
-            dist_text = "\n".join([
-                f"{'MISSING/0' if r[0] in (0, None) else str(r[0])}: {r[1]} links"
-                for r in dist_result[:5]
-            ])
-            embed.add_field(
-                name="📊 Distribution",
-                value=dist_text or "No data",
-                inline=False
+            dist_text = "\n".join(
+                [f"{'MISSING/0' if r[0] in (0, None) else str(r[0])}: {r[1]} links" for r in dist_result[:5]]
             )
+            embed.add_field(name="📊 Distribution", value=dist_text or "No data", inline=False)
 
             # Duplicates
             if dup_result:
-                dup_text = "\n".join([
-                    f"• `{r[0]}` on {r[1]} servers"
-                    for r in dup_result[:5]
-                ])
+                dup_text = "\n".join([f"• `{r[0]}` on {r[1]} servers" for r in dup_result[:5]])
                 embed.add_field(
                     name="⚠️ Duplicates Across Servers",
                     value=f"{len(dup_result)} kick names on multiple servers:\n{dup_text}",
-                    inline=False
+                    inline=False,
                 )
             else:
                 embed.add_field(
-                    name="✅ No Duplicates",
-                    value="Each kick name belongs to one server only",
-                    inline=False
+                    name="✅ No Duplicates", value="Each kick name belongs to one server only", inline=False
                 )
 
             await ctx.send(embed=embed)
@@ -6513,7 +7304,8 @@ async def fixlinks_check(ctx):
         await ctx.send(f"❌ Error running diagnostics: {e}")
         print(f"[fixlinks check] Error: {e}")
 
-@fixlinks.command(name='backfill')
+
+@fixlinks.command(name="backfill")
 @commands.has_permissions(administrator=True)
 async def fixlinks_backfill(ctx):
     """[ADMIN] Fix rows with missing discord_server_id."""
@@ -6524,11 +7316,15 @@ async def fixlinks_backfill(ctx):
     try:
         with engine.begin() as conn:
             # Count rows needing fix
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 SELECT COUNT(*) as cnt
                 FROM links
                 WHERE discord_server_id IS NULL OR discord_server_id = 0
-            """)).fetchone()
+            """
+                )
+            ).fetchone()
             missing_count = result[0] if result else 0
 
             if missing_count == 0:
@@ -6536,15 +7332,19 @@ async def fixlinks_backfill(ctx):
                 return
 
             # Update missing values
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 UPDATE links
                 SET discord_server_id = :sid
                 WHERE discord_server_id IS NULL OR discord_server_id = 0
-            """), {"sid": DISCORD_GUILD_ID})
+            """
+                ),
+                {"sid": DISCORD_GUILD_ID},
+            )
 
             await ctx.send(
-                f"✅ **Backfill Complete**\n"
-                f"Updated {missing_count} rows with server ID `{DISCORD_GUILD_ID}`"
+                f"✅ **Backfill Complete**\n" f"Updated {missing_count} rows with server ID `{DISCORD_GUILD_ID}`"
             )
             print(f"[fixlinks backfill] Updated {missing_count} rows")
 
@@ -6552,13 +7352,16 @@ async def fixlinks_backfill(ctx):
         await ctx.send(f"❌ Error during backfill: {e}")
         print(f"[fixlinks backfill] Error: {e}")
 
-@fixlinks.command(name='duplicates')
+
+@fixlinks.command(name="duplicates")
 @commands.has_permissions(administrator=True)
 async def fixlinks_duplicates(ctx):
     """[ADMIN] Show kick names that exist on multiple servers."""
     try:
         with engine.connect() as conn:
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 SELECT
                     l.kick_name,
                     l.discord_server_id,
@@ -6573,7 +7376,9 @@ async def fixlinks_duplicates(ctx):
                     HAVING COUNT(DISTINCT discord_server_id) > 1
                 )
                 ORDER BY l.kick_name, l.linked_at DESC
-            """)).fetchall()
+            """
+                )
+            ).fetchall()
 
             if not result:
                 await ctx.send("✅ No duplicate kick names found across servers.")
@@ -6585,28 +7390,22 @@ async def fixlinks_duplicates(ctx):
                 kick_name = row[0]
                 if kick_name not in duplicates:
                     duplicates[kick_name] = []
-                duplicates[kick_name].append({
-                    'server_id': row[1],
-                    'discord_id': row[2],
-                    'linked_at': row[3]
-                })
+                duplicates[kick_name].append({"server_id": row[1], "discord_id": row[2], "linked_at": row[3]})
 
             embed = discord.Embed(
                 title="⚠️ Duplicate Kick Names Across Servers",
                 description=f"Found {len(duplicates)} kick names on multiple servers",
-                color=0xe74c3c
+                color=0xE74C3C,
             )
 
             for kick_name, entries in list(duplicates.items())[:10]:  # Show max 10
-                servers_text = "\n".join([
-                    f"Server `{e['server_id']}`: <@{e['discord_id']}> (linked {e['linked_at'].strftime('%Y-%m-%d') if e['linked_at'] else 'unknown'})"
-                    for e in entries
-                ])
-                embed.add_field(
-                    name=f"🔗 {kick_name}",
-                    value=servers_text,
-                    inline=False
+                servers_text = "\n".join(
+                    [
+                        f"Server `{e['server_id']}`: <@{e['discord_id']}> (linked {e['linked_at'].strftime('%Y-%m-%d') if e['linked_at'] else 'unknown'})"
+                        for e in entries
+                    ]
                 )
+                embed.add_field(name=f"🔗 {kick_name}", value=servers_text, inline=False)
 
             if len(duplicates) > 10:
                 embed.set_footer(text=f"Showing 10 of {len(duplicates)} duplicates")
@@ -6614,7 +7413,7 @@ async def fixlinks_duplicates(ctx):
             embed.add_field(
                 name="How to Resolve",
                 value="Use `!fixlinks resolve <kick_name> <keep_server_id>` to keep one link and remove others",
-                inline=False
+                inline=False,
             )
 
             await ctx.send(embed=embed)
@@ -6623,19 +7422,25 @@ async def fixlinks_duplicates(ctx):
         await ctx.send(f"❌ Error fetching duplicates: {e}")
         print(f"[fixlinks duplicates] Error: {e}")
 
-@fixlinks.command(name='resolve')
+
+@fixlinks.command(name="resolve")
 @commands.has_permissions(administrator=True)
 async def fixlinks_resolve(ctx, kick_name: str, keep_server_id: int):
     """[ADMIN] Resolve duplicate by keeping one server's link and removing others."""
     try:
         with engine.begin() as conn:
             # Check if duplicate exists
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 SELECT discord_server_id, discord_id
                 FROM links
                 WHERE kick_name = :name
                 ORDER BY discord_server_id
-            """), {"name": kick_name}).fetchall()
+            """
+                ),
+                {"name": kick_name},
+            ).fetchall()
 
             if not result:
                 await ctx.send(f"❌ No links found for kick name `{kick_name}`")
@@ -6655,11 +7460,16 @@ async def fixlinks_resolve(ctx, kick_name: str, keep_server_id: int):
                 return
 
             # Delete other servers' links
-            deleted = conn.execute(text("""
+            deleted = conn.execute(
+                text(
+                    """
                 DELETE FROM links
                 WHERE kick_name = :name AND discord_server_id != :keep_server
                 RETURNING discord_server_id, discord_id
-            """), {"name": kick_name, "keep_server": keep_server_id}).fetchall()
+            """
+                ),
+                {"name": kick_name, "keep_server": keep_server_id},
+            ).fetchall()
 
             deleted_info = ", ".join([f"Server {r[0]} (<@{r[1]}>)" for r in deleted])
 
@@ -6674,14 +7484,26 @@ async def fixlinks_resolve(ctx, kick_name: str, keep_server_id: int):
         await ctx.send(f"❌ Error resolving duplicate: {e}")
         print(f"[fixlinks resolve] Error: {e}")
 
+
 # -------------------------
 # Point Shop Interactive Components
 # -------------------------
 
+
 class PointShopConfirmView(discord.ui.View):
     """View with button to confirm purchase"""
 
-    def __init__(self, item_id: int, item_name: str, price: int, kick_username: str, discord_id: int, guild_id: int, requirement_value: str = None, note: str = None):
+    def __init__(
+        self,
+        item_id: int,
+        item_name: str,
+        price: int,
+        kick_username: str,
+        discord_id: int,
+        guild_id: int,
+        requirement_value: str = None,
+        note: str = None,
+    ):
         super().__init__(timeout=300)  # 5 minute timeout
         self.item_id = item_id
         self.item_name = item_name
@@ -6699,11 +7521,16 @@ class PointShopConfirmView(discord.ui.View):
         try:
             with engine.begin() as conn:
                 # Get item details (fresh from DB)
-                item = conn.execute(text("""
+                item = conn.execute(
+                    text(
+                        """
                     SELECT id, name, price, stock, is_active, requirement_title, requirement_footer
                     FROM point_shop_items
                     WHERE id = :id
-                """), {"id": self.item_id}).fetchone()
+                """
+                    ),
+                    {"id": self.item_id},
+                ).fetchone()
 
                 if not item:
                     await interaction.response.edit_message(content="❌ This item no longer exists.", view=None)
@@ -6720,109 +7547,151 @@ class PointShopConfirmView(discord.ui.View):
                     return
 
                 # Check user's points balance
-                user_points = conn.execute(text("""
+                user_points = conn.execute(
+                    text(
+                        """
                     SELECT points FROM user_points
                     WHERE kick_username = :k AND discord_server_id = :g
-                """), {"k": self.kick_username, "g": self.guild_id}).fetchone()
+                """
+                    ),
+                    {"k": self.kick_username, "g": self.guild_id},
+                ).fetchone()
 
                 if not user_points or user_points[0] < price:
                     current_balance = user_points[0] if user_points else 0
                     await interaction.response.edit_message(
                         content=f"❌ Insufficient points! You have **{current_balance:,}** points but need **{price:,}** points.",
-                        view=None
+                        view=None,
                     )
                     return
 
                 # Deduct points
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     UPDATE user_points
                     SET points = points - :p,
                         total_spent = total_spent + :p,
                         last_updated = CURRENT_TIMESTAMP
                     WHERE kick_username = :k AND discord_server_id = :g
-                """), {"p": price, "k": self.kick_username, "g": self.guild_id})
+                """
+                    ),
+                    {"p": price, "k": self.kick_username, "g": self.guild_id},
+                )
 
                 # Reduce stock if not unlimited
                 if stock > 0:
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         UPDATE point_shop_items
                         SET stock = stock - 1,
                             updated_at = CURRENT_TIMESTAMP
                         WHERE id = :id
-                    """), {"id": item_id})
+                    """
+                        ),
+                        {"id": item_id},
+                    )
 
                 # Record the sale with requirement input (and note in requirement if both exist)
                 full_requirement = self.requirement_value
                 if self.note:
-                    full_requirement = f"{self.requirement_value}\nNote: {self.note}" if self.requirement_value else f"Note: {self.note}"
+                    full_requirement = (
+                        f"{self.requirement_value}\nNote: {self.note}"
+                        if self.requirement_value
+                        else f"Note: {self.note}"
+                    )
 
                 # Create sale record and capture order ID
-                sale_id_row = conn.execute(text("""
+                sale_id_row = conn.execute(
+                    text(
+                        """
                     INSERT INTO point_sales (item_id, kick_username, discord_id, discord_server_id, item_name, price_paid, quantity, status, requirement_input)
                     VALUES (:item_id, :kick, :discord, :server_id, :name, :price, 1, 'pending', :req_input)
                     RETURNING id
-                """), {
-                    "item_id": item_id,
-                    "kick": self.kick_username,
-                    "discord": self.discord_id,
-                    "server_id": self.server_id,
-                    "name": item_name,
-                    "price": price,
-                    "req_input": full_requirement
-                }).fetchone()
+                """
+                    ),
+                    {
+                        "item_id": item_id,
+                        "kick": self.kick_username,
+                        "discord": self.discord_id,
+                        "server_id": self.server_id,
+                        "name": item_name,
+                        "price": price,
+                        "req_input": full_requirement,
+                    },
+                ).fetchone()
 
                 sale_id = int(sale_id_row[0]) if sale_id_row and sale_id_row[0] is not None else None
 
                 # Create a DB notification and publish a Redis event for the bot subscriber
                 notification_data = {
-                    'sale_id': sale_id,
-                    'item_id': item_id,
-                    'item_name': item_name,
-                    'buyer': self.kick_username,
-                    'price': price,
-                    'discord_id': self.discord_id,
-                    'requirement_title': requirement_title,
-                    'requirement_footer': requirement_footer,
-                    'requirement_input': self.requirement_value
+                    "sale_id": sale_id,
+                    "item_id": item_id,
+                    "item_name": item_name,
+                    "buyer": self.kick_username,
+                    "price": price,
+                    "discord_id": self.discord_id,
+                    "requirement_title": requirement_title,
+                    "requirement_footer": requirement_footer,
+                    "requirement_input": self.requirement_value,
                 }
                 if self.note:
-                    notification_data['note'] = self.note
+                    notification_data["note"] = self.note
 
-                notif_row = conn.execute(text("""
+                notif_row = conn.execute(
+                    text(
+                        """
                     INSERT INTO notifications (discord_server_id, type, title, message, data)
                     VALUES (:server_id, 'new_sale', :title, :message, :data)
                     RETURNING id
-                """), {
-                    "server_id": self.server_id,
-                    "title": f"New purchase: {item_name}",
-                    "message": f"{self.kick_username} bought {item_name} for {price:,} points",
-                    "data": json.dumps(notification_data)
-                }).fetchone()
+                """
+                    ),
+                    {
+                        "server_id": self.server_id,
+                        "title": f"New purchase: {item_name}",
+                        "message": f"{self.kick_username} bought {item_name} for {price:,} points",
+                        "data": json.dumps(notification_data),
+                    },
+                ).fetchone()
 
                 notif_id = int(notif_row[0]) if notif_row and notif_row[0] is not None else None
 
-                publish_redis_event('dashboard:notifications', 'new_notification', {
-                    'notification_id': notif_id,
-                    'discord_server_id': str(self.server_id) if self.server_id is not None else None,
-                    'type': 'new_sale',
-                    'title': f"New purchase: {item_name}",
-                    'message': f"{self.kick_username} bought {item_name} for {price:,} points",
-                    'data': notification_data
-                })
+                publish_redis_event(
+                    "dashboard:notifications",
+                    "new_notification",
+                    {
+                        "notification_id": notif_id,
+                        "discord_server_id": str(self.server_id) if self.server_id is not None else None,
+                        "type": "new_sale",
+                        "title": f"New purchase: {item_name}",
+                        "message": f"{self.kick_username} bought {item_name} for {price:,} points",
+                        "data": notification_data,
+                    },
+                )
 
                 # Get updated balance
-                new_balance = conn.execute(text("""
+                new_balance = conn.execute(
+                    text(
+                        """
                     SELECT points FROM user_points WHERE kick_username = :k AND discord_server_id = :g
-                """), {"k": self.kick_username, "g": self.guild_id}).fetchone()[0]
+                """
+                    ),
+                    {"k": self.kick_username, "g": self.guild_id},
+                ).fetchone()[0]
 
             # Publish event to notify dashboard of new purchase
-            publish_redis_event('point_shop', 'new_purchase', {
-                'item_id': item_id,
-                'item_name': item_name,
-                'buyer': self.kick_username,
-                'price': price,
-                'discord_id': self.discord_id
-            })
+            publish_redis_event(
+                "point_shop",
+                "new_purchase",
+                {
+                    "item_id": item_id,
+                    "item_name": item_name,
+                    "buyer": self.kick_username,
+                    "price": price,
+                    "discord_id": self.discord_id,
+                },
+            )
 
             # Success response
             note_text = f"\n📝 Note: _{self.note}_" if self.note else ""
@@ -6832,18 +7701,20 @@ class PointShopConfirmView(discord.ui.View):
                 f"🛒 You bought **{item_name}** for **{price:,}** points!\n"
                 f"💰 Your new balance: **{new_balance:,}** points{req_text}{note_text}\n\n"
                 f"_An admin will fulfill your purchase soon._",
-                view=None
+                view=None,
             )
 
-            print(f"[Point Shop] {self.kick_username} (Discord ID: {self.discord_id}) purchased {item_name} for {price} points")
+            print(
+                f"[Point Shop] {self.kick_username} (Discord ID: {self.discord_id}) purchased {item_name} for {price} points"
+            )
 
         except Exception as e:
             print(f"[Point Shop] Purchase error: {e}")
             import traceback
+
             traceback.print_exc()
             await interaction.response.edit_message(
-                content=f"❌ An error occurred during purchase. Please try again later.",
-                view=None
+                content=f"❌ An error occurred during purchase. Please try again later.", view=None
             )
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
@@ -6851,10 +7722,20 @@ class PointShopConfirmView(discord.ui.View):
         """Cancel the purchase"""
         await interaction.response.edit_message(content="❌ Purchase cancelled.", view=None)
 
+
 class PointShopPurchaseModal(discord.ui.Modal):
     """Modal for confirming a point shop purchase"""
 
-    def __init__(self, item_id: int, item_name: str, price: int, description: str, stock: int, requirement_title: str = None, requirement_footer: str = None):
+    def __init__(
+        self,
+        item_id: int,
+        item_name: str,
+        price: int,
+        description: str,
+        stock: int,
+        requirement_title: str = None,
+        requirement_footer: str = None,
+    ):
         super().__init__(title=f"Purchase: {item_name[:40]}")
         self.item_id = item_id
         self.item_name = item_name
@@ -6873,11 +7754,7 @@ class PointShopPurchaseModal(discord.ui.Modal):
             label = requirement_title[:45]  # Discord label limit
             placeholder = requirement_footer[:100] if requirement_footer else "Enter required information"
             self.requirement_input = discord.ui.TextInput(
-                label=label,
-                placeholder=placeholder,
-                required=True,
-                max_length=200,
-                style=discord.TextStyle.short
+                label=label, placeholder=placeholder, required=True, max_length=200, style=discord.TextStyle.short
             )
             self.add_item(self.requirement_input)
 
@@ -6887,7 +7764,7 @@ class PointShopPurchaseModal(discord.ui.Modal):
             placeholder="e.g., preferred delivery method, etc.",
             required=False,
             max_length=200,
-            style=discord.TextStyle.paragraph
+            style=discord.TextStyle.paragraph,
         )
         self.add_item(self.note_input)
 
@@ -6901,25 +7778,32 @@ class PointShopPurchaseModal(discord.ui.Modal):
         # Get user's balance
         with engine.connect() as conn:
             # Get linked account
-            link = conn.execute(text("""
+            link = conn.execute(
+                text(
+                    """
                 SELECT kick_name FROM links
                 WHERE discord_id = :d AND discord_server_id = :s
-            """), {"d": discord_id, "s": interaction.guild.id}).fetchone()
+            """
+                ),
+                {"d": discord_id, "s": interaction.guild.id},
+            ).fetchone()
 
             if not link:
-                await interaction.response.send_message(
-                    "❌ You need to link your Kick account first!",
-                    ephemeral=True
-                )
+                await interaction.response.send_message("❌ You need to link your Kick account first!", ephemeral=True)
                 return
 
             kick_username = link[0]
 
             # Get balance (with multiserver support)
-            points_data = conn.execute(text("""
-                SELECT points FROM user_points 
+            points_data = conn.execute(
+                text(
+                    """
+                SELECT points FROM user_points
                 WHERE kick_username = :k AND discord_server_id = :s
-            """), {"k": kick_username, "s": interaction.guild.id}).fetchone()
+            """
+                ),
+                {"k": kick_username, "s": interaction.guild.id},
+            ).fetchone()
 
             current_balance = points_data[0] if points_data else 0
 
@@ -6930,7 +7814,7 @@ class PointShopPurchaseModal(discord.ui.Modal):
                 f"**{self.item_name}** costs **{self.price:,}** points\n"
                 f"Your balance: **{current_balance:,}** points\n"
                 f"You need **{self.price - current_balance:,}** more points!",
-                ephemeral=True
+                ephemeral=True,
             )
             return
 
@@ -6955,10 +7839,11 @@ class PointShopPurchaseModal(discord.ui.Modal):
             discord_id=discord_id,
             guild_id=interaction.guild_id,
             requirement_value=requirement_value,
-            note=note
+            note=note,
         )
 
         await interaction.response.send_message(confirm_text, view=view, ephemeral=True)
+
 
 class PointShopItemSelect(discord.ui.Select):
     """Dropdown to select a shop item"""
@@ -6985,54 +7870,39 @@ class PointShopItemSelect(discord.ui.Select):
                     "price": price,
                     "stock": stock,
                     "requirement_title": requirement_title,
-                    "requirement_footer": requirement_footer
+                    "requirement_footer": requirement_footer,
                 }
 
                 # Format: "Item Name: Xpts" with "──── In-stock: X ────" as description
-                options.append(discord.SelectOption(
-                    label=f"{name}: {price:,}pts"[:100],
-                    description=f"━━━━ In-stock: {stock_text} ━━━━"[:100],
-                    value=str(item_id),
-                    emoji="🎁"
-                ))
+                options.append(
+                    discord.SelectOption(
+                        label=f"{name}: {price:,}pts"[:100],
+                        description=f"━━━━ In-stock: {stock_text} ━━━━"[:100],
+                        value=str(item_id),
+                        emoji="🎁",
+                    )
+                )
 
         if not options:
-            options.append(discord.SelectOption(
-                label="No items available",
-                value="none",
-                emoji="❌"
-            ))
+            options.append(discord.SelectOption(label="No items available", value="none", emoji="❌"))
 
-        super().__init__(
-            placeholder="🛍️ Select an item to purchase...",
-            options=options,
-            custom_id="shop_item_select"
-        )
+        super().__init__(placeholder="🛍️ Select an item to purchase...", options=options, custom_id="shop_item_select")
 
     async def callback(self, interaction: discord.Interaction):
         """Show purchase modal when item is selected"""
         selected_id = self.values[0]
 
         if selected_id == "none":
-            await interaction.response.send_message(
-                "❌ No items are available for purchase right now.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("❌ No items are available for purchase right now.", ephemeral=True)
             return
 
         item = self.items_data.get(selected_id)
         if not item:
-            await interaction.response.send_message(
-                "❌ Item not found. Please try again.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("❌ Item not found. Please try again.", ephemeral=True)
             return
 
         if item["stock"] == 0:
-            await interaction.response.send_message(
-                f"❌ **{item['name']}** is sold out!",
-                ephemeral=True
-            )
+            await interaction.response.send_message(f"❌ **{item['name']}** is sold out!", ephemeral=True)
             return
 
         # First, show the user their balance and item details
@@ -7041,24 +7911,34 @@ class PointShopItemSelect(discord.ui.Select):
 
         with engine.connect() as conn:
             # Get linked account
-            link = conn.execute(text("""
+            link = conn.execute(
+                text(
+                    """
                 SELECT kick_name FROM links
                 WHERE discord_id = :d AND discord_server_id = :s
-            """), {"d": discord_id, "s": guild_id}).fetchone()
+            """
+                ),
+                {"d": discord_id, "s": guild_id},
+            ).fetchone()
 
             if not link:
                 await interaction.response.send_message(
                     "❌ You need to link your Kick account first! Use the link panel or `!link` command.",
-                    ephemeral=True
+                    ephemeral=True,
                 )
                 return
 
             kick_username = link[0]
 
             # Get balance
-            points_data = conn.execute(text("""
+            points_data = conn.execute(
+                text(
+                    """
                 SELECT points FROM user_points WHERE kick_username = :k AND discord_server_id = :s
-            """), {"k": kick_username, "s": guild_id}).fetchone()
+            """
+                ),
+                {"k": kick_username, "s": guild_id},
+            ).fetchone()
 
             current_balance = points_data[0] if points_data else 0
 
@@ -7069,7 +7949,7 @@ class PointShopItemSelect(discord.ui.Select):
                 f"**{item['name']}** costs **{item['price']:,}** points\n"
                 f"Your balance: **{current_balance:,}** points\n"
                 f"You need **{item['price'] - current_balance:,}** more points!",
-                ephemeral=True
+                ephemeral=True,
             )
             return
 
@@ -7081,9 +7961,10 @@ class PointShopItemSelect(discord.ui.Select):
             description=item["description"],
             stock=item["stock"],
             requirement_title=item.get("requirement_title"),
-            requirement_footer=item.get("requirement_footer")
+            requirement_footer=item.get("requirement_footer"),
         )
         await interaction.response.send_modal(modal)
+
 
 class PointShopView(discord.ui.View):
     """Persistent view for the point shop with item selector (legacy)"""
@@ -7097,15 +7978,13 @@ class PointShopView(discord.ui.View):
         # Add a check balance button
         self.add_item(PointShopBalanceButton())
 
+
 class PointShopBalanceButton(discord.ui.Button):
     """Button to check point balance"""
 
     def __init__(self):
         super().__init__(
-            style=discord.ButtonStyle.secondary,
-            label="Check Balance",
-            custom_id="shop_check_balance",
-            emoji="💰"
+            style=discord.ButtonStyle.secondary, label="Check Balance", custom_id="shop_check_balance", emoji="💰"
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -7114,41 +7993,49 @@ class PointShopBalanceButton(discord.ui.Button):
         guild_id = interaction.guild.id if interaction.guild else None
 
         with engine.connect() as conn:
-            link = conn.execute(text("""
+            link = conn.execute(
+                text(
+                    """
                 SELECT kick_name FROM links
                 WHERE discord_id = :d AND discord_server_id = :s
-            """), {"d": discord_id, "s": guild_id}).fetchone()
+            """
+                ),
+                {"d": discord_id, "s": guild_id},
+            ).fetchone()
 
             if not link:
                 await interaction.response.send_message(
                     "❌ You need to link your Kick account first! Use the link panel or `!link` command.",
-                    ephemeral=True
+                    ephemeral=True,
                 )
                 return
 
             kick_username = link[0]
 
-            points_data = conn.execute(text("""
+            points_data = conn.execute(
+                text(
+                    """
                 SELECT points, total_earned, total_spent
                 FROM user_points
                 WHERE kick_username = :k AND discord_server_id = :s
-            """), {"k": kick_username, "s": guild_id}).fetchone()
+            """
+                ),
+                {"k": kick_username, "s": guild_id},
+            ).fetchone()
 
             if not points_data:
                 points, total_earned, total_spent = 0, 0, 0
             else:
                 points, total_earned, total_spent = points_data
 
-        embed = discord.Embed(
-            title="💰 Your Point Balance",
-            color=0xFFD700
-        )
+        embed = discord.Embed(title="💰 Your Point Balance", color=0xFFD700)
         embed.add_field(name="Current Balance", value=f"**{points:,}** points", inline=True)
         embed.add_field(name="Total Earned", value=f"{total_earned:,} points", inline=True)
         embed.add_field(name="Total Spent", value=f"{total_spent:,} points", inline=True)
         embed.set_footer(text=f"Kick Account: {kick_username}")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 async def create_shop_mosaic_image(items, max_width=2400):
     """Create a grid mosaic image from shop item images, preserving original aspect ratios
@@ -7168,10 +8055,11 @@ async def create_shop_mosaic_image(items, max_width=2400):
         items: List of shop items
         max_width: Maximum width of the entire mosaic (default 2400px for very large images)
     """
-    from PIL import Image, ImageDraw, ImageFont
-    import aiohttp
     import io
     import math
+
+    import aiohttp
+    from PIL import Image, ImageDraw, ImageFont
 
     # Filter items with images
     items_with_images = [(i, item) for i, item in enumerate(items) if item[5]]  # item[5] is image_url
@@ -7231,14 +8119,14 @@ async def create_shop_mosaic_image(items, max_width=2400):
                         img = Image.open(io.BytesIO(img_data))
 
                         # Convert to RGB if necessary
-                        if img.mode in ('RGBA', 'P'):
-                            bg = Image.new('RGB', img.size, BG_COLOR)
-                            if img.mode == 'P':
-                                img = img.convert('RGBA')
+                        if img.mode in ("RGBA", "P"):
+                            bg = Image.new("RGB", img.size, BG_COLOR)
+                            if img.mode == "P":
+                                img = img.convert("RGBA")
                             bg.paste(img, mask=img.split()[3] if len(img.split()) > 3 else None)
                             img = bg
-                        elif img.mode != 'RGB':
-                            img = img.convert('RGB')
+                        elif img.mode != "RGB":
+                            img = img.convert("RGB")
 
                         # Scale image to fit cell width while preserving aspect ratio
                         orig_w, orig_h = img.size
@@ -7257,7 +8145,7 @@ async def create_shop_mosaic_image(items, max_width=2400):
         return None
 
     # Group into rows and calculate height per row
-    rows_data = [downloaded_images[i:i + COLS] for i in range(0, len(downloaded_images), COLS)]
+    rows_data = [downloaded_images[i : i + COLS] for i in range(0, len(downloaded_images), COLS)]
     row_heights = []
 
     for row in rows_data:
@@ -7276,7 +8164,7 @@ async def create_shop_mosaic_image(items, max_width=2400):
         total_height += TITLE_HEIGHT + rh + FOOTER_HEIGHT + PADDING
 
     canvas_width = COLS * cell_width + (COLS + 1) * PADDING
-    canvas = Image.new('RGB', (canvas_width, total_height), BG_COLOR)
+    canvas = Image.new("RGB", (canvas_width, total_height), BG_COLOR)
     draw = ImageDraw.Draw(canvas)
 
     # Second pass: place images on canvas
@@ -7312,8 +8200,8 @@ async def create_shop_mosaic_image(items, max_width=2400):
 
                 # Draw sold out overlay if applicable
                 if stock == 0:
-                    overlay = Image.new('RGBA', img.size, (0, 0, 0, 150))
-                    composited = Image.alpha_composite(img.convert('RGBA'), overlay).convert('RGB')
+                    overlay = Image.new("RGBA", img.size, (0, 0, 0, 150))
+                    composited = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
                     canvas.paste(composited, (x, img_y + y_offset))
 
                     # Draw "SOLD OUT" text centered on image
@@ -7325,7 +8213,7 @@ async def create_shop_mosaic_image(items, max_width=2400):
                         (x + (cell_width - tw) // 2, img_y + y_offset + (img_h - th) // 2),
                         sold_text,
                         fill=SOLDOUT_COLOR,
-                        font=price_font
+                        font=price_font,
                     )
             else:
                 # Draw placeholder
@@ -7357,12 +8245,15 @@ async def create_shop_mosaic_image(items, max_width=2400):
 
     # Save to bytes with high quality
     output = io.BytesIO()
-    canvas.save(output, format='PNG', optimize=False)  # No optimization for better quality
+    canvas.save(output, format="PNG", optimize=False)  # No optimization for better quality
     output.seek(0)
 
     return output
 
-async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int = None, update_existing: bool = True, use_components_v2: bool = True):
+
+async def post_point_shop_to_discord(
+    bot, guild_id: int = None, channel_id: int = None, update_existing: bool = True, use_components_v2: bool = True
+):
     """Post or update the point shop using Components V2 with grid mosaic layout"""
 
     try:
@@ -7379,20 +8270,25 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
             # No channel_id provided, need to look it up using guild_id
             if not guild_id and bot.guilds:
                 guild_id = bot.guilds[0].id
-            
+
             # Get channel_id from settings
             with engine.connect() as conn:
-                result = conn.execute(text("""
-                    SELECT value FROM point_settings 
+                result = conn.execute(
+                    text(
+                        """
+                    SELECT value FROM point_settings
                     WHERE key = 'shop_channel_id' AND discord_server_id = :guild_id
-                """), {"guild_id": guild_id}).fetchone()
+                """
+                    ),
+                    {"guild_id": guild_id},
+                ).fetchone()
 
                 if not result:
                     print("[Point Shop] No shop channel configured")
                     return False
 
                 channel_id = int(result[0])
-            
+
             channel = bot.get_channel(channel_id)
             if not channel:
                 print(f"[Point Shop] Channel {channel_id} not found")
@@ -7401,33 +8297,53 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
         # Get active shop items
         print(f"[Point Shop] Querying items for guild_id: {guild_id}")
         with engine.connect() as conn:
-            items = conn.execute(text("""
+            items = conn.execute(
+                text(
+                    """
                 SELECT id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer
                 FROM point_shop_items
                 WHERE is_active = TRUE AND discord_server_id = :guild_id
                 ORDER BY price ASC
-            """), {"guild_id": guild_id}).fetchall()
+            """
+                ),
+                {"guild_id": guild_id},
+            ).fetchall()
             print(f"[Point Shop] Found {len(items)} items")
 
             # Get existing message ID
-            existing_msg_result = conn.execute(text("""
-                SELECT value FROM point_settings 
+            existing_msg_result = conn.execute(
+                text(
+                    """
+                SELECT value FROM point_settings
                 WHERE key = 'shop_message_id' AND discord_server_id = :guild_id
-            """), {"guild_id": guild_id}).fetchone()
+            """
+                ),
+                {"guild_id": guild_id},
+            ).fetchone()
             existing_message_id = int(existing_msg_result[0]) if existing_msg_result else None
 
             # Get existing interactive message ID
-            existing_interactive_result = conn.execute(text("""
-                SELECT value FROM point_settings 
+            existing_interactive_result = conn.execute(
+                text(
+                    """
+                SELECT value FROM point_settings
                 WHERE key = 'shop_interactive_id' AND discord_server_id = :guild_id
-            """), {"guild_id": guild_id}).fetchone()
+            """
+                ),
+                {"guild_id": guild_id},
+            ).fetchone()
             existing_interactive_id = int(existing_interactive_result[0]) if existing_interactive_result else None
 
             # Get existing footer message ID
-            existing_footer_result = conn.execute(text("""
-                SELECT value FROM point_settings 
+            existing_footer_result = conn.execute(
+                text(
+                    """
+                SELECT value FROM point_settings
                 WHERE key = 'shop_footer_id' AND discord_server_id = :guild_id
-            """), {"guild_id": guild_id}).fetchone()
+            """
+                ),
+                {"guild_id": guild_id},
+            ).fetchone()
             existing_footer_id = int(existing_footer_result[0]) if existing_footer_result else None
 
         # Delete existing messages if updating
@@ -7444,9 +8360,11 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                         print(f"[Point Shop] Error deleting message {msg_id}: {e}")
 
         # Check if Components V2 is supported (discord.py 2.6+)
-        has_components_v2 = hasattr(discord.ui, 'LayoutView') and hasattr(discord.ui, 'MediaGallery')
+        has_components_v2 = hasattr(discord.ui, "LayoutView") and hasattr(discord.ui, "MediaGallery")
 
-        print(f"[Point Shop] Components V2 available: {has_components_v2}, use_components_v2: {use_components_v2}, items count: {len(items)}")
+        print(
+            f"[Point Shop] Components V2 available: {has_components_v2}, use_components_v2: {use_components_v2}, items count: {len(items)}"
+        )
 
         if use_components_v2 and has_components_v2 and items:
             # ==================== Components V2 Mode with Mosaic ====================
@@ -7466,17 +8384,19 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
 
                     def _build_layout(self, has_mosaic):
                         # Header container
-                        self.add_item(discord.ui.Container(
-                            discord.ui.TextDisplay("# 🛍️ Point Shop"),
-                            discord.ui.TextDisplay("Spend your hard-earned points on awesome rewards!"),
-                            accent_colour=0xFFD700
-                        ))
+                        self.add_item(
+                            discord.ui.Container(
+                                discord.ui.TextDisplay("# 🛍️ Point Shop"),
+                                discord.ui.TextDisplay("Spend your hard-earned points on awesome rewards!"),
+                                accent_colour=0xFFD700,
+                            )
+                        )
 
                         # Show mosaic image in MediaGallery
                         if has_mosaic:
-                            self.add_item(discord.ui.MediaGallery(
-                                discord.MediaGalleryItem("attachment://shop_items.png")
-                            ))
+                            self.add_item(
+                                discord.ui.MediaGallery(discord.MediaGalleryItem("attachment://shop_items.png"))
+                            )
 
                 layout = ShopLayout(mosaic_file is not None)
 
@@ -7499,58 +8419,103 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                 # Store all three message IDs - critical operation
                 with engine.begin() as conn:
                     # Check and update shop_message_id
-                    existing = conn.execute(text("""
-                        SELECT key FROM point_settings 
+                    existing = conn.execute(
+                        text(
+                            """
+                        SELECT key FROM point_settings
                         WHERE key = 'shop_message_id' AND discord_server_id = :guild_id
-                    """), {"guild_id": guild_id}).fetchone()
-                    
+                    """
+                        ),
+                        {"guild_id": guild_id},
+                    ).fetchone()
+
                     if existing:
-                        conn.execute(text("""
-                            UPDATE point_settings 
+                        conn.execute(
+                            text(
+                                """
+                            UPDATE point_settings
                             SET value = :m, updated_at = CURRENT_TIMESTAMP
                             WHERE key = 'shop_message_id' AND discord_server_id = :guild_id
-                        """), {"m": str(message.id), "guild_id": guild_id})
+                        """
+                            ),
+                            {"m": str(message.id), "guild_id": guild_id},
+                        )
                     else:
-                        conn.execute(text("""
+                        conn.execute(
+                            text(
+                                """
                             INSERT INTO point_settings (key, value, discord_server_id, updated_at)
                             VALUES ('shop_message_id', :m, :guild_id, CURRENT_TIMESTAMP)
-                        """), {"m": str(message.id), "guild_id": guild_id})
-                    
+                        """
+                            ),
+                            {"m": str(message.id), "guild_id": guild_id},
+                        )
+
                     # Check and update shop_interactive_id
-                    existing = conn.execute(text("""
-                        SELECT key FROM point_settings 
+                    existing = conn.execute(
+                        text(
+                            """
+                        SELECT key FROM point_settings
                         WHERE key = 'shop_interactive_id' AND discord_server_id = :guild_id
-                    """), {"guild_id": guild_id}).fetchone()
-                    
+                    """
+                        ),
+                        {"guild_id": guild_id},
+                    ).fetchone()
+
                     if existing:
-                        conn.execute(text("""
-                            UPDATE point_settings 
+                        conn.execute(
+                            text(
+                                """
+                            UPDATE point_settings
                             SET value = :m, updated_at = CURRENT_TIMESTAMP
                             WHERE key = 'shop_interactive_id' AND discord_server_id = :guild_id
-                        """), {"m": str(interactive_msg.id), "guild_id": guild_id})
+                        """
+                            ),
+                            {"m": str(interactive_msg.id), "guild_id": guild_id},
+                        )
                     else:
-                        conn.execute(text("""
+                        conn.execute(
+                            text(
+                                """
                             INSERT INTO point_settings (key, value, discord_server_id, updated_at)
                             VALUES ('shop_interactive_id', :m, :guild_id, CURRENT_TIMESTAMP)
-                        """), {"m": str(interactive_msg.id), "guild_id": guild_id})
-                    
+                        """
+                            ),
+                            {"m": str(interactive_msg.id), "guild_id": guild_id},
+                        )
+
                     # Check and update shop_footer_id
-                    existing = conn.execute(text("""
-                        SELECT key FROM point_settings 
+                    existing = conn.execute(
+                        text(
+                            """
+                        SELECT key FROM point_settings
                         WHERE key = 'shop_footer_id' AND discord_server_id = :guild_id
-                    """), {"guild_id": guild_id}).fetchone()
-                    
+                    """
+                        ),
+                        {"guild_id": guild_id},
+                    ).fetchone()
+
                     if existing:
-                        conn.execute(text("""
-                            UPDATE point_settings 
+                        conn.execute(
+                            text(
+                                """
+                            UPDATE point_settings
                             SET value = :m, updated_at = CURRENT_TIMESTAMP
                             WHERE key = 'shop_footer_id' AND discord_server_id = :guild_id
-                        """), {"m": str(footer_msg.id), "guild_id": guild_id})
+                        """
+                            ),
+                            {"m": str(footer_msg.id), "guild_id": guild_id},
+                        )
                     else:
-                        conn.execute(text("""
+                        conn.execute(
+                            text(
+                                """
                             INSERT INTO point_settings (key, value, discord_server_id, updated_at)
                             VALUES ('shop_footer_id', :m, :guild_id, CURRENT_TIMESTAMP)
-                        """), {"m": str(footer_msg.id), "guild_id": guild_id})
+                        """
+                            ),
+                            {"m": str(footer_msg.id), "guild_id": guild_id},
+                        )
 
                 print(f"[Point Shop] Posted Components V2 mosaic shop to channel {channel_id}")
                 return True
@@ -7559,6 +8524,7 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
                 if not v2_success:
                     print(f"[Point Shop] Components V2 failed, falling back to legacy: {v2_error}")
                     import traceback
+
                     traceback.print_exc()
                     # Fall through to legacy mode
                 else:
@@ -7569,19 +8535,22 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
         # ==================== Legacy Mode (Embed + Mosaic) ====================
         if not items:
             embed = discord.Embed(
-                title="🛍️ Point Shop",
-                description="No items available at the moment. Check back later!",
-                color=0xFFD700
+                title="🛍️ Point Shop", description="No items available at the moment. Check back later!", color=0xFFD700
             )
             embed.set_footer(text="💡 Tip: Earn points by watching streams!")
             message = await channel.send(embed=embed)
 
             with engine.begin() as conn:
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     INSERT INTO point_settings (key, value, discord_server_id, updated_at)
                     VALUES ('shop_message_id', :m, :guild_id, CURRENT_TIMESTAMP)
                     ON CONFLICT (key, discord_server_id) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
-                """), {"m": str(message.id), "guild_id": guild_id})
+                """
+                    ),
+                    {"m": str(message.id), "guild_id": guild_id},
+                )
             return True
 
         # Create mosaic image for legacy mode
@@ -7593,7 +8562,7 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
         embed = discord.Embed(
             title="🛍️ Point Shop",
             description="Spend your hard-earned points on awesome rewards!\nSelect an item from the dropdown below to purchase.",
-            color=0xFFD700
+            color=0xFFD700,
         )
 
         if mosaic_file:
@@ -7621,15 +8590,25 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
 
         # Store the message ID for future updates (legacy mode has interactive in same message)
         with engine.begin() as conn:
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 INSERT INTO point_settings (key, value, discord_server_id, updated_at)
                 VALUES ('shop_message_id', :m, :guild_id, CURRENT_TIMESTAMP)
                 ON CONFLICT (key, discord_server_id) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
-            """), {"m": str(message.id), "guild_id": guild_id})
+            """
+                ),
+                {"m": str(message.id), "guild_id": guild_id},
+            )
             # Clear interactive ID since legacy mode includes it in same message
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 DELETE FROM point_settings WHERE key = 'shop_interactive_id' AND discord_server_id = :guild_id
-            """), {"guild_id": guild_id})
+            """
+                ),
+                {"guild_id": guild_id},
+            )
 
         print(f"[Point Shop] Posted shop to channel {channel_id}")
         return True
@@ -7637,12 +8616,15 @@ async def post_point_shop_to_discord(bot, guild_id: int = None, channel_id: int 
     except Exception as e:
         print(f"[Point Shop] Error posting shop: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 async def update_point_shop_message(bot):
     """Update the existing point shop message with current data"""
     return await post_point_shop_to_discord(bot, update_existing=True)
+
 
 @bot.command(name="points", aliases=["balance", "pts"])
 async def cmd_points(ctx):
@@ -7651,10 +8633,15 @@ async def cmd_points(ctx):
 
     # Get linked Kick account
     with engine.connect() as conn:
-        link = conn.execute(text("""
+        link = conn.execute(
+            text(
+                """
             SELECT kick_name FROM links
             WHERE discord_id = :d AND discord_server_id = :s
-        """), {"d": discord_id, "s": ctx.guild.id}).fetchone()
+        """
+            ),
+            {"d": discord_id, "s": ctx.guild.id},
+        ).fetchone()
 
         if not link:
             await ctx.send("❌ You need to link your Kick account first! Use the link panel or `!link` command.")
@@ -7663,27 +8650,30 @@ async def cmd_points(ctx):
         kick_username = link[0]
 
         # Get points balance
-        points_data = conn.execute(text("""
+        points_data = conn.execute(
+            text(
+                """
             SELECT points, total_earned, total_spent
             FROM user_points
             WHERE kick_username = :k AND discord_server_id = :s
-        """), {"k": kick_username, "s": ctx.guild.id}).fetchone()
+        """
+            ),
+            {"k": kick_username, "s": ctx.guild.id},
+        ).fetchone()
 
         if not points_data:
             points, total_earned, total_spent = 0, 0, 0
         else:
             points, total_earned, total_spent = points_data
 
-    embed = discord.Embed(
-        title="💰 Your Point Balance",
-        color=0xFFD700
-    )
+    embed = discord.Embed(title="💰 Your Point Balance", color=0xFFD700)
     embed.add_field(name="Current Balance", value=f"**{points:,}** points", inline=True)
     embed.add_field(name="Total Earned", value=f"{total_earned:,} points", inline=True)
     embed.add_field(name="Total Spent", value=f"{total_spent:,} points", inline=True)
     embed.set_footer(text=f"Kick Account: {kick_username}")
 
     await ctx.send(embed=embed)
+
 
 @bot.command(name="pointslb", aliases=["pointsleaderboard", "ptslb"])
 async def cmd_points_leaderboard(ctx, limit: int = 10):
@@ -7695,22 +8685,24 @@ async def cmd_points_leaderboard(ctx, limit: int = 10):
 
     guild_id = ctx.guild.id if ctx.guild else None
     with engine.connect() as conn:
-        leaders = conn.execute(text("""
+        leaders = conn.execute(
+            text(
+                """
             SELECT kick_username, points, total_earned
             FROM user_points
             WHERE points > 0 AND discord_server_id = :guild_id
             ORDER BY points DESC
             LIMIT :limit
-        """), {"limit": limit, "guild_id": guild_id}).fetchall()
+        """
+            ),
+            {"limit": limit, "guild_id": guild_id},
+        ).fetchall()
 
     if not leaders:
         await ctx.send("📊 No one has earned any points yet!")
         return
 
-    embed = discord.Embed(
-        title="🏆 Points Leaderboard",
-        color=0xFFD700
-    )
+    embed = discord.Embed(title="🏆 Points Leaderboard", color=0xFFD700)
 
     leaderboard_text = ""
     for i, (username, points, total_earned) in enumerate(leaders, 1):
@@ -7722,6 +8714,7 @@ async def cmd_points_leaderboard(ctx, limit: int = 10):
 
     await ctx.send(embed=embed)
 
+
 @bot.command(name="postshop")
 @commands.has_permissions(administrator=True)
 async def cmd_post_shop(ctx, channel: discord.TextChannel = None):
@@ -7730,11 +8723,16 @@ async def cmd_post_shop(ctx, channel: discord.TextChannel = None):
 
     # Save channel setting
     with engine.begin() as conn:
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
             INSERT INTO point_settings (key, value, discord_server_id, updated_at)
             VALUES ('shop_channel_id', :c, :guild_id, CURRENT_TIMESTAMP)
             ON CONFLICT (key, discord_server_id) DO UPDATE SET value = :c, updated_at = CURRENT_TIMESTAMP
-        """), {"c": str(target_channel.id), "guild_id": ctx.guild.id})
+        """
+            ),
+            {"c": str(target_channel.id), "guild_id": ctx.guild.id},
+        )
 
     success = await post_point_shop_to_discord(bot, ctx.guild.id, target_channel.id)
 
@@ -7743,6 +8741,7 @@ async def cmd_post_shop(ctx, channel: discord.TextChannel = None):
             await ctx.send(f"✅ Point shop posted to {target_channel.mention}!")
     else:
         await ctx.send("❌ Failed to post point shop. Check that there are active items.")
+
 
 # -------------------------
 # Run bot
