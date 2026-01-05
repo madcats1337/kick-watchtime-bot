@@ -2214,11 +2214,11 @@ def load_watchtime_roles():
 # -------------------------
 # Link logging helper
 # -------------------------
-async def log_link_attempt(discord_user, kick_username: str, success: bool, error_message: str = None):
+async def log_link_attempt(discord_user, kick_username: str, success: bool, error_message: str = None, guild_id: int = None):
     """Log account linking attempts to configured Discord channel."""
-    # Multiserver: guild_id should be passed as parameter, but for now skip if not available
-    # TODO: Update callers to pass guild_id
-    return  # Temporarily disabled for multiserver migration
+    if not guild_id:
+        print("⚠️ log_link_attempt: No guild_id provided, skipping log")
+        return
 
     try:
         with engine.connect() as conn:
@@ -2229,7 +2229,7 @@ async def log_link_attempt(discord_user, kick_username: str, success: bool, erro
                 WHERE guild_id = :guild_id
             """
                 ),
-                {"guild_id": DISCORD_GUILD_ID},
+                {"guild_id": guild_id},
             ).fetchone()
 
             if not result or not result[1]:  # Not configured or disabled
@@ -2238,8 +2238,9 @@ async def log_link_attempt(discord_user, kick_username: str, success: bool, erro
             channel_id = result[0]
 
         # Get the channel
-        channel = bot.get_channel(channel_id)
+        channel = bot.get_channel(int(channel_id))
         if not channel:
+            print(f"⚠️ Link logs channel {channel_id} not found")
             return
 
         # Create embed
@@ -2259,6 +2260,7 @@ async def log_link_attempt(discord_user, kick_username: str, success: bool, erro
         embed.set_footer(text=f"Discord ID: {discord_user.id}")
 
         await channel.send(embed=embed)
+        print(f"✅ Logged link attempt to channel {channel_id}", flush=True)
 
     except Exception as e:
         print(f"⚠️ Failed to log link attempt: {e}")
@@ -3769,7 +3771,7 @@ async def check_oauth_notifications_task():
 
                             # Log the failed attempt
                             await log_link_attempt(
-                                user, actual_kick_username, success=False, error_message=error_message
+                                user, actual_kick_username, success=False, error_message=error_message, guild_id=guild_id
                             )
                         else:
                             # Send success message via DM
@@ -3806,7 +3808,7 @@ async def check_oauth_notifications_task():
                                                 )
 
                             # Log the successful link attempt
-                            await log_link_attempt(user, actual_kick_username, success=True)
+                            await log_link_attempt(user, actual_kick_username, success=True, guild_id=guild_id)
                             
                             # Grant linked role if configured
                             if guild_id:
@@ -4655,10 +4657,17 @@ async def cmd_grant_link_role(ctx, member: discord.Member = None):
 
         for discord_id, kick_name in linked_users:
             try:
+                # Try cache first, then fetch from API if not cached
                 member = ctx.guild.get_member(int(discord_id))
                 if not member:
-                    not_in_server += 1
-                    continue
+                    try:
+                        member = await ctx.guild.fetch_member(int(discord_id))
+                    except discord.NotFound:
+                        not_in_server += 1
+                        continue
+                    except discord.HTTPException:
+                        not_in_server += 1
+                        continue
 
                 if role in member.roles:
                     already_had += 1
