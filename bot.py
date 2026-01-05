@@ -4524,6 +4524,171 @@ async def unlink_error(ctx, error):
         await ctx.send("❌ Invalid user. Usage: `!unlink @user`")
 
 
+@bot.command(name="updatekick")
+@commands.has_permissions(administrator=True)
+async def cmd_update_kick(ctx, member: discord.Member, new_kick_username: str):
+    """[ADMIN] Update a user's linked Kick username.
+
+    Usage:
+    !updatekick @user newkickname - Update the Kick username for a linked user
+    """
+    discord_id = member.id
+    guild_id = ctx.guild.id if ctx.guild else None
+    new_kick_username = new_kick_username.lower().strip()
+
+    # Check if user has a linked account
+    with engine.connect() as conn:
+        existing = conn.execute(
+            text("SELECT kick_name FROM links WHERE discord_id = :d AND discord_server_id = :guild_id"),
+            {"d": discord_id, "guild_id": guild_id},
+        ).fetchone()
+
+    if not existing:
+        await ctx.send(f"❌ {member.mention} doesn't have a linked Kick account. They need to link first via the link panel.")
+        return
+
+    old_kick_name = existing[0]
+
+    # Update the kick username
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                UPDATE links 
+                SET kick_name = :new_name, linked_at = CURRENT_TIMESTAMP
+                WHERE discord_id = :d AND discord_server_id = :guild_id
+            """),
+            {"new_name": new_kick_username, "d": discord_id, "guild_id": guild_id},
+        )
+
+    await ctx.send(
+        f"✅ Updated {member.mention}'s Kick username:\n"
+        f"**{old_kick_name}** → **{new_kick_username}**"
+    )
+    print(f"[Admin] {ctx.author} updated {member}'s Kick: {old_kick_name} → {new_kick_username}", flush=True)
+
+
+@cmd_update_kick.error
+async def update_kick_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ This command requires Administrator permission.")
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("❌ Usage: `!updatekick @user newkickname`")
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send("❌ Invalid user. Usage: `!updatekick @user newkickname`")
+
+
+@bot.command(name="grantlinkrole", aliases=["synclinkedroles"])
+@commands.has_permissions(administrator=True)
+async def cmd_grant_link_role(ctx, member: discord.Member = None):
+    """[ADMIN] Grant the linked role to users who are already linked.
+
+    Usage:
+    !grantlinkrole - Grant role to ALL linked users in this server
+    !grantlinkrole @user - Grant role to a specific linked user
+    """
+    guild_id = ctx.guild.id if ctx.guild else None
+    
+    # Get the configured linked role ID
+    with engine.connect() as conn:
+        linked_role_id = conn.execute(
+            text("""
+                SELECT value FROM bot_settings 
+                WHERE key = 'kick_linked_role_id' AND discord_server_id = :guild_id
+            """),
+            {"guild_id": guild_id}
+        ).scalar()
+
+    if not linked_role_id or not linked_role_id.strip():
+        await ctx.send("❌ No linked role configured. Set it in Dashboard → Profile Settings → Kick Link Settings.")
+        return
+
+    role = ctx.guild.get_role(int(linked_role_id))
+    if not role:
+        await ctx.send(f"❌ Configured role ID `{linked_role_id}` not found in this server. Please update the setting.")
+        return
+
+    # Check bot permissions
+    if not ctx.guild.me.guild_permissions.manage_roles:
+        await ctx.send("❌ I don't have permission to manage roles.")
+        return
+    
+    if role >= ctx.guild.me.top_role:
+        await ctx.send(f"❌ The role **{role.name}** is higher than my highest role. I cannot assign it.")
+        return
+
+    if member:
+        # Single user mode
+        with engine.connect() as conn:
+            linked = conn.execute(
+                text("SELECT kick_name FROM links WHERE discord_id = :d AND discord_server_id = :guild_id"),
+                {"d": member.id, "guild_id": guild_id},
+            ).fetchone()
+
+        if not linked:
+            await ctx.send(f"❌ {member.mention} doesn't have a linked Kick account.")
+            return
+
+        if role in member.roles:
+            await ctx.send(f"ℹ️ {member.mention} already has the **{role.name}** role.")
+            return
+
+        await member.add_roles(role, reason=f"Admin granted linked role (Kick: {linked[0]})")
+        await ctx.send(f"✅ Granted **{role.name}** to {member.mention} (Kick: **{linked[0]}**)")
+    else:
+        # Bulk mode - grant to all linked users
+        status_msg = await ctx.send("🔄 Scanning linked users and granting roles...")
+        
+        with engine.connect() as conn:
+            linked_users = conn.execute(
+                text("SELECT discord_id, kick_name FROM links WHERE discord_server_id = :guild_id"),
+                {"guild_id": guild_id},
+            ).fetchall()
+
+        if not linked_users:
+            await status_msg.edit(content="❌ No linked users found in this server.")
+            return
+
+        granted = 0
+        already_had = 0
+        not_in_server = 0
+        errors = 0
+
+        for discord_id, kick_name in linked_users:
+            try:
+                member = ctx.guild.get_member(int(discord_id))
+                if not member:
+                    not_in_server += 1
+                    continue
+
+                if role in member.roles:
+                    already_had += 1
+                    continue
+
+                await member.add_roles(role, reason=f"Bulk sync: Linked Kick account ({kick_name})")
+                granted += 1
+            except Exception as e:
+                errors += 1
+                print(f"⚠️ Error granting role to {discord_id}: {e}", flush=True)
+
+        await status_msg.edit(
+            content=f"✅ **Link Role Sync Complete**\n\n"
+                    f"**{role.name}** role:\n"
+                    f"• ✅ Granted to: **{granted}** users\n"
+                    f"• ℹ️ Already had role: **{already_had}** users\n"
+                    f"• ⚠️ Not in server: **{not_in_server}** users\n"
+                    f"• ❌ Errors: **{errors}**"
+        )
+        print(f"[Admin] {ctx.author} synced linked roles: {granted} granted, {already_had} already had, {not_in_server} not in server", flush=True)
+
+
+@cmd_grant_link_role.error
+async def grant_link_role_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ This command requires Administrator permission.")
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send("❌ Invalid user. Usage: `!grantlinkrole` or `!grantlinkrole @user`")
+
+
 @bot.command(name="leaderboard")
 async def cmd_leaderboard(ctx, top: int = 10):
     """Show top viewers by watchtime."""
