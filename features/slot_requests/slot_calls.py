@@ -5,17 +5,26 @@ Slot Call Tracker - Monitor Kick chat for !call commands and post to Discord
 import logging
 import re
 from datetime import datetime, timedelta
-from typing import Optional, Dict
+from typing import Dict, Optional
+
 import discord
 from discord.ext import commands
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
+
 class SlotCallTracker:
     """Track slot calls from Kick chat and post to Discord"""
 
-    def __init__(self, bot, discord_channel_id: Optional[int] = None, kick_send_callback=None, engine=None, server_id: Optional[int] = None):
+    def __init__(
+        self,
+        bot,
+        discord_channel_id: Optional[int] = None,
+        kick_send_callback=None,
+        engine=None,
+        server_id: Optional[int] = None,
+    ):
         self.bot = bot
         self.discord_channel_id = discord_channel_id
         self.engine = engine
@@ -41,7 +50,9 @@ class SlotCallTracker:
 
         try:
             with self.engine.begin() as conn:
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     CREATE TABLE IF NOT EXISTS feature_settings (
                         feature_name TEXT NOT NULL,
                         discord_server_id BIGINT NOT NULL,
@@ -49,10 +60,14 @@ class SlotCallTracker:
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         PRIMARY KEY (feature_name, discord_server_id)
                     )
-                """))
+                """
+                    )
+                )
 
                 # Create slot_requests table to store all slot requests
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     CREATE TABLE IF NOT EXISTS slot_requests (
                         id SERIAL PRIMARY KEY,
                         kick_username TEXT NOT NULL,
@@ -62,21 +77,31 @@ class SlotCallTracker:
                         picked_at TIMESTAMP,
                         discord_server_id BIGINT
                     )
-                """))
-                
+                """
+                    )
+                )
+
                 # Add discord_server_id column if it doesn't exist (migration)
                 try:
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         ALTER TABLE slot_requests ADD COLUMN IF NOT EXISTS discord_server_id BIGINT
-                    """))
+                    """
+                        )
+                    )
                 except Exception:
                     pass  # Column might already exist
 
                 # Add performance index for requested_at ordering
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     CREATE INDEX IF NOT EXISTS idx_slot_requests_requested_at
                     ON slot_requests(requested_at DESC)
-                """))
+                """
+                    )
+                )
             logger.info("Slot call tables initialized")
         except Exception as e:
             logger.error(f"Failed to initialize slot call tables: {e}")
@@ -88,23 +113,33 @@ class SlotCallTracker:
 
         try:
             with self.engine.connect() as conn:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT value FROM bot_settings
                     WHERE key = 'slot_requests_enabled' AND discord_server_id = :server_id
-                """), {"server_id": self.server_id}).fetchone()
+                """
+                    ),
+                    {"server_id": self.server_id},
+                ).fetchone()
 
                 if result:
-                    enabled = result[0].lower() == 'true'
+                    enabled = result[0].lower() == "true"
                     logger.info(f"Loaded slot call state from database: {'enabled' if enabled else 'disabled'}")
                     return enabled
                 else:
                     # First time - set default to enabled
                     with self.engine.begin() as conn:
-                        conn.execute(text("""
+                        conn.execute(
+                            text(
+                                """
                             INSERT INTO bot_settings (key, value, discord_server_id)
                             VALUES ('slot_requests_enabled', 'true', :server_id)
                             ON CONFLICT (key, discord_server_id) DO NOTHING
-                        """), {"server_id": self.server_id})
+                        """
+                            ),
+                            {"server_id": self.server_id},
+                        )
                     logger.info("Initialized slot call state in database: enabled")
                     return True
         except Exception as e:
@@ -120,27 +155,40 @@ class SlotCallTracker:
             with self.engine.connect() as conn:
                 # Try to load server-specific setting first
                 if self.server_id:
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         SELECT value FROM bot_settings
                         WHERE key = 'slot_max_requests_per_user'
                         AND discord_server_id = :server_id
-                    """), {"server_id": self.server_id}).fetchone()
-                    
+                    """
+                        ),
+                        {"server_id": self.server_id},
+                    ).fetchone()
+
                     if result:
                         max_requests = int(result[0])
-                        logger.info(f"Loaded max slot requests per user (server {self.server_id}): {max_requests if max_requests > 0 else 'unlimited'}")
+                        logger.info(
+                            f"Loaded max slot requests per user (server {self.server_id}): {max_requests if max_requests > 0 else 'unlimited'}"
+                        )
                         return max_requests
-                
+
                 # Fallback to global setting if no server-specific setting
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT value FROM bot_settings
                     WHERE key = 'slot_max_requests_per_user'
                     AND discord_server_id IS NULL
-                """)).fetchone()
+                """
+                    )
+                ).fetchone()
 
                 if result:
                     max_requests = int(result[0])
-                    logger.info(f"Loaded max slot requests per user (global): {max_requests if max_requests > 0 else 'unlimited'}")
+                    logger.info(
+                        f"Loaded max slot requests per user (global): {max_requests if max_requests > 0 else 'unlimited'}"
+                    )
                     return max_requests
                 else:
                     return 0  # Default to unlimited
@@ -155,13 +203,18 @@ class SlotCallTracker:
 
         try:
             with self.engine.connect() as conn:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT value FROM bot_settings
                     WHERE key = 'slot_request_cooldown_seconds'
                       AND (discord_server_id = :server_id OR discord_server_id IS NULL)
                     ORDER BY discord_server_id NULLS LAST
                     LIMIT 1
-                """), {"server_id": self.bot.server_id if hasattr(self.bot, 'server_id') else None}).fetchone()
+                """
+                    ),
+                    {"server_id": self.bot.server_id if hasattr(self.bot, "server_id") else None},
+                ).fetchone()
 
                 if result and result[0]:
                     cooldown = int(result[0])
@@ -182,23 +235,36 @@ class SlotCallTracker:
             with self.engine.begin() as conn:
                 if self.server_id:
                     # Server-specific setting
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         INSERT INTO bot_settings (key, value, discord_server_id)
                         VALUES ('slot_max_requests_per_user', :max_requests, :server_id)
                         ON CONFLICT (key, discord_server_id)
                         DO UPDATE SET value = :max_requests
-                    """), {"max_requests": str(max_requests), "server_id": self.server_id})
+                    """
+                        ),
+                        {"max_requests": str(max_requests), "server_id": self.server_id},
+                    )
                 else:
                     # Global setting
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         INSERT INTO bot_settings (key, value, discord_server_id)
                         VALUES ('slot_max_requests_per_user', :max_requests, NULL)
                         ON CONFLICT (key, discord_server_id)
                         DO UPDATE SET value = :max_requests
-                    """), {"max_requests": str(max_requests)})
+                    """
+                        ),
+                        {"max_requests": str(max_requests)},
+                    )
 
             self.max_requests_per_user = max_requests
-            logger.info(f"Set max slot requests per user to: {max_requests if max_requests > 0 else 'unlimited'}" + (f" (server {self.server_id})" if self.server_id else " (global)"))
+            logger.info(
+                f"Set max slot requests per user to: {max_requests if max_requests > 0 else 'unlimited'}"
+                + (f" (server {self.server_id})" if self.server_id else " (global)")
+            )
             return True
         except Exception as e:
             logger.error(f"Failed to set max requests: {e}")
@@ -218,12 +284,17 @@ class SlotCallTracker:
         if self.engine:
             try:
                 with self.engine.begin() as conn:
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         INSERT INTO bot_settings (key, value, discord_server_id)
                         VALUES ('slot_requests_enabled', :value, :server_id)
                         ON CONFLICT (key, discord_server_id)
                         DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP
-                    """), {"value": str(enabled).lower(), "server_id": self.server_id})
+                    """
+                        ),
+                        {"value": str(enabled).lower(), "server_id": self.server_id},
+                    )
 
                     # Clear slot requests table when enabled after being disabled
                     if enabled and was_disabled:
@@ -257,21 +328,28 @@ class SlotCallTracker:
             try:
                 username_lower = kick_username.lower()
                 with self.engine.connect() as conn:
-                    blacklist_check = conn.execute(text("""
-                        SELECT 1 FROM slot_call_blacklist 
+                    blacklist_check = conn.execute(
+                        text(
+                            """
+                        SELECT 1 FROM slot_call_blacklist
                         WHERE kick_username = :username AND discord_server_id = :guild_id
-                    """), {"username": username_lower, "guild_id": self.discord_server_id}).fetchone()
+                    """
+                        ),
+                        {"username": username_lower, "guild_id": self.discord_server_id},
+                    ).fetchone()
                     if blacklist_check:
                         logger.info(f"[Slot Call] Blocked blacklisted user in handle_slot_call: {kick_username}")
                         return  # Silently block - no response to blacklisted users
             except Exception as e:
                 logger.error(f"Error checking slot call blacklist: {e}")
-        
+
         if not self.enabled:
             # Send "slot requests not open" message to Kick chat
             if self.kick_send_callback:
                 try:
-                    await self.kick_send_callback(f"@{kick_username} Slot requests are not open at the moment.", guild_id=self.discord_server_id)
+                    await self.kick_send_callback(
+                        f"@{kick_username} Slot requests are not open at the moment.", guild_id=self.discord_server_id
+                    )
                     logger.info(f"Sent 'slot requests not open' message to {kick_username}")
                 except Exception as e:
                     logger.error(f"Failed to send disabled message to Kick: {e}")
@@ -297,60 +375,84 @@ class SlotCallTracker:
         # Check per-user request limit (if enabled)
         # This counts ALL requests (picked, unpicked, added to hunt - everything)
         # Using SELECT FOR UPDATE to prevent race conditions
-        logger.info(f"[LIMIT CHECK] User: {kick_username}, max_requests_per_user: {self.max_requests_per_user}, engine: {bool(self.engine)}")
+        logger.info(
+            f"[LIMIT CHECK] User: {kick_username}, max_requests_per_user: {self.max_requests_per_user}, engine: {bool(self.engine)}"
+        )
         if self.max_requests_per_user > 0 and self.engine:
             try:
                 with self.engine.begin() as conn:
                     # Count the user's total requests
                     if self.server_id:
-                        result = conn.execute(text("""
+                        result = conn.execute(
+                            text(
+                                """
                             SELECT COUNT(*) FROM slot_requests
                             WHERE LOWER(kick_username) = LOWER(:username)
                             AND discord_server_id = :server_id
-                        """), {"username": kick_username, "server_id": self.server_id}).fetchone()
+                        """
+                            ),
+                            {"username": kick_username, "server_id": self.server_id},
+                        ).fetchone()
                     else:
-                        result = conn.execute(text("""
+                        result = conn.execute(
+                            text(
+                                """
                             SELECT COUNT(*) FROM slot_requests
                             WHERE LOWER(kick_username) = LOWER(:username)
-                        """), {"username": kick_username}).fetchone()
+                        """
+                            ),
+                            {"username": kick_username},
+                        ).fetchone()
 
                     total_requests = result[0] if result else 0
-                    logger.info(f"[LIMIT CHECK] User {kick_username} has {total_requests} total requests, limit is {self.max_requests_per_user}")
+                    logger.info(
+                        f"[LIMIT CHECK] User {kick_username} has {total_requests} total requests, limit is {self.max_requests_per_user}"
+                    )
 
                     if total_requests >= self.max_requests_per_user:
                         # User has reached their request limit
-                        logger.warning(f"[LIMIT CHECK] BLOCKING {kick_username}: {total_requests} >= {self.max_requests_per_user}")
+                        logger.warning(
+                            f"[LIMIT CHECK] BLOCKING {kick_username}: {total_requests} >= {self.max_requests_per_user}"
+                        )
                         if self.kick_send_callback:
                             try:
                                 print(f"[SLOT TRACKER DEBUG] discord_server_id = {self.discord_server_id}")
                                 await self.kick_send_callback(
                                     f"@{kick_username} You have reached the maximum of {self.max_requests_per_user} slot request(s). "
                                     f"Please wait for the current hunt to complete.",
-                                    guild_id=self.discord_server_id
+                                    guild_id=self.discord_server_id,
                                 )
-                                logger.info(f"User {kick_username} blocked: {total_requests}/{self.max_requests_per_user} total requests")
+                                logger.info(
+                                    f"User {kick_username} blocked: {total_requests}/{self.max_requests_per_user} total requests"
+                                )
                             except Exception as e:
                                 logger.error(f"Failed to send limit message to Kick: {e}")
                         return
                     else:
-                        logger.info(f"[LIMIT CHECK] ALLOWING {kick_username}: {total_requests} < {self.max_requests_per_user}")
+                        logger.info(
+                            f"[LIMIT CHECK] ALLOWING {kick_username}: {total_requests} < {self.max_requests_per_user}"
+                        )
             except Exception as e:
                 logger.error(f"Failed to check user request limit: {e}")
                 # Continue anyway to not block legitimate requests on DB errors
         else:
-            logger.info(f"[LIMIT CHECK] SKIPPED - max_requests_per_user is {self.max_requests_per_user} (must be > 0) or engine is None")
+            logger.info(
+                f"[LIMIT CHECK] SKIPPED - max_requests_per_user is {self.max_requests_per_user} (must be > 0) or engine is None"
+            )
 
         # 🔒 SECURITY: Input validation - prevent excessively long inputs
-        kick_username_safe = kick_username[:self.max_username_length]
-        slot_call_safe = slot_call[:self.max_slot_call_length]
+        kick_username_safe = kick_username[: self.max_username_length]
+        slot_call_safe = slot_call[: self.max_slot_call_length]
 
         # Check if slot is banned or provider is disabled (supports name or slug match, basic slug normalization)
         if self.engine:
             try:
                 # Normalize to a slug candidate (lowercase, non-alphanumeric -> '-')
-                slot_slug_candidate = re.sub(r"[^a-z0-9]+", "-", slot_call_safe.lower()).strip('-')
+                slot_slug_candidate = re.sub(r"[^a-z0-9]+", "-", slot_call_safe.lower()).strip("-")
                 with self.engine.connect() as conn:
-                    slot_check = conn.execute(text("""
+                    slot_check = conn.execute(
+                        text(
+                            """
                         SELECT banned, is_active
                         FROM shuffle_slots
                         WHERE (
@@ -359,7 +461,10 @@ class SlotCallTracker:
                              OR LOWER(REPLACE(name,' ','-')) = LOWER(:slot_slug)
                           )
                         LIMIT 1
-                    """), {"slot_name": slot_call_safe, "slot_slug": slot_slug_candidate}).fetchone()
+                    """
+                        ),
+                        {"slot_name": slot_call_safe, "slot_slug": slot_slug_candidate},
+                    ).fetchone()
 
                 if slot_check:
                     is_banned, is_active = slot_check
@@ -370,7 +475,7 @@ class SlotCallTracker:
                             try:
                                 await self.kick_send_callback(
                                     f"@{kick_username_safe} Sorry, {slot_call_safe} is currently banned.",
-                                    guild_id=self.discord_server_id
+                                    guild_id=self.discord_server_id,
                                 )
                                 logger.info(f"Blocked banned slot request: {slot_call_safe}")
                             except Exception as e:
@@ -383,7 +488,7 @@ class SlotCallTracker:
                             try:
                                 await self.kick_send_callback(
                                     f"@{kick_username_safe} Sorry, {slot_call_safe} is currently unavailable.",
-                                    guild_id=self.discord_server_id
+                                    guild_id=self.discord_server_id,
                                 )
                                 logger.info(f"Blocked slot request for disabled provider: {slot_call_safe}")
                             except Exception as e:
@@ -398,28 +503,42 @@ class SlotCallTracker:
             try:
                 with self.engine.connect() as conn:
                     # Check if duplicate prevention is enabled
-                    prevent_result = conn.execute(text("""
+                    prevent_result = conn.execute(
+                        text(
+                            """
                         SELECT value FROM bot_settings
                         WHERE key = 'slot_prevent_duplicates'
-                    """)).fetchone()
+                    """
+                        )
+                    ).fetchone()
 
-                    prevent_duplicates = prevent_result and prevent_result[0] == 'true'
+                    prevent_duplicates = prevent_result and prevent_result[0] == "true"
 
                     if prevent_duplicates:
                         # Check if this slot has already been requested (unpicked OR added to hunt)
                         if self.server_id:
-                            dup_result = conn.execute(text("""
+                            dup_result = conn.execute(
+                                text(
+                                    """
                                 SELECT COUNT(*) FROM slot_requests
                                 WHERE LOWER(slot_call) = LOWER(:slot_call)
                                 AND (picked = FALSE OR added_to_hunt = TRUE)
                                 AND discord_server_id = :server_id
-                            """), {"slot_call": slot_call_safe, "server_id": self.server_id}).fetchone()
+                            """
+                                ),
+                                {"slot_call": slot_call_safe, "server_id": self.server_id},
+                            ).fetchone()
                         else:
-                            dup_result = conn.execute(text("""
+                            dup_result = conn.execute(
+                                text(
+                                    """
                                 SELECT COUNT(*) FROM slot_requests
                                 WHERE LOWER(slot_call) = LOWER(:slot_call)
                                 AND (picked = FALSE OR added_to_hunt = TRUE)
-                            """), {"slot_call": slot_call_safe}).fetchone()
+                            """
+                                ),
+                                {"slot_call": slot_call_safe},
+                            ).fetchone()
 
                         if dup_result and dup_result[0] > 0:
                             # Slot already requested or in active hunt
@@ -427,9 +546,11 @@ class SlotCallTracker:
                                 try:
                                     await self.kick_send_callback(
                                         f"@{kick_username_safe} Sorry, {slot_call_safe} has already been requested.",
-                                        guild_id=self.discord_server_id
+                                        guild_id=self.discord_server_id,
                                     )
-                                    logger.info(f"Blocked duplicate slot request: {slot_call_safe} by {kick_username_safe}")
+                                    logger.info(
+                                        f"Blocked duplicate slot request: {slot_call_safe} by {kick_username_safe}"
+                                    )
                                 except Exception as e:
                                     logger.error(f"Failed to send duplicate message to Kick: {e}")
                             return
@@ -441,11 +562,12 @@ class SlotCallTracker:
         if not avatar_url:
             try:
                 import requests
+
                 # Try the users endpoint first (same as OAuth flow)
                 kick_response = requests.get(f"https://kick.com/api/v2/users/{kick_username_safe}", timeout=3)
                 if kick_response.status_code == 200:
                     kick_data = kick_response.json()
-                    avatar_url = kick_data.get('profile_picture')
+                    avatar_url = kick_data.get("profile_picture")
                     logger.info(f"✅ Found Kick avatar via /users for {kick_username_safe}: {avatar_url}")
                 else:
                     # Fallback to channels endpoint
@@ -453,9 +575,14 @@ class SlotCallTracker:
                     if kick_response.status_code == 200:
                         kick_data = kick_response.json()
                         # Try multiple possible avatar fields from Kick API
-                        user_data = kick_data.get('user', {})
-                        avatar_url = user_data.get('profile_picture') or user_data.get('profile_pic') or user_data.get('profilepic') or user_data.get('avatar')
-                        
+                        user_data = kick_data.get("user", {})
+                        avatar_url = (
+                            user_data.get("profile_picture")
+                            or user_data.get("profile_pic")
+                            or user_data.get("profilepic")
+                            or user_data.get("avatar")
+                        )
+
                         # Log the API response structure for debugging
                         logger.info(f"Kick API response for {kick_username_safe}: user keys = {list(user_data.keys())}")
                         if avatar_url:
@@ -468,7 +595,7 @@ class SlotCallTracker:
                 logger.error(f"Failed to fetch Kick avatar for {kick_username_safe}: {avatar_err}")
         else:
             logger.info(f"✅ Using Kick avatar from websocket for {kick_username_safe}: {avatar_url}")
-        
+
         # Fallback to placeholder if no avatar
         if not avatar_url:
             avatar_url = f"https://ui-avatars.com/api/?name={kick_username_safe}&background=random&size=95"
@@ -484,7 +611,7 @@ class SlotCallTracker:
             title="🎰 Slot Call",
             description=f"**{kick_username_safe}** requested **{slot_call_safe}**",
             color=discord.Color.gold(),
-            timestamp=datetime.utcnow()
+            timestamp=datetime.utcnow(),
         )
         embed.set_footer(text=f"From Kick chat • {kick_username_safe}")
 
@@ -495,30 +622,48 @@ class SlotCallTracker:
             # Save slot request to database with avatar
             if self.engine:
                 try:
-                    
+
                     with self.engine.begin() as conn:
                         if self.server_id:
-                            conn.execute(text("""
+                            conn.execute(
+                                text(
+                                    """
                                 INSERT INTO slot_requests (kick_username, slot_call, requested_at, discord_server_id, avatar_url)
                                 VALUES (:username, :slot_call, CURRENT_TIMESTAMP, :server_id, :avatar_url)
-                            """), {"username": kick_username_safe, "slot_call": slot_call_safe, "server_id": self.server_id, "avatar_url": avatar_url})
+                            """
+                                ),
+                                {
+                                    "username": kick_username_safe,
+                                    "slot_call": slot_call_safe,
+                                    "server_id": self.server_id,
+                                    "avatar_url": avatar_url,
+                                },
+                            )
                         else:
-                            conn.execute(text("""
+                            conn.execute(
+                                text(
+                                    """
                                 INSERT INTO slot_requests (kick_username, slot_call, requested_at, avatar_url)
                                 VALUES (:username, :slot_call, CURRENT_TIMESTAMP, :avatar_url)
-                            """), {"username": kick_username_safe, "slot_call": slot_call_safe, "avatar_url": avatar_url})
+                            """
+                                ),
+                                {"username": kick_username_safe, "slot_call": slot_call_safe, "avatar_url": avatar_url},
+                            )
                     logger.debug(f"Saved slot request to database with avatar")
 
                     # Publish event for real-time dashboard updates
                     try:
                         from bot import publish_redis_event
-                        publish_redis_event('dashboard:slot_requests', {
-                            'action': 'new_request',
-                            'data': {
-                                'username': kick_username_safe,
-                                'slot_call': slot_call_safe
-                            }
-                        })
+
+                        publish_redis_event(
+                            "dashboard:slot_requests",
+                            "new_request",
+                            {
+                                "username": kick_username_safe,
+                                "slot_call": slot_call_safe,
+                                "discord_server_id": self.server_id,
+                            },
+                        )
                     except Exception as redis_err:
                         logger.debug(f"Redis publish failed (non-critical): {redis_err}")
                 except Exception as e:
@@ -544,6 +689,7 @@ class SlotCallTracker:
         except Exception as e:
             logger.error(f"Failed to post slot call to Discord: {e}")
 
+
 class SlotCallCommands(commands.Cog):
     """Discord commands for managing slot call tracking"""
 
@@ -554,14 +700,14 @@ class SlotCallCommands(commands.Cog):
     def _get_tracker_for_guild(self, guild_id: int) -> Optional[SlotCallTracker]:
         """Get the correct tracker for a guild"""
         # First try per-guild trackers
-        if hasattr(self.bot, 'slot_call_trackers_by_guild'):
+        if hasattr(self.bot, "slot_call_trackers_by_guild"):
             tracker = self.bot.slot_call_trackers_by_guild.get(guild_id)
             if tracker:
                 return tracker
         # Fallback to default tracker
         return self.default_tracker
 
-    @commands.command(name='slotcalls')
+    @commands.command(name="slotcalls")
     @commands.has_permissions(administrator=True)
     async def toggle_slot_calls(self, ctx, action: str = None):
         """
@@ -572,7 +718,7 @@ class SlotCallCommands(commands.Cog):
         if not tracker:
             await ctx.send("❌ Slot call tracker not initialized for this server")
             return
-        
+
         if action is None or action.lower() == "status":
             status = "✅ **enabled**" if tracker.is_enabled() else "❌ **disabled**"
             channel_id = tracker.discord_channel_id
@@ -580,21 +726,21 @@ class SlotCallCommands(commands.Cog):
 
             embed = discord.Embed(
                 title="🎰 Slot Call Tracker Status",
-                color=discord.Color.green() if tracker.is_enabled() else discord.Color.red()
+                color=discord.Color.green() if tracker.is_enabled() else discord.Color.red(),
             )
             embed.add_field(name="Status", value=status, inline=True)
             embed.add_field(name="Channel", value=channel_mention, inline=True)
             embed.add_field(
                 name="🔒 Security",
                 value=f"• Rate limit: {tracker.cooldown_seconds}s cooldown per user\n"
-                      f"• Max username: {tracker.max_username_length} chars\n"
-                      f"• Max slot call: {tracker.max_slot_call_length} chars",
-                inline=False
+                f"• Max username: {tracker.max_username_length} chars\n"
+                f"• Max slot call: {tracker.max_slot_call_length} chars",
+                inline=False,
             )
             embed.add_field(
                 name="How it works",
                 value="When users type `!call <slot>` or `!sr <slot>` in Kick chat, it posts to the configured Discord channel.",
-                inline=False
+                inline=False,
             )
 
             await ctx.send(embed=embed)
@@ -602,14 +748,16 @@ class SlotCallCommands(commands.Cog):
 
         if action.lower() == "on":
             await tracker.set_enabled(True)
-            await ctx.send("✅ Slot call tracking **enabled**! Users can now use `!call <slot>` or `!sr <slot>` in Kick chat.")
+            await ctx.send(
+                "✅ Slot call tracking **enabled**! Users can now use `!call <slot>` or `!sr <slot>` in Kick chat."
+            )
         elif action.lower() == "off":
             await tracker.set_enabled(False)
             await ctx.send("❌ Slot call tracking **disabled**. `!call` and `!sr` commands will be ignored.")
         else:
             await ctx.send("❌ Invalid action. Use `!slotcalls on`, `!slotcalls off`, or `!slotcalls status`")
 
-    @commands.command(name='pickslot', aliases=['randomslot', 'slotpick'])
+    @commands.command(name="pickslot", aliases=["randomslot", "slotpick"])
     @commands.has_permissions(administrator=True)
     async def pick_random_slot(self, ctx):
         """
@@ -620,7 +768,7 @@ class SlotCallCommands(commands.Cog):
         if not tracker:
             await ctx.send("❌ Slot call tracker not initialized for this server")
             return
-        
+
         if not tracker.engine:
             await ctx.send("❌ Database not available")
             return
@@ -629,44 +777,62 @@ class SlotCallCommands(commands.Cog):
             with tracker.engine.connect() as conn:
                 # Get a random unpicked slot request (filter by server_id if available)
                 if tracker.server_id:
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         SELECT id, kick_username, slot_call, requested_at
                         FROM slot_requests
                         WHERE picked = FALSE AND discord_server_id = :server_id
                         ORDER BY RANDOM()
                         LIMIT 1
-                    """), {"server_id": tracker.server_id}).fetchone()
+                    """
+                        ),
+                        {"server_id": tracker.server_id},
+                    ).fetchone()
                 else:
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         SELECT id, kick_username, slot_call, requested_at
                         FROM slot_requests
                         WHERE picked = FALSE
                         ORDER BY RANDOM()
                         LIMIT 1
-                    """)).fetchone()
+                    """
+                        )
+                    ).fetchone()
 
                 if not result:
-                    await ctx.send("❌ No slot requests available. The list may be empty or all requests have been picked.")
+                    await ctx.send(
+                        "❌ No slot requests available. The list may be empty or all requests have been picked."
+                    )
                     return
 
                 request_id, username, slot_call, requested_at = result
 
                 # Mark as picked
                 with tracker.engine.begin() as update_conn:
-                    update_conn.execute(text("""
+                    update_conn.execute(
+                        text(
+                            """
                         UPDATE slot_requests
                         SET picked = TRUE, picked_at = CURRENT_TIMESTAMP
                         WHERE id = :id
-                    """), {"id": request_id})
+                    """
+                        ),
+                        {"id": request_id},
+                    )
 
                 # Create embed
                 embed = discord.Embed(
-                    title="🎰 Random Slot Picked!",
-                    description=f"**{slot_call}**",
-                    color=discord.Color.gold()
+                    title="🎰 Random Slot Picked!", description=f"**{slot_call}**", color=discord.Color.gold()
                 )
                 embed.add_field(name="Requested by", value=username, inline=True)
-                embed.add_field(name="Requested at", value=requested_at.strftime("%Y-%m-%d %H:%M:%S UTC") if requested_at else "Unknown", inline=True)
+                embed.add_field(
+                    name="Requested at",
+                    value=requested_at.strftime("%Y-%m-%d %H:%M:%S UTC") if requested_at else "Unknown",
+                    inline=True,
+                )
                 embed.set_footer(text=f"Request ID: {request_id}")
 
                 await ctx.send(embed=embed)
@@ -693,7 +859,7 @@ class SlotCallCommands(commands.Cog):
             logger.error(f"Failed to pick random slot: {e}")
             await ctx.send(f"❌ Error picking random slot: {e}")
 
-    @commands.command(name='slotlist', aliases=['listslots', 'slots'])
+    @commands.command(name="slotlist", aliases=["listslots", "slots"])
     @commands.has_permissions(administrator=True)
     async def list_slot_requests(self, ctx):
         """
@@ -704,7 +870,7 @@ class SlotCallCommands(commands.Cog):
         if not tracker:
             await ctx.send("❌ Slot call tracker not initialized for this server")
             return
-        
+
         if not tracker.engine:
             await ctx.send("❌ Database not available")
             return
@@ -713,27 +879,41 @@ class SlotCallCommands(commands.Cog):
             with tracker.engine.connect() as conn:
                 # Get counts (filter by server_id if available)
                 if tracker.server_id:
-                    total = conn.execute(text("""
+                    total = conn.execute(
+                        text(
+                            """
                         SELECT COUNT(*) FROM slot_requests
                         WHERE discord_server_id = :server_id
-                    """), {"server_id": tracker.server_id}).fetchone()[0]
-                    unpicked = conn.execute(text("""
+                    """
+                        ),
+                        {"server_id": tracker.server_id},
+                    ).fetchone()[0]
+                    unpicked = conn.execute(
+                        text(
+                            """
                         SELECT COUNT(*) FROM slot_requests
                         WHERE picked = FALSE AND discord_server_id = :server_id
-                    """), {"server_id": tracker.server_id}).fetchone()[0]
-                    picked = conn.execute(text("""
+                    """
+                        ),
+                        {"server_id": tracker.server_id},
+                    ).fetchone()[0]
+                    picked = conn.execute(
+                        text(
+                            """
                         SELECT COUNT(*) FROM slot_requests
                         WHERE picked = TRUE AND discord_server_id = :server_id
-                    """), {"server_id": tracker.server_id}).fetchone()[0]
+                    """
+                        ),
+                        {"server_id": tracker.server_id},
+                    ).fetchone()[0]
                 else:
                     total = conn.execute(text("SELECT COUNT(*) FROM slot_requests")).fetchone()[0]
-                    unpicked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = FALSE")).fetchone()[0]
+                    unpicked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = FALSE")).fetchone()[
+                        0
+                    ]
                     picked = conn.execute(text("SELECT COUNT(*) FROM slot_requests WHERE picked = TRUE")).fetchone()[0]
 
-                embed = discord.Embed(
-                    title="🎰 Slot Request Statistics",
-                    color=discord.Color.blue()
-                )
+                embed = discord.Embed(title="🎰 Slot Request Statistics", color=discord.Color.blue())
                 embed.add_field(name="Total Requests", value=str(total), inline=True)
                 embed.add_field(name="Available", value=str(unpicked), inline=True)
                 embed.add_field(name="Already Picked", value=str(picked), inline=True)
@@ -749,7 +929,7 @@ class SlotCallCommands(commands.Cog):
             logger.error(f"Failed to get slot request stats: {e}")
             await ctx.send(f"❌ Error getting slot list: {e}")
 
-    @commands.command(name='clearslots', aliases=['clearrequests', 'resetslots'])
+    @commands.command(name="clearslots", aliases=["clearrequests", "resetslots"])
     @commands.has_permissions(administrator=True)
     async def clear_slot_requests(self, ctx):
         """
@@ -760,7 +940,7 @@ class SlotCallCommands(commands.Cog):
         if not tracker:
             await ctx.send("❌ Slot call tracker not initialized for this server")
             return
-        
+
         if not tracker.engine:
             await ctx.send("❌ Database not available")
             return
@@ -769,20 +949,30 @@ class SlotCallCommands(commands.Cog):
             with tracker.engine.begin() as conn:
                 if tracker.server_id:
                     # Delete slot_picks first (foreign key constraint)
-                    conn.execute(text("""
-                        DELETE FROM slot_picks WHERE slot_request_id IN 
+                    conn.execute(
+                        text(
+                            """
+                        DELETE FROM slot_picks WHERE slot_request_id IN
                         (SELECT id FROM slot_requests WHERE discord_server_id = :server_id)
-                    """), {"server_id": tracker.server_id})
-                    
+                    """
+                        ),
+                        {"server_id": tracker.server_id},
+                    )
+
                     # Now delete slot_requests
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         DELETE FROM slot_requests
                         WHERE discord_server_id = :server_id
-                    """), {"server_id": tracker.server_id})
+                    """
+                        ),
+                        {"server_id": tracker.server_id},
+                    )
                 else:
                     # Delete all slot_picks first
                     conn.execute(text("DELETE FROM slot_picks"))
-                    
+
                     # Now delete all slot_requests
                     result = conn.execute(text("DELETE FROM slot_requests"))
                 deleted_count = result.rowcount
@@ -790,7 +980,7 @@ class SlotCallCommands(commands.Cog):
             embed = discord.Embed(
                 title="🗑️ Slot Requests Cleared",
                 description=f"Deleted **{deleted_count}** slot request(s)",
-                color=discord.Color.green()
+                color=discord.Color.green(),
             )
             embed.set_footer(text="Users can now make new requests")
 
@@ -802,7 +992,7 @@ class SlotCallCommands(commands.Cog):
                 try:
                     await tracker.kick_send_callback(
                         "🔄 Slot requests have been cleared! You can now make new requests with !call or !sr",
-                        guild_id=tracker.discord_server_id
+                        guild_id=tracker.discord_server_id,
                     )
                 except Exception as e:
                     logger.error(f"Failed to send Kick notification: {e}")
@@ -824,7 +1014,10 @@ class SlotCallCommands(commands.Cog):
         if isinstance(error, commands.MissingPermissions):
             await ctx.send("❌ You need administrator permission to use this command.")
 
-async def setup_slot_call_tracker(bot, discord_channel_id: Optional[int] = None, kick_send_callback=None, engine=None, server_id: Optional[int] = None):
+
+async def setup_slot_call_tracker(
+    bot, discord_channel_id: Optional[int] = None, kick_send_callback=None, engine=None, server_id: Optional[int] = None
+):
     """
     Setup slot call tracker
 
