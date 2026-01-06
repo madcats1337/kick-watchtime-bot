@@ -1021,14 +1021,18 @@ class KickWebSocketManager:
                             print(f"[Clip] ❌ No channel configured")
                             return
 
-                        # Check if stream is live FIRST
-                        stream_status = check_stream_live(kick_channel)
-                        if not stream_status.get("is_live"):
-                            print(f"[Clip] ❌ Stream is offline")
-                            await send_kick_message(
-                                f"@{user} Stream is not live! Can't create clip when offline.", guild_id=guild_id
-                            )
-                            return
+                        # Check if stream is live FIRST (async function returning bool)
+                        try:
+                            is_live = await check_stream_live(kick_channel)
+                            if not is_live:
+                                print(f"[Clip] ❌ Stream is offline")
+                                await send_kick_message(
+                                    f"@{user} Stream is not live! Can't create clip when offline.", guild_id=guild_id
+                                )
+                                return
+                        except Exception as live_check_err:
+                            print(f"[Clip] ⚠️ Could not verify stream status: {live_check_err}")
+                            # Continue anyway - dashboard will verify
 
                         # Get settings from bot_settings
                         dashboard_url = None
