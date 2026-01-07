@@ -69,11 +69,11 @@ class SetMaxRequestsModal(Modal, title="Set Max Requests Per User"):
 
 
 class SlotPanelView(View):
-    """Button view for slot request panel"""
+    """Button view for slot request panel - looks up panel by guild_id for multi-server support"""
 
-    def __init__(self, panel=None):
+    def __init__(self, bot=None):
         super().__init__(timeout=None)  # Persistent view
-        self.panel = panel
+        self.bot = bot
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """Check if user has permission to use buttons"""
@@ -83,49 +83,56 @@ class SlotPanelView(View):
             return False
         return True
     
-    def set_panel(self, panel):
-        """Set the panel reference (used when registering persistent view)"""
-        self.panel = panel
+    def _get_panel(self, interaction: discord.Interaction):
+        """Get the panel for the interaction's guild"""
+        if not self.bot or not hasattr(self.bot, 'slot_panels_by_guild'):
+            return None
+        return self.bot.slot_panels_by_guild.get(interaction.guild_id)
 
     @discord.ui.button(style=discord.ButtonStyle.primary, label="Pick Random", emoji="🎲", custom_id="slot_pick_random")
     async def pick_random_button(self, interaction: discord.Interaction, button: Button):
         """Handle pick random button click"""
-        if self.panel:
-            await self.panel.pick_random_slot_interaction(interaction)
+        panel = self._get_panel(interaction)
+        if panel:
+            await panel.pick_random_slot_interaction(interaction)
         else:
-            await interaction.response.send_message("❌ Panel not initialized. Please recreate the panel.", ephemeral=True)
+            await interaction.response.send_message("❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True)
 
     @discord.ui.button(style=discord.ButtonStyle.secondary, label="Refresh", emoji="♻️", custom_id="slot_refresh")
     async def refresh_button(self, interaction: discord.Interaction, button: Button):
         """Handle refresh button click"""
-        if self.panel:
-            await self.panel.refresh_interaction(interaction)
+        panel = self._get_panel(interaction)
+        if panel:
+            await panel.refresh_interaction(interaction)
         else:
-            await interaction.response.send_message("❌ Panel not initialized. Please recreate the panel.", ephemeral=True)
+            await interaction.response.send_message("❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True)
 
     @discord.ui.button(style=discord.ButtonStyle.success, label="Enable Requests", emoji="✅", custom_id="slot_enable")
     async def enable_button(self, interaction: discord.Interaction, button: Button):
         """Handle enable requests button click"""
-        if self.panel:
-            await self.panel.enable_requests_interaction(interaction)
+        panel = self._get_panel(interaction)
+        if panel:
+            await panel.enable_requests_interaction(interaction)
         else:
-            await interaction.response.send_message("❌ Panel not initialized. Please recreate the panel.", ephemeral=True)
+            await interaction.response.send_message("❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True)
 
     @discord.ui.button(style=discord.ButtonStyle.danger, label="Disable Requests", emoji="❌", custom_id="slot_disable")
     async def disable_button(self, interaction: discord.Interaction, button: Button):
         """Handle disable requests button click"""
-        if self.panel:
-            await self.panel.disable_requests_interaction(interaction)
+        panel = self._get_panel(interaction)
+        if panel:
+            await panel.disable_requests_interaction(interaction)
         else:
-            await interaction.response.send_message("❌ Panel not initialized. Please recreate the panel.", ephemeral=True)
+            await interaction.response.send_message("❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True)
 
     @discord.ui.button(style=discord.ButtonStyle.secondary, label="Set Limit", emoji="🔢", custom_id="slot_set_limit")
     async def set_limit_button(self, interaction: discord.Interaction, button: Button):
         """Handle set limit button click"""
-        if self.panel:
-            await self.panel.set_limit_interaction(interaction)
+        panel = self._get_panel(interaction)
+        if panel:
+            await panel.set_limit_interaction(interaction)
         else:
-            await interaction.response.send_message("❌ Panel not initialized. Please recreate the panel.", ephemeral=True)
+            await interaction.response.send_message("❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True)
 
 
 class SlotRequestPanel:
@@ -336,7 +343,7 @@ class SlotRequestPanel:
         """Create a new panel in the specified channel"""
         try:
             embed = self._create_panel_embed()
-            view = SlotPanelView(self)
+            view = SlotPanelView(self.bot)  # Pass bot for guild lookup
 
             message = await channel.send(embed=embed, view=view)
 
@@ -383,7 +390,7 @@ class SlotRequestPanel:
                 return False
 
             embed = self._create_panel_embed()
-            view = SlotPanelView(self)
+            view = SlotPanelView(self.bot)  # Pass bot for guild lookup
 
             await message.edit(embed=embed, view=view)
             self.last_update_time = datetime.utcnow()  # Update timestamp

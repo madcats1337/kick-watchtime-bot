@@ -97,11 +97,11 @@ class SetResultModal(Modal, title="Set Result Amount"):
 
 
 class GTBPanelView(View):
-    """Button view for GTB panel"""
+    """Button view for GTB panel - looks up panel by guild_id for multi-server support"""
 
-    def __init__(self, panel=None):
+    def __init__(self, bot=None):
         super().__init__(timeout=None)  # Persistent view
-        self.panel = panel
+        self.bot = bot
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """Check if user has permission to use buttons"""
@@ -110,41 +110,47 @@ class GTBPanelView(View):
             return False
         return True
     
-    def set_panel(self, panel):
-        """Set the panel reference (used when registering persistent view)"""
-        self.panel = panel
+    def _get_panel(self, interaction: discord.Interaction):
+        """Get the panel for the interaction's guild"""
+        if not self.bot or not hasattr(self.bot, 'gtb_panels_by_guild'):
+            return None
+        return self.bot.gtb_panels_by_guild.get(interaction.guild_id)
 
     @discord.ui.button(style=discord.ButtonStyle.success, label="Open Session", emoji="🎮", custom_id="gtb_open")
     async def open_button(self, interaction: discord.Interaction, button: Button):
         """Handle open session button click"""
-        if self.panel:
-            await self.panel.open_session_interaction(interaction)
+        panel = self._get_panel(interaction)
+        if panel:
+            await panel.open_session_interaction(interaction)
         else:
-            await interaction.response.send_message("❌ Panel not initialized. Please recreate the panel.", ephemeral=True)
+            await interaction.response.send_message("❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True)
 
     @discord.ui.button(style=discord.ButtonStyle.danger, label="Close Session", emoji="🔒", custom_id="gtb_close")
     async def close_button(self, interaction: discord.Interaction, button: Button):
         """Handle close session button click"""
-        if self.panel:
-            await self.panel.close_session_interaction(interaction)
+        panel = self._get_panel(interaction)
+        if panel:
+            await panel.close_session_interaction(interaction)
         else:
-            await interaction.response.send_message("❌ Panel not initialized. Please recreate the panel.", ephemeral=True)
+            await interaction.response.send_message("❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True)
 
     @discord.ui.button(style=discord.ButtonStyle.primary, label="Set Result", emoji="💰", custom_id="gtb_result")
     async def result_button(self, interaction: discord.Interaction, button: Button):
         """Handle set result button click"""
-        if self.panel:
-            await self.panel.set_result_interaction(interaction)
+        panel = self._get_panel(interaction)
+        if panel:
+            await panel.set_result_interaction(interaction)
         else:
-            await interaction.response.send_message("❌ Panel not initialized. Please recreate the panel.", ephemeral=True)
+            await interaction.response.send_message("❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True)
 
     @discord.ui.button(style=discord.ButtonStyle.secondary, label="Refresh", emoji="♻️", custom_id="gtb_refresh")
     async def refresh_button(self, interaction: discord.Interaction, button: Button):
         """Handle refresh button click"""
-        if self.panel:
-            await self.panel.refresh_interaction(interaction)
+        panel = self._get_panel(interaction)
+        if panel:
+            await panel.refresh_interaction(interaction)
         else:
-            await interaction.response.send_message("❌ Panel not initialized. Please recreate the panel.", ephemeral=True)
+            await interaction.response.send_message("❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True)
 
 
 class GTBPanel:
@@ -317,7 +323,7 @@ class GTBPanel:
         """Create a new panel in the specified channel"""
         try:
             embed = self._create_panel_embed()
-            view = GTBPanelView(self)
+            view = GTBPanelView(self.bot)  # Pass bot for guild lookup
 
             message = await channel.send(embed=embed, view=view)
 
@@ -353,7 +359,7 @@ class GTBPanel:
 
             message = await channel.fetch_message(self.panel_message_id)
             embed = self._create_panel_embed()
-            view = GTBPanelView(self)
+            view = GTBPanelView(self.bot)  # Pass bot for guild lookup
 
             await message.edit(embed=embed, view=view)
             self.last_update_time = datetime.utcnow()
