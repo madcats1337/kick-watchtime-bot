@@ -296,11 +296,14 @@ class SlotCallTracker:
                         {"value": str(enabled).lower(), "server_id": self.server_id},
                     )
 
-                    # Clear slot requests table when enabled after being disabled
+                    # Clear slot requests table when enabled after being disabled (only for this server!)
                     if enabled and was_disabled:
-                        result = conn.execute(text("DELETE FROM slot_requests"))
+                        result = conn.execute(
+                            text("DELETE FROM slot_requests WHERE discord_server_id = :server_id"),
+                            {"server_id": self.server_id}
+                        )
                         deleted_count = result.rowcount
-                        logger.info(f"Cleared {deleted_count} old slot requests (slot requests re-enabled)")
+                        logger.info(f"Cleared {deleted_count} old slot requests for server {self.server_id} (slot requests re-enabled)")
 
                 logger.info(f"Persisted slot call state to database")
             except Exception as e:
@@ -970,11 +973,9 @@ class SlotCallCommands(commands.Cog):
                         {"server_id": tracker.server_id},
                     )
                 else:
-                    # Delete all slot_picks first
-                    conn.execute(text("DELETE FROM slot_picks"))
-
-                    # Now delete all slot_requests
-                    result = conn.execute(text("DELETE FROM slot_requests"))
+                    # Safety: don't delete without server_id to prevent cross-server data loss
+                    await ctx.send("❌ Cannot clear slots: server ID not configured. Please contact support.")
+                    return
                 deleted_count = result.rowcount
 
             embed = discord.Embed(
