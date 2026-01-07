@@ -4603,7 +4603,7 @@ async def cmd_update_kick(ctx, member: discord.Member, new_kick_username: str):
         if result.rowcount > 0:
             tables_updated.append(f"raffle_tickets ({result.rowcount})")
         
-        # 4. Update raffle_watchtime_converted table
+        # 4. Update raffle_watchtime_converted table (no discord_server_id - uses period_id)
         result = conn.execute(
             text("""
                 UPDATE raffle_watchtime_converted 
@@ -4615,7 +4615,7 @@ async def cmd_update_kick(ctx, member: discord.Member, new_kick_username: str):
         if result.rowcount > 0:
             tables_updated.append(f"raffle_watchtime_converted ({result.rowcount})")
         
-        # 5. Update raffle_shuffle_links table
+        # 5. Update raffle_shuffle_links table (global table - no server isolation)
         result = conn.execute(
             text("""
                 UPDATE raffle_shuffle_links 
@@ -4663,7 +4663,7 @@ async def cmd_update_kick(ctx, member: discord.Member, new_kick_username: str):
         if result.rowcount > 0:
             tables_updated.append(f"slot_requests ({result.rowcount})")
         
-        # 9. Update raffle_gifted_subs table (gifter name)
+        # 9. Update raffle_gifted_subs table (uses period_id + gifter_discord_id)
         result = conn.execute(
             text("""
                 UPDATE raffle_gifted_subs 
@@ -4675,7 +4675,7 @@ async def cmd_update_kick(ctx, member: discord.Member, new_kick_username: str):
         if result.rowcount > 0:
             tables_updated.append(f"raffle_gifted_subs ({result.rowcount})")
         
-        # 10. Update raffle_shuffle_wagers table
+        # 10. Update raffle_shuffle_wagers table (uses period_id + discord_id)
         result = conn.execute(
             text("""
                 UPDATE raffle_shuffle_wagers 
