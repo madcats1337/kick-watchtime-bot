@@ -4523,6 +4523,9 @@ async def unlink_error(ctx, error):
 @commands.has_permissions(administrator=True)
 async def cmd_update_kick(ctx, member: discord.Member, new_kick_username: str):
     """[ADMIN] Update a user's linked Kick username.
+    
+    This also migrates all associated data (watchtime, points, raffle tickets, etc.)
+    to the new username to prevent data loss.
 
     Usage:
     !updatekick @user newkickname - Update the Kick username for a linked user
@@ -4543,9 +4546,29 @@ async def cmd_update_kick(ctx, member: discord.Member, new_kick_username: str):
         return
 
     old_kick_name = existing[0]
+    
+    if old_kick_name.lower() == new_kick_username.lower():
+        await ctx.send(f"❌ The new username is the same as the current one: **{old_kick_name}**")
+        return
 
-    # Update the kick username
+    # Check if new username is already linked by someone else
+    with engine.connect() as conn:
+        existing_new = conn.execute(
+            text("SELECT discord_id FROM links WHERE kick_name = :new_name AND discord_server_id = :guild_id"),
+            {"new_name": new_kick_username, "guild_id": guild_id},
+        ).fetchone()
+    
+    if existing_new and existing_new[0] != discord_id:
+        await ctx.send(f"❌ The username **{new_kick_username}** is already linked to another Discord user.")
+        return
+
+    status_msg = await ctx.send(f"🔄 Updating **{old_kick_name}** → **{new_kick_username}**...\nMigrating all user data...")
+
+    # Update all tables that reference the kick username
+    tables_updated = []
+    
     with engine.begin() as conn:
+        # 1. Update links table
         conn.execute(
             text("""
                 UPDATE links 
@@ -4554,12 +4577,122 @@ async def cmd_update_kick(ctx, member: discord.Member, new_kick_username: str):
             """),
             {"new_name": new_kick_username, "d": discord_id, "guild_id": guild_id},
         )
+        tables_updated.append("links")
+        
+        # 2. Update watchtime table
+        result = conn.execute(
+            text("""
+                UPDATE watchtime 
+                SET username = :new_name
+                WHERE username = :old_name AND discord_server_id = :guild_id
+            """),
+            {"new_name": new_kick_username, "old_name": old_kick_name, "guild_id": guild_id},
+        )
+        if result.rowcount > 0:
+            tables_updated.append(f"watchtime ({result.rowcount})")
+        
+        # 3. Update raffle_tickets table
+        result = conn.execute(
+            text("""
+                UPDATE raffle_tickets 
+                SET kick_name = :new_name
+                WHERE kick_name = :old_name AND discord_server_id = :guild_id
+            """),
+            {"new_name": new_kick_username, "old_name": old_kick_name, "guild_id": guild_id},
+        )
+        if result.rowcount > 0:
+            tables_updated.append(f"raffle_tickets ({result.rowcount})")
+        
+        # 4. Update raffle_watchtime_converted table
+        result = conn.execute(
+            text("""
+                UPDATE raffle_watchtime_converted 
+                SET kick_name = :new_name
+                WHERE kick_name = :old_name
+            """),
+            {"new_name": new_kick_username, "old_name": old_kick_name},
+        )
+        if result.rowcount > 0:
+            tables_updated.append(f"raffle_watchtime_converted ({result.rowcount})")
+        
+        # 5. Update raffle_shuffle_links table
+        result = conn.execute(
+            text("""
+                UPDATE raffle_shuffle_links 
+                SET kick_name = :new_name
+                WHERE kick_name = :old_name AND discord_id = :d
+            """),
+            {"new_name": new_kick_username, "old_name": old_kick_name, "d": discord_id},
+        )
+        if result.rowcount > 0:
+            tables_updated.append(f"raffle_shuffle_links ({result.rowcount})")
+        
+        # 6. Update user_points table
+        result = conn.execute(
+            text("""
+                UPDATE user_points 
+                SET kick_username = :new_name
+                WHERE kick_username = :old_name AND discord_server_id = :guild_id
+            """),
+            {"new_name": new_kick_username, "old_name": old_kick_name, "guild_id": guild_id},
+        )
+        if result.rowcount > 0:
+            tables_updated.append(f"user_points ({result.rowcount})")
+        
+        # 7. Update points_watchtime_converted table
+        result = conn.execute(
+            text("""
+                UPDATE points_watchtime_converted 
+                SET kick_username = :new_name
+                WHERE kick_username = :old_name AND discord_server_id = :guild_id
+            """),
+            {"new_name": new_kick_username, "old_name": old_kick_name, "guild_id": guild_id},
+        )
+        if result.rowcount > 0:
+            tables_updated.append(f"points_watchtime_converted ({result.rowcount})")
+        
+        # 8. Update slot_requests table (pending requests)
+        result = conn.execute(
+            text("""
+                UPDATE slot_requests 
+                SET kick_username = :new_name
+                WHERE kick_username = :old_name AND discord_server_id = :guild_id
+            """),
+            {"new_name": new_kick_username, "old_name": old_kick_name, "guild_id": guild_id},
+        )
+        if result.rowcount > 0:
+            tables_updated.append(f"slot_requests ({result.rowcount})")
+        
+        # 9. Update raffle_gifted_subs table (gifter name)
+        result = conn.execute(
+            text("""
+                UPDATE raffle_gifted_subs 
+                SET gifter_kick_name = :new_name
+                WHERE gifter_kick_name = :old_name AND gifter_discord_id = :d
+            """),
+            {"new_name": new_kick_username, "old_name": old_kick_name, "d": discord_id},
+        )
+        if result.rowcount > 0:
+            tables_updated.append(f"raffle_gifted_subs ({result.rowcount})")
+        
+        # 10. Update raffle_shuffle_wagers table
+        result = conn.execute(
+            text("""
+                UPDATE raffle_shuffle_wagers 
+                SET kick_name = :new_name
+                WHERE kick_name = :old_name AND discord_id = :d
+            """),
+            {"new_name": new_kick_username, "old_name": old_kick_name, "d": discord_id},
+        )
+        if result.rowcount > 0:
+            tables_updated.append(f"raffle_shuffle_wagers ({result.rowcount})")
 
-    await ctx.send(
-        f"✅ Updated {member.mention}'s Kick username:\n"
-        f"**{old_kick_name}** → **{new_kick_username}**"
+    await status_msg.edit(
+        content=f"✅ Updated {member.mention}'s Kick username:\n"
+                f"**{old_kick_name}** → **{new_kick_username}**\n\n"
+                f"📦 Data migrated: {', '.join(tables_updated)}"
     )
-    print(f"[Admin] {ctx.author} updated {member}'s Kick: {old_kick_name} → {new_kick_username}", flush=True)
+    print(f"[Admin] {ctx.author} updated {member}'s Kick: {old_kick_name} → {new_kick_username} | Tables: {tables_updated}", flush=True)
 
 
 @cmd_update_kick.error
