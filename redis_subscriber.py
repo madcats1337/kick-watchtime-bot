@@ -140,8 +140,10 @@ class RedisSubscriber:
         """Handle slot request events from dashboard"""
         print(f"📥 Slot Requests Event: {action}")
 
-        # Extract discord_server_id from event data
+        # Extract discord_server_id from event data and convert to int
         guild_id = data.get("discord_server_id")
+        if guild_id is not None:
+            guild_id = int(guild_id)
 
         if action == "toggle":
             enabled = data.get("enabled")
@@ -221,6 +223,8 @@ class RedisSubscriber:
             slot_call = data.get("slot_call")
             username = data.get("username")
             guild_id = data.get("discord_server_id")
+            if guild_id is not None:
+                guild_id = int(guild_id)
             delay_announcement = data.get("delay_announcement", 0)
 
             print(f"📥 [BOT-REDIS] Received 'pick' event with delay_announcement={delay_announcement}")
@@ -275,6 +279,8 @@ class RedisSubscriber:
             reward_type = data.get("reward_type")
             reward_amount = data.get("reward_amount")
             guild_id = data.get("discord_server_id")
+            if guild_id is not None:
+                guild_id = int(guild_id)
             delay_announcement = data.get("delay_announcement", 0)
 
             print(f"📥 [BOT-REDIS] Received 'pick_with_reward' event with delay_announcement={delay_announcement}")
@@ -420,8 +426,10 @@ class RedisSubscriber:
         """Handle Guess the Balance events from dashboard"""
         print(f"📥 GTB Event: {action}")
 
-        # Extract discord_server_id from event data
+        # Extract discord_server_id from event data and convert to int
         guild_id = data.get("discord_server_id")
+        if guild_id is not None:
+            guild_id = int(guild_id)
 
         if action == "open":
             session_id = data.get("session_id")
