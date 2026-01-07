@@ -4975,24 +4975,48 @@ async def cmd_leaderboard(ctx, top: int = 10):
 
 @bot.command(name="watchtime")
 @dynamic_cooldown(CommandCooldowns.WATCHTIME_COOLDOWN)
-async def cmd_watchtime(ctx, kick_username: str = None):
+async def cmd_watchtime(ctx, target: str = None):
     """
     Check watchtime for yourself or another user.
-    Usage: !watchtime (check your own) or !watchtime <kick_username> (admins only)
+    Usage: !watchtime (check your own)
+           !watchtime @user (admins - lookup by Discord mention)
+           !watchtime <kick_username> (admins - lookup by Kick username)
     """
     discord_id = ctx.author.id
     is_admin = ctx.guild and ctx.author.guild_permissions.administrator
 
     guild_id = ctx.guild.id if ctx.guild else None
     with engine.connect() as conn:
-        # If kick_username provided, check if admin
-        if kick_username:
+        # If target provided, check if admin
+        if target:
             if not is_admin:
                 await ctx.send("❌ Only administrators can check other users' watchtime.")
                 return
 
-            # Admin lookup by Kick username
-            kick_name = kick_username.lower()
+            # Check if it's a Discord mention
+            if target.startswith('<@') and target.endswith('>'):
+                # Extract Discord ID from mention
+                mention_id = target.replace('<@', '').replace('>', '').replace('!', '')
+                try:
+                    target_discord_id = int(mention_id)
+                    # Look up their linked Kick name
+                    link = conn.execute(
+                        text("SELECT kick_name FROM links WHERE discord_id = :d AND discord_server_id = :guild_id"),
+                        {"d": target_discord_id, "guild_id": guild_id},
+                    ).fetchone()
+                    
+                    if not link:
+                        await ctx.send(f"❌ <@{target_discord_id}> doesn't have a linked Kick account.")
+                        return
+                    
+                    kick_name = link[0]
+                except ValueError:
+                    await ctx.send("❌ Invalid Discord mention.")
+                    return
+            else:
+                # Admin lookup by Kick username
+                kick_name = target.lower()
+            
             watchtime = conn.execute(
                 text("SELECT minutes FROM watchtime WHERE username = :u AND discord_server_id = :guild_id"),
                 {"u": kick_name, "guild_id": guild_id},
