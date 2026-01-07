@@ -184,39 +184,32 @@ class RedisSubscriber:
                 except Exception as e:
                     print(f"⚠️ Failed to update slot_call_tracker: {e}")
 
-            # Update panel tracker (if panel exists)
-            if hasattr(self.bot, "slot_request_panel") and self.bot.slot_request_panel:
+            # Update panel tracker (if panel exists for this guild)
+            panel = None
+            if guild_id and hasattr(self.bot, "slot_panels_by_guild"):
+                panel = self.bot.slot_panels_by_guild.get(guild_id)
+            
+            if panel:
                 try:
-                    panel = self.bot.slot_request_panel
                     # Refresh tracker state from database before updating panel
                     if hasattr(panel, "tracker") and panel.tracker:
-                        # Store current server_id and switch to the guild that triggered this event
-                        original_server_id = panel.tracker.server_id
-                        if guild_id:
-                            panel.tracker.server_id = guild_id
-
                         panel.tracker.enabled = panel.tracker._load_enabled_state()
                         panel.tracker.max_requests_per_user = panel.tracker._load_max_requests()
                         print(
                             f"✅ Updated panel tracker enabled state to: {panel.tracker.enabled} for server {guild_id}"
                         )
-
-                        # Restore original server_id
-                        if original_server_id:
-                            panel.tracker.server_id = original_server_id
                 except Exception as e:
                     print(f"⚠️ Failed to update tracker via panel: {e}")
 
-            # Update Discord panel (if it exists)
-            if hasattr(self.bot, "slot_request_panel") and self.bot.slot_request_panel:
+            # Update Discord panel (if it exists for this guild)
+            if panel:
                 try:
-                    panel = self.bot.slot_request_panel
                     print(f"🔍 Panel IDs: message_id={panel.panel_message_id}, channel_id={panel.panel_channel_id}")
                     success = await panel.update_panel(force=True)
                     if success:
-                        print("✅ Slot request panel updated in Discord")
+                        print(f"✅ Slot request panel updated in Discord for guild {guild_id}")
                     else:
-                        print("ℹ️  Slot panel not created yet (Discord admin: use !slotpanel to create)")
+                        print(f"ℹ️  Slot panel not created yet for guild {guild_id} (Discord admin: use !slotpanel to create)")
                 except Exception as e:
                     print(f"⚠️ Failed to update slot panel: {e}")
                     import traceback
@@ -254,10 +247,13 @@ class RedisSubscriber:
                 except Exception as e:
                     print(f"Failed to send Discord notification: {e}")
 
-            # Update Discord panel
-            if hasattr(self.bot, "slot_request_panel") and self.bot.slot_request_panel:
+            # Update Discord panel for this guild
+            panel = None
+            if guild_id and hasattr(self.bot, "slot_panels_by_guild"):
+                panel = self.bot.slot_panels_by_guild.get(guild_id)
+            
+            if panel:
                 try:
-                    panel = self.bot.slot_request_panel
                     # Refresh tracker state from database before updating panel
                     if hasattr(panel, "tracker") and panel.tracker:
                         panel.tracker.enabled = panel.tracker._load_enabled_state()  # Reload enabled state from DB
@@ -266,9 +262,9 @@ class RedisSubscriber:
                         )  # Reload max requests too
                     success = await panel.update_panel(force=True)
                     if success:
-                        print("✅ Slot request panel updated in Discord")
+                        print(f"✅ Slot request panel updated in Discord for guild {guild_id}")
                     else:
-                        print("ℹ️  Slot panel not created yet (Discord admin: use !slotpanel to create)")
+                        print(f"ℹ️  Slot panel not created yet for guild {guild_id}")
                 except Exception as e:
                     print(f"⚠️ Failed to update slot panel: {e}")
 
@@ -314,10 +310,13 @@ class RedisSubscriber:
                 except Exception as e:
                     print(f"Failed to send Discord notification: {e}")
 
-            # Update Discord panel
-            if hasattr(self.bot, "slot_request_panel") and self.bot.slot_request_panel:
+            # Update Discord panel for this guild
+            panel = None
+            if guild_id and hasattr(self.bot, "slot_panels_by_guild"):
+                panel = self.bot.slot_panels_by_guild.get(guild_id)
+            
+            if panel:
                 try:
-                    panel = self.bot.slot_request_panel
                     # Refresh tracker state from database before updating panel
                     if hasattr(panel, "tracker") and panel.tracker:
                         panel.tracker.enabled = panel.tracker._load_enabled_state()  # Reload enabled state from DB
@@ -326,9 +325,9 @@ class RedisSubscriber:
                         )  # Reload max requests too
                     success = await panel.update_panel(force=True)
                     if success:
-                        print("✅ Slot request panel updated in Discord")
+                        print(f"✅ Slot request panel updated in Discord for guild {guild_id}")
                     else:
-                        print("ℹ️  Slot panel not created yet (Discord admin: use !slotpanel to create)")
+                        print(f"ℹ️  Slot panel not created yet for guild {guild_id}")
                 except Exception as e:
                     print(f"⚠️ Failed to update slot panel: {e}")
 
@@ -353,8 +352,8 @@ class RedisSubscriber:
                         print(f"⚠️ Failed to update slot_call_tracker for guild {guild_id}: {e}")
 
             # Update Discord panel for the specific guild
-            if guild_id and hasattr(self.bot, "slot_request_panels_by_guild"):
-                panel = self.bot.slot_request_panels_by_guild.get(guild_id)
+            if guild_id and hasattr(self.bot, "slot_panels_by_guild"):
+                panel = self.bot.slot_panels_by_guild.get(guild_id)
                 if panel:
                     try:
                         # Refresh tracker state from database before updating panel
@@ -368,32 +367,6 @@ class RedisSubscriber:
                             print(f"ℹ️  Slot panel not created yet for guild {guild_id}")
                     except Exception as e:
                         print(f"⚠️ Failed to update slot panel for guild {guild_id}: {e}")
-            
-            # Fallback for single-panel setup (backwards compatibility)
-            elif hasattr(self.bot, "slot_request_panel") and self.bot.slot_request_panel:
-                try:
-                    panel = self.bot.slot_request_panel
-                    # Refresh tracker state from database before updating panel
-                    if hasattr(panel, "tracker") and panel.tracker:
-                        # Temporarily set server_id if we have guild_id
-                        original_server_id = panel.tracker.server_id
-                        if guild_id:
-                            panel.tracker.server_id = guild_id
-                        
-                        panel.tracker.max_requests_per_user = panel.tracker._load_max_requests()
-                        print(f"✅ Updated panel tracker max_requests: {panel.tracker.max_requests_per_user}")
-                        
-                        # Restore original server_id
-                        if original_server_id:
-                            panel.tracker.server_id = original_server_id
-                    
-                    success = await panel.update_panel(force=True)
-                    if success:
-                        print("✅ Slot request panel updated in Discord")
-                    else:
-                        print("ℹ️  Slot panel not created yet (Discord admin: use !slotpanel to create)")
-                except Exception as e:
-                    print(f"⚠️ Failed to update slot panel: {e}")
 
     async def handle_timed_messages_event(self, action, data):
         """Handle timed message events from dashboard"""
@@ -468,16 +441,18 @@ class RedisSubscriber:
                 except Exception as e:
                     print(f"Failed to send Discord notification: {e}")
 
-            # Update Discord GTB panel
-            if hasattr(self.bot, "gtb_panel") and self.bot.gtb_panel:
-                try:
-                    success = await self.bot.gtb_panel.update_panel(force=True)
-                    if success:
-                        print("✅ GTB panel updated in Discord")
-                    else:
-                        print("ℹ️  GTB panel not created yet (Discord admin: use !creategtbpanel to create)")
-                except Exception as e:
-                    print(f"⚠️ Failed to update GTB panel: {e}")
+            # Update Discord GTB panel for this guild
+            if guild_id and hasattr(self.bot, "gtb_panels_by_guild"):
+                gtb_panel = self.bot.gtb_panels_by_guild.get(guild_id)
+                if gtb_panel:
+                    try:
+                        success = await gtb_panel.update_panel(force=True)
+                        if success:
+                            print(f"✅ GTB panel updated in Discord for guild {guild_id}")
+                        else:
+                            print(f"ℹ️  GTB panel not created yet for guild {guild_id}")
+                    except Exception as e:
+                        print(f"⚠️ Failed to update GTB panel: {e}")
 
         elif action == "close":
             session_id = data.get("session_id")
@@ -495,16 +470,18 @@ class RedisSubscriber:
                 except Exception as e:
                     print(f"Failed to send Discord notification: {e}")
 
-            # Update Discord GTB panel
-            if hasattr(self.bot, "gtb_panel") and self.bot.gtb_panel:
-                try:
-                    success = await self.bot.gtb_panel.update_panel(force=True)
-                    if success:
-                        print("✅ GTB panel updated in Discord")
-                    else:
-                        print("ℹ️  GTB panel not created yet (Discord admin: use !creategtbpanel to create)")
-                except Exception as e:
-                    print(f"⚠️ Failed to update GTB panel: {e}")
+            # Update Discord GTB panel for this guild
+            if guild_id and hasattr(self.bot, "gtb_panels_by_guild"):
+                gtb_panel = self.bot.gtb_panels_by_guild.get(guild_id)
+                if gtb_panel:
+                    try:
+                        success = await gtb_panel.update_panel(force=True)
+                        if success:
+                            print(f"✅ GTB panel updated in Discord for guild {guild_id}")
+                        else:
+                            print(f"ℹ️  GTB panel not created yet for guild {guild_id}")
+                    except Exception as e:
+                        print(f"⚠️ Failed to update GTB panel: {e}")
 
         elif action == "set_result":
             session_id = data.get("session_id")
@@ -582,16 +559,18 @@ class RedisSubscriber:
                 except Exception as e:
                     print(f"Failed to send Discord notification: {e}")
 
-            # Update Discord GTB panel
-            if hasattr(self.bot, "gtb_panel") and self.bot.gtb_panel:
-                try:
-                    success = await self.bot.gtb_panel.update_panel(force=True)
-                    if success:
-                        print("✅ GTB panel updated in Discord")
-                    else:
-                        print("ℹ️  GTB panel not created yet (Discord admin: use !creategtbpanel to create)")
-                except Exception as e:
-                    print(f"⚠️ Failed to update GTB panel: {e}")
+            # Update Discord GTB panel for this guild
+            if guild_id and hasattr(self.bot, "gtb_panels_by_guild"):
+                gtb_panel = self.bot.gtb_panels_by_guild.get(guild_id)
+                if gtb_panel:
+                    try:
+                        success = await gtb_panel.update_panel(force=True)
+                        if success:
+                            print(f"✅ GTB panel updated in Discord for guild {guild_id}")
+                        else:
+                            print(f"ℹ️  GTB panel not created yet for guild {guild_id}")
+                    except Exception as e:
+                        print(f"⚠️ Failed to update GTB panel: {e}")
 
     async def handle_management_event(self, action, data):
         """Handle management events from dashboard"""
