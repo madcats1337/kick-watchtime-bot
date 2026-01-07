@@ -290,7 +290,7 @@ class GTBPanel:
             embed.add_field(name="Status", value="⚪ **NO ACTIVE SESSION**", inline=False)
             embed.add_field(name="Get Started", value="Click **Open Session** to start a new game!", inline=False)
 
-            # Show last completed session stats
+            # Show last completed session stats for THIS server
             try:
                 with self.engine.connect() as conn:
                     last_session = conn.execute(
@@ -298,11 +298,12 @@ class GTBPanel:
                             """
                         SELECT id, result_amount, opened_at
                         FROM gtb_sessions
-                        WHERE status = 'completed'
+                        WHERE status = 'completed' AND discord_server_id = :server_id
                         ORDER BY closed_at DESC
                         LIMIT 1
                     """
-                        )
+                        ),
+                        {"server_id": self.guild_id}
                     ).fetchone()
 
                     if last_session:
