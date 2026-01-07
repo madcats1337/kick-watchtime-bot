@@ -71,24 +71,9 @@ class SetMaxRequestsModal(Modal, title="Set Max Requests Per User"):
 class SlotPanelView(View):
     """Button view for slot request panel"""
 
-    def __init__(self, panel):
+    def __init__(self, panel=None):
         super().__init__(timeout=None)  # Persistent view
         self.panel = panel
-
-        # Add buttons
-        self.add_item(
-            Button(style=discord.ButtonStyle.primary, label="Pick Random", emoji="🎲", custom_id="slot_pick_random")
-        )
-        self.add_item(Button(style=discord.ButtonStyle.secondary, label="Refresh", emoji="♻️", custom_id="slot_refresh"))
-        self.add_item(
-            Button(style=discord.ButtonStyle.success, label="Enable Requests", emoji="✅", custom_id="slot_enable")
-        )
-        self.add_item(
-            Button(style=discord.ButtonStyle.danger, label="Disable Requests", emoji="❌", custom_id="slot_disable")
-        )
-        self.add_item(
-            Button(style=discord.ButtonStyle.secondary, label="Set Limit", emoji="🔢", custom_id="slot_set_limit")
-        )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """Check if user has permission to use buttons"""
@@ -97,24 +82,50 @@ class SlotPanelView(View):
             await interaction.response.send_message("❌ Only administrators can use this panel.", ephemeral=True)
             return False
         return True
+    
+    def set_panel(self, panel):
+        """Set the panel reference (used when registering persistent view)"""
+        self.panel = panel
 
-    async def callback(self, interaction: discord.Interaction, button: Button):
-        """Handle button clicks"""
-        try:
-            if button.custom_id == "slot_pick_random":
-                await self.panel.pick_random_slot_interaction(interaction)
-            elif button.custom_id == "slot_refresh":
-                await self.panel.refresh_interaction(interaction)
-            elif button.custom_id == "slot_enable":
-                await self.panel.enable_requests_interaction(interaction)
-            elif button.custom_id == "slot_disable":
-                await self.panel.disable_requests_interaction(interaction)
-            elif button.custom_id == "slot_set_limit":
-                await self.panel.set_limit_interaction(interaction)
-        except Exception as e:
-            logger.error(f"Error handling button interaction: {e}")
-            if not interaction.response.is_done():
-                await interaction.response.send_message("❌ An error occurred.", ephemeral=True)
+    @discord.ui.button(style=discord.ButtonStyle.primary, label="Pick Random", emoji="🎲", custom_id="slot_pick_random")
+    async def pick_random_button(self, interaction: discord.Interaction, button: Button):
+        """Handle pick random button click"""
+        if self.panel:
+            await self.panel.pick_random_slot_interaction(interaction)
+        else:
+            await interaction.response.send_message("❌ Panel not initialized. Please recreate the panel.", ephemeral=True)
+
+    @discord.ui.button(style=discord.ButtonStyle.secondary, label="Refresh", emoji="♻️", custom_id="slot_refresh")
+    async def refresh_button(self, interaction: discord.Interaction, button: Button):
+        """Handle refresh button click"""
+        if self.panel:
+            await self.panel.refresh_interaction(interaction)
+        else:
+            await interaction.response.send_message("❌ Panel not initialized. Please recreate the panel.", ephemeral=True)
+
+    @discord.ui.button(style=discord.ButtonStyle.success, label="Enable Requests", emoji="✅", custom_id="slot_enable")
+    async def enable_button(self, interaction: discord.Interaction, button: Button):
+        """Handle enable requests button click"""
+        if self.panel:
+            await self.panel.enable_requests_interaction(interaction)
+        else:
+            await interaction.response.send_message("❌ Panel not initialized. Please recreate the panel.", ephemeral=True)
+
+    @discord.ui.button(style=discord.ButtonStyle.danger, label="Disable Requests", emoji="❌", custom_id="slot_disable")
+    async def disable_button(self, interaction: discord.Interaction, button: Button):
+        """Handle disable requests button click"""
+        if self.panel:
+            await self.panel.disable_requests_interaction(interaction)
+        else:
+            await interaction.response.send_message("❌ Panel not initialized. Please recreate the panel.", ephemeral=True)
+
+    @discord.ui.button(style=discord.ButtonStyle.secondary, label="Set Limit", emoji="🔢", custom_id="slot_set_limit")
+    async def set_limit_button(self, interaction: discord.Interaction, button: Button):
+        """Handle set limit button click"""
+        if self.panel:
+            await self.panel.set_limit_interaction(interaction)
+        else:
+            await interaction.response.send_message("❌ Panel not initialized. Please recreate the panel.", ephemeral=True)
 
 
 class SlotRequestPanel:
@@ -327,11 +338,6 @@ class SlotRequestPanel:
             embed = self._create_panel_embed()
             view = SlotPanelView(self)
 
-            # Setup button callbacks
-            for item in view.children:
-                if isinstance(item, Button):
-                    item.callback = lambda interaction, b=item: view.callback(interaction, b)
-
             message = await channel.send(embed=embed, view=view)
 
             # Save panel info
@@ -378,11 +384,6 @@ class SlotRequestPanel:
 
             embed = self._create_panel_embed()
             view = SlotPanelView(self)
-
-            # Setup button callbacks
-            for item in view.children:
-                if isinstance(item, Button):
-                    item.callback = lambda interaction, b=item: view.callback(interaction, b)
 
             await message.edit(embed=embed, view=view)
             self.last_update_time = datetime.utcnow()  # Update timestamp

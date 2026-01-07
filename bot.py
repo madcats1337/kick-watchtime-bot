@@ -6639,7 +6639,7 @@ async def on_ready():
             first_guild = True
             for guild in bot.guilds:
                 # Create panel instances
-                from features.slot_requests.slot_request_panel import SlotRequestPanel
+                from features.slot_requests.slot_request_panel import SlotRequestPanel, SlotPanelView
 
                 slot_panel = SlotRequestPanel(
                     bot,
@@ -6652,10 +6652,14 @@ async def on_ready():
                 if not hasattr(bot, "slot_panels_by_guild"):
                     bot.slot_panels_by_guild = {}
                 bot.slot_panels_by_guild[guild.id] = slot_panel
-                print(f"✅ [Guild {guild.name}] Slot request panel initialized")
+                
+                # Register persistent view for this guild's panel
+                persistent_view = SlotPanelView(slot_panel)
+                bot.add_view(persistent_view)
+                print(f"✅ [Guild {guild.name}] Slot request panel initialized + persistent view registered")
 
                 # Setup GTB panel for this guild (just the instance, no commands)
-                from features.games.gtb_panel import GTBPanel
+                from features.games.gtb_panel import GTBPanel, GTBPanelView
 
                 gtb_panel = GTBPanel(
                     bot,
@@ -6667,7 +6671,11 @@ async def on_ready():
                 if not hasattr(bot, "gtb_panels_by_guild"):
                     bot.gtb_panels_by_guild = {}
                 bot.gtb_panels_by_guild[guild.id] = gtb_panel
-                print(f"✅ [Guild {guild.name}] GTB panel initialized")
+                
+                # Register persistent view for GTB panel
+                gtb_persistent_view = GTBPanelView(gtb_panel)
+                bot.add_view(gtb_persistent_view)
+                print(f"✅ [Guild {guild.name}] GTB panel initialized + persistent view registered")
 
                 # Add cogs only once on first iteration
                 if first_guild:

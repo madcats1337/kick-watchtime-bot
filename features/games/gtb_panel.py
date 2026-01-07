@@ -4,14 +4,17 @@ Shows session status, guess count, and controls for opening/closing sessions and
 """
 
 import logging
+from datetime import datetime
+
 import discord
 from discord.ext import commands, tasks
-from discord.ui import View, Button, Modal, TextInput
+from discord.ui import Button, Modal, TextInput, View
 from sqlalchemy import text
-from datetime import datetime
+
 from features.games.guess_the_balance import parse_amount
 
 logger = logging.getLogger(__name__)
+
 
 class SetResultModal(Modal, title="Set Result Amount"):
     """Modal for setting the final balance result"""
@@ -21,7 +24,7 @@ class SetResultModal(Modal, title="Set Result Amount"):
         placeholder="Enter the final balance (e.g., 1234.56)",
         required=True,
         min_length=1,
-        max_length=20
+        max_length=20,
     )
 
     def __init__(self, panel):
@@ -35,10 +38,7 @@ class SetResultModal(Modal, title="Set Result Amount"):
             amount = parse_amount(self.result_amount.value)
 
             if amount is None or amount <= 0:
-                await interaction.response.send_message(
-                    "❌ Please enter a valid positive number.",
-                    ephemeral=True
-                )
+                await interaction.response.send_message("❌ Please enter a valid positive number.", ephemeral=True)
                 return
 
             # Set the result and calculate winners
@@ -50,16 +50,16 @@ class SetResultModal(Modal, title="Set Result Amount"):
                     title="🏆 Guess the Balance - Results!",
                     description=f"**Final Balance:** ${amount:,.2f}",
                     color=discord.Color.gold(),
-                    timestamp=datetime.utcnow()
+                    timestamp=datetime.utcnow(),
                 )
 
                 # Add winners
                 for winner in winners:
-                    medal = "🥇" if winner['rank'] == 1 else "🥈" if winner['rank'] == 2 else "🥉"
+                    medal = "🥇" if winner["rank"] == 1 else "🥈" if winner["rank"] == 2 else "🥉"
                     embed.add_field(
                         name=f"{medal} #{winner['rank']} - {winner['username']}",
                         value=f"Guess: ${winner['guess']:,.2f} (off by ${winner['difference']:,.2f})",
-                        inline=False
+                        inline=False,
                     )
 
                 embed.set_footer(text="Congratulations to the winners! 🎉")
@@ -72,7 +72,7 @@ class SetResultModal(Modal, title="Set Result Amount"):
                         kick_msg = f"🏆 GTB RESULTS - Final Balance: ${amount:,.2f} | "
                         winner_texts = []
                         for winner in winners:
-                            medal = "🥇" if winner['rank'] == 1 else "🥈" if winner['rank'] == 2 else "🥉"
+                            medal = "🥇" if winner["rank"] == 1 else "🥈" if winner["rank"] == 2 else "🥉"
                             winner_texts.append(f"{medal} {winner['username']} (${winner['guess']:,.2f})")
                         kick_msg += " | ".join(winner_texts)
                         await self.panel.kick_send_callback(kick_msg)
@@ -84,61 +84,24 @@ class SetResultModal(Modal, title="Set Result Amount"):
                 await self.panel.update_panel(force=True)
 
             elif success:
-                await interaction.response.send_message(
-                    f"⚠️ {message}",
-                    ephemeral=True
-                )
+                await interaction.response.send_message(f"⚠️ {message}", ephemeral=True)
                 await self.panel.update_panel(force=True)
             else:
-                await interaction.response.send_message(
-                    f"❌ {message}",
-                    ephemeral=True
-                )
+                await interaction.response.send_message(f"❌ {message}", ephemeral=True)
 
         except ValueError:
-            await interaction.response.send_message(
-                "❌ Please enter a valid number.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("❌ Please enter a valid number.", ephemeral=True)
         except Exception as e:
             logger.error(f"Error setting GTB result: {e}")
-            await interaction.response.send_message(
-                "❌ An error occurred while setting the result.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("❌ An error occurred while setting the result.", ephemeral=True)
+
 
 class GTBPanelView(View):
     """Button view for GTB panel"""
 
-    def __init__(self, panel):
+    def __init__(self, panel=None):
         super().__init__(timeout=None)  # Persistent view
         self.panel = panel
-
-        # Add buttons
-        self.add_item(Button(
-            style=discord.ButtonStyle.success,
-            label="Open Session",
-            emoji="🎮",
-            custom_id="gtb_open"
-        ))
-        self.add_item(Button(
-            style=discord.ButtonStyle.danger,
-            label="Close Session",
-            emoji="🔒",
-            custom_id="gtb_close"
-        ))
-        self.add_item(Button(
-            style=discord.ButtonStyle.primary,
-            label="Set Result",
-            emoji="💰",
-            custom_id="gtb_result"
-        ))
-        self.add_item(Button(
-            style=discord.ButtonStyle.secondary,
-            label="Refresh",
-            emoji="♻️",
-            custom_id="gtb_refresh"
-        ))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """Check if user has permission to use buttons"""
@@ -146,22 +109,43 @@ class GTBPanelView(View):
             await interaction.response.send_message("❌ Only administrators can use this panel.", ephemeral=True)
             return False
         return True
+    
+    def set_panel(self, panel):
+        """Set the panel reference (used when registering persistent view)"""
+        self.panel = panel
 
-    async def callback(self, interaction: discord.Interaction, button: Button):
-        """Handle button clicks"""
-        try:
-            if button.custom_id == "gtb_open":
-                await self.panel.open_session_interaction(interaction)
-            elif button.custom_id == "gtb_close":
-                await self.panel.close_session_interaction(interaction)
-            elif button.custom_id == "gtb_result":
-                await self.panel.set_result_interaction(interaction)
-            elif button.custom_id == "gtb_refresh":
-                await self.panel.refresh_interaction(interaction)
-        except Exception as e:
-            logger.error(f"Error handling button interaction: {e}")
-            if not interaction.response.is_done():
-                await interaction.response.send_message("❌ An error occurred.", ephemeral=True)
+    @discord.ui.button(style=discord.ButtonStyle.success, label="Open Session", emoji="🎮", custom_id="gtb_open")
+    async def open_button(self, interaction: discord.Interaction, button: Button):
+        """Handle open session button click"""
+        if self.panel:
+            await self.panel.open_session_interaction(interaction)
+        else:
+            await interaction.response.send_message("❌ Panel not initialized. Please recreate the panel.", ephemeral=True)
+
+    @discord.ui.button(style=discord.ButtonStyle.danger, label="Close Session", emoji="🔒", custom_id="gtb_close")
+    async def close_button(self, interaction: discord.Interaction, button: Button):
+        """Handle close session button click"""
+        if self.panel:
+            await self.panel.close_session_interaction(interaction)
+        else:
+            await interaction.response.send_message("❌ Panel not initialized. Please recreate the panel.", ephemeral=True)
+
+    @discord.ui.button(style=discord.ButtonStyle.primary, label="Set Result", emoji="💰", custom_id="gtb_result")
+    async def result_button(self, interaction: discord.Interaction, button: Button):
+        """Handle set result button click"""
+        if self.panel:
+            await self.panel.set_result_interaction(interaction)
+        else:
+            await interaction.response.send_message("❌ Panel not initialized. Please recreate the panel.", ephemeral=True)
+
+    @discord.ui.button(style=discord.ButtonStyle.secondary, label="Refresh", emoji="♻️", custom_id="gtb_refresh")
+    async def refresh_button(self, interaction: discord.Interaction, button: Button):
+        """Handle refresh button click"""
+        if self.panel:
+            await self.panel.refresh_interaction(interaction)
+        else:
+            await interaction.response.send_message("❌ Panel not initialized. Please recreate the panel.", ephemeral=True)
+
 
 class GTBPanel:
     """Manages the Guess the Balance panel message"""
@@ -185,18 +169,28 @@ class GTBPanel:
 
         try:
             with self.engine.connect() as conn:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT value FROM bot_settings
                     WHERE key = 'gtb_panel_message_id' AND discord_server_id = :guild_id
-                """), {"guild_id": str(self.guild_id)}).fetchone()
+                """
+                    ),
+                    {"guild_id": str(self.guild_id)},
+                ).fetchone()
 
                 if result:
                     self.panel_message_id = int(result[0])
 
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT value FROM bot_settings
                     WHERE key = 'gtb_panel_channel_id' AND discord_server_id = :guild_id
-                """), {"guild_id": str(self.guild_id)}).fetchone()
+                """
+                    ),
+                    {"guild_id": str(self.guild_id)},
+                ).fetchone()
 
                 if result:
                     self.panel_channel_id = int(result[0])
@@ -212,20 +206,30 @@ class GTBPanel:
         try:
             with self.engine.begin() as conn:
                 if self.panel_message_id:
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         INSERT INTO bot_settings (key, value, discord_server_id, updated_at)
                         VALUES ('gtb_panel_message_id', :value, :guild_id, CURRENT_TIMESTAMP)
                         ON CONFLICT (key, discord_server_id)
                         DO UPDATE SET value = :value, updated_at = CURRENT_TIMESTAMP
-                    """), {"value": str(self.panel_message_id), "guild_id": str(self.guild_id)})
+                    """
+                        ),
+                        {"value": str(self.panel_message_id), "guild_id": str(self.guild_id)},
+                    )
 
                 if self.panel_channel_id:
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         INSERT INTO bot_settings (key, value, discord_server_id, updated_at)
                         VALUES ('gtb_panel_channel_id', :value, :guild_id, CURRENT_TIMESTAMP)
                         ON CONFLICT (key, discord_server_id)
                         DO UPDATE SET value = :value, updated_at = CURRENT_TIMESTAMP
-                    """), {"value": str(self.panel_channel_id), "guild_id": str(self.guild_id)})
+                    """
+                        ),
+                        {"value": str(self.panel_channel_id), "guild_id": str(self.guild_id)},
+                    )
 
         except Exception as e:
             logger.error(f"Failed to save GTB panel info: {e}")
@@ -236,69 +240,71 @@ class GTBPanel:
         session = self.gtb_manager.get_active_session()
 
         embed = discord.Embed(
-            title="🎮 Guess the Balance",
-            color=discord.Color.green() if session else discord.Color.red()
+            title="🎮 Guess the Balance", color=discord.Color.green() if session else discord.Color.red()
         )
 
         if session:
             # Get guess count
             try:
                 with self.engine.connect() as conn:
-                    guess_count = conn.execute(text("""
+                    guess_count = conn.execute(
+                        text(
+                            """
                         SELECT COUNT(*) FROM gtb_guesses WHERE session_id = :session_id
-                    """), {"session_id": session['id']}).fetchone()[0]
+                    """
+                        ),
+                        {"session_id": session["id"]},
+                    ).fetchone()[0]
             except Exception:
                 guess_count = 0
 
-            status_text = "🟢 **OPEN**" if session['status'] == 'open' else "🔴 **CLOSED**"
+            status_text = "🟢 **OPEN**" if session["status"] == "open" else "🔴 **CLOSED**"
             embed.add_field(name="Status", value=status_text, inline=True)
             embed.add_field(name="Session #", value=f"{session['id']}", inline=True)
             embed.add_field(name="Guesses", value=f"{guess_count}", inline=True)
 
-            opened_time = session['opened_at'].strftime("%H:%M:%S") if session['opened_at'] else "Unknown"
+            opened_time = session["opened_at"].strftime("%H:%M:%S") if session["opened_at"] else "Unknown"
             embed.add_field(
                 name="Session Info",
                 value=f"Opened by: {session['opened_by']}\nOpened at: {opened_time} UTC",
-                inline=False
+                inline=False,
             )
 
-            if session['status'] == 'open':
+            if session["status"] == "open":
                 embed.add_field(
                     name="How to Play",
                     value="Users can guess in Kick chat with: `!gtb <amount>`\nExample: `!gtb 1234.56`",
-                    inline=False
+                    inline=False,
                 )
             else:
                 embed.add_field(
-                    name="Session Closed",
-                    value="Use **Set Result** button to calculate winners",
-                    inline=False
+                    name="Session Closed", value="Use **Set Result** button to calculate winners", inline=False
                 )
         else:
             embed.add_field(name="Status", value="⚪ **NO ACTIVE SESSION**", inline=False)
-            embed.add_field(
-                name="Get Started",
-                value="Click **Open Session** to start a new game!",
-                inline=False
-            )
+            embed.add_field(name="Get Started", value="Click **Open Session** to start a new game!", inline=False)
 
             # Show last completed session stats
             try:
                 with self.engine.connect() as conn:
-                    last_session = conn.execute(text("""
+                    last_session = conn.execute(
+                        text(
+                            """
                         SELECT id, result_amount, opened_at
                         FROM gtb_sessions
                         WHERE status = 'completed'
                         ORDER BY closed_at DESC
                         LIMIT 1
-                    """)).fetchone()
+                    """
+                        )
+                    ).fetchone()
 
                     if last_session:
                         session_id, result, opened_at = last_session
                         embed.add_field(
                             name="Last Session",
                             value=f"Session #{session_id} - Result: ${float(result):,.2f}",
-                            inline=False
+                            inline=False,
                         )
             except Exception:
                 pass
@@ -312,11 +318,6 @@ class GTBPanel:
         try:
             embed = self._create_panel_embed()
             view = GTBPanelView(self)
-
-            # Setup button callbacks
-            for item in view.children:
-                if isinstance(item, Button):
-                    item.callback = lambda interaction, b=item: view.callback(interaction, b)
 
             message = await channel.send(embed=embed, view=view)
 
@@ -337,7 +338,9 @@ class GTBPanel:
         if not force and self.last_update_time:
             time_since_last = (datetime.utcnow() - self.last_update_time).total_seconds()
             if time_since_last < self.update_cooldown:
-                logger.debug(f"GTB panel update skipped (cooldown: {self.update_cooldown - time_since_last:.1f}s remaining)")
+                logger.debug(
+                    f"GTB panel update skipped (cooldown: {self.update_cooldown - time_since_last:.1f}s remaining)"
+                )
                 return False
 
         if not self.panel_message_id or not self.panel_channel_id:
@@ -351,11 +354,6 @@ class GTBPanel:
             message = await channel.fetch_message(self.panel_message_id)
             embed = self._create_panel_embed()
             view = GTBPanelView(self)
-
-            # Setup button callbacks
-            for item in view.children:
-                if isinstance(item, Button):
-                    item.callback = lambda interaction, b=item: view.callback(interaction, b)
 
             await message.edit(embed=embed, view=view)
             self.last_update_time = datetime.utcnow()
@@ -448,12 +446,13 @@ class GTBPanel:
         """Wait for bot to be ready before starting auto-update"""
         await self.bot.wait_until_ready()
 
+
 async def setup_gtb_panel(bot, engine, gtb_manager, kick_send_callback=None):
     """Setup the GTB panel"""
     panel = GTBPanel(bot, engine, gtb_manager, kick_send_callback)
 
     # Add command to create the panel
-    @bot.command(name='creategtbpanel')
+    @bot.command(name="creategtbpanel")
     @commands.has_permissions(administrator=True)
     async def create_gtb_panel_cmd(ctx):
         """[ADMIN] Create the GTB panel in this channel"""
