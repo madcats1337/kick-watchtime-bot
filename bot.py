@@ -2115,25 +2115,12 @@ kick_chatroom_id_global = None
 stream_tracking_enabled = True  # Admin can toggle this
 # When true, admins can force watchtime updates to run even if the live-detection
 # checks (unique chatters, recent activity) would normally block updates.
-tracking_force_override = False
+tracking_force_override = False  # Default off, loaded per-guild when needed
 # When true, enables detailed debug logging for watchtime tracking
 watchtime_debug_enabled = True  # Admin can toggle this
 
-# Load tracking_force_override from database
-try:
-    with engine.connect() as conn:
-        result = conn.execute(
-            text(
-                """
-            SELECT value FROM bot_settings WHERE key = 'tracking_force_override'
-        """
-            )
-        ).fetchone()
-        if result:
-            tracking_force_override = result[0].lower() == "true"
-            print(f"🔧 Loaded tracking_force_override from database: {tracking_force_override}")
-except Exception as e:
-    print(f"ℹ️ Could not load tracking_force_override from database (using default): {e}")
+# Note: tracking_force_override is saved per-guild in bot_settings table.
+# The global variable is used as a cache. Each guild loads its own value.
 
 last_chat_activity = None  # Track last time we saw any chat activity
 
@@ -2993,9 +2980,10 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                 result = conn.execute(
                                                     text(
                                                         """
-                                                    SELECT value FROM bot_settings WHERE key = 'clip_duration'
+                                                    SELECT value FROM bot_settings WHERE key = 'clip_duration' AND discord_server_id = :guild_id
                                                 """
-                                                    )
+                                                    ),
+                                                    {"guild_id": guild_id}
                                                 ).fetchone()
                                                 if result:
                                                     clip_duration = int(result[0])
@@ -3104,9 +3092,10 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                                     result = conn.execute(
                                                                         text(
                                                                             """
-                                                                        SELECT value FROM bot_settings WHERE key = 'clip_channel_id'
+                                                                        SELECT value FROM bot_settings WHERE key = 'clip_channel_id' AND discord_server_id = :guild_id
                                                                     """
-                                                                        )
+                                                                        ),
+                                                                        {"guild_id": guild_id}
                                                                     ).fetchone()
                                                                     if result and result[0]:
                                                                         clip_channel_id = int(result[0])
