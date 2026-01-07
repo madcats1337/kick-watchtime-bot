@@ -4565,6 +4565,7 @@ async def cmd_update_kick(ctx, member: discord.Member, new_kick_username: str):
     status_msg = await ctx.send(f"🔄 Updating **{old_kick_name}** → **{new_kick_username}**...\nMigrating all user data...")
 
     # Update all tables that reference the kick username
+    # Use MERGE logic: if new username already has data, combine it then delete old
     tables_updated = []
     
     with engine.begin() as conn:
@@ -4579,77 +4580,195 @@ async def cmd_update_kick(ctx, member: discord.Member, new_kick_username: str):
         )
         tables_updated.append("links")
         
-        # 2. Update watchtime table
-        result = conn.execute(
-            text("""
-                UPDATE watchtime 
-                SET username = :new_name
-                WHERE username = :old_name AND discord_server_id = :guild_id
-            """),
-            {"new_name": new_kick_username, "old_name": old_kick_name, "guild_id": guild_id},
-        )
-        if result.rowcount > 0:
-            tables_updated.append(f"watchtime ({result.rowcount})")
+        # 2. MERGE watchtime table (combine minutes if new username exists)
+        # First check if new username already has watchtime
+        existing_new_wt = conn.execute(
+            text("SELECT minutes FROM watchtime WHERE username = :new_name AND discord_server_id = :guild_id"),
+            {"new_name": new_kick_username, "guild_id": guild_id},
+        ).fetchone()
         
-        # 3. Update raffle_tickets table
+        old_wt = conn.execute(
+            text("SELECT minutes FROM watchtime WHERE username = :old_name AND discord_server_id = :guild_id"),
+            {"old_name": old_kick_name, "guild_id": guild_id},
+        ).fetchone()
+        
+        if old_wt:
+            old_minutes = old_wt[0] or 0
+            if existing_new_wt:
+                # Merge: add old minutes to new, then delete old record
+                new_minutes = existing_new_wt[0] or 0
+                conn.execute(
+                    text("""
+                        UPDATE watchtime 
+                        SET minutes = :total, last_active = CURRENT_TIMESTAMP
+                        WHERE username = :new_name AND discord_server_id = :guild_id
+                    """),
+                    {"total": new_minutes + old_minutes, "new_name": new_kick_username, "guild_id": guild_id},
+                )
+                conn.execute(
+                    text("DELETE FROM watchtime WHERE username = :old_name AND discord_server_id = :guild_id"),
+                    {"old_name": old_kick_name, "guild_id": guild_id},
+                )
+                tables_updated.append(f"watchtime (merged {old_minutes}+{new_minutes}={old_minutes+new_minutes} min)")
+            else:
+                # Simple rename
+                conn.execute(
+                    text("""
+                        UPDATE watchtime 
+                        SET username = :new_name
+                        WHERE username = :old_name AND discord_server_id = :guild_id
+                    """),
+                    {"new_name": new_kick_username, "old_name": old_kick_name, "guild_id": guild_id},
+                )
+                tables_updated.append(f"watchtime ({old_minutes} min)")
+        
+        # 3. Update raffle_tickets table - ONLY for the ACTIVE period
+        # Unique constraint is (period_id, discord_id), so we update kick_name for this user
+        # Only carry over tickets from the active period, not historical periods
         result = conn.execute(
             text("""
-                UPDATE raffle_tickets 
+                UPDATE raffle_tickets rt
                 SET kick_name = :new_name
-                WHERE kick_name = :old_name AND discord_server_id = :guild_id
+                WHERE rt.discord_id = :d 
+                  AND rt.discord_server_id = :guild_id
+                  AND rt.period_id = (
+                      SELECT id FROM raffle_periods 
+                      WHERE discord_server_id = :guild_id AND status = 'active' 
+                      LIMIT 1
+                  )
             """),
-            {"new_name": new_kick_username, "old_name": old_kick_name, "guild_id": guild_id},
+            {"new_name": new_kick_username, "d": discord_id, "guild_id": guild_id},
         )
         if result.rowcount > 0:
-            tables_updated.append(f"raffle_tickets ({result.rowcount})")
+            # Get current ticket count to show in the message
+            ticket_info = conn.execute(
+                text("""
+                    SELECT total_tickets FROM raffle_tickets rt
+                    WHERE rt.discord_id = :d AND rt.discord_server_id = :guild_id
+                      AND rt.period_id = (
+                          SELECT id FROM raffle_periods 
+                          WHERE discord_server_id = :guild_id AND status = 'active' 
+                          LIMIT 1
+                      )
+                """),
+                {"d": discord_id, "guild_id": guild_id},
+            ).fetchone()
+            ticket_count = ticket_info[0] if ticket_info else 0
+            tables_updated.append(f"raffle_tickets (active period, {ticket_count} tickets)")
         
-        # 4. Update raffle_watchtime_converted table (no discord_server_id - uses period_id)
-        result = conn.execute(
-            text("""
-                UPDATE raffle_watchtime_converted 
-                SET kick_name = :new_name
-                WHERE kick_name = :old_name
-            """),
-            {"new_name": new_kick_username, "old_name": old_kick_name},
-        )
-        if result.rowcount > 0:
-            tables_updated.append(f"raffle_watchtime_converted ({result.rowcount})")
+        # 4. Handle raffle_watchtime_converted table (no discord_server_id - uses period_id)
+        # Check if new username has records - if so, delete old to avoid conflicts
+        existing_new_rwc = conn.execute(
+            text("SELECT COUNT(*) FROM raffle_watchtime_converted WHERE kick_name = :new_name"),
+            {"new_name": new_kick_username},
+        ).scalar()
         
-        # 5. Update raffle_shuffle_links table (global table - no server isolation)
+        if existing_new_rwc and existing_new_rwc > 0:
+            # New username has conversion records - delete old username's records
+            result = conn.execute(
+                text("DELETE FROM raffle_watchtime_converted WHERE kick_name = :old_name"),
+                {"old_name": old_kick_name},
+            )
+            if result.rowcount > 0:
+                tables_updated.append(f"raffle_watchtime_converted (cleaned {result.rowcount} old)")
+        else:
+            # Safe to rename
+            result = conn.execute(
+                text("""
+                    UPDATE raffle_watchtime_converted 
+                    SET kick_name = :new_name
+                    WHERE kick_name = :old_name
+                """),
+                {"new_name": new_kick_username, "old_name": old_kick_name},
+            )
+            if result.rowcount > 0:
+                tables_updated.append(f"raffle_watchtime_converted ({result.rowcount})")
+        
+        # 5. Update raffle_shuffle_links table (global table - scoped by discord_id)
+        # Only update records belonging to this specific user
         result = conn.execute(
             text("""
                 UPDATE raffle_shuffle_links 
                 SET kick_name = :new_name
-                WHERE kick_name = :old_name AND discord_id = :d
+                WHERE discord_id = :d AND kick_name = :old_name
             """),
             {"new_name": new_kick_username, "old_name": old_kick_name, "d": discord_id},
         )
         if result.rowcount > 0:
             tables_updated.append(f"raffle_shuffle_links ({result.rowcount})")
         
-        # 6. Update user_points table
-        result = conn.execute(
-            text("""
-                UPDATE user_points 
-                SET kick_username = :new_name
-                WHERE kick_username = :old_name AND discord_server_id = :guild_id
-            """),
-            {"new_name": new_kick_username, "old_name": old_kick_name, "guild_id": guild_id},
-        )
-        if result.rowcount > 0:
-            tables_updated.append(f"user_points ({result.rowcount})")
+        # 6. MERGE user_points table
+        existing_new_pts = conn.execute(
+            text("SELECT points, total_earned, total_spent FROM user_points WHERE kick_username = :new_name AND discord_server_id = :guild_id"),
+            {"new_name": new_kick_username, "guild_id": guild_id},
+        ).fetchone()
         
-        # 7. Update points_watchtime_converted table
-        result = conn.execute(
-            text("""
-                UPDATE points_watchtime_converted 
-                SET kick_username = :new_name
-                WHERE kick_username = :old_name AND discord_server_id = :guild_id
-            """),
-            {"new_name": new_kick_username, "old_name": old_kick_name, "guild_id": guild_id},
-        )
-        if result.rowcount > 0:
-            tables_updated.append(f"points_watchtime_converted ({result.rowcount})")
+        old_pts = conn.execute(
+            text("SELECT points, total_earned, total_spent FROM user_points WHERE kick_username = :old_name AND discord_server_id = :guild_id"),
+            {"old_name": old_kick_name, "guild_id": guild_id},
+        ).fetchone()
+        
+        if old_pts:
+            if existing_new_pts:
+                # Merge points
+                conn.execute(
+                    text("""
+                        UPDATE user_points 
+                        SET points = points + :old_pts,
+                            total_earned = total_earned + :old_earned,
+                            total_spent = total_spent + :old_spent,
+                            last_updated = CURRENT_TIMESTAMP
+                        WHERE kick_username = :new_name AND discord_server_id = :guild_id
+                    """),
+                    {
+                        "old_pts": old_pts[0] or 0,
+                        "old_earned": old_pts[1] or 0,
+                        "old_spent": old_pts[2] or 0,
+                        "new_name": new_kick_username,
+                        "guild_id": guild_id
+                    },
+                )
+                conn.execute(
+                    text("DELETE FROM user_points WHERE kick_username = :old_name AND discord_server_id = :guild_id"),
+                    {"old_name": old_kick_name, "guild_id": guild_id},
+                )
+                tables_updated.append(f"user_points (merged +{old_pts[0] or 0} pts)")
+            else:
+                conn.execute(
+                    text("""
+                        UPDATE user_points 
+                        SET kick_username = :new_name
+                        WHERE kick_username = :old_name AND discord_server_id = :guild_id
+                    """),
+                    {"new_name": new_kick_username, "old_name": old_kick_name, "guild_id": guild_id},
+                )
+                tables_updated.append(f"user_points ({old_pts[0] or 0} pts)")
+        
+        # 7. Handle points_watchtime_converted table (may have unique constraint)
+        existing_new_pwc = conn.execute(
+            text("SELECT COUNT(*) FROM points_watchtime_converted WHERE kick_username = :new_name AND discord_server_id = :guild_id"),
+            {"new_name": new_kick_username, "guild_id": guild_id},
+        ).scalar()
+        
+        if existing_new_pwc and existing_new_pwc > 0:
+            # New username has conversion records - delete old to avoid conflicts
+            result = conn.execute(
+                text("DELETE FROM points_watchtime_converted WHERE kick_username = :old_name AND discord_server_id = :guild_id"),
+                {"old_name": old_kick_name, "guild_id": guild_id},
+            )
+            if result.rowcount > 0:
+                tables_updated.append(f"points_watchtime_converted (cleaned {result.rowcount} old)")
+        else:
+            result = conn.execute(
+                text("""
+                    UPDATE points_watchtime_converted 
+                    SET kick_username = :new_name
+                    WHERE kick_username = :old_name AND discord_server_id = :guild_id
+                """),
+                {"new_name": new_kick_username, "old_name": old_kick_name, "guild_id": guild_id},
+            )
+            if result.rowcount > 0:
+                tables_updated.append(f"points_watchtime_converted ({result.rowcount})")
         
         # 8. Update slot_requests table (pending requests)
         result = conn.execute(
