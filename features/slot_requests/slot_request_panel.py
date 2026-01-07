@@ -233,11 +233,16 @@ class SlotRequestPanel:
         server_id = self.tracker.server_id if self.tracker else None
         if not server_id:
             logger.warning("No server_id available for stats, showing all servers")
+        else:
+            logger.info(f"Getting slot stats for server_id: {server_id} (type: {type(server_id).__name__})")
 
         try:
             with self.engine.connect() as conn:
                 # Get counts - filter by server_id if available
                 if server_id:
+                    # Ensure server_id is int for BIGINT column comparison
+                    server_id = int(server_id)
+                    
                     total = conn.execute(
                         text("SELECT COUNT(*) FROM slot_requests WHERE discord_server_id = :server_id"),
                         {"server_id": server_id},
@@ -268,6 +273,8 @@ class SlotRequestPanel:
                         ),
                         {"server_id": server_id},
                     ).fetchone()
+                    
+                    logger.info(f"Stats for server {server_id}: total={total}, unpicked={unpicked}, picked={picked}, last_picked={last_picked}")
                 else:
                     # Fallback: show all servers
                     total = conn.execute(text("SELECT COUNT(*) FROM slot_requests")).fetchone()[0]
@@ -765,9 +772,15 @@ class SlotRequestPanelCommands(commands.Cog):
         if hasattr(self.bot, "slot_panels_by_guild"):
             panel = self.bot.slot_panels_by_guild.get(guild_id)
             if panel:
+                logger.info(f"Found panel for guild {guild_id}")
                 return panel
-        # Fallback to default panel
-        return self.default_panel
+            else:
+                # Debug: show what keys exist
+                keys = list(self.bot.slot_panels_by_guild.keys())
+                logger.warning(f"No panel found for guild {guild_id}. Available guild IDs: {keys}")
+        # DO NOT fall back to default panel - that causes cross-server issues
+        logger.error(f"No panel available for guild {guild_id}")
+        return None
 
     def cog_unload(self):
         """Clean up when cog is unloaded"""
