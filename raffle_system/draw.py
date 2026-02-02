@@ -3,12 +3,13 @@ Raffle Draw Logic
 Implements provably fair random drawing using SHA-256 hashing
 """
 
-from sqlalchemy import text
-from datetime import datetime
-import secrets
 import hashlib
 import logging
 import os
+import secrets
+from datetime import datetime
+
+from sqlalchemy import text
 
 # Import bot redis publisher for notifications
 try:
@@ -18,13 +19,16 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
 class RaffleDraw:
     """Handles raffle drawing and winner selection"""
 
     def __init__(self, engine):
         self.engine = engine
 
-    def draw_winner(self, period_id, drawn_by_discord_id=None, prize_description=None, excluded_discord_ids=None, update_period=True):
+    def draw_winner(
+        self, period_id, drawn_by_discord_id=None, prize_description=None, excluded_discord_ids=None, update_period=True
+    ):
         """
         Draw a random winner for the raffle period using cryptographic randomness
 
@@ -45,12 +49,17 @@ class RaffleDraw:
         """
         try:
             excluded_discord_ids = excluded_discord_ids or []
-            
+
             with self.engine.begin() as conn:
                 # Get server_id from the period
-                period_result = conn.execute(text("""
+                period_result = conn.execute(
+                    text(
+                        """
                     SELECT discord_server_id FROM raffle_periods WHERE id = :period_id
-                """), {'period_id': period_id})
+                """
+                    ),
+                    {"period_id": period_id},
+                )
                 period_row = period_result.fetchone()
                 if not period_row:
                     logger.error(f"Period {period_id} not found")
@@ -72,18 +81,18 @@ class RaffleDraw:
                             )
                       )
                 """
-                
-                params = {'period_id': period_id, 'server_id': server_id}
-                
+
+                params = {"period_id": period_id, "server_id": server_id}
+
                 # Add exclusion for already drawn winners
                 if excluded_discord_ids:
-                    placeholders = ', '.join([f':excluded_{i}' for i in range(len(excluded_discord_ids))])
+                    placeholders = ", ".join([f":excluded_{i}" for i in range(len(excluded_discord_ids))])
                     query += f" AND rt.discord_id NOT IN ({placeholders})"
                     for i, discord_id in enumerate(excluded_discord_ids):
-                        params[f'excluded_{i}'] = discord_id
-                
+                        params[f"excluded_{i}"] = discord_id
+
                 query += " ORDER BY rt.id"  # Deterministic ordering for reproducibility
-                
+
                 result = conn.execute(text(query), params)
 
                 participants = list(result)
@@ -97,13 +106,15 @@ class RaffleDraw:
                 current_ticket = 1
 
                 for discord_id, kick_name, ticket_count in participants:
-                    ticket_ranges.append({
-                        'discord_id': discord_id,
-                        'kick_name': kick_name,
-                        'ticket_count': ticket_count,
-                        'start_ticket': current_ticket,
-                        'end_ticket': current_ticket + ticket_count - 1
-                    })
+                    ticket_ranges.append(
+                        {
+                            "discord_id": discord_id,
+                            "kick_name": kick_name,
+                            "ticket_count": ticket_count,
+                            "start_ticket": current_ticket,
+                            "end_ticket": current_ticket + ticket_count - 1,
+                        }
+                    )
                     current_ticket += ticket_count
 
                 total_tickets = current_ticket - 1
@@ -112,23 +123,23 @@ class RaffleDraw:
                 # Draw winning ticket using provably fair SHA-256 hashing
                 # Generate server seed
                 server_seed = secrets.token_hex(32)  # 64 character hex string
-                
+
                 # Client seed: period_id:total_tickets:total_participants
                 client_seed = f"{period_id}:{total_tickets}:{total_participants}"
-                
+
                 # Nonce: period_id
                 nonce = str(period_id)
-                
+
                 # Create hash for provable fairness
                 combined = f"{server_seed}:{client_seed}:{nonce}"
                 hash_result = hashlib.sha256(combined.encode()).hexdigest()
-                
+
                 # Convert first 16 hex chars to integer for larger range
                 random_int = int(hash_result[:16], 16)
-                
+
                 # Map to winning ticket (1 to total_tickets)
                 winning_ticket = (random_int % total_tickets) + 1
-                
+
                 proof_hash = hash_result
 
                 logger.info(f"🎲 Drawing raffle for period {period_id}")
@@ -142,7 +153,7 @@ class RaffleDraw:
                 # Find the winner
                 winner = None
                 for entry in ticket_ranges:
-                    if entry['start_ticket'] <= winning_ticket <= entry['end_ticket']:
+                    if entry["start_ticket"] <= winning_ticket <= entry["end_ticket"]:
                         winner = entry
                         break
 
@@ -151,15 +162,22 @@ class RaffleDraw:
                     return None
 
                 # Get Shuffle username if linked
-                shuffle_result = conn.execute(text("""
+                shuffle_result = conn.execute(
+                    text(
+                        """
                     SELECT shuffle_username FROM raffle_shuffle_links
                     WHERE discord_id = :discord_id
-                """), {'discord_id': winner['discord_id']})
+                """
+                    ),
+                    {"discord_id": winner["discord_id"]},
+                )
                 shuffle_row = shuffle_result.fetchone()
                 shuffle_username = shuffle_row[0] if shuffle_row else None
 
                 # Record the draw
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     INSERT INTO raffle_draws
                         (period_id, discord_server_id, total_tickets, total_participants, winner_discord_id,
                          winner_kick_name, winner_shuffle_name, winning_ticket,
@@ -170,132 +188,80 @@ class RaffleDraw:
                          :winner_kick_name, :winner_shuffle_name, :winning_ticket,
                          :prize_description, :drawn_by_discord_id,
                          :server_seed, :client_seed, :nonce, :proof_hash)
-                """), {
-                    'period_id': period_id,
-                    'server_id': server_id,
-                    'total_tickets': total_tickets,
-                    'total_participants': total_participants,
-                    'winner_discord_id': winner['discord_id'],
-                    'winner_kick_name': winner['kick_name'],
-                    'winner_shuffle_name': shuffle_username,
-                    'winning_ticket': winning_ticket,
-                    'prize_description': prize_description,
-                    'drawn_by_discord_id': drawn_by_discord_id,
-                    'server_seed': server_seed,
-                    'client_seed': client_seed,
-                    'nonce': nonce,
-                    'proof_hash': proof_hash
-                })
+                """
+                    ),
+                    {
+                        "period_id": period_id,
+                        "server_id": server_id,
+                        "total_tickets": total_tickets,
+                        "total_participants": total_participants,
+                        "winner_discord_id": winner["discord_id"],
+                        "winner_kick_name": winner["kick_name"],
+                        "winner_shuffle_name": shuffle_username,
+                        "winning_ticket": winning_ticket,
+                        "prize_description": prize_description,
+                        "drawn_by_discord_id": drawn_by_discord_id,
+                        "server_seed": server_seed,
+                        "client_seed": client_seed,
+                        "nonce": nonce,
+                        "proof_hash": proof_hash,
+                    },
+                )
 
                 # Mark the raffle period as ended (only once for first winner)
                 if update_period:
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         UPDATE raffle_periods
                         SET
                             status = 'ended',
                             total_tickets = :total_tickets
                         WHERE id = :period_id
-                    """), {
-                        'period_id': period_id,
-                        'total_tickets': total_tickets
-                    })
+                    """
+                        ),
+                        {"period_id": period_id, "total_tickets": total_tickets},
+                    )
 
             # Publish notification to dashboard
             if bot_redis_publisher and bot_redis_publisher.enabled and update_period:
                 try:
                     bot_redis_publisher.publish_raffle_draw(
                         discord_server_id=server_id,
-                        winner_kick_name=winner['kick_name'],
+                        winner_kick_name=winner["kick_name"],
                         winner_shuffle_name=shuffle_username,
-                        prize_description=prize_description or 'Raffle Prize',
-                        period_id=period_id
+                        prize_description=prize_description or "Raffle Prize",
+                        period_id=period_id,
                     )
                 except Exception as e:
                     logger.error(f"Failed to publish raffle draw notification: {e}")
 
             result = {
-                'winner_discord_id': winner['discord_id'],
-                'winner_kick_name': winner['kick_name'],
-                'winner_shuffle_name': shuffle_username,
-                'winner_tickets': winner['ticket_count'],
-                'winning_ticket': winning_ticket,
-                'total_tickets': total_tickets,
-                'total_participants': total_participants,
-                'win_probability': (winner['ticket_count'] / total_tickets * 100),
-                'server_seed': server_seed,
-                'client_seed': client_seed,
-                'nonce': nonce,
-                'proof_hash': proof_hash
+                "winner_discord_id": winner["discord_id"],
+                "winner_kick_name": winner["kick_name"],
+                "winner_shuffle_name": shuffle_username,
+                "winner_tickets": winner["ticket_count"],
+                "winning_ticket": winning_ticket,
+                "total_tickets": total_tickets,
+                "total_participants": total_participants,
+                "win_probability": (winner["ticket_count"] / total_tickets * 100),
+                "server_seed": server_seed,
+                "client_seed": client_seed,
+                "nonce": nonce,
+                "proof_hash": proof_hash,
             }
 
-            # Publish draw events to Redis for overlay visualization
-            try:
-                import redis
-                import json as json_lib
-                redis_client = redis.from_url(os.getenv('REDIS_URL', 'redis://localhost:6379'))
-                
-                # Convert server_id to string to avoid JavaScript precision loss with large integers
-                server_id_str = str(server_id)
-                
-                # Event 1: Draw started (include server_id at top level for filtering)
-                redis_client.publish('raffle:draw:events', json_lib.dumps({
-                    'type': 'draw_started',
-                    'server_id': server_id_str,
-                    'payload': {
-                        'period_id': period_id,
-                        'server_id': server_id_str,
-                        'total_tickets': total_tickets
-                    }
-                }))
-                
-                # Event 2: Spinning animation
-                redis_client.publish('raffle:draw:events', json_lib.dumps({
-                    'type': 'draw_spinning',
-                    'server_id': server_id_str,
-                    'payload': {
-                        'period_id': period_id,
-                        'server_id': server_id_str,
-                        'total_tickets': total_tickets,
-                        'duration': 5000  # Default animation duration
-                    }
-                }))
-                
-                # Event 3: Winner revealed (after countdown + animation)
-                # Default: 3s countdown + 5s animation = 8s total
-                # Use threading to avoid blocking the function return
-                import threading
-                import time
-                
-                winner_payload = {
-                    'server_id': server_id_str,
-                    'winning_ticket': winning_ticket,
-                    'winner_kick_name': winner['kick_name'],
-                    'winner_shuffle_name': shuffle_username,
-                    'winner_tickets': winner['ticket_count'],
-                    'total_tickets': total_tickets,
-                    'win_probability': result['win_probability']
-                }
-                
-                def publish_winner_event():
-                    time.sleep(8)
-                    try:
-                        redis_client.publish('raffle:draw:events', json_lib.dumps({
-                            'type': 'draw_complete',
-                            'server_id': server_id_str,
-                            'payload': winner_payload
-                        }))
-                    except Exception as e:
-                        logger.warning(f"Failed to publish draw_complete event: {e}")
-                
-                timer = threading.Thread(target=publish_winner_event)
-                timer.daemon = True  # Don't block process shutdown
-                timer.start()
-                
-            except Exception as e:
-                logger.warning(f"Failed to publish draw events to Redis: {e}")
+            # NOTE: Draw events are NO LONGER published automatically here.
+            # The reveal animation should ONLY be triggered by the dashboard's "Reveal Next Winner" button
+            # which calls /api/raffle/reveal-winner. This ensures:
+            # 1. The first winner isn't revealed instantly before pressing the button
+            # 2. Discord announcements are synced to the reveal animation (via animation_complete event)
+            # 3. Streamers have full control over when each winner is revealed
 
             logger.info(f"🎉 Winner: {winner['kick_name']} (Discord ID: {winner['discord_id']})")
-            logger.info(f"   Winner's tickets: {winner['ticket_count']}/{total_tickets} ({result['win_probability']:.2f}%)")
+            logger.info(
+                f"   Winner's tickets: {winner['ticket_count']}/{total_tickets} ({result['win_probability']:.2f}%)"
+            )
 
             return result
 
@@ -315,7 +281,9 @@ class RaffleDraw:
         """
         try:
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT
                         rd.period_id,
                         rd.winner_discord_id,
@@ -332,23 +300,28 @@ class RaffleDraw:
                     JOIN raffle_periods rp ON rp.id = rd.period_id
                     ORDER BY rd.drawn_at DESC
                     LIMIT :limit
-                """), {'limit': limit})
+                """
+                    ),
+                    {"limit": limit},
+                )
 
                 history = []
                 for row in result:
-                    history.append({
-                        'period_id': row[0],
-                        'winner_discord_id': row[1],
-                        'winner_kick_name': row[2],
-                        'winner_shuffle_name': row[3],
-                        'winning_ticket': row[4],
-                        'total_tickets': row[5],
-                        'total_participants': row[6],
-                        'prize_description': row[7],
-                        'drawn_at': row[8],
-                        'period_start': row[9],
-                        'period_end': row[10]
-                    })
+                    history.append(
+                        {
+                            "period_id": row[0],
+                            "winner_discord_id": row[1],
+                            "winner_kick_name": row[2],
+                            "winner_shuffle_name": row[3],
+                            "winning_ticket": row[4],
+                            "total_tickets": row[5],
+                            "total_participants": row[6],
+                            "prize_description": row[7],
+                            "drawn_at": row[8],
+                            "period_start": row[9],
+                            "period_end": row[10],
+                        }
+                    )
 
                 return history
 
@@ -370,13 +343,15 @@ class RaffleDraw:
         try:
             with self.engine.begin() as conn:
                 # Get user's tickets
-                user_result = conn.execute(text("""
+                user_result = conn.execute(
+                    text(
+                        """
                     SELECT total_tickets FROM raffle_tickets
                     WHERE period_id = :period_id AND discord_id = :discord_id
-                """), {
-                    'period_id': period_id,
-                    'discord_id': discord_id
-                })
+                """
+                    ),
+                    {"period_id": period_id, "discord_id": discord_id},
+                )
                 user_row = user_result.fetchone()
 
                 if not user_row or user_row[0] == 0:
@@ -385,10 +360,15 @@ class RaffleDraw:
                 user_tickets = user_row[0]
 
                 # Get total tickets
-                total_result = conn.execute(text("""
+                total_result = conn.execute(
+                    text(
+                        """
                     SELECT COALESCE(SUM(total_tickets), 0) FROM raffle_tickets
                     WHERE period_id = :period_id
-                """), {'period_id': period_id})
+                """
+                    ),
+                    {"period_id": period_id},
+                )
                 total_tickets = total_result.scalar()
 
                 if total_tickets == 0:
@@ -397,10 +377,10 @@ class RaffleDraw:
                 probability = (user_tickets / total_tickets) * 100
 
                 return {
-                    'user_tickets': user_tickets,
-                    'total_tickets': total_tickets,
-                    'probability_percent': probability,
-                    'odds': f"{user_tickets}/{total_tickets}"
+                    "user_tickets": user_tickets,
+                    "total_tickets": total_tickets,
+                    "probability_percent": probability,
+                    "odds": f"{user_tickets}/{total_tickets}",
                 }
 
         except Exception as e:
@@ -421,16 +401,23 @@ class RaffleDraw:
         try:
             with self.engine.begin() as conn:
                 # Get server_id from the period
-                period_result = conn.execute(text("""
+                period_result = conn.execute(
+                    text(
+                        """
                     SELECT discord_server_id FROM raffle_periods WHERE id = :period_id
-                """), {'period_id': period_id})
+                """
+                    ),
+                    {"period_id": period_id},
+                )
                 period_row = period_result.fetchone()
                 if not period_row:
                     return None
                 server_id = period_row[0]
 
                 # Get participants excluding those in raffle_exclusions
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT rt.discord_id, rt.kick_name, rt.total_tickets
                     FROM raffle_tickets rt
                     WHERE rt.period_id = :period_id
@@ -444,7 +431,10 @@ class RaffleDraw:
                             )
                       )
                     ORDER BY rt.id
-                """), {'period_id': period_id, 'server_id': server_id})
+                """
+                    ),
+                    {"period_id": period_id, "server_id": server_id},
+                )
 
                 participants = list(result)
 
@@ -456,14 +446,16 @@ class RaffleDraw:
                 current_ticket = 1
 
                 for discord_id, kick_name, ticket_count in participants:
-                    ticket_ranges.append({
-                        'discord_id': discord_id,
-                        'kick_name': kick_name,
-                        'ticket_count': ticket_count,
-                        'start_ticket': current_ticket,
-                        'end_ticket': current_ticket + ticket_count - 1,
-                        'wins': 0
-                    })
+                    ticket_ranges.append(
+                        {
+                            "discord_id": discord_id,
+                            "kick_name": kick_name,
+                            "ticket_count": ticket_count,
+                            "start_ticket": current_ticket,
+                            "end_ticket": current_ticket + ticket_count - 1,
+                            "wins": 0,
+                        }
+                    )
                     current_ticket += ticket_count
 
                 total_tickets = current_ticket - 1
@@ -473,30 +465,32 @@ class RaffleDraw:
                     winning_ticket = secrets.randbelow(total_tickets) + 1
 
                     for entry in ticket_ranges:
-                        if entry['start_ticket'] <= winning_ticket <= entry['end_ticket']:
-                            entry['wins'] += 1
+                        if entry["start_ticket"] <= winning_ticket <= entry["end_ticket"]:
+                            entry["wins"] += 1
                             break
 
                 # Calculate results
                 results = []
                 for entry in ticket_ranges:
-                    expected_wins = (entry['ticket_count'] / total_tickets) * num_simulations
-                    actual_wins = entry['wins']
+                    expected_wins = (entry["ticket_count"] / total_tickets) * num_simulations
+                    actual_wins = entry["wins"]
                     variance = ((actual_wins - expected_wins) / expected_wins * 100) if expected_wins > 0 else 0
 
-                    results.append({
-                        'kick_name': entry['kick_name'],
-                        'tickets': entry['ticket_count'],
-                        'expected_wins': expected_wins,
-                        'actual_wins': actual_wins,
-                        'variance_percent': variance
-                    })
+                    results.append(
+                        {
+                            "kick_name": entry["kick_name"],
+                            "tickets": entry["ticket_count"],
+                            "expected_wins": expected_wins,
+                            "actual_wins": actual_wins,
+                            "variance_percent": variance,
+                        }
+                    )
 
                 return {
-                    'num_simulations': num_simulations,
-                    'total_tickets': total_tickets,
-                    'participants': len(participants),
-                    'results': results
+                    "num_simulations": num_simulations,
+                    "total_tickets": total_tickets,
+                    "participants": len(participants),
+                    "results": results,
                 }
 
         except Exception as e:

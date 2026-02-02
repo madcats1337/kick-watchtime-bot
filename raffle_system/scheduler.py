@@ -5,12 +5,15 @@ Handles automatic monthly period resets and optional auto-draw
 
 import logging
 from datetime import datetime, timedelta
+
 from discord.ext import tasks
 from sqlalchemy import text
+
 from .database import create_new_period, get_current_period
 from .draw import RaffleDraw
 
 logger = logging.getLogger(__name__)
+
 
 class RaffleScheduler:
     """Manages automatic raffle period transitions"""
@@ -22,18 +25,41 @@ class RaffleScheduler:
         Args:
             engine: SQLAlchemy database engine
             bot: Discord bot instance (for announcements)
-            auto_draw: Whether to automatically draw winner at period end
+            auto_draw: Whether to automatically draw winner at period end (initial value, refreshed from DB)
             announcement_channel_id: Discord channel ID for winner announcements
             discord_server_id: Discord server ID for multiserver support
         """
         self.engine = engine
         self.bot = bot
-        self.auto_draw = auto_draw
+        self._auto_draw_default = auto_draw  # Fallback value
         self.announcement_channel_id = announcement_channel_id
         self.discord_server_id = discord_server_id
         self.raffle_draw = RaffleDraw(engine)
 
         logger.info(f"📅 Raffle scheduler initialized (auto_draw: {auto_draw}, server: {discord_server_id})")
+
+    @property
+    def auto_draw(self):
+        """Get auto_draw setting from database (refreshes on each check)"""
+        try:
+            with self.engine.begin() as conn:
+                result = conn.execute(
+                    text("""
+                        SELECT setting_value FROM bot_settings 
+                        WHERE setting_key = 'raffle_auto_draw' AND discord_server_id = :server_id
+                    """),
+                    {"server_id": self.discord_server_id}
+                )
+                row = result.fetchone()
+                if row:
+                    value = row[0]
+                    # Handle string 'true'/'false' or boolean
+                    if isinstance(value, str):
+                        return value.lower() == 'true'
+                    return bool(value)
+        except Exception as e:
+            logger.warning(f"Failed to get raffle_auto_draw setting from DB: {e}")
+        return self._auto_draw_default
 
     def check_period_transition(self):
         """
@@ -47,13 +73,15 @@ class RaffleScheduler:
             current_period = get_current_period(self.engine, self.discord_server_id)
 
             if not current_period:
-                logger.warning(f"[Server {self.discord_server_id}] No active raffle period found - creating monthly period!")
+                logger.warning(
+                    f"[Server {self.discord_server_id}] No active raffle period found - creating monthly period!"
+                )
                 # Auto-create monthly period starting on 1st of current month
                 return self._create_monthly_period()
 
             now = datetime.now()
-            end_date = current_period['end_date']
-            start_date = current_period['start_date']
+            end_date = current_period["end_date"]
+            start_date = current_period["start_date"]
 
             # Ensure dates are datetime objects
             if isinstance(end_date, str):
@@ -65,21 +93,28 @@ class RaffleScheduler:
             # This prevents unwanted cleanup after manual operations
 
             # Check if it's 10 minutes before period ends and winner not drawn yet
+            # ONLY draw if auto_draw is enabled!
             time_until_end = (end_date - now).total_seconds()
-            if 0 < time_until_end <= 600 and not current_period.get('winner_discord_id'):  # 600 seconds = 10 minutes
-                logger.info(f"⏰ 10 minutes until period end - drawing winner now!")
+            if self.auto_draw and 0 < time_until_end <= 600 and not current_period.get("winner_discord_id"):  # 600 seconds = 10 minutes
+                logger.info(f"⏰ 10 minutes until period end - auto_draw enabled, drawing winner now!")
                 self._draw_winner_for_period(current_period)
+            elif 0 < time_until_end <= 600 and not current_period.get("winner_discord_id"):
+                logger.info(f"⏰ 10 minutes until period end - auto_draw DISABLED, skipping automatic draw")
 
             # Check if current period has ended
             if now > end_date:
-                logger.info(f"🔔 [Server {self.discord_server_id}] Raffle period #{current_period['id']} has ended! (end_date: {end_date}, now: {now})")
+                logger.info(
+                    f"🔔 [Server {self.discord_server_id}] Raffle period #{current_period['id']} has ended! (end_date: {end_date}, now: {now})"
+                )
                 return self._transition_to_new_period(current_period)
             else:
                 # Period still active
                 time_remaining = end_date - now
                 hours_remaining = time_remaining.total_seconds() / 3600
                 if hours_remaining < 24:
-                    logger.debug(f"[Server {self.discord_server_id}] Period #{current_period['id']} active ({hours_remaining:.1f} hours remaining)")
+                    logger.debug(
+                        f"[Server {self.discord_server_id}] Period #{current_period['id']} active ({hours_remaining:.1f} hours remaining)"
+                    )
                 return None
 
         except Exception as e:
@@ -104,16 +139,18 @@ class RaffleScheduler:
             end = next_month - timedelta(seconds=1)
 
             period_id = create_new_period(self.engine, start, end, discord_server_id=self.discord_server_id)
-            logger.info(f"✅ Auto-created monthly period #{period_id} ({start.strftime('%b %d')} - {end.strftime('%b %d, %Y')})")
+            logger.info(
+                f"✅ Auto-created monthly period #{period_id} ({start.strftime('%b %d')} - {end.strftime('%b %d, %Y')})"
+            )
 
             return {
-                'old_period_id': None,
-                'old_period_start': None,
-                'old_period_end': None,
-                'winner_drawn': False,
-                'winner_info': None,
-                'new_period_id': period_id,
-                'transition_time': now
+                "old_period_id": None,
+                "old_period_start": None,
+                "old_period_end": None,
+                "winner_drawn": False,
+                "winner_info": None,
+                "new_period_id": period_id,
+                "transition_time": now,
             }
         except Exception as e:
             logger.error(f"Failed to create monthly period: {e}")
@@ -123,9 +160,9 @@ class RaffleScheduler:
         """Draw winner for the given period"""
         try:
             winner = self.raffle_draw.draw_winner(
-                period_id=period['id'],
+                period_id=period["id"],
                 prize_description="Monthly Raffle Prize",
-                drawn_by_discord_id=None  # Automatic draw
+                drawn_by_discord_id=None,  # Automatic draw
             )
 
             if winner:
@@ -150,59 +187,66 @@ class RaffleScheduler:
         """
         try:
             transition_info = {
-                'old_period_id': old_period['id'],
-                'old_period_start': old_period['start_date'],
-                'old_period_end': old_period['end_date'],
-                'winner_drawn': False,
-                'winner_info': None,
-                'new_period_id': None,
-                'transition_time': datetime.now()
+                "old_period_id": old_period["id"],
+                "old_period_start": old_period["start_date"],
+                "old_period_end": old_period["end_date"],
+                "winner_drawn": False,
+                "winner_info": None,
+                "new_period_id": None,
+                "transition_time": datetime.now(),
             }
 
             # Step 1: Draw winner if auto-draw enabled and not already drawn
-            if self.auto_draw and not old_period.get('winner_discord_id'):
+            if self.auto_draw and not old_period.get("winner_discord_id"):
                 logger.info(f"🎲 Auto-drawing winner for period #{old_period['id']}...")
 
                 winner = self.raffle_draw.draw_winner(
-                    period_id=old_period['id'],
+                    period_id=old_period["id"],
                     prize_description="Monthly Raffle Prize",
-                    drawn_by_discord_id=None  # Automatic draw
+                    drawn_by_discord_id=None,  # Automatic draw
                 )
 
                 if winner:
-                    transition_info['winner_drawn'] = True
-                    transition_info['winner_info'] = winner
+                    transition_info["winner_drawn"] = True
+                    transition_info["winner_info"] = winner
                     logger.info(f"🎉 Winner drawn: {winner['winner_kick_name']}")
                 else:
                     logger.warning("No participants to draw from")
 
             # Step 2: Close the old period
             with self.engine.begin() as conn:
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     UPDATE raffle_periods
                     SET status = 'ended'
                     WHERE id = :period_id
-                """), {'period_id': old_period['id']})
+                """
+                    ),
+                    {"period_id": old_period["id"]},
+                )
 
             logger.info(f"✅ Period #{old_period['id']} closed")
 
             # Step 3: Create new monthly period
             # IMPORTANT: Don't clear tickets if auto-draw is disabled and no winner drawn yet
             # This allows manual winner drawing after period ends
-            clear_tickets = self.auto_draw or old_period.get('winner_discord_id') is not None
-            
+            clear_tickets = self.auto_draw or old_period.get("winner_discord_id") is not None
+
             if not clear_tickets:
                 logger.warning(f"⚠️  Tickets preserved! Winner NOT drawn for period #{old_period['id']}")
                 logger.warning("   Use !raffledraw or dashboard to draw winner before cleanup")
-            
+
             # New period starts on 1st of next month
-            old_end = old_period['end_date']
+            old_end = old_period["end_date"]
             if isinstance(old_end, str):
                 old_end = datetime.fromisoformat(old_end)
 
             # Calculate next month
             if old_end.month == 12:
-                start = old_end.replace(year=old_end.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+                start = old_end.replace(
+                    year=old_end.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0
+                )
             else:
                 start = old_end.replace(month=old_end.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
 
@@ -214,10 +258,14 @@ class RaffleScheduler:
 
             end = next_month - timedelta(seconds=1)
 
-            new_period_id = create_new_period(self.engine, start, end, clear_tickets=clear_tickets, discord_server_id=self.discord_server_id)
-            transition_info['new_period_id'] = new_period_id
+            new_period_id = create_new_period(
+                self.engine, start, end, clear_tickets=clear_tickets, discord_server_id=self.discord_server_id
+            )
+            transition_info["new_period_id"] = new_period_id
 
-            logger.info(f"✅ New monthly period #{new_period_id} created ({start.strftime('%b %d')} - {end.strftime('%b %d, %Y')})")
+            logger.info(
+                f"✅ New monthly period #{new_period_id} created ({start.strftime('%b %d')} - {end.strftime('%b %d, %Y')})"
+            )
             logger.info("� Next period will auto-start on 1st of next month")
 
             return transition_info
@@ -225,6 +273,7 @@ class RaffleScheduler:
         except Exception as e:
             logger.error(f"Failed to transition periods: {e}")
             import traceback
+
             traceback.print_exc()
             return None
 
@@ -247,10 +296,10 @@ class RaffleScheduler:
 
             # Try to mention winner if possible
             try:
-                discord_user = await self.bot.fetch_user(winner_info['winner_discord_id'])
+                discord_user = await self.bot.fetch_user(winner_info["winner_discord_id"])
                 mention = discord_user.mention
             except:
-                mention = winner_info['winner_kick_name']
+                mention = winner_info["winner_kick_name"]
 
             message = f"""
 🎉 **MONTHLY RAFFLE WINNER!** 🎉
@@ -308,8 +357,10 @@ Good luck! 🍀
         except Exception as e:
             logger.error(f"Failed to announce new period: {e}")
 
+
 # Store active scheduler tasks to prevent garbage collection
 _active_scheduler_tasks = {}
+
 
 async def setup_raffle_scheduler(bot, engine, auto_draw=False, announcement_channel_id=None, discord_server_id=None):
     """
@@ -330,7 +381,7 @@ async def setup_raffle_scheduler(bot, engine, auto_draw=False, announcement_chan
         bot=bot,
         auto_draw=auto_draw,
         announcement_channel_id=announcement_channel_id,
-        discord_server_id=discord_server_id
+        discord_server_id=discord_server_id,
     )
 
     @tasks.loop(minutes=1)  # Check every minute
@@ -338,7 +389,7 @@ async def setup_raffle_scheduler(bot, engine, auto_draw=False, announcement_chan
         """Check every minute for: winner drawing (10 min before end) and period transitions"""
         try:
             now = datetime.now()
-            
+
             # Log that the task is running (debug level to avoid spam)
             logger.debug(f"🔄 [Server {discord_server_id}] Raffle scheduler check running at {now}")
 
@@ -346,47 +397,48 @@ async def setup_raffle_scheduler(bot, engine, auto_draw=False, announcement_chan
             transition = scheduler.check_period_transition()
 
             # If cleanup was performed, update leaderboard
-            if transition and transition.get('cleanup_performed'):
-                if hasattr(bot, 'auto_leaderboards') and bot.auto_leaderboards.get(discord_server_id):
+            if transition and transition.get("cleanup_performed"):
+                if hasattr(bot, "auto_leaderboards") and bot.auto_leaderboards.get(discord_server_id):
                     logger.info(f"📊 [Server {discord_server_id}] Updating leaderboard after cleanup...")
                     await bot.auto_leaderboards[discord_server_id].update_leaderboard()
                 else:
-                    logger.info(f"📊 [Server {discord_server_id}] Leaderboard not initialized yet, skipping update after cleanup")
+                    logger.info(
+                        f"📊 [Server {discord_server_id}] Leaderboard not initialized yet, skipping update after cleanup"
+                    )
                 return
 
             # Process period transition whenever it happens (not just at midnight on 1st)
-            if transition and transition.get('new_period_id'):
+            if transition and transition.get("new_period_id"):
                 logger.info(f"📊 [Server {discord_server_id}] Period transition completed:")
-                if transition['old_period_id']:
+                if transition["old_period_id"]:
                     logger.info(f"   Old period: #{transition['old_period_id']}")
                 logger.info(f"   New period: #{transition['new_period_id']}")
 
                 # Announce winner if drawn
-                if transition.get('winner_drawn') and transition.get('winner_info'):
-                    await scheduler.announce_winner(transition['winner_info'])
+                if transition.get("winner_drawn") and transition.get("winner_info"):
+                    await scheduler.announce_winner(transition["winner_info"])
 
                 # Announce new period
                 new_period = get_current_period(engine, discord_server_id=scheduler.discord_server_id)
                 if new_period:
                     await scheduler.announce_new_period(
-                        new_period['id'],
-                        new_period['start_date'],
-                        new_period['end_date']
+                        new_period["id"], new_period["start_date"], new_period["end_date"]
                     )
 
                 # Update the leaderboard immediately after period transition
-                if hasattr(bot, 'auto_leaderboards') and bot.auto_leaderboards.get(discord_server_id):
+                if hasattr(bot, "auto_leaderboards") and bot.auto_leaderboards.get(discord_server_id):
                     logger.info(f"🔄 [Server {discord_server_id}] Updating leaderboard after period transition...")
                     await bot.auto_leaderboards[discord_server_id].update_leaderboard()
 
         except Exception as e:
             logger.error(f"[Server {discord_server_id}] Error in raffle period check task: {e}")
             import traceback
+
             traceback.print_exc()
 
     # Store the task to prevent garbage collection
     _active_scheduler_tasks[discord_server_id] = check_raffle_period
-    
+
     # Start the task
     check_raffle_period.start()
     logger.info(f"✅ [Server {discord_server_id}] Raffle scheduler task started (checks every minute)")
