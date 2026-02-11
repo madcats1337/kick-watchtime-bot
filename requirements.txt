@@ -1,4 +1,4 @@
-﻿discord.py==2.6.4
+discord.py==2.6.4
 aiohttp==3.11.13
 websockets==15.0
 python-dotenv==1.0.1
@@ -11,7 +11,7 @@ authlib==1.6.5
 cryptography==44.0.0
 gunicorn==23.0.0
 redis==5.0.1
-Pillow==11.0.0
+Pillow==12.1.1
 cloudscraper==1.2.71
 kickpython==0.1.5
 asyncio==3.4.3
