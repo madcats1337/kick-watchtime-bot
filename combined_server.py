@@ -189,19 +189,37 @@ def run_database_migration():
 
 
 def run_discord_bot():
-    """Run Discord bot in background subprocess"""
+    """Start Discord bot as a subprocess, return the process handle"""
     print("🤖 Starting Discord bot subprocess...", flush=True)
     try:
-        # Run bot.py and stream output
-        process = subprocess.Popen([sys.executable, "-u", "bot.py"], stdout=sys.stdout, stderr=sys.stderr)
+        # Run bot.py with unbuffered output, piped through reader threads
+        process = subprocess.Popen(
+            [sys.executable, "-u", "bot.py"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,  # Line buffered
+        )
         print(f"✅ Bot subprocess started (PID: {process.pid})", flush=True)
-        process.wait()
-        print(f"❌ Discord bot exited with code {process.returncode}", flush=True)
+        return process
     except Exception as e:
         print(f"❌ Discord bot error: {e}", flush=True)
         import traceback
-
         traceback.print_exc()
+        return None
+
+
+def stream_subprocess_output(process, prefix="[BOT]"):
+    """Read and print subprocess output line by line"""
+    try:
+        for line in iter(process.stdout.readline, ""):
+            if line:
+                print(f"{prefix} {line.rstrip()}", flush=True)
+    except Exception as e:
+        print(f"{prefix} Stream ended: {e}", flush=True)
+    finally:
+        if process.stdout:
+            process.stdout.close()
 
 
 if __name__ == "__main__":
@@ -212,9 +230,17 @@ if __name__ == "__main__":
     # Run database migration first
     run_database_migration()
 
-    # Start Discord bot in background thread
-    bot_thread = threading.Thread(target=run_discord_bot, daemon=True)
-    bot_thread.start()
+    # Start Discord bot subprocess
+    bot_process = run_discord_bot()
+
+    # Stream bot output in a background thread
+    if bot_process:
+        bot_output_thread = threading.Thread(
+            target=stream_subprocess_output,
+            args=(bot_process, "[BOT]"),
+            daemon=True,
+        )
+        bot_output_thread.start()
 
     # Give bot a moment to start
     print("⏳ Waiting for bot to initialize...", flush=True)
@@ -227,8 +253,8 @@ if __name__ == "__main__":
     print(f"🌐 OAuth Base URL: {os.getenv('OAUTH_BASE_URL', 'Not set')}", flush=True)
 
     # Use Gunicorn for production
-    # IMPORTANT: Use subprocess.Popen (NOT os.execvp) so the bot thread stays alive.
-    # os.execvp replaces the entire process image, killing all threads including the bot.
+    # IMPORTANT: Use subprocess.Popen (NOT os.execvp) so the bot process stays alive.
+    # os.execvp replaces the entire process image, killing all subprocesses.
     try:
         gunicorn_process = subprocess.Popen(
             [
@@ -245,19 +271,45 @@ if __name__ == "__main__":
                 "-",
                 "core.oauth_server:app",
             ],
-            stdout=sys.stdout,
-            stderr=sys.stderr,
         )
         print(f"✅ Gunicorn started (PID: {gunicorn_process.pid})", flush=True)
 
-        # Wait for either process to exit
-        # If gunicorn dies, we should exit so Railway can restart
-        gunicorn_process.wait()
-        print(f"❌ Gunicorn exited with code {gunicorn_process.returncode}", flush=True)
-        sys.exit(gunicorn_process.returncode)
+        # Monitor both processes - if either dies, restart or exit
+        while True:
+            # Check bot process
+            if bot_process and bot_process.poll() is not None:
+                print(f"❌ Discord bot exited with code {bot_process.returncode}", flush=True)
+                # Restart bot
+                print("🔄 Restarting Discord bot...", flush=True)
+                bot_process = run_discord_bot()
+                if bot_process:
+                    bot_output_thread = threading.Thread(
+                        target=stream_subprocess_output,
+                        args=(bot_process, "[BOT]"),
+                        daemon=True,
+                    )
+                    bot_output_thread.start()
+
+            # Check gunicorn process
+            if gunicorn_process.poll() is not None:
+                print(f"❌ Gunicorn exited with code {gunicorn_process.returncode}", flush=True)
+                # Kill bot and exit so Railway can restart everything
+                if bot_process:
+                    bot_process.terminate()
+                sys.exit(gunicorn_process.returncode)
+
+            time.sleep(5)
+
+    except KeyboardInterrupt:
+        print("🛑 Shutting down...", flush=True)
+        if bot_process:
+            bot_process.terminate()
+        gunicorn_process.terminate()
+        sys.exit(0)
     except Exception as e:
         print(f"❌ Failed to start Gunicorn: {e}", flush=True)
         import traceback
-
         traceback.print_exc()
+        if bot_process:
+            bot_process.terminate()
         sys.exit(1)
