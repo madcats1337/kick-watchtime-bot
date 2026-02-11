@@ -45,8 +45,8 @@ class RaffleScheduler:
             with self.engine.begin() as conn:
                 result = conn.execute(
                     text("""
-                        SELECT setting_value FROM bot_settings 
-                        WHERE setting_key = 'raffle_auto_draw' AND discord_server_id = :server_id
+                        SELECT value FROM bot_settings 
+                        WHERE key = 'raffle_auto_draw' AND discord_server_id = :server_id
                     """),
                     {"server_id": self.discord_server_id}
                 )
