@@ -1669,7 +1669,7 @@ Congratulations! Please contact an admin to claim your prize! 🎊
 
 async def start_redis_subscriber(bot, send_message_callback=None):
     """
-    Start the Redis subscriber in the background
+    Start the Redis subscriber in the background with retry logic.
 
     Args:
         bot: Discord bot instance
@@ -1692,8 +1692,40 @@ async def start_redis_subscriber(bot, send_message_callback=None):
             except Exception as e:
                 print(f"⚠️  Failed to auto-sync shop for {guild.name}: {e}")
 
-        # Run the listener in the background
-        await subscriber.listen()
+        # Run the listener with automatic retry on connection failures
+        retry_delay = 5
+        max_delay = 60
+        while True:
+            try:
+                await subscriber.listen()
+            except Exception as e:
+                print(f"⚠️  Redis subscriber error: {e} — retrying in {retry_delay}s", flush=True)
+                # Fully recreate the Redis client and pubsub for a clean reconnect
+                try:
+                    subscriber.pubsub.close()
+                except Exception:
+                    pass
+                try:
+                    subscriber.client.close()
+                except Exception:
+                    pass
+                try:
+                    subscriber.client = redis.from_url(
+                        subscriber.redis_url,
+                        decode_responses=True,
+                        socket_connect_timeout=5,
+                        socket_timeout=5,
+                    )
+                    subscriber.pubsub = subscriber.client.pubsub()
+                    subscriber.enabled = True
+                    print("🔄 Redis subscriber client recreated", flush=True)
+                except Exception as re:
+                    print(f"⚠️  Failed to recreate Redis client: {re}", flush=True)
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, max_delay)
+            else:
+                # listen() returned normally (shouldn't happen), reset delay
+                retry_delay = 5
     else:
         print("⚠️  Redis subscriber disabled, bot will poll database instead")
 

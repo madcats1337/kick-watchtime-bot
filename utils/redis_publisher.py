@@ -11,31 +11,43 @@ import redis
 
 class BotRedisPublisher:
     def __init__(self):
-        redis_url = os.getenv("REDIS_URL")
-        if redis_url:
-            if "://" not in redis_url:
-                redis_url = f"redis://{redis_url}"
-            try:
-                self.client = redis.from_url(
-                    redis_url,
-                    decode_responses=True,
-                    socket_connect_timeout=5,
-                    socket_timeout=5,
-                )
-                self.client.ping()
-                self.enabled = True
-                print("✅ Bot Redis publisher connected")
-            except Exception as e:
-                print(f"⚠️ Redis unavailable for bot publisher: {e}")
-                self.enabled = False
+        self.redis_url = os.getenv("REDIS_URL")
+        self.client = None
+        self.enabled = False
+        if self.redis_url:
+            if "://" not in self.redis_url:
+                self.redis_url = f"redis://{self.redis_url}"
+            self._connect()
         else:
             print("⚠️ REDIS_URL not set, bot events will not be published")
+
+    def _connect(self):
+        """Attempt to connect/reconnect to Redis"""
+        try:
+            self.client = redis.from_url(
+                self.redis_url,
+                decode_responses=True,
+                socket_connect_timeout=5,
+                socket_timeout=5,
+            )
+            self.client.ping()
+            self.enabled = True
+            print("✅ Bot Redis publisher connected")
+        except Exception as e:
+            print(f"⚠️ Redis unavailable for bot publisher: {e}")
+            self.client = None
             self.enabled = False
 
     def publish(self, channel, action, data=None):
-        """Publish an event to a Redis channel"""
-        if not self.enabled:
+        """Publish an event to a Redis channel, reconnecting if needed"""
+        if not self.redis_url:
             return False
+
+        # Lazy reconnect if not connected
+        if not self.enabled or not self.client:
+            self._connect()
+            if not self.enabled:
+                return False
 
         try:
             message = json.dumps({"action": action, "data": data or {}})
@@ -44,6 +56,8 @@ class BotRedisPublisher:
             return True
         except Exception as e:
             print(f"❌ Failed to publish to {channel}: {e}")
+            # Mark as disconnected so next call will reconnect
+            self.enabled = False
             return False
 
     def publish_raffle_draw(
