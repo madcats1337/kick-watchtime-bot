@@ -94,7 +94,12 @@ class RedisSubscriber:
             if "://" not in self.redis_url:
                 self.redis_url = f"redis://{self.redis_url}"
             try:
-                self.client = redis.from_url(self.redis_url, decode_responses=True)
+                self.client = redis.from_url(
+                    self.redis_url,
+                    decode_responses=True,
+                    socket_connect_timeout=5,
+                    socket_timeout=5,
+                )
                 self.pubsub = self.client.pubsub()
                 self.enabled = True
                 print("✅ Redis subscriber initialized")

@@ -9,21 +9,23 @@ Now includes official Kick API integration with:
 - Stream notifications
 """
 
+import base64
+import hashlib
+import hmac
 import os
 import secrets
-import hashlib
-import base64
-import hmac
-from flask import Flask, request, redirect, jsonify, render_template_string
-from authlib.integrations.requests_client import OAuth2Session
-from sqlalchemy import create_engine, text
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
+from authlib.integrations.requests_client import OAuth2Session
+from flask import Flask, jsonify, redirect, render_template_string, request
+from sqlalchemy import create_engine, text
+
 # Import webhook handlers
 try:
-    from .kick_webhooks import register_webhook_routes, WebhookEventHandler
-    from .kick_official_api import KickOfficialAPI, OAUTH_SCOPES, WEBHOOK_EVENTS
+    from .kick_official_api import OAUTH_SCOPES, WEBHOOK_EVENTS, KickOfficialAPI
+    from .kick_webhooks import WebhookEventHandler, register_webhook_routes
+
     HAS_KICK_OFFICIAL = True
 except ImportError:
     HAS_KICK_OFFICIAL = False
@@ -41,18 +43,16 @@ if os.getenv("FLASK_SECRET_KEY"):
 else:
     print(f"[OAuth] WARNING: FLASK_SECRET_KEY not set, using random key!", flush=True)
 
+
 def sign_discord_id(discord_id: str, timestamp: int, guild_id: str = "0") -> str:
     """
     Create HMAC signature for Discord ID to prevent OAuth initiation spoofing.
     Returns: base64url-encoded signature
     """
     message = f"{discord_id}:{guild_id}:{timestamp}"
-    signature = hmac.new(
-        OAUTH_SECRET_KEY.encode(),
-        message.encode(),
-        hashlib.sha256
-    ).digest()
-    return base64.urlsafe_b64encode(signature).decode().rstrip('=')
+    signature = hmac.new(OAUTH_SECRET_KEY.encode(), message.encode(), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(signature).decode().rstrip("=")
+
 
 def verify_discord_id_signature(discord_id: str, timestamp: int, signature: str, guild_id: str = "0") -> bool:
     """
@@ -80,6 +80,7 @@ def verify_discord_id_signature(discord_id: str, timestamp: int, signature: str,
 
     return is_valid
 
+
 # -------------------------
 # 🔒 OPSEC: Data Sanitization
 # -------------------------
@@ -92,7 +93,7 @@ def sanitize_for_logs(value, field_name=None):
         return None
 
     # Sensitive field names to redact
-    sensitive_fields = ['email', 'token', 'access_token', 'refresh_token', 'code', 'code_verifier']
+    sensitive_fields = ["email", "token", "access_token", "refresh_token", "code", "code_verifier"]
 
     # If field name indicates sensitive data, redact
     if field_name and any(s in field_name.lower() for s in sensitive_fields):
@@ -101,8 +102,8 @@ def sanitize_for_logs(value, field_name=None):
         return "***REDACTED***"
 
     # If value looks like an email, redact
-    if isinstance(value, str) and '@' in value:
-        parts = value.split('@')
+    if isinstance(value, str) and "@" in value:
+        parts = value.split("@")
         if len(parts) == 2:
             return f"{parts[0][:2]}***@{parts[1]}"
 
@@ -115,6 +116,7 @@ def sanitize_for_logs(value, field_name=None):
         return [sanitize_for_logs(item) for item in value]
 
     return value
+
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -135,28 +137,34 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
             message_id = event_data.get("message_id", "")
             broadcaster = event_data.get("broadcaster", {})
             channel_slug = broadcaster.get("slug", "")
-            
+
             # Get server context added by webhook routing
             server_id = event_data.get("_server_id")
             broadcaster_user_id = event_data.get("_broadcaster_user_id")
-            
+
             print(f"[Webhook] 💬 [{channel_slug}] {username}: {content}")
-            
+
             # Use Redis to forward the chat message to the bot process
-            import redis
             import json
-            
-            redis_url = os.getenv('REDIS_URL')
+
+            import redis
+
+            redis_url = os.getenv("REDIS_URL")
             if not redis_url:
                 print("[Webhook] ⚠️ REDIS_URL not set, cannot forward message to bot")
                 return
-            
-            if '://' not in redis_url:
-                redis_url = f'redis://{redis_url}'
-            
+
+            if "://" not in redis_url:
+                redis_url = f"redis://{redis_url}"
+
             try:
-                redis_client = redis.from_url(redis_url, decode_responses=True)
-                
+                redis_client = redis.from_url(
+                    redis_url,
+                    decode_responses=True,
+                    socket_connect_timeout=5,
+                    socket_timeout=5,
+                )
+
                 # Publish chat message event to Redis for bot to process
                 event = {
                     "type": "kick_chat_message",
@@ -168,21 +176,23 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
                         "sender": sender,
                         "broadcaster": broadcaster,
                         "_server_id": server_id,  # Include server routing info
-                        "_broadcaster_user_id": broadcaster_user_id
-                    }
+                        "_broadcaster_user_id": broadcaster_user_id,
+                    },
                 }
-                
+
                 redis_client.publish("bot_events", json.dumps(event))
                 print(f"[Webhook] ✅ Forwarded chat message to bot via Redis")
-                
+
             except Exception as e:
                 print(f"[Webhook] ❌ Redis error: {e}")
                 import traceback
+
                 traceback.print_exc()
-            
+
         except Exception as e:
             print(f"[Webhook] ❌ Error handling chat message: {e}")
             import traceback
+
             traceback.print_exc()
 
     @webhook_handler.on("livestream.status.updated")
@@ -197,141 +207,134 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
             category = livestream.get("category", {}).get("name", "Just Chatting")
             discord_server_id = event_data.get("_server_id")
             is_simulated = event_data.get("_simulated", False)
-            
-            print(f"[Webhook] 📺 Stream status: {broadcaster} is_live={is_live}, server={discord_server_id}, simulated={is_simulated}")
-            
+
+            print(
+                f"[Webhook] 📺 Stream status: {broadcaster} is_live={is_live}, server={discord_server_id}, simulated={is_simulated}"
+            )
+
             # Only send notification when going LIVE
             if not is_live:
                 print(f"[Webhook] ℹ️ Stream offline, no notification sent")
                 return
-            
+
             if not discord_server_id:
                 print(f"[Webhook] ⚠️ No server_id, cannot send notification")
                 return
-            
+
             # Get notification settings from database
-            from sqlalchemy import create_engine, text
             import aiohttp
-            
-            db_url = os.getenv('DATABASE_URL')
+            from sqlalchemy import create_engine, text
+
+            db_url = os.getenv("DATABASE_URL")
             if not db_url:
                 print(f"[Webhook] ⚠️ DATABASE_URL not set")
                 return
-            
+
             engine = create_engine(db_url, pool_pre_ping=True)
             with engine.connect() as conn:
                 # Get stream notification settings
-                settings_result = conn.execute(text("""
-                    SELECT key, value FROM bot_settings 
-                    WHERE discord_server_id = :guild_id 
-                    AND key IN ('stream_notification_enabled', 'stream_notification_channel_id', 
-                                'stream_notification_title', 'stream_notification_description', 
-                                'stream_notification_link_text', 'stream_notification_link_small', 
+                settings_result = conn.execute(
+                    text(
+                        """
+                    SELECT key, value FROM bot_settings
+                    WHERE discord_server_id = :guild_id
+                    AND key IN ('stream_notification_enabled', 'stream_notification_channel_id',
+                                'stream_notification_title', 'stream_notification_description',
+                                'stream_notification_link_text', 'stream_notification_link_small',
                                 'stream_notification_footer', 'kick_channel')
-                """), {"guild_id": discord_server_id}).fetchall()
-                
+                """
+                    ),
+                    {"guild_id": discord_server_id},
+                ).fetchall()
+
                 settings = {key: value for key, value in settings_result}
-                
-                if settings.get('stream_notification_enabled') != 'true':
+
+                if settings.get("stream_notification_enabled") != "true":
                     print(f"[Webhook] ℹ️ Stream notifications disabled for server {discord_server_id}")
                     return
-                
-                notification_channel_id = settings.get('stream_notification_channel_id')
+
+                notification_channel_id = settings.get("stream_notification_channel_id")
                 if not notification_channel_id:
                     print(f"[Webhook] ⚠️ No notification channel configured for server {discord_server_id}")
                     return
-                
+
                 # Use configured kick_channel or broadcaster from webhook
-                streamer = settings.get('kick_channel') or broadcaster
-                
+                streamer = settings.get("kick_channel") or broadcaster
+
                 stream_url = f"https://kick.com/{streamer}"
                 embed_url = f"https://clkick.com/{streamer}"
-                
+
                 # Get custom settings
-                custom_title = settings.get('stream_notification_title')
-                custom_description = settings.get('stream_notification_description')
-                custom_link_text = settings.get('stream_notification_link_text')
-                link_small = settings.get('stream_notification_link_small') == 'true'
-                custom_footer = settings.get('stream_notification_footer')
-                
+                custom_title = settings.get("stream_notification_title")
+                custom_description = settings.get("stream_notification_description")
+                custom_link_text = settings.get("stream_notification_link_text")
+                link_small = settings.get("stream_notification_link_small") == "true"
+                custom_footer = settings.get("stream_notification_footer")
+
                 # Replace placeholders
                 def replace_placeholders(text):
                     if not text:
                         return text
-                    return text.replace('{streamer}', streamer).replace('{channel}', streamer)
-                
+                    return text.replace("{streamer}", streamer).replace("{channel}", streamer)
+
                 # Build message content
                 link_text = custom_link_text or "Watch Preview"
                 hidden_link = f"[{link_text}]({embed_url})"
                 if link_small:
                     hidden_link = f"-# {hidden_link}"
-                
+
                 if custom_title:
                     title_text = replace_placeholders(custom_title)
                 else:
                     title_text = f"🔴 **{streamer}** is now LIVE on Kick!"
-                
+
                 if custom_description:
                     desc_text = replace_placeholders(custom_description)
                     message_content = f"{title_text}\n{desc_text}\n{hidden_link}"
                 else:
                     message_content = f"{title_text}\n{hidden_link}"
-                
+
                 # Process footer separately (will be sent as follow-up)
                 footer_text = None
                 if custom_footer:
                     footer_text = replace_placeholders(custom_footer)
-                
+
                 # Discord button component for "Watch Stream"
                 components = [
                     {
                         "type": 1,
                         "components": [
-                            {
-                                "type": 2,
-                                "style": 5,
-                                "label": "Watch Stream",
-                                "url": stream_url,
-                                "emoji": {"name": "🔴"}
-                            }
-                        ]
+                            {"type": 2, "style": 5, "label": "Watch Stream", "url": stream_url, "emoji": {"name": "🔴"}}
+                        ],
                     }
                 ]
-                
+
                 # Send to Discord via API
-                bot_token = os.getenv('DISCORD_TOKEN')
+                bot_token = os.getenv("DISCORD_TOKEN")
                 if not bot_token:
                     print(f"[Webhook] ⚠️ DISCORD_TOKEN not set")
                     return
-                
+
                 import asyncio
+
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
                         f"https://discord.com/api/v10/channels/{notification_channel_id}/messages",
-                        headers={
-                            "Authorization": f"Bot {bot_token}",
-                            "Content-Type": "application/json"
-                        },
-                        json={
-                            "content": message_content,
-                            "components": components
-                        },
-                        timeout=aiohttp.ClientTimeout(total=10)
+                        headers={"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"},
+                        json={"content": message_content, "components": components},
+                        timeout=aiohttp.ClientTimeout(total=10),
                     ) as resp:
                         if resp.status in [200, 201]:
                             print(f"[Webhook] ✅ Stream notification sent to channel {notification_channel_id}")
-                            
+
                             # Send footer as follow-up message if set
                             if footer_text:
                                 await asyncio.sleep(0.5)
                                 async with session.post(
                                     f"https://discord.com/api/v10/channels/{notification_channel_id}/messages",
-                                    headers={
-                                        "Authorization": f"Bot {bot_token}",
-                                        "Content-Type": "application/json"
-                                    },
+                                    headers={"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"},
                                     json={"content": f"-# {footer_text}"},
-                                    timeout=aiohttp.ClientTimeout(total=10)
+                                    timeout=aiohttp.ClientTimeout(total=10),
                                 ) as footer_resp:
                                     if footer_resp.status in [200, 201]:
                                         print(f"[Webhook] ✅ Footer sent")
@@ -340,25 +343,28 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
                         else:
                             error_text = await resp.text()
                             print(f"[Webhook] ❌ Discord API error {resp.status}: {error_text[:200]}")
-                
+
         except Exception as e:
             print(f"[Webhook] ❌ Error handling livestream status: {e}")
             import traceback
+
             traceback.print_exc()
 
     @webhook_handler.set_default_handler
     async def default_webhook_handler(event_data):
         """Default handler logs all events for debugging new webhook types"""
         import json
-        event_type = event_data.get('_event_type', 'unknown')
+
+        event_type = event_data.get("_event_type", "unknown")
         print(f"[Webhook] 📩 Unhandled event type: {event_type}")
         print(f"[Webhook] Event data: {json.dumps(event_data, indent=2, default=str)[:500]}")
-    
+
     # Register webhook routes with Flask app
     register_webhook_routes(app, webhook_handler)
     print("[OAuth] ✅ Webhook routes registered at /webhooks/kick", flush=True)
 else:
     print("[OAuth] ⚠️ Kick webhook support not available", flush=True)
+
 
 # 404 handler - ignore not found errors (bots/scanners)
 @app.errorhandler(404)
@@ -367,31 +373,41 @@ def handle_404(e):
     print(f"ℹ️ 404: {request.method} {request.path}", flush=True)
     return jsonify({"error": "Not Found"}), 404
 
+
 # 405 handler - method not allowed (wrong HTTP method)
 @app.errorhandler(405)
 def handle_405(e):
     # Log method not allowed errors without full traceback
     print(f"ℹ️ 405 Method Not Allowed: {request.method} {request.path}", flush=True)
     print(f"   Allowed methods: {e.valid_methods}", flush=True)
-    return jsonify({
-        "error": "Method Not Allowed",
-        "message": f"The method {request.method} is not allowed for this endpoint",
-        "allowed_methods": list(e.valid_methods)
-    }), 405
+    return (
+        jsonify(
+            {
+                "error": "Method Not Allowed",
+                "message": f"The method {request.method} is not allowed for this endpoint",
+                "allowed_methods": list(e.valid_methods),
+            }
+        ),
+        405,
+    )
+
 
 # Global error handler
 @app.errorhandler(Exception)
 def handle_error(e):
     print(f"🚨 Unhandled error: {e}", flush=True)
     import traceback
+
     traceback.print_exc()
     return jsonify({"error": str(e), "type": type(e).__name__}), 500
+
+
+from pathlib import Path
 
 # -------------------------
 # 🎬 Clip Serving Endpoint
 # -------------------------
-from flask import send_from_directory, make_response
-from pathlib import Path
+from flask import make_response, send_from_directory
 
 # Use absolute path for clips directory (relative to project root)
 PROJECT_ROOT = Path(__file__).parent.parent  # Go up from core/ to project root
@@ -399,61 +415,67 @@ CLIPS_DIR = PROJECT_ROOT / "clips"
 CLIPS_DIR.mkdir(exist_ok=True)
 print(f"[OAuth] Clips directory: {CLIPS_DIR.absolute()}")
 
+
 def add_cors_headers(response):
     """Add CORS headers to allow dashboard access"""
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, DELETE, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
     return response
 
-@app.route('/clips/<filename>', methods=['GET', 'OPTIONS'])
+
+@app.route("/clips/<filename>", methods=["GET", "OPTIONS"])
 def serve_clip(filename):
     """Serve clip files from the clips directory"""
     # Handle CORS preflight
-    if request.method == 'OPTIONS':
+    if request.method == "OPTIONS":
         response = make_response()
         return add_cors_headers(response)
 
     # Security: only allow .mp4 files and prevent path traversal
-    if not filename.endswith('.mp4') or '..' in filename or '/' in filename:
+    if not filename.endswith(".mp4") or ".." in filename or "/" in filename:
         return add_cors_headers(jsonify({"error": "Invalid filename"})), 400
 
     filepath = CLIPS_DIR / filename
     if not filepath.exists():
         return add_cors_headers(jsonify({"error": "Clip not found"})), 404
 
-    response = send_from_directory(CLIPS_DIR, filename, mimetype='video/mp4')
+    response = send_from_directory(CLIPS_DIR, filename, mimetype="video/mp4")
     return add_cors_headers(response)
 
-@app.route('/clips', methods=['GET', 'OPTIONS'])
+
+@app.route("/clips", methods=["GET", "OPTIONS"])
 def list_clips():
     """List available clips"""
     # Handle CORS preflight
-    if request.method == 'OPTIONS':
+    if request.method == "OPTIONS":
         response = make_response()
         return add_cors_headers(response)
 
     clips = []
     for filepath in sorted(CLIPS_DIR.glob("clip_*.mp4"), reverse=True)[:50]:
         stat = filepath.stat()
-        clips.append({
-            'filename': filepath.name,
-            'url': f"/clips/{filepath.name}",
-            'size_mb': round(stat.st_size / 1024 / 1024, 2),
-            'created': datetime.fromtimestamp(stat.st_mtime).isoformat()
-        })
+        clips.append(
+            {
+                "filename": filepath.name,
+                "url": f"/clips/{filepath.name}",
+                "size_mb": round(stat.st_size / 1024 / 1024, 2),
+                "created": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            }
+        )
     return add_cors_headers(jsonify(clips))
 
-@app.route('/clips/<filename>', methods=['DELETE', 'OPTIONS'])
+
+@app.route("/clips/<filename>", methods=["DELETE", "OPTIONS"])
 def delete_clip(filename):
     """Delete a clip file"""
     # Handle CORS preflight
-    if request.method == 'OPTIONS':
+    if request.method == "OPTIONS":
         response = make_response()
         return add_cors_headers(response)
 
     # Security: only allow .mp4 files and prevent path traversal
-    if not filename.endswith('.mp4') or '..' in filename or '/' in filename:
+    if not filename.endswith(".mp4") or ".." in filename or "/" in filename:
         return add_cors_headers(jsonify({"error": "Invalid filename"})), 400
 
     filepath = CLIPS_DIR / filename
@@ -466,12 +488,13 @@ def delete_clip(filename):
     except Exception as e:
         return add_cors_headers(jsonify({"error": str(e)})), 500
 
+
 # Kick OAuth Configuration
 KICK_CLIENT_ID = os.getenv("KICK_CLIENT_ID")
 KICK_CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET")
 OAUTH_BASE_URL = os.getenv("OAUTH_BASE_URL", "")  # e.g., https://your-app.up.railway.app
 # Ensure OAUTH_BASE_URL has https:// scheme
-if OAUTH_BASE_URL and not OAUTH_BASE_URL.startswith(('http://', 'https://')):
+if OAUTH_BASE_URL and not OAUTH_BASE_URL.startswith(("http://", "https://")):
     OAUTH_BASE_URL = f"https://{OAUTH_BASE_URL}"
 
 if not KICK_CLIENT_ID or not KICK_CLIENT_SECRET:
@@ -494,7 +517,9 @@ engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 # Initialize database tables
 with engine.begin() as conn:
     # Create oauth_states table for storing OAuth state across workers
-    conn.execute(text("""
+    conn.execute(
+        text(
+            """
         CREATE TABLE IF NOT EXISTS oauth_states (
             state TEXT PRIMARY KEY,
             discord_id BIGINT NOT NULL,
@@ -502,13 +527,19 @@ with engine.begin() as conn:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             guild_id BIGINT DEFAULT 0
         )
-    """))
+    """
+        )
+    )
 
     # Add guild_id column if it doesn't exist (migration)
     try:
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
             ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS guild_id BIGINT DEFAULT 0
-        """))
+        """
+            )
+        )
     except Exception:
         pass  # Column already exists or database doesn't support IF NOT EXISTS
 
@@ -517,15 +548,17 @@ with engine.begin() as conn:
 # Note: OAuth states are stored in database, not in-memory
 # This is necessary because Gunicorn workers don't share memory
 
+
 def generate_pkce_pair():
     """Generate PKCE code_verifier and code_challenge."""
-    code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8').rstrip('=')
-    code_challenge = base64.urlsafe_b64encode(
-        hashlib.sha256(code_verifier.encode('utf-8')).digest()
-    ).decode('utf-8').rstrip('=')
+    code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("utf-8").rstrip("=")
+    code_challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode("utf-8")).digest()).decode("utf-8").rstrip("=")
+    )
     return code_verifier, code_challenge
 
-@app.route('/')
+
+@app.route("/")
 def index():
     """Simple homepage."""
     return """
@@ -564,12 +597,14 @@ def index():
     </html>
     """
 
-@app.route('/health')
+
+@app.route("/health")
 def health():
     """Health check endpoint for Railway."""
     return jsonify({"status": "healthy", "oauth_configured": bool(KICK_CLIENT_ID and KICK_CLIENT_SECRET)}), 200
 
-@app.route('/api/status')
+
+@app.route("/api/status")
 def api_status():
     """
     Get detailed API status including official Kick API availability.
@@ -587,22 +622,23 @@ def api_status():
             "bot_authorize": "/bot/authorize",
             "webhooks": "/webhooks/kick",
             "webhook_subscriptions": "/api/webhooks",
-        }
+        },
     }
     return jsonify(status), 200
 
-@app.route('/api/webhooks', methods=['GET'])
+
+@app.route("/api/webhooks", methods=["GET"])
 def list_webhook_subscriptions():
     """
     List all active webhook subscriptions.
     Requires bot access token.
     """
-    auth_header = request.headers.get('Authorization', '')
+    auth_header = request.headers.get("Authorization", "")
 
-    if not auth_header.startswith('Bearer '):
+    if not auth_header.startswith("Bearer "):
         return jsonify({"error": "Missing or invalid Authorization header"}), 401
 
-    access_token = auth_header.replace('Bearer ', '')
+    access_token = auth_header.replace("Bearer ", "")
 
     if not HAS_KICK_OFFICIAL:
         return jsonify({"error": "Official Kick API not available"}), 503
@@ -618,7 +654,7 @@ def list_webhook_subscriptions():
             )
             try:
                 subs = await api.get_webhook_subscriptions()
-                return [s.__dict__ if hasattr(s, '__dict__') else s for s in subs]
+                return [s.__dict__ if hasattr(s, "__dict__") else s for s in subs]
             finally:
                 await api.close()
 
@@ -634,7 +670,8 @@ def list_webhook_subscriptions():
         print(f"[API] Error listing webhooks: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route('/api/webhooks', methods=['POST'])
+
+@app.route("/api/webhooks", methods=["POST"])
 def create_webhook_subscription():
     """
     Create a new webhook subscription.
@@ -643,12 +680,12 @@ def create_webhook_subscription():
     - Authorization: Bearer <access_token>
     - JSON body: { "event": "channel.subscription.gifts", "callback_url": "https://..." }
     """
-    auth_header = request.headers.get('Authorization', '')
+    auth_header = request.headers.get("Authorization", "")
 
-    if not auth_header.startswith('Bearer '):
+    if not auth_header.startswith("Bearer "):
         return jsonify({"error": "Missing or invalid Authorization header"}), 401
 
-    access_token = auth_header.replace('Bearer ', '')
+    access_token = auth_header.replace("Bearer ", "")
 
     if not HAS_KICK_OFFICIAL:
         return jsonify({"error": "Official Kick API not available"}), 503
@@ -657,9 +694,9 @@ def create_webhook_subscription():
     if not data:
         return jsonify({"error": "JSON body required"}), 400
 
-    event = data.get('event')
-    callback_url = data.get('callback_url')
-    broadcaster_user_id = data.get('broadcaster_user_id')
+    event = data.get("event")
+    callback_url = data.get("callback_url")
+    broadcaster_user_id = data.get("broadcaster_user_id")
 
     if not event or not callback_url:
         return jsonify({"error": "event and callback_url are required"}), 400
@@ -679,7 +716,7 @@ def create_webhook_subscription():
                     callback_url=callback_url,
                     broadcaster_user_id=broadcaster_user_id,
                 )
-                return sub.__dict__ if hasattr(sub, '__dict__') else sub
+                return sub.__dict__ if hasattr(sub, "__dict__") else sub
             finally:
                 await api.close()
 
@@ -695,18 +732,19 @@ def create_webhook_subscription():
         print(f"[API] Error creating webhook: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route('/api/webhooks/<subscription_id>', methods=['DELETE'])
+
+@app.route("/api/webhooks/<subscription_id>", methods=["DELETE"])
 def delete_webhook_subscription(subscription_id):
     """
     Delete a webhook subscription.
     Requires Authorization: Bearer <access_token>
     """
-    auth_header = request.headers.get('Authorization', '')
+    auth_header = request.headers.get("Authorization", "")
 
-    if not auth_header.startswith('Bearer '):
+    if not auth_header.startswith("Bearer "):
         return jsonify({"error": "Missing or invalid Authorization header"}), 401
 
-    access_token = auth_header.replace('Bearer ', '')
+    access_token = auth_header.replace("Bearer ", "")
 
     if not HAS_KICK_OFFICIAL:
         return jsonify({"error": "Official Kick API not available"}), 503
@@ -737,34 +775,35 @@ def delete_webhook_subscription(subscription_id):
         print(f"[API] Error deleting webhook: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route('/terms')
-@app.route('/terms-of-service')
+
+@app.route("/terms")
+@app.route("/terms-of-service")
 def terms_of_service():
     """Serve Terms of Service page."""
     try:
-        with open('TERMS_OF_SERVICE.md', 'r', encoding='utf-8') as f:
+        with open("TERMS_OF_SERVICE.md", "r", encoding="utf-8") as f:
             content = f.read()
 
         # Simple markdown to HTML conversion
-        lines = content.split('\n')
+        lines = content.split("\n")
         html_parts = []
 
         for line in lines:
-            if line.startswith('# '):
-                html_parts.append(f'<h1>{line[2:]}</h1>')
-            elif line.startswith('## '):
-                html_parts.append(f'<h2>{line[3:]}</h2>')
-            elif line.startswith('### '):
-                html_parts.append(f'<h3>{line[4:]}</h3>')
+            if line.startswith("# "):
+                html_parts.append(f"<h1>{line[2:]}</h1>")
+            elif line.startswith("## "):
+                html_parts.append(f"<h2>{line[3:]}</h2>")
+            elif line.startswith("### "):
+                html_parts.append(f"<h3>{line[4:]}</h3>")
             elif line.strip():
                 # Bold text
-                line = line.replace('**', '<strong>', 1)
-                line = line.replace('**', '</strong>', 1)
-                html_parts.append(f'<p>{line}</p>')
+                line = line.replace("**", "<strong>", 1)
+                line = line.replace("**", "</strong>", 1)
+                html_parts.append(f"<p>{line}</p>")
             else:
-                html_parts.append('<br>')
+                html_parts.append("<br>")
 
-        html_content = '\n'.join(html_parts)
+        html_content = "\n".join(html_parts)
 
         return f"""
         <!DOCTYPE html>
@@ -897,34 +936,35 @@ def terms_of_service():
     except Exception as e:
         return f"<h1>Error</h1><p>Error loading Terms of Service: {{str(e)}}</p>", 500
 
-@app.route('/privacy')
-@app.route('/privacy-policy')
+
+@app.route("/privacy")
+@app.route("/privacy-policy")
 def privacy_policy():
     """Serve Privacy Policy page."""
     try:
-        with open('PRIVACY_POLICY.md', 'r', encoding='utf-8') as f:
+        with open("PRIVACY_POLICY.md", "r", encoding="utf-8") as f:
             content = f.read()
 
         # Simple markdown to HTML conversion
-        lines = content.split('\n')
+        lines = content.split("\n")
         html_parts = []
 
         for line in lines:
-            if line.startswith('# '):
-                html_parts.append(f'<h1>{line[2:]}</h1>')
-            elif line.startswith('## '):
-                html_parts.append(f'<h2>{line[3:]}</h2>')
-            elif line.startswith('### '):
-                html_parts.append(f'<h3>{line[4:]}</h3>')
+            if line.startswith("# "):
+                html_parts.append(f"<h1>{line[2:]}</h1>")
+            elif line.startswith("## "):
+                html_parts.append(f"<h2>{line[3:]}</h2>")
+            elif line.startswith("### "):
+                html_parts.append(f"<h3>{line[4:]}</h3>")
             elif line.strip():
                 # Bold text
-                line = line.replace('**', '<strong>', 1)
-                line = line.replace('**', '</strong>', 1)
-                html_parts.append(f'<p>{line}</p>')
+                line = line.replace("**", "<strong>", 1)
+                line = line.replace("**", "</strong>", 1)
+                html_parts.append(f"<p>{line}</p>")
             else:
-                html_parts.append('<br>')
+                html_parts.append("<br>")
 
-        html_content = '\n'.join(html_parts)
+        html_content = "\n".join(html_parts)
 
         return f"""
         <!DOCTYPE html>
@@ -1057,7 +1097,8 @@ def privacy_policy():
     except Exception as e:
         return f"<h1>Error</h1><p>Error loading Privacy Policy: {{str(e)}}</p>", 500
 
-@app.route('/auth/kick')
+
+@app.route("/auth/kick")
 def auth_kick():
     """
     Initiate Kick OAuth flow.
@@ -1066,10 +1107,10 @@ def auth_kick():
     🔒 Security: Requires cryptographic signature to prevent OAuth initiation spoofing.
     Only URLs generated by the Discord bot will have valid signatures.
     """
-    discord_id = request.args.get('discord_id')
-    guild_id = request.args.get('guild_id', '0')  # Default to 0 if not provided (for backwards compatibility)
-    timestamp_str = request.args.get('timestamp')
-    signature = request.args.get('signature')
+    discord_id = request.args.get("discord_id")
+    guild_id = request.args.get("guild_id", "0")  # Default to 0 if not provided (for backwards compatibility)
+    timestamp_str = request.args.get("timestamp")
+    signature = request.args.get("signature")
 
     if not discord_id or not timestamp_str or not signature:
         return "❌ Missing required parameters (discord_id, timestamp, signature)", 400
@@ -1082,7 +1123,10 @@ def auth_kick():
     # 🔒 SECURITY: Verify signature to ensure request came from Discord bot
     if not verify_discord_id_signature(discord_id, timestamp, signature, guild_id):
         print(f"🚨 SECURITY: Invalid OAuth signature for Discord ID {discord_id}, Guild ID {guild_id}", flush=True)
-        return "❌ Invalid or expired authentication token. Please use the !link command in Discord to generate a new link.", 403
+        return (
+            "❌ Invalid or expired authentication token. Please use the !link command in Discord to generate a new link.",
+            403,
+        )
 
     if not KICK_CLIENT_ID or not KICK_CLIENT_SECRET:
         return "❌ OAuth not configured. Please set KICK_CLIENT_ID and KICK_CLIENT_SECRET.", 500
@@ -1099,17 +1143,26 @@ def auth_kick():
     # Store state in database (survives across Gunicorn workers)
     with engine.begin() as conn:
         # Clean up old states (older than 30 minutes)
-        deleted_count = conn.execute(text("""
+        deleted_count = conn.execute(
+            text(
+                """
             DELETE FROM oauth_states
             WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes'
-        """)).rowcount
+        """
+            )
+        ).rowcount
         print(f"🧹 Cleaned up {deleted_count} expired state(s)", flush=True)
 
         # Store new state with guild_id
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
             INSERT INTO oauth_states (state, discord_id, code_verifier, created_at, guild_id)
             VALUES (:state, :discord_id, :code_verifier, CURRENT_TIMESTAMP, :guild_id)
-        """), {"state": state, "discord_id": int(discord_id), "code_verifier": code_verifier, "guild_id": int(guild_id)})
+        """
+            ),
+            {"state": state, "discord_id": int(discord_id), "code_verifier": code_verifier, "guild_id": int(guild_id)},
+        )
         print(f"✅ State saved to database with guild_id: {guild_id}", flush=True)
 
     # Build authorization URL with required scopes and PKCE
@@ -1119,18 +1172,18 @@ def auth_kick():
     # (User linking only needs to read their profile and channel info)
     # Bot functionality (chat:write, events:subscribe) is handled separately via streamer dashboard
     scopes = [
-        'user:read',           # Read user profile (required for linking)
-        'channel:read',        # Read channel information (required for linking)
+        "user:read",  # Read user profile (required for linking)
+        "channel:read",  # Read channel information (required for linking)
     ]
 
     auth_params = {
-        'client_id': KICK_CLIENT_ID,
-        'response_type': 'code',
-        'redirect_uri': redirect_uri,
-        'state': state,
-        'scope': ' '.join(scopes),  # Space-separated scopes
-        'code_challenge': code_challenge,
-        'code_challenge_method': 'S256'
+        "client_id": KICK_CLIENT_ID,
+        "response_type": "code",
+        "redirect_uri": redirect_uri,
+        "state": state,
+        "scope": " ".join(scopes),  # Space-separated scopes
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
     }
 
     print(f"🔗 Authorization URL: {KICK_AUTHORIZE_URL}?{urlencode(auth_params)}", flush=True)
@@ -1139,16 +1192,20 @@ def auth_kick():
 
     return redirect(auth_url)
 
-@app.route('/auth/kick/callback')
+
+@app.route("/auth/kick/callback")
 def auth_kick_callback():
     """Handle OAuth callback from Kick (supports both user linking and bot authorization)."""
     print(f"🔔 Callback received!", flush=True)
 
-    code = request.args.get('code')
-    state = request.args.get('state')
-    error = request.args.get('error')
+    code = request.args.get("code")
+    state = request.args.get("state")
+    error = request.args.get("error")
 
-    print(f"📥 Code: {sanitize_for_logs(code, 'code')}, State: {sanitize_for_logs(state, 'state')}, Error: {error}", flush=True)
+    print(
+        f"📥 Code: {sanitize_for_logs(code, 'code')}, State: {sanitize_for_logs(state, 'state')}, Error: {error}",
+        flush=True,
+    )
 
     if error:
         print(f"❌ Kick returned error: {error}", flush=True)
@@ -1161,9 +1218,14 @@ def auth_kick_callback():
     # Verify state from database
     print(f"🔍 Checking state in database...", flush=True)
     with engine.connect() as conn:
-        result = conn.execute(text("""
+        result = conn.execute(
+            text(
+                """
             SELECT discord_id, code_verifier, created_at, guild_id FROM oauth_states WHERE state = :state
-        """), {"state": state}).fetchone()
+        """
+            ),
+            {"state": state},
+        ).fetchone()
 
     if not result:
         print(f"❌ State not found or expired", flush=True)
@@ -1171,17 +1233,24 @@ def auth_kick_callback():
         # Debug: Check if state exists at all and show recent states
         with engine.connect() as conn:
             count = conn.execute(text("SELECT COUNT(*) FROM oauth_states")).fetchone()[0]
-            recent_states = conn.execute(text("""
+            recent_states = conn.execute(
+                text(
+                    """
                 SELECT state, discord_id, created_at, guild_id
                 FROM oauth_states
                 ORDER BY created_at DESC
                 LIMIT 5
-            """)).fetchall()
+            """
+                )
+            ).fetchall()
             print(f"📊 Total states in database: {count}", flush=True)
             print(f"📋 Recent states:", flush=True)
             for s in recent_states:
                 # 🔒 OPSEC: Sanitize state tokens in debug output
-                print(f"   - State: {sanitize_for_logs(s[0], 'state')}, Discord ID: {s[1]}, Created: {s[2]}, Guild ID: {s[3] if len(s) > 3 else 0}", flush=True)
+                print(
+                    f"   - State: {sanitize_for_logs(s[0], 'state')}, Discord ID: {s[1]}, Created: {s[2]}, Guild ID: {s[3] if len(s) > 3 else 0}",
+                    flush=True,
+                )
         return render_error("Invalid or expired state. Please try linking again. The link expires after 30 minutes.")
 
     discord_id = result[0]
@@ -1199,12 +1268,13 @@ def auth_kick_callback():
         print(f"👤 Detected user linking flow", flush=True)
         return handle_user_linking_callback(code, code_verifier, state, discord_id, created_at, guild_id)
 
+
 def handle_bot_authorization_callback(code, code_verifier, state):
     """Handle bot authorization callback."""
     print(f"🤖 [BOT AUTH] Starting bot authorization callback handler", flush=True)
     print(f"🤖 [BOT AUTH] Code: {sanitize_for_logs(code, 'code')}", flush=True)
     print(f"🤖 [BOT AUTH] State: {sanitize_for_logs(state, 'state')}", flush=True)
-    
+
     try:
         # Ensure bot_tokens table exists with expires_at column
         # kick_oauth_tokens table is created by the dashboard
@@ -1214,9 +1284,9 @@ def handle_bot_authorization_callback(code, code_verifier, state):
         print(f"🤖 [BOT AUTH] Exchanging code for token...", flush=True)
         token_data = exchange_code_for_token(code, code_verifier=code_verifier)
         print(f"🤖 [BOT AUTH] Token exchange complete. Keys: {list(token_data.keys())}", flush=True)
-        
-        access_token = token_data.get('access_token')
-        expires_in = token_data.get('expires_in', 3600)  # Default to 1 hour if not provided
+
+        access_token = token_data.get("access_token")
+        expires_in = token_data.get("expires_in", 3600)  # Default to 1 hour if not provided
 
         if not access_token:
             print(f"❌ [BOT AUTH] No access token in response: {list(token_data.keys())}", flush=True)
@@ -1228,8 +1298,8 @@ def handle_bot_authorization_callback(code, code_verifier, state):
         # Get bot user info
         try:
             kick_user = get_kick_user_info(access_token)
-            kick_username = kick_user.get('username', 'lelebot')
-            kick_user_id = kick_user.get('user_id', 0)
+            kick_username = kick_user.get("username", "lelebot")
+            kick_user_id = kick_user.get("user_id", 0)
             print(f"🤖 Bot username: {kick_username}, user_id: {kick_user_id}", flush=True)
         except Exception as e:
             print(f"⚠️ Could not get bot user info: {e}, using default: lelebot", flush=True)
@@ -1238,10 +1308,11 @@ def handle_bot_authorization_callback(code, code_verifier, state):
 
         # Calculate expiration time
         from datetime import datetime, timedelta
+
         expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
 
         # Store token in kick_oauth_tokens table (same table as dashboard)
-        
+
         print(f"🤖 [BOT AUTH] Storing token in kick_oauth_tokens table...", flush=True)
         print(f"🤖 [BOT AUTH] Username: {kick_username}, user_id: {kick_user_id}", flush=True)
         print(f"🤖 [BOT AUTH] Expires at: {expires_at}", flush=True)
@@ -1249,7 +1320,9 @@ def handle_bot_authorization_callback(code, code_verifier, state):
         with engine.begin() as conn:
             # Use UPSERT to kick_oauth_tokens table
             print(f"🤖 [BOT AUTH] Upserting token for {kick_username}...", flush=True)
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 INSERT INTO kick_oauth_tokens (user_id, kick_username, access_token, refresh_token, scopes, expires_at)
                 VALUES (:user_id, :username, :access_token, :refresh_token, :scopes, :expires_at)
                 ON CONFLICT (user_id) DO UPDATE SET
@@ -1258,14 +1331,17 @@ def handle_bot_authorization_callback(code, code_verifier, state):
                     scopes = EXCLUDED.scopes,
                     expires_at = EXCLUDED.expires_at,
                     updated_at = CURRENT_TIMESTAMP
-            """), {
-                "user_id": kick_user_id,
-                "username": kick_username,
-                "access_token": access_token,
-                "refresh_token": token_data.get('refresh_token', ''),
-                "scopes": token_data.get('scope', ''),
-                "expires_at": expires_at
-            })
+            """
+                ),
+                {
+                    "user_id": kick_user_id,
+                    "username": kick_username,
+                    "access_token": access_token,
+                    "refresh_token": token_data.get("refresh_token", ""),
+                    "scopes": token_data.get("scope", ""),
+                    "expires_at": expires_at,
+                },
+            )
 
             # Clean up state
             print(f"🤖 [BOT AUTH] Cleaning up state...", flush=True)
@@ -1274,41 +1350,48 @@ def handle_bot_authorization_callback(code, code_verifier, state):
             print(f"✅ [BOT AUTH] Bot token stored successfully in kick_oauth_tokens!", flush=True)
 
             print(f"✅ Bot token stored securely", flush=True)
-            
+
             # 🎯 AUTO-SETUP WEBHOOKS after successful bot authorization
             print(f"🔧 [WEBHOOK AUTO-SETUP] Starting automatic webhook setup for {kick_username}...", flush=True)
             try:
                 import asyncio
+
                 from setup_webhooks import setup_webhooks_for_server
-                
+
                 # Get the Discord server ID for this bot auth (from guild_id in state or bot_settings)
                 # For now, try to find it from bot_settings with matching kick_channel
-                server_result = conn.execute(text("""
+                server_result = conn.execute(
+                    text(
+                        """
                     SELECT discord_server_id FROM bot_settings
                     WHERE key = 'kick_channel' AND value = :username
                     LIMIT 1
-                """), {"username": kick_username}).fetchone()
-                
+                """
+                    ),
+                    {"username": kick_username},
+                ).fetchone()
+
                 if server_result:
                     discord_server_id = server_result[0]
                     print(f"🔧 [WEBHOOK AUTO-SETUP] Found server ID: {discord_server_id}", flush=True)
-                    
+
                     # Run webhook setup asynchronously
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     webhook_success = loop.run_until_complete(setup_webhooks_for_server(discord_server_id))
                     loop.close()
-                    
+
                     if webhook_success:
                         print(f"✅ [WEBHOOK AUTO-SETUP] Webhooks configured successfully!", flush=True)
                     else:
                         print(f"⚠️  [WEBHOOK AUTO-SETUP] Webhook setup had issues, check logs", flush=True)
                 else:
                     print(f"⚠️  [WEBHOOK AUTO-SETUP] Could not find Discord server ID for {kick_username}", flush=True)
-                    
+
             except Exception as webhook_err:
                 print(f"⚠️  [WEBHOOK AUTO-SETUP] Failed to auto-setup webhooks: {webhook_err}", flush=True)
                 import traceback
+
                 traceback.print_exc()
                 # Don't fail the OAuth flow if webhook setup fails
 
@@ -1405,8 +1488,10 @@ def handle_bot_authorization_callback(code, code_verifier, state):
     except Exception as e:
         print(f"❌ Bot authorization error: {e}", flush=True)
         import traceback
+
         traceback.print_exc()
         return render_error(f"Bot authorization failed: {str(e)}")
+
 
 def handle_user_linking_callback(code, code_verifier, state, discord_id, created_at, guild_id=0):
     """Handle regular user linking callback."""
@@ -1414,7 +1499,7 @@ def handle_user_linking_callback(code, code_verifier, state, discord_id, created
     # Exchange code for access token
     try:
         token_data = exchange_code_for_token(code, code_verifier=code_verifier)
-        access_token = token_data.get('access_token')
+        access_token = token_data.get("access_token")
 
         if not access_token:
             return render_error("Failed to obtain access token from Kick")
@@ -1430,24 +1515,30 @@ def handle_user_linking_callback(code, code_verifier, state, discord_id, created
             print(f"❌ Failed to get user info: {e}", flush=True)
             return render_error(f"Failed to get your Kick username: {str(e)}")
 
-        if not kick_user or not kick_user.get('username'):
+        if not kick_user or not kick_user.get("username"):
             return render_error("Could not retrieve your Kick username. Please try again.")
 
-        kick_username = kick_user['username']
+        kick_username = kick_user["username"]
         print(f"👤 Kick username: {kick_username}", flush=True)
 
         # Check if Kick account is already linked to another Discord user on this server
         with engine.connect() as conn:
-            existing = conn.execute(text(
-                "SELECT discord_id FROM links WHERE kick_name = :k AND discord_server_id = :gid"
-            ), {"k": kick_username.lower(), "gid": guild_id}).fetchone()
+            existing = conn.execute(
+                text("SELECT discord_id FROM links WHERE kick_name = :k AND discord_server_id = :gid"),
+                {"k": kick_username.lower(), "gid": guild_id},
+            ).fetchone()
 
             if existing and existing[0] != discord_id:
                 # Store failed attempt for logging
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     INSERT INTO oauth_notifications (discord_id, kick_username, processed)
                     VALUES (:d, :k, FALSE)
-                """), {"d": discord_id, "k": f"FAILED:{kick_username}:already_linked"})
+                """
+                    ),
+                    {"d": discord_id, "k": f"FAILED:{kick_username}:already_linked"},
+                )
                 return render_error(
                     f"Kick account '{kick_username}' is already linked to another Discord user on this server."
                 )
@@ -1456,31 +1547,51 @@ def handle_user_linking_callback(code, code_verifier, state, discord_id, created
         with engine.begin() as conn:
             # First, try the proper multiserver upsert
             try:
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     INSERT INTO links (discord_id, kick_name, discord_server_id)
                     VALUES (:d, :k, :gid)
                     ON CONFLICT(discord_id, discord_server_id) DO UPDATE
                     SET kick_name = excluded.kick_name, linked_at = CURRENT_TIMESTAMP
-                """), {"d": discord_id, "k": kick_username.lower(), "gid": guild_id})
+                """
+                    ),
+                    {"d": discord_id, "k": kick_username.lower(), "gid": guild_id},
+                )
             except Exception as insert_error:
                 # If composite key doesn't exist yet (old schema), try alternative approach
                 error_str = str(insert_error).lower()
-                if 'unique constraint' in error_str or 'duplicate key' in error_str:
+                if "unique constraint" in error_str or "duplicate key" in error_str:
                     print(f"⚠️ Falling back to DELETE+INSERT due to old schema: {insert_error}", flush=True)
                     # Delete existing link for this user on this server
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         DELETE FROM links WHERE discord_id = :d AND discord_server_id = :gid
-                    """), {"d": discord_id, "gid": guild_id})
+                    """
+                        ),
+                        {"d": discord_id, "gid": guild_id},
+                    )
                     # Also try deleting by discord_id only if server_id is 0 (legacy records)
                     if guild_id != 0:
-                        conn.execute(text("""
+                        conn.execute(
+                            text(
+                                """
                             DELETE FROM links WHERE discord_id = :d AND (discord_server_id IS NULL OR discord_server_id = 0)
-                        """), {"d": discord_id})
+                        """
+                            ),
+                            {"d": discord_id},
+                        )
                     # Now insert fresh
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         INSERT INTO links (discord_id, kick_name, discord_server_id, linked_at)
                         VALUES (:d, :k, :gid, CURRENT_TIMESTAMP)
-                    """), {"d": discord_id, "k": kick_username.lower(), "gid": guild_id})
+                    """
+                        ),
+                        {"d": discord_id, "k": kick_username.lower(), "gid": guild_id},
+                    )
                 else:
                     raise
 
@@ -1492,19 +1603,29 @@ def handle_user_linking_callback(code, code_verifier, state, discord_id, created
 
             # Update existing notification with kick_username (was created when !link command was used)
             # If no existing notification exists, create a new one
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 UPDATE oauth_notifications
                 SET kick_username = :k, processed = FALSE
                 WHERE discord_id = :d AND kick_username = ''
                 RETURNING id
-            """), {"d": discord_id, "k": kick_username}).fetchone()
+            """
+                ),
+                {"d": discord_id, "k": kick_username},
+            ).fetchone()
 
             # If no pending notification found, create new one
             if not result:
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     INSERT INTO oauth_notifications (discord_id, kick_username)
                     VALUES (:d, :k)
-                """), {"d": discord_id, "k": kick_username})
+                """
+                    ),
+                    {"d": discord_id, "k": kick_username},
+                )
 
         print(f"✅ OAuth link successful: Discord {discord_id} -> Kick {kick_username}", flush=True)
         return render_success(kick_username, discord_id)
@@ -1512,8 +1633,10 @@ def handle_user_linking_callback(code, code_verifier, state, discord_id, created
     except Exception as e:
         print(f"❌ [OAuth] Error during callback: {e}", flush=True)
         import traceback
+
         traceback.print_exc()
         return render_error(f"An error occurred: {str(e)}")
+
 
 def exchange_code_for_token(code, code_verifier=None, redirect_uri=None):
     """Exchange authorization code for access token."""
@@ -1524,16 +1647,16 @@ def exchange_code_for_token(code, code_verifier=None, redirect_uri=None):
         redirect_uri = f"{OAUTH_BASE_URL}/auth/kick/callback"
 
     token_data = {
-        'grant_type': 'authorization_code',
-        'code': code,
-        'redirect_uri': redirect_uri,
-        'client_id': KICK_CLIENT_ID,
-        'client_secret': KICK_CLIENT_SECRET
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "client_id": KICK_CLIENT_ID,
+        "client_secret": KICK_CLIENT_SECRET,
     }
 
     # Only include code_verifier if PKCE was used
     if code_verifier:
-        token_data['code_verifier'] = code_verifier
+        token_data["code_verifier"] = code_verifier
 
     print(f"🔄 Exchanging code for token...", flush=True)
     response = requests.post(KICK_TOKEN_URL, data=token_data, timeout=10)
@@ -1544,6 +1667,7 @@ def exchange_code_for_token(code, code_verifier=None, redirect_uri=None):
     print(f"✅ Got token response with keys: {list(token_json.keys())}", flush=True)
     return token_json
 
+
 def get_kick_user_info(access_token):
     """Get user information from Kick OAuth access token.
 
@@ -1552,15 +1676,12 @@ def get_kick_user_info(access_token):
     """
     import requests
 
-    headers = {
-        'Authorization': f'Bearer {access_token}',
-        'Accept': 'application/json'
-    }
+    headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
 
     try:
         # Use Kick's public API endpoint (documented in Arctic.js OAuth library)
         print(f"🔍 Getting user info from Kick public API...", flush=True)
-        response = requests.get('https://api.kick.com/public/v1/users', headers=headers, timeout=10)
+        response = requests.get("https://api.kick.com/public/v1/users", headers=headers, timeout=10)
 
         print(f"📊 Response status: {response.status_code}", flush=True)
 
@@ -1570,13 +1691,13 @@ def get_kick_user_info(access_token):
             print(f"✅ Got user data: {sanitize_for_logs(data)}", flush=True)
 
             # Kick's API returns: {"data": [{"user_id": ..., "name": "...", "email": "..."}], "message": "OK"}
-            if 'data' in data and isinstance(data['data'], list) and len(data['data']) > 0:
-                user = data['data'][0]
+            if "data" in data and isinstance(data["data"], list) and len(data["data"]) > 0:
+                user = data["data"][0]
                 return {
-                    'username': user.get('name'),
-                    'id': user.get('user_id'),
-                    'email': user.get('email'),
-                    'profile_picture': user.get('profile_picture')
+                    "username": user.get("name"),
+                    "id": user.get("user_id"),
+                    "email": user.get("email"),
+                    "profile_picture": user.get("profile_picture"),
                 }
 
         # If we get here, the API didn't return expected data
@@ -1586,6 +1707,7 @@ def get_kick_user_info(access_token):
     except Exception as e:
         print(f"❌ Failed to get user info: {e}", flush=True)
         raise Exception(f"Could not get user info from Kick API: {str(e)}")
+
 
 def render_success(kick_username, discord_id):
     """Render success page with auto-close."""
@@ -1662,9 +1784,11 @@ def render_success(kick_username, discord_id):
     </html>
     """
 
+
 def render_error(message):
     """Render error page."""
-    return f"""
+    return (
+        f"""
     <html>
         <head>
             <title>❌ Error</title>
@@ -1720,11 +1844,15 @@ def render_error(message):
             </div>
         </body>
     </html>
-    """, 400
+    """,
+        400,
+    )
+
 
 def render_error(message):
     """Render error page."""
-    return f"""
+    return (
+        f"""
     <html>
         <head>
             <title>❌ Error</title>
@@ -1758,9 +1886,12 @@ def render_error(message):
             </div>
         </body>
     </html>
-    """, 400
+    """,
+        400,
+    )
 
-@app.route('/bot/authorize')
+
+@app.route("/bot/authorize")
 def bot_authorize():
     """
     Special route for getting bot access token without Discord account requirement.
@@ -1769,8 +1900,8 @@ def bot_authorize():
     """
     try:
         # Check for admin authorization token
-        auth_token = request.args.get('token')
-        expected_token = os.getenv('BOT_AUTH_TOKEN')
+        auth_token = request.args.get("token")
+        expected_token = os.getenv("BOT_AUTH_TOKEN")
 
         if not expected_token:
             print(f"⚠️ BOT_AUTH_TOKEN not configured - bot authorization disabled", flush=True)
@@ -1794,17 +1925,26 @@ def bot_authorize():
         # Store state in database with special discord_id = 0 for bot
         with engine.begin() as conn:
             # Clean up old states
-            deleted_count = conn.execute(text("""
+            deleted_count = conn.execute(
+                text(
+                    """
                 DELETE FROM oauth_states
                 WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes'
-            """)).rowcount
+            """
+                )
+            ).rowcount
             print(f"🧹 Cleaned up {deleted_count} expired state(s)", flush=True)
 
             # Store new state with discord_id = 0 to indicate bot authorization
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 INSERT INTO oauth_states (state, discord_id, code_verifier, created_at)
                 VALUES (:state, :discord_id, :code_verifier, CURRENT_TIMESTAMP)
-            """), {"state": state, "discord_id": 0, "code_verifier": code_verifier})
+            """
+                ),
+                {"state": state, "discord_id": 0, "code_verifier": code_verifier},
+            )
             print(f"✅ Bot state saved to database", flush=True)
 
         # Build authorization URL with chat:write scope
@@ -1812,13 +1952,13 @@ def bot_authorize():
         redirect_uri = f"{OAUTH_BASE_URL}/auth/kick/callback"
 
         auth_params = {
-            'client_id': KICK_CLIENT_ID,
-            'response_type': 'code',
-            'redirect_uri': redirect_uri,
-            'state': state,
-            'scope': 'chat:write chat:read channel:read user:read events:subscribe',  # Match Botrix scopes
-            'code_challenge': code_challenge,
-            'code_challenge_method': 'S256'
+            "client_id": KICK_CLIENT_ID,
+            "response_type": "code",
+            "redirect_uri": redirect_uri,
+            "state": state,
+            "scope": "chat:write chat:read channel:read user:read events:subscribe",  # Match Botrix scopes
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
         }
 
         print(f"🔗 Bot authorization URL: {KICK_AUTHORIZE_URL}?{urlencode(auth_params)}", flush=True)
@@ -1829,12 +1969,14 @@ def bot_authorize():
     except Exception as e:
         print(f"❌ Error in bot_authorize: {e}", flush=True)
         import traceback
+
         traceback.print_exc()
         return render_error(f"Failed to initiate bot authorization: {str(e)}")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     # Use OAUTH_PORT if set, otherwise use PORT, otherwise default to 8000
     # This allows Flask to run on a different port than Railway's main PORT
-    port = int(os.getenv('OAUTH_PORT', os.getenv('PORT', 8000)))
+    port = int(os.getenv("OAUTH_PORT", os.getenv("PORT", 8000)))
     print(f"🚀 Starting OAuth server on port {port}")
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host="0.0.0.0", port=port, debug=False)

@@ -128,7 +128,12 @@ redis_client = None
 if REDIS_URL:
     try:
         _ru = REDIS_URL if "://" in REDIS_URL else f"redis://{REDIS_URL}"
-        redis_client = redis.from_url(_ru, decode_responses=True)
+        redis_client = redis.from_url(
+            _ru,
+            decode_responses=True,
+            socket_connect_timeout=5,
+            socket_timeout=5,
+        )
         redis_client.ping()
         print("✅ Redis client connected for event publishing")
     except Exception as e:
