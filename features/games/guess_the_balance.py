@@ -3,14 +3,41 @@ Guess the Balance - Game where users guess the final balance amount
 Admins open/close sessions and set the result to determine winners
 """
 
+import json
 import logging
-from datetime import datetime
+import os
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Optional, List, Dict, Tuple
+from typing import Dict, List, Optional, Tuple
+
+import redis as _redis
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
 logger = logging.getLogger(__name__)
+
+# Lazy-init Redis client for publishing guess events to dashboard
+_guess_redis_client = None
+
+
+def _get_guess_redis():
+    """Get or create a Redis client for publishing guess events."""
+    global _guess_redis_client
+    if _guess_redis_client is not None:
+        return _guess_redis_client
+    url = os.getenv("REDIS_URL")
+    if not url:
+        return None
+    if "://" not in url:
+        url = f"redis://{url}"
+    try:
+        _guess_redis_client = _redis.from_url(url, decode_responses=True, socket_connect_timeout=3)
+        _guess_redis_client.ping()
+        return _guess_redis_client
+    except Exception as e:
+        logger.warning(f"GTB Redis publish unavailable: {e}")
+        return None
+
 
 class GuessTheBalanceManager:
     """Manages Guess the Balance game sessions and guesses"""
@@ -27,21 +54,21 @@ class GuessTheBalanceManager:
 
         try:
             with self.engine.connect() as conn:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT id, opened_by, opened_at, status
                     FROM gtb_sessions
                     WHERE status = 'open' AND discord_server_id = :server_id
                     ORDER BY opened_at DESC
                     LIMIT 1
-                """), {"server_id": self.server_id}).fetchone()
+                """
+                    ),
+                    {"server_id": self.server_id},
+                ).fetchone()
 
                 if result:
-                    return {
-                        "id": result[0],
-                        "opened_by": result[1],
-                        "opened_at": result[2],
-                        "status": result[3]
-                    }
+                    return {"id": result[0], "opened_by": result[1], "opened_at": result[2], "status": result[3]}
                 return None
         except Exception as e:
             logger.error(f"Failed to get active session: {e}")
@@ -64,11 +91,16 @@ class GuessTheBalanceManager:
 
         try:
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     INSERT INTO gtb_sessions (opened_by, status, discord_server_id)
                     VALUES (:opened_by, 'open', :server_id)
                     RETURNING id
-                """), {"opened_by": opened_by, "server_id": self.server_id})
+                """
+                    ),
+                    {"opened_by": opened_by, "server_id": self.server_id},
+                )
 
                 session_id = result.fetchone()[0]
                 logger.info(f"GTB session #{session_id} opened by {opened_by}")
@@ -95,19 +127,33 @@ class GuessTheBalanceManager:
 
         try:
             with self.engine.begin() as conn:
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     UPDATE gtb_sessions
                     SET status = 'closed', closed_at = CURRENT_TIMESTAMP
                     WHERE id = :session_id
-                """), {"session_id": session_id})
+                """
+                    ),
+                    {"session_id": session_id},
+                )
 
                 # Get guess count
-                guess_count = conn.execute(text("""
+                guess_count = conn.execute(
+                    text(
+                        """
                     SELECT COUNT(*) FROM gtb_guesses WHERE session_id = :session_id
-                """), {"session_id": session_id}).fetchone()[0]
+                """
+                    ),
+                    {"session_id": session_id},
+                ).fetchone()[0]
 
                 logger.info(f"GTB session #{session_id} closed with {guess_count} guesses")
-                return True, f"Session #{session_id} closed with {guess_count} guesses. Use !gtbresult <amount> to set the result.", session_id
+                return (
+                    True,
+                    f"Session #{session_id} closed with {guess_count} guesses. Use !gtbresult <amount> to set the result.",
+                    session_id,
+                )
         except Exception as e:
             logger.error(f"Failed to close session: {e}")
             return False, f"Failed to close session: {str(e)}", None
@@ -139,19 +185,42 @@ class GuessTheBalanceManager:
         try:
             with self.engine.begin() as conn:
                 # Try to insert (will fail if user already guessed)
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     INSERT INTO gtb_guesses (session_id, kick_username, guess_amount, discord_server_id)
                     VALUES (:session_id, :username, :amount, :server_id)
                     ON CONFLICT (session_id, kick_username)
                     DO UPDATE SET guess_amount = :amount, guessed_at = CURRENT_TIMESTAMP
-                """), {
-                    "session_id": session_id,
-                    "username": kick_username,
-                    "amount": guess_amount,
-                    "server_id": self.server_id
-                })
+                """
+                    ),
+                    {
+                        "session_id": session_id,
+                        "username": kick_username,
+                        "amount": guess_amount,
+                        "server_id": self.server_id,
+                    },
+                )
 
                 logger.info(f"GTB: {kick_username} guessed ${guess_amount:,.2f} in session #{session_id}")
+
+                # Publish event to Redis so dashboard SSE can push it in real-time
+                try:
+                    rc = _get_guess_redis()
+                    if rc:
+                        rc.publish("gtb:guess:events", json.dumps({
+                            "action": "new_guess",
+                            "data": {
+                                "session_id": session_id,
+                                "kick_username": kick_username,
+                                "guess_amount": float(guess_amount),
+                                "discord_server_id": self.server_id,
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            }
+                        }))
+                except Exception as pub_err:
+                    logger.debug(f"Failed to publish GTB guess event: {pub_err}")
+
                 return True, f"Guess recorded: ${guess_amount:,.2f}"
         except Exception as e:
             logger.error(f"Failed to add guess: {e}")
@@ -174,12 +243,17 @@ class GuessTheBalanceManager:
         try:
             with self.engine.begin() as conn:
                 # Get the most recent closed session
-                session = conn.execute(text("""
+                session = conn.execute(
+                    text(
+                        """
                     SELECT id FROM gtb_sessions
                     WHERE status = 'closed' AND discord_server_id = :server_id
                     ORDER BY closed_at DESC
                     LIMIT 1
-                """), {"server_id": self.server_id}).fetchone()
+                """
+                    ),
+                    {"server_id": self.server_id},
+                ).fetchone()
 
                 if not session:
                     return False, "No closed session found. Close a session first with !gtbclose", None
@@ -187,52 +261,69 @@ class GuessTheBalanceManager:
                 session_id = session[0]
 
                 # Update session with result
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     UPDATE gtb_sessions
                     SET result_amount = :amount, status = 'completed'
                     WHERE id = :session_id
-                """), {"amount": result_amount, "session_id": session_id})
+                """
+                    ),
+                    {"amount": result_amount, "session_id": session_id},
+                )
 
                 # Get all guesses with calculated differences
-                guesses = conn.execute(text("""
+                guesses = conn.execute(
+                    text(
+                        """
                     SELECT kick_username, guess_amount,
                            ABS(guess_amount - :result) as difference
                     FROM gtb_guesses
                     WHERE session_id = :session_id
                     ORDER BY difference ASC, guessed_at ASC
                     LIMIT 3
-                """), {"result": result_amount, "session_id": session_id}).fetchall()
+                """
+                    ),
+                    {"result": result_amount, "session_id": session_id},
+                ).fetchall()
 
                 if not guesses:
                     return False, f"Session #{session_id} has no guesses!", None
 
                 # Clear any existing winners for this session (in case of re-calculation)
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     DELETE FROM gtb_winners WHERE session_id = :session_id
-                """), {"session_id": session_id})
+                """
+                    ),
+                    {"session_id": session_id},
+                )
 
                 # Insert winners
                 winners = []
                 for rank, (username, guess, diff) in enumerate(guesses, 1):
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         INSERT INTO gtb_winners
                         (session_id, kick_username, rank, guess_amount, result_amount, difference)
                         VALUES (:session_id, :username, :rank, :guess, :result, :diff)
-                    """), {
-                        "session_id": session_id,
-                        "username": username,
-                        "rank": rank,
-                        "guess": guess,
-                        "result": result_amount,
-                        "diff": diff
-                    })
+                    """
+                        ),
+                        {
+                            "session_id": session_id,
+                            "username": username,
+                            "rank": rank,
+                            "guess": guess,
+                            "result": result_amount,
+                            "diff": diff,
+                        },
+                    )
 
-                    winners.append({
-                        "rank": rank,
-                        "username": username,
-                        "guess": float(guess),
-                        "difference": float(diff)
-                    })
+                    winners.append(
+                        {"rank": rank, "username": username, "guess": float(guess), "difference": float(diff)}
+                    )
 
                 logger.info(f"GTB session #{session_id} completed with result ${result_amount:,.2f}")
                 return True, f"Results set! Winners calculated.", winners
@@ -248,18 +339,28 @@ class GuessTheBalanceManager:
 
         try:
             with self.engine.connect() as conn:
-                session = conn.execute(text("""
+                session = conn.execute(
+                    text(
+                        """
                     SELECT id, opened_by, opened_at, closed_at, result_amount, status
                     FROM gtb_sessions
                     WHERE id = :session_id
-                """), {"session_id": session_id}).fetchone()
+                """
+                    ),
+                    {"session_id": session_id},
+                ).fetchone()
 
                 if not session:
                     return None
 
-                guess_count = conn.execute(text("""
+                guess_count = conn.execute(
+                    text(
+                        """
                     SELECT COUNT(*) FROM gtb_guesses WHERE session_id = :session_id
-                """), {"session_id": session_id}).fetchone()[0]
+                """
+                    ),
+                    {"session_id": session_id},
+                ).fetchone()[0]
 
                 return {
                     "id": session[0],
@@ -268,11 +369,12 @@ class GuessTheBalanceManager:
                     "closed_at": session[3],
                     "result_amount": float(session[4]) if session[4] else None,
                     "status": session[5],
-                    "guess_count": guess_count
+                    "guess_count": guess_count,
                 }
         except Exception as e:
             logger.error(f"Failed to get session stats: {e}")
             return None
+
 
 def parse_amount(amount_str: str) -> Optional[float]:
     """
