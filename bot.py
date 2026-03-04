@@ -3937,8 +3937,30 @@ async def proactive_token_refresh_task():
 
 
 async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, refresh_token: str) -> bool:
-    """Refresh OAuth token for a specific user."""
+    """Refresh OAuth token for a specific user.
+    Uses PostgreSQL advisory lock to prevent race conditions with the dashboard's
+    token refresh scheduler (both may try to refresh the same token).
+    """
     try:
+        # Acquire advisory lock to prevent race with dashboard refresh
+        lock_key = abs(user_id) % (2**31)
+        with engine.connect() as conn:
+            got_lock = conn.execute(text("SELECT pg_try_advisory_lock(:key)"), {"key": lock_key}).scalar()
+            if not got_lock:
+                print(f"[Kick] ⏳ Token for {kick_username} is being refreshed by another process, skipping")
+                return True  # Not a failure — someone else is handling it
+
+            # Re-check: token may have been refreshed by another process already
+            current = conn.execute(
+                text("SELECT refresh_token, expires_at FROM kick_oauth_tokens WHERE user_id = :uid"),
+                {"uid": user_id},
+            ).fetchone()
+            if current and current[0] != refresh_token:
+                print(f"[Kick] ✅ Token for {kick_username} was already refreshed by another process")
+                conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": lock_key})
+                conn.commit()
+                return True
+
         token_url = "https://id.kick.com/oauth/token"
         token_data = {
             "grant_type": "refresh_token",
@@ -3956,6 +3978,10 @@ async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, re
                     expires_in = token_response.get("expires_in", 3600)
 
                     if not new_access_token:
+                        # Release lock
+                        with engine.connect() as conn:
+                            conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": lock_key})
+                            conn.commit()
                         return False
 
                     expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
@@ -4013,14 +4039,29 @@ async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, re
                             {"refresh_token": new_refresh_token, "kick_username": kick_username},
                         )
 
+                    # Release lock after successful update
+                    with engine.connect() as conn:
+                        conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": lock_key})
+                        conn.commit()
+
                     return True
                 else:
                     error_text = await response.text()
                     print(f"[Kick] ❌ Refresh failed for {kick_username} (HTTP {response.status}): {error_text[:100]}")
+                    # Release lock
+                    with engine.connect() as conn:
+                        conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": lock_key})
+                        conn.commit()
                     return False
 
     except Exception as e:
         print(f"[Kick] ❌ Error refreshing token for {kick_username}: {e}")
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": abs(user_id) % (2**31)})
+                conn.commit()
+        except Exception:
+            pass
         return False
 
 
@@ -4389,76 +4430,6 @@ def dynamic_cooldown(cooldown_mapping):
 # -------------------------
 # Note: Commands now work in all guilds (multiserver support)
 # Each guild has its own settings loaded dynamically
-
-
-@bot.command(name="link")
-@progressive_cooldown(base_seconds=10, increment_seconds=10, max_seconds=60)
-async def cmd_link(ctx):
-    """Link your Kick account using OAuth (instant, no bio editing required)."""
-
-    if not OAUTH_BASE_URL or not KICK_CLIENT_ID:
-        await ctx.send("❌ OAuth linking is not configured on this bot.")
-        return
-
-    discord_id = ctx.author.id
-    guild_id = ctx.guild.id if ctx.guild else None
-
-    # Check if already linked
-    with engine.connect() as conn:
-        existing = conn.execute(
-            text("SELECT kick_name FROM links WHERE discord_id = :d AND discord_server_id = :g"),
-            {"d": discord_id, "g": guild_id},
-        ).fetchone()
-
-        if existing:
-            await ctx.send(
-                f"✅ You are already linked to **{existing[0]}**.\n"
-                f"Contact an admin if you need to unlink your account."
-            )
-            return
-
-    # Generate cryptographically signed OAuth URL
-    oauth_url = generate_signed_oauth_url(discord_id, guild_id)
-
-    embed = discord.Embed(
-        title="🔗 Link with Kick OAuth",
-        description="Click the button below to securely link your Kick account.",
-        color=0x53FC18,
-    )
-    embed.add_field(
-        name="📝 Instructions",
-        value="1. Click the link below\n2. Log in to Kick (if needed)\n3. Authorize the connection\n4. You're done!",
-        inline=False,
-    )
-    embed.set_footer(text="Link expires in 10 minutes")
-
-    # Create a view with a button
-    view = discord.ui.View()
-    button = discord.ui.Button(label="Link with Kick", style=discord.ButtonStyle.link, url=oauth_url, emoji="🎮")
-    view.add_item(button)
-
-    message = await ctx.send(embed=embed, view=view)
-
-    # Store message info for later deletion
-    with engine.begin() as conn:
-        # Delete any existing pending OAuth for this user in this guild
-        conn.execute(
-            text(
-                "DELETE FROM oauth_notifications WHERE discord_id = :d AND discord_server_id = :g AND processed = FALSE"
-            ),
-            {"d": discord_id, "g": guild_id},
-        )
-
-        # Store message info (will be updated with kick_username when OAuth completes)
-        conn.execute(
-            text(
-                """
-            INSERT INTO oauth_notifications (discord_id, kick_username, channel_id, message_id, processed, discord_server_id)
-            VALUES (:d, '', :c, :m, FALSE, :g)
-        """
-            ),
-            {"d": discord_id, "c": ctx.channel.id, "m": message.id, "g": guild_id},
-        )
 
 
 @bot.command(name="unlink")
