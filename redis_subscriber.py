@@ -171,23 +171,22 @@ class RedisSubscriber:
                 except Exception as e:
                     print(f"Failed to send Discord notification: {e}")
 
-            # Update tracker enabled state directly
-            if hasattr(self.bot, "slot_call_tracker") and self.bot.slot_call_tracker:
-                try:
-                    tracker = self.bot.slot_call_tracker
-                    # Store current server_id and switch to the guild that triggered this event
-                    original_server_id = tracker.server_id
-                    if guild_id:
-                        tracker.server_id = guild_id
+            # Update guild-specific tracker (preferred approach for multi-server)
+            tracker = None
+            if guild_id and hasattr(self.bot, "slot_call_trackers_by_guild"):
+                tracker = self.bot.slot_call_trackers_by_guild.get(guild_id)
 
-                    # Reload enabled state from database
+            # Fallback to global tracker if no guild-specific one exists
+            if not tracker and hasattr(self.bot, "slot_call_tracker"):
+                tracker = self.bot.slot_call_tracker
+
+            if tracker:
+                try:
+                    # Reload enabled state from database for the correct guild_id
+                    # The tracker's server_id should already be set correctly
                     tracker.enabled = tracker._load_enabled_state()
                     tracker.max_requests_per_user = tracker._load_max_requests()
                     print(f"✅ Updated slot_call_tracker enabled state to: {tracker.enabled} for server {guild_id}")
-
-                    # Restore original server_id
-                    if original_server_id:
-                        tracker.server_id = original_server_id
                 except Exception as e:
                     print(f"⚠️ Failed to update slot_call_tracker: {e}")
 
@@ -195,7 +194,7 @@ class RedisSubscriber:
             panel = None
             if guild_id and hasattr(self.bot, "slot_panels_by_guild"):
                 panel = self.bot.slot_panels_by_guild.get(guild_id)
-            
+
             if panel:
                 try:
                     # Refresh tracker state from database before updating panel
@@ -216,7 +215,9 @@ class RedisSubscriber:
                     if success:
                         print(f"✅ Slot request panel updated in Discord for guild {guild_id}")
                     else:
-                        print(f"ℹ️  Slot panel not created yet for guild {guild_id} (Discord admin: use !slotpanel to create)")
+                        print(
+                            f"ℹ️  Slot panel not created yet for guild {guild_id} (Discord admin: use !slotpanel to create)"
+                        )
                 except Exception as e:
                     print(f"⚠️ Failed to update slot panel: {e}")
                     import traceback
@@ -260,7 +261,7 @@ class RedisSubscriber:
             panel = None
             if guild_id and hasattr(self.bot, "slot_panels_by_guild"):
                 panel = self.bot.slot_panels_by_guild.get(guild_id)
-            
+
             if panel:
                 try:
                     # Refresh tracker state from database before updating panel
@@ -325,7 +326,7 @@ class RedisSubscriber:
             panel = None
             if guild_id and hasattr(self.bot, "slot_panels_by_guild"):
                 panel = self.bot.slot_panels_by_guild.get(guild_id)
-            
+
             if panel:
                 try:
                     # Refresh tracker state from database before updating panel
@@ -345,11 +346,11 @@ class RedisSubscriber:
         elif action == "update_max":
             max_requests = data.get("max_requests")
             guild_id = data.get("discord_server_id")
-            
+
             # Convert guild_id to int (may come as string from JSON)
             if guild_id is not None:
                 guild_id = int(guild_id)
-            
+
             print(f"📥 Updated max slot requests to {max_requests} for guild {guild_id}")
 
             # Update the per-guild tracker if available
@@ -358,7 +359,9 @@ class RedisSubscriber:
                 if tracker:
                     try:
                         tracker.max_requests_per_user = tracker._load_max_requests()
-                        print(f"✅ Updated slot_call_tracker max_requests for guild {guild_id}: {tracker.max_requests_per_user}")
+                        print(
+                            f"✅ Updated slot_call_tracker max_requests for guild {guild_id}: {tracker.max_requests_per_user}"
+                        )
                     except Exception as e:
                         print(f"⚠️ Failed to update slot_call_tracker for guild {guild_id}: {e}")
 
@@ -370,7 +373,9 @@ class RedisSubscriber:
                         # Refresh tracker state from database before updating panel
                         if hasattr(panel, "tracker") and panel.tracker:
                             panel.tracker.max_requests_per_user = panel.tracker._load_max_requests()
-                            print(f"✅ Updated panel tracker max_requests for guild {guild_id}: {panel.tracker.max_requests_per_user}")
+                            print(
+                                f"✅ Updated panel tracker max_requests for guild {guild_id}: {panel.tracker.max_requests_per_user}"
+                            )
                         success = await panel.update_panel(force=True)
                         if success:
                             print(f"✅ Slot request panel updated in Discord for guild {guild_id}")
@@ -1442,20 +1447,6 @@ class RedisSubscriber:
             import traceback
 
             traceback.print_exc()
-
-    async def announce_in_chat(self, message, guild_id=None):
-        """Send a message to the Kick chat"""
-        try:
-            if self.send_message_callback:
-                success = await self.send_message_callback(message, guild_id=guild_id)
-                if success:
-                    print(f"💬 Sent to Kick chat: {message}")
-                else:
-                    print(f"⚠️ Failed to send to Kick chat: {message}")
-            else:
-                print(f"💬 [No Kick callback] Would announce: {message}")
-        except Exception as e:
-            print(f"❌ Error sending to Kick chat: {e}")
 
     async def announce_raffle_winners(self, winners, prize_description, guild_id=None):
         """Announce raffle winner(s) to Discord raffle announcement channel
