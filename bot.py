@@ -2364,11 +2364,11 @@ async def refresh_kick_oauth_token() -> bool:
                         return False
 
                     print(f"[Kick] ✅ Access token refreshed (expires in {expires_in//3600}h)")
-                    print(f"[Kick] ℹ️  Refresh token is permanent per Kick API - no expiration tracking needed")
+                    print(f"[Kick] ℹ️  Refresh token is permanent per Kick API - will not be refreshed")
 
-                    # IMPORTANT: Refresh tokens are permanent and reusable (as of Nov 2025)
-                    # Store NULL for expires_at - we never want to trigger refresh attempts
-                    expires_at = None
+                    # Calculate when this ACCESS TOKEN will expire
+                    # (Refresh token is permanent and never expires)
+                    expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
                     # Update tokens in kick_oauth_tokens table
                     with engine.begin() as conn:
@@ -3872,21 +3872,22 @@ async def check_oauth_notifications_task():
 @tasks.loop(minutes=30)  # Check every 30 minutes
 async def proactive_token_refresh_task():
     """
-    Token refresh check task.
+    Proactive access token refresh task.
     
-    NOTE: As of Nov 2025, Kick refresh tokens are PERMANENT and never expire.
-    This task is kept for monitoring/logging only. We don't attempt refresh
-    since the tokens will work indefinitely (unless Kick revokes them).
-    If a refresh fails with 401 invalid_grant, it means the token was revoked
-    by Kick and the user needs to re-authenticate.
+    NOTE: Refresh tokens are PERMANENT per Kick API (as of Nov 2025).
+    This task ONLY refreshes ACCESS TOKENS when they are about to expire.
+    
+    - expires_at tracks ACCESS TOKEN expiration (they expire ~1 hour after issued)
+    - Refresh tokens are permanent and never expire
+    - When access token expires, we use refresh_token to get a new one
+    - Refresh token stays the same
     """
     if not engine:
         return
 
     try:
-        print("[Kick] 🔄 Checking OAuth token status (refresh tokens are permanent)...")
+        print("[Kick] 🔄 Checking for access tokens that need refresh...")
 
-        # Just log token status - don't attempt refresh since tokens never expire
         with engine.connect() as conn:
             results = conn.execute(
                 text(
@@ -3903,31 +3904,57 @@ async def proactive_token_refresh_task():
                 print("[Kick] ℹ️  No OAuth tokens in database")
                 return
 
+            now = datetime.now(timezone.utc)
+            refreshed = 0
+            failed = 0
+            checked = 0
+
             for user_id, kick_username, refresh_token, expires_at in results:
-                # expires_at will be NULL for permanent refresh tokens
+                checked += 1
+                
                 if expires_at is None:
-                    print(f"[Kick] ✓ Token for {kick_username} is PERMANENT (never expires)")
-                else:
-                    # This shouldn't happen with new tokens, but log for debugging
-                    now = datetime.now(timezone.utc)
-                    if expires_at.tzinfo is None:
-                        expires_at = expires_at.replace(tzinfo=timezone.utc)
-                    
-                    remaining = (expires_at - now).total_seconds() / 60
-                    if remaining > 0:
-                        hours = remaining / 60
-                        print(f"[Kick] ⚠️  OLD TOKEN: {kick_username} has expires_at set ({hours:.1f}hrs remaining) - should be NULL")
+                    # This shouldn't happen anymore, but log if it does
+                    print(f"[Kick] ⚠️  Token for {kick_username} has no expiration - skipping")
+                    continue
+                
+                # Make timezone-aware if needed
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                
+                time_until_expiry = expires_at - now
+                minutes_until_expiry = time_until_expiry.total_seconds() / 60
+                
+                if minutes_until_expiry < 0:
+                    # Token already expired - user needs to re-authenticate
+                    print(f"[Kick] ❌ Token for {kick_username} EXPIRED - user must re-authenticate")
+                    failed += 1
+                elif minutes_until_expiry < 30:
+                    # Token expiring soon - refresh it now
+                    print(f"[Kick] ⏱️  Token for {kick_username} expires in {minutes_until_expiry:.0f}m - refreshing now...")
+                    if await refresh_kick_oauth_token_for_user(user_id, kick_username, refresh_token):
+                        refreshed += 1
+                        print(f"[Kick] ✅ Token refreshed for {kick_username}")
                     else:
-                        print(f"[Kick] ❌ OLD TOKEN: {kick_username} expired - user needs to re-authenticate")
+                        failed += 1
+                        print(f"[Kick] ❌ Failed to refresh token for {kick_username}")
+                else:
+                    # Plenty of time left
+                    hours = minutes_until_expiry / 60
+                    print(f"[Kick] ✓ {kick_username} token valid for {hours:.1f} more hours")
+            
+            print(f"[Kick] Token refresh check complete: {refreshed} refreshed, {failed} failed, {checked} checked")
 
     except Exception as e:
-        print(f"[Kick] ❌ Error in token status check: {e}")
+        print(f"[Kick] ❌ Error in token refresh task: {e}")
         import traceback
         traceback.print_exc()
 
 
 async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, refresh_token: str) -> bool:
-    """Refresh OAuth token for a specific user.
+    """Refresh OAuth ACCESS TOKEN for a specific user using their REFRESH TOKEN.
+    
+    NOTE: Only refreshes the ACCESS TOKEN (short-lived ~1hr).
+    The REFRESH TOKEN itself is permanent and never needs refresh.
     Uses PostgreSQL advisory lock to prevent race conditions with the dashboard's
     token refresh scheduler (both may try to refresh the same token).
     """
