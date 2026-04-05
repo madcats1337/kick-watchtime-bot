@@ -4,15 +4,17 @@ Posts and updates a raffle ticket leaderboard in a specified channel
 """
 
 import logging
+import os
+from datetime import datetime
+
 import discord
 from discord.ext import tasks
 from sqlalchemy import text
-from datetime import datetime
-import os
 
 from .config import AUTO_LEADERBOARD_UPDATE_INTERVAL
 
 logger = logging.getLogger(__name__)
+
 
 class AutoLeaderboard:
     """Manages auto-updating raffle leaderboard"""
@@ -55,6 +57,7 @@ class AutoLeaderboard:
         except Exception as e:
             print(f"[Auto-Leaderboard] ❌ Failed to initialize: {e}")
             import traceback
+
             traceback.print_exc()
             return False
 
@@ -69,6 +72,7 @@ class AutoLeaderboard:
         except Exception as e:
             print(f"[Auto-Leaderboard] ❌ Failed to post: {e}")
             import traceback
+
             traceback.print_exc()
 
     async def update_leaderboard(self):
@@ -97,6 +101,7 @@ class AutoLeaderboard:
         except Exception as e:
             print(f"[Auto-Leaderboard] ❌ Failed to update: {e}")
             import traceback
+
             traceback.print_exc()
 
     async def create_leaderboard_embed(self):
@@ -104,29 +109,29 @@ class AutoLeaderboard:
         try:
             # Import here to avoid circular import
             from .tickets import TicketManager
-            
+
             # Create ticket manager with server_id for proper multiserver support
             ticket_manager = TicketManager(self.engine, server_id=self.server_id)
-            
+
             # Get period stats using the proper method
             stats = ticket_manager.get_period_stats()
-            
+
             if not stats:
                 return discord.Embed(
                     title="🎟️ Raffle Ticket Leaderboard",
                     description="No active raffle period",
-                    color=discord.Color.red()
+                    color=discord.Color.red(),
                 )
-            
-            period_id = stats['period_id']
-            start_date = stats['start_date']
-            end_date = stats['end_date']
-            
+
+            period_id = stats["period_id"]
+            start_date = stats["start_date"]
+            end_date = stats["end_date"]
+
             # Check if period hasn't started yet
             now = datetime.now()
             if now < start_date:
                 days_until_start = (start_date - now).days
-                hours_until_start = ((start_date - now).seconds // 3600)
+                hours_until_start = (start_date - now).seconds // 3600
 
                 time_msg = f"{days_until_start} days" if days_until_start > 0 else f"{hours_until_start} hours"
 
@@ -139,47 +144,43 @@ class AutoLeaderboard:
                         f"⏳ **Time until start:** {time_msg}\n\n"
                         f"Get ready to earn tickets by watching streams, gifting subs, and wagering on Shuffle!"
                     ),
-                    color=discord.Color.blue()
+                    color=discord.Color.blue(),
                 )
-            
+
             # Get leaderboard using the proper method (top 5)
             leaderboard = ticket_manager.get_leaderboard(limit=5)
-            
+
             # Get total stats from stats dict
-            total_participants = stats['total_participants']
-            total_tickets = stats['total_tickets']
+            total_participants = stats["total_participants"]
+            total_tickets = stats["total_tickets"]
 
             # Create embed
             embed = discord.Embed(
                 title="🎟️ Raffle Ticket Leaderboard",
                 description=f"**Period:** {start_date.strftime('%b %d')} - {end_date.strftime('%b %d, %Y')}\n"
-                           f"**Participants:** {total_participants:,} | **Total Tickets:** {total_tickets:,}",
+                f"**Participants:** {total_participants:,} | **Total Tickets:** {total_tickets:,}",
                 color=discord.Color.gold(),
-                timestamp=datetime.utcnow()
+                timestamp=datetime.utcnow(),
             )
 
             if not leaderboard:
-                embed.add_field(
-                    name="No Participants Yet",
-                    value="Be the first to earn tickets!",
-                    inline=False
-                )
+                embed.add_field(name="No Participants Yet", value="Be the first to earn tickets!", inline=False)
             else:
                 # Medals for top 3
                 medals = ["🥇", "🥈", "🥉"]
 
                 leaderboard_text = ""
                 for entry in leaderboard:
-                    rank = entry['rank']
-                    kick_name = entry['kick_name'] or "Unknown"
-                    total = entry['total_tickets']
-                    watchtime = entry['watchtime_tickets']
-                    gifted = entry['gifted_sub_tickets']
-                    shuffle = entry['shuffle_wager_tickets']
-                    bonus = entry['bonus_tickets']
+                    rank = entry["rank"]
+                    kick_name = entry["kick_name"] or "Unknown"
+                    total = entry["total_tickets"]
+                    watchtime = entry["watchtime_tickets"]
+                    gifted = entry["gifted_sub_tickets"]
+                    shuffle = entry["shuffle_wager_tickets"]
+                    bonus = entry["bonus_tickets"]
 
                     # Medal or rank number
-                    rank_display = medals[rank-1] if rank <= 3 else f"`{rank}.`"
+                    rank_display = medals[rank - 1] if rank <= 3 else f"`{rank}.`"
 
                     # Calculate win probability
                     win_prob = (total / total_tickets * 100) if total_tickets > 0 else 0
@@ -187,23 +188,53 @@ class AutoLeaderboard:
                     leaderboard_text += f"{rank_display} **{kick_name}** - {total:,} tickets ({win_prob:.2f}%)\n"
                     leaderboard_text += f"    ⏱️ {watchtime} 🎁 {gifted} 🎲 {shuffle} ⭐ {bonus}\n"
 
-                embed.add_field(
-                    name="🏆 Top 5",
-                    value=leaderboard_text,
-                    inline=False
-                )
+                embed.add_field(name="🏆 Top 5", value=leaderboard_text, inline=False)
 
-            # Add how to earn tickets section
+            # Get ticket reward settings from database
+            watchtime_tickets = "10"
+            gifted_sub_tickets = "15"
+            wager_tickets = "20"
+            
+            try:
+                with self.engine.connect() as conn:
+                    # Get watchtime tickets per hour
+                    result = conn.execute(text(
+                        "SELECT value FROM bot_settings WHERE key = 'watchtime_tickets_per_hour' "
+                        "AND discord_server_id = :server_id"
+                    ), {"server_id": self.server_id}).fetchone()
+                    if result and result[0]:
+                        watchtime_tickets = str(result[0])
+                    
+                    # Get gifted sub tickets
+                    result = conn.execute(text(
+                        "SELECT value FROM bot_settings WHERE key = 'gifted_sub_tickets' "
+                        "AND discord_server_id = :server_id"
+                    ), {"server_id": self.server_id}).fetchone()
+                    if result and result[0]:
+                        gifted_sub_tickets = str(result[0])
+                    
+                    # Get wager tickets per $1000
+                    result = conn.execute(text(
+                        "SELECT value FROM bot_settings WHERE key = 'shuffle_tickets_per_1000' "
+                        "AND discord_server_id = :server_id"
+                    ), {"server_id": self.server_id}).fetchone()
+                    if result and result[0]:
+                        wager_tickets = str(result[0])
+            except Exception as e:
+                print(f"[Auto-Leaderboard] ⚠️ Failed to fetch ticket rewards from database: {e}")
+                print(f"[Auto-Leaderboard] Using defaults: {watchtime_tickets}, {gifted_sub_tickets}, {wager_tickets}")
+
+            # Add how to earn tickets section with dynamic values from settings
             embed.add_field(
                 name="📋 How to Earn Tickets",
                 value=(
-                    "⏱️ **Watch Streams** - 10 tickets per hour\n"
-                    "🎁 **Gift Subs** - 15 tickets per sub\n"
-                    "🎲 **Shuffle Wagers** - 20 tickets per $1000 wagered\n"
+                    f"⏱️ **Watch Streams** - {watchtime_tickets} tickets per hour\n"
+                    f"🎁 **Gift Subs** - {gifted_sub_tickets} tickets per sub\n"
+                    f"🎲 **Shuffle Wagers** - {wager_tickets} tickets per $1000 wagered\n"
                     "⭐ **Bonus** - Admin awarded for events\n\n"
                     "Use `!tickets` to check your balance!"
                 ),
-                inline=False
+                inline=False,
             )
 
             # Dynamic footer based on update interval
@@ -221,12 +252,14 @@ class AutoLeaderboard:
         except Exception as e:
             print(f"[Auto-Leaderboard] ❌ Failed to create embed: {e}")
             import traceback
+
             traceback.print_exc()
             return discord.Embed(
                 title="🎟️ Raffle Ticket Leaderboard",
                 description="Error loading leaderboard data",
-                color=discord.Color.red()
+                color=discord.Color.red(),
             )
+
 
 async def setup_auto_leaderboard(bot, engine, channel_id=None, server_id=None):
     """
@@ -241,12 +274,12 @@ async def setup_auto_leaderboard(bot, engine, channel_id=None, server_id=None):
     # Get channel ID from parameter, bot_settings, or environment variable
     if channel_id is None:
         # Try to get from bot_settings if available
-        if hasattr(bot, 'settings_manager') and bot.settings_manager:
+        if hasattr(bot, "settings_manager") and bot.settings_manager:
             channel_id = bot.settings_manager.raffle_leaderboard_channel_id
 
         # Fall back to environment variable
         if channel_id is None:
-            channel_id_str = os.getenv('RAFFLE_LEADERBOARD_CHANNEL_ID')
+            channel_id_str = os.getenv("RAFFLE_LEADERBOARD_CHANNEL_ID")
             if channel_id_str:
                 try:
                     channel_id = int(channel_id_str)
@@ -280,9 +313,13 @@ async def setup_auto_leaderboard(bot, engine, channel_id=None, server_id=None):
 
         if success:
             if AUTO_LEADERBOARD_UPDATE_INTERVAL >= 3600:
-                print(f"✅ [Auto-Leaderboard] Started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/3600:.1f} hours)")
+                print(
+                    f"✅ [Auto-Leaderboard] Started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/3600:.1f} hours)"
+                )
             elif AUTO_LEADERBOARD_UPDATE_INTERVAL >= 60:
-                print(f"✅ [Auto-Leaderboard] Started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/60:.0f} minutes)")
+                print(
+                    f"✅ [Auto-Leaderboard] Started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/60:.0f} minutes)"
+                )
             else:
                 print(f"✅ [Auto-Leaderboard] Started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL} seconds)")
         else:
