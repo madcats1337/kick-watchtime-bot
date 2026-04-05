@@ -3913,9 +3913,10 @@ async def proactive_token_refresh_task():
                 checked += 1
                 
                 if expires_at is None:
-                    # This shouldn't happen anymore, but log if it does
-                    print(f"[Kick] ⚠️  Token for {kick_username} has no expiration - skipping")
-                    continue
+                    # Legacy token without expiration info - treat as expired to trigger refresh
+                    print(f"[Kick] ⏱️  Token for {kick_username} has no expiration (legacy) - treating as expired, will refresh")
+                    from datetime import timedelta
+                    expires_at = now - timedelta(minutes=1)
                 
                 # Make timezone-aware if needed
                 if expires_at.tzinfo is None:
@@ -3924,13 +3925,12 @@ async def proactive_token_refresh_task():
                 time_until_expiry = expires_at - now
                 minutes_until_expiry = time_until_expiry.total_seconds() / 60
                 
-                if minutes_until_expiry < 0:
-                    # Token already expired - user needs to re-authenticate
-                    print(f"[Kick] ❌ Token for {kick_username} EXPIRED - user must re-authenticate")
-                    failed += 1
-                elif minutes_until_expiry < 30:
-                    # Token expiring soon - refresh it now
-                    print(f"[Kick] ⏱️  Token for {kick_username} expires in {minutes_until_expiry:.0f}m - refreshing now...")
+                if minutes_until_expiry < 30:
+                    # Token expired or expiring soon - refresh it now
+                    if minutes_until_expiry < 0:
+                        print(f"[Kick] ⏱️  Token for {kick_username} has EXPIRED - refreshing using refresh_token...")
+                    else:
+                        print(f"[Kick] ⏱️  Token for {kick_username} expires in {minutes_until_expiry:.0f}m - refreshing now...")
                     if await refresh_kick_oauth_token_for_user(user_id, kick_username, refresh_token):
                         refreshed += 1
                         print(f"[Kick] ✅ Token refreshed for {kick_username}")
