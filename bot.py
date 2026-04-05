@@ -4001,10 +4001,11 @@ async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, re
                             conn.commit()
                         return False
 
-                    # Note: As of Nov 2025, Kick refresh tokens are PERMANENT and reusable
-                    # They don't expire. We don't track expiration for refresh tokens.
-                    # The access token expires, but the refresh token is permanent.
-                    expires_at = None  # Permanent refresh tokens don't expire
+                    # Calculate access token expiration
+                    # Kick access tokens expire ~1 hour after issued (expires_in from response)
+                    # Refresh tokens are permanent and never expire
+                    from datetime import datetime, timedelta, timezone
+                    expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
                     with engine.begin() as conn:
                         # Update kick_oauth_tokens table
