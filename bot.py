@@ -4048,6 +4048,22 @@ async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, re
                 else:
                     error_text = await response.text()
                     print(f"[Kick] ❌ Refresh failed for {kick_username} (HTTP {response.status}): {error_text[:100]}")
+                    
+                    # Special handling for 401 invalid_grant errors - token is permanently invalid
+                    if response.status == 401:
+                        try:
+                            error_json = await response.json()
+                            if error_json.get("error") == "invalid_grant":
+                                # Token is permanently invalid - clear it from database so we don't keep retrying
+                                with engine.begin() as conn:
+                                    conn.execute(
+                                        text("UPDATE kick_oauth_tokens SET refresh_token = NULL WHERE user_id = :uid"),
+                                        {"uid": user_id}
+                                    )
+                                print(f"[Kick Token] Cleared invalid refresh token for user {user_id} - user needs to re-authenticate")
+                        except Exception as parse_error:
+                            print(f"[Kick] Could not parse error response: {parse_error}")
+                    
                     # Release lock
                     with engine.connect() as conn:
                         conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": lock_key})
