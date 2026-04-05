@@ -2363,10 +2363,12 @@ async def refresh_kick_oauth_token() -> bool:
                         print("[Kick] ❌ No access_token in refresh response")
                         return False
 
-                    print(f"[Kick] ✅ New token expires in {expires_in} seconds ({expires_in/3600:.1f} hours)")
+                    print(f"[Kick] ✅ Access token refreshed (expires in {expires_in//3600}h)")
+                    print(f"[Kick] ℹ️  Refresh token is permanent per Kick API - no expiration tracking needed")
 
-                    # Calculate expiration time in Python (safer than SQL date math)
-                    expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+                    # IMPORTANT: Refresh tokens are permanent and reusable (as of Nov 2025)
+                    # Store NULL for expires_at - we never want to trigger refresh attempts
+                    expires_at = None
 
                     # Update tokens in kick_oauth_tokens table
                     with engine.begin() as conn:
@@ -3867,16 +3869,24 @@ async def check_oauth_notifications_task():
         print(f"⚠️ Error in OAuth notifications task: {e}", flush=True)
 
 
-@tasks.loop(minutes=30)  # Check every 30 minutes for faster response
+@tasks.loop(minutes=30)  # Check every 30 minutes
 async def proactive_token_refresh_task():
-    """Proactively refresh OAuth tokens before they expire."""
+    """
+    Token refresh check task.
+    
+    NOTE: As of Nov 2025, Kick refresh tokens are PERMANENT and never expire.
+    This task is kept for monitoring/logging only. We don't attempt refresh
+    since the tokens will work indefinitely (unless Kick revokes them).
+    If a refresh fails with 401 invalid_grant, it means the token was revoked
+    by Kick and the user needs to re-authenticate.
+    """
     if not engine:
         return
 
     try:
-        print("[Kick] 🔄 Running proactive token refresh check...")
+        print("[Kick] 🔄 Checking OAuth token status (refresh tokens are permanent)...")
 
-        # Check ALL tokens that might expire soon
+        # Just log token status - don't attempt refresh since tokens never expire
         with engine.connect() as conn:
             results = conn.execute(
                 text(
@@ -3893,46 +3903,26 @@ async def proactive_token_refresh_task():
                 print("[Kick] ℹ️  No OAuth tokens in database")
                 return
 
-            now = datetime.now(timezone.utc)
-            refreshed = 0
-            failed = 0
-
             for user_id, kick_username, refresh_token, expires_at in results:
-                if not expires_at:
-                    print(f"[Kick] ⚠️  No expiration time for {kick_username} - skipping")
-                    continue
-
-                # Make expires_at timezone-aware if it isn't already
-                if expires_at.tzinfo is None:
-                    expires_at = expires_at.replace(tzinfo=timezone.utc)
-
-                time_until_expiry = expires_at - now
-                minutes_until_expiry = time_until_expiry.total_seconds() / 60
-
-                # Refresh if token expires in less than 30 minutes
-                if minutes_until_expiry < 30:
-                    print(
-                        f"[Kick] ⚠️  Token for {kick_username} expires in {minutes_until_expiry:.1f} minutes - refreshing..."
-                    )
-                    if await refresh_kick_oauth_token_for_user(user_id, kick_username, refresh_token):
-                        refreshed += 1
-                        print(f"[Kick] ✅ Token refreshed for {kick_username}")
-                    else:
-                        failed += 1
-                        print(f"[Kick] ❌ Token refresh failed for {kick_username}")
-                elif minutes_until_expiry < 120:
-                    print(f"[Kick] ⚠️  Token for {kick_username} expires in {minutes_until_expiry:.1f} minutes")
+                # expires_at will be NULL for permanent refresh tokens
+                if expires_at is None:
+                    print(f"[Kick] ✓ Token for {kick_username} is PERMANENT (never expires)")
                 else:
-                    hours = minutes_until_expiry / 60
-                    print(f"[Kick] ✓ Token for {kick_username} valid for {hours:.1f} more hours")
-
-            if refreshed > 0 or failed > 0:
-                print(f"[Kick] Token refresh complete - Refreshed: {refreshed}, Failed: {failed}")
+                    # This shouldn't happen with new tokens, but log for debugging
+                    now = datetime.now(timezone.utc)
+                    if expires_at.tzinfo is None:
+                        expires_at = expires_at.replace(tzinfo=timezone.utc)
+                    
+                    remaining = (expires_at - now).total_seconds() / 60
+                    if remaining > 0:
+                        hours = remaining / 60
+                        print(f"[Kick] ⚠️  OLD TOKEN: {kick_username} has expires_at set ({hours:.1f}hrs remaining) - should be NULL")
+                    else:
+                        print(f"[Kick] ❌ OLD TOKEN: {kick_username} expired - user needs to re-authenticate")
 
     except Exception as e:
-        print(f"[Kick] ❌ Error in proactive token refresh: {e}")
+        print(f"[Kick] ❌ Error in token status check: {e}")
         import traceback
-
         traceback.print_exc()
 
 
@@ -3984,7 +3974,10 @@ async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, re
                             conn.commit()
                         return False
 
-                    expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+                    # Note: As of Nov 2025, Kick refresh tokens are PERMANENT and reusable
+                    # They don't expire. We don't track expiration for refresh tokens.
+                    # The access token expires, but the refresh token is permanent.
+                    expires_at = None  # Permanent refresh tokens don't expire
 
                     with engine.begin() as conn:
                         # Update kick_oauth_tokens table
