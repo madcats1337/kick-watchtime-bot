@@ -3785,27 +3785,27 @@ async def check_oauth_notifications_task():
                                 for guild in bot.guilds:
                                     if not guild:
                                         continue
-                                        member = guild.get_member(int(discord_id))
-                                        if member:
-                                            # Try to send in the same channel as original message, or system channel
-                                            target_channel = bot.get_channel(int(channel_id)) if channel_id else None
-                                            if (
-                                                not target_channel
-                                                or not target_channel.permissions_for(guild.me).send_messages
-                                            ):
-                                                target_channel = guild.system_channel or next(
-                                                    (
-                                                        ch
-                                                        for ch in guild.text_channels
-                                                        if ch.permissions_for(guild.me).send_messages
-                                                    ),
-                                                    None,
-                                                )
+                                    member = guild.get_member(int(discord_id))
+                                    if member:
+                                        # Try to send in the same channel as original message, or system channel
+                                        target_channel = bot.get_channel(int(channel_id)) if channel_id else None
+                                        if (
+                                            not target_channel
+                                            or not target_channel.permissions_for(guild.me).send_messages
+                                        ):
+                                            target_channel = guild.system_channel or next(
+                                                (
+                                                    ch
+                                                    for ch in guild.text_channels
+                                                    if ch.permissions_for(guild.me).send_messages
+                                                ),
+                                                None,
+                                            )
 
-                                            if target_channel:
-                                                await target_channel.send(
-                                                    f"{member.mention} ✅ **Verification Successful!** Your account has been linked to Kick **{actual_kick_username}**."
-                                                )
+                                        if target_channel:
+                                            await target_channel.send(
+                                                f"{member.mention} ✅ **Verification Successful!** Your account has been linked to Kick **{actual_kick_username}**."
+                                            )
 
                             # Log the successful link attempt
                             await log_link_attempt(user, actual_kick_username, success=True, guild_id=guild_id)
@@ -3813,29 +3813,47 @@ async def check_oauth_notifications_task():
                             # Grant linked role if configured
                             if guild_id:
                                 try:
+                                    print(f"🔍 Attempting to grant linked role for guild_id={guild_id}, discord_id={discord_id}", flush=True)
                                     guild = bot.get_guild(int(guild_id))
-                                    if guild:
+                                    if not guild:
+                                        print(f"⚠️ Guild {guild_id} not found in bot", flush=True)
+                                    else:
                                         member = guild.get_member(int(discord_id))
-                                        if member:
+                                        if not member:
+                                            print(f"⚠️ Member {discord_id} not found in guild {guild.name}", flush=True)
+                                        else:
                                             # Get linked role ID from bot_settings
-                                            linked_role_id = conn.execute(
-                                                text("""
-                                                    SELECT value FROM bot_settings 
-                                                    WHERE key = 'kick_linked_role_id' AND discord_server_id = :guild_id
-                                                """),
-                                                {"guild_id": guild_id}
-                                            ).scalar()
+                                            try:
+                                                linked_role_id = conn.execute(
+                                                    text("""
+                                                        SELECT value FROM bot_settings 
+                                                        WHERE key = 'kick_linked_role_id' AND discord_server_id = :guild_id
+                                                    """),
+                                                    {"guild_id": guild_id}
+                                                ).scalar()
+                                                print(f"📋 Linked role ID from DB: {linked_role_id!r}", flush=True)
+                                            except Exception as query_err:
+                                                print(f"❌ Failed to query linked role ID: {query_err}", flush=True)
+                                                linked_role_id = None
                                             
                                             if linked_role_id and linked_role_id.strip():
-                                                role = guild.get_role(int(linked_role_id))
-                                                if role:
-                                                    if role not in member.roles:
+                                                try:
+                                                    role = guild.get_role(int(linked_role_id))
+                                                    if not role:
+                                                        print(f"⚠️ Linked role ID {linked_role_id} not found in guild {guild.name}", flush=True)
+                                                    elif role in member.roles:
+                                                        print(f"ℹ️ Member {member.display_name} already has role '{role.name}'", flush=True)
+                                                    else:
                                                         await member.add_roles(role, reason=f"Linked Kick account: {actual_kick_username}")
                                                         print(f"✅ Granted role '{role.name}' to {member.display_name} for Kick link", flush=True)
-                                                else:
-                                                    print(f"⚠️ Linked role ID {linked_role_id} not found in guild {guild.name}", flush=True)
+                                                except ValueError as val_err:
+                                                    print(f"❌ Invalid role ID {linked_role_id}: {val_err}", flush=True)
+                                            else:
+                                                print(f"⚠️ No linked role configured for guild {guild_id}", flush=True)
                                 except Exception as role_error:
-                                    print(f"⚠️ Error granting linked role: {role_error}", flush=True)
+                                    import traceback
+                                    print(f"❌ Error granting linked role: {role_error}", flush=True)
+                                    traceback.print_exc()
 
                     # Mark as processed
                     conn.execute(
