@@ -1607,24 +1607,24 @@ def handle_user_linking_callback(code, code_verifier, state, discord_id, created
                 text(
                     """
                 UPDATE oauth_notifications
-                SET kick_username = :k, processed = FALSE
-                WHERE discord_id = :d AND kick_username = ''
+                SET kick_username = :k, processed = FALSE, discord_server_id = :g
+                WHERE discord_id = :d AND kick_username = '' AND (discord_server_id = :g OR discord_server_id IS NULL)
                 RETURNING id
             """
                 ),
-                {"d": discord_id, "k": kick_username},
+                {"d": discord_id, "k": kick_username, "g": guild_id},
             ).fetchone()
 
-            # If no pending notification found, create new one
+            # If no pending notification found, create new one (with guild_id for proper multi-server support)
             if not result:
                 conn.execute(
                     text(
                         """
-                    INSERT INTO oauth_notifications (discord_id, kick_username)
-                    VALUES (:d, :k)
+                    INSERT INTO oauth_notifications (discord_id, kick_username, discord_server_id)
+                    VALUES (:d, :k, :g)
                 """
                     ),
-                    {"d": discord_id, "k": kick_username},
+                    {"d": discord_id, "k": kick_username, "g": guild_id},
                 )
 
         print(f"✅ OAuth link successful: Discord {discord_id} -> Kick {kick_username}", flush=True)
