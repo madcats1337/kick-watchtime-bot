@@ -7637,6 +7637,12 @@ async def on_raw_reaction_add(payload):
 async def on_command_error(ctx, error):
     """Handle command errors gracefully."""
     try:
+        # If the command has a local error handler, let it handle the error fully.
+        # Without this guard, both the local handler AND this global handler fire
+        # for the same error, causing duplicate messages.
+        if ctx.command and hasattr(ctx.command, 'on_error'):
+            return
+
         if isinstance(error, commands.MissingRequiredArgument):
             await ctx.send(f"❌ Missing argument: `{error.param.name}`")
         elif isinstance(error, commands.CommandNotFound):
