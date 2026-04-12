@@ -3,12 +3,13 @@ Research script to explore Stake.com affiliate API endpoints
 This is for research purposes only - NOT for production use
 """
 
-import os
-import requests
 import json
+import os
+
+import requests
 
 # Get API token from environment variable
-API_TOKEN = os.getenv('STAKE_API_TOKEN')
+API_TOKEN = os.getenv("STAKE_API_TOKEN")
 if not API_TOKEN:
     raise ValueError("STAKE_API_TOKEN environment variable not set")
 
@@ -34,6 +35,7 @@ ENDPOINTS = [
     "/v1/players",
     "/v1/stats",
 ]
+
 
 def test_endpoint(base_url, endpoint):
     """Test a specific API endpoint"""
@@ -80,6 +82,7 @@ def test_endpoint(base_url, endpoint):
 
     return False
 
+
 def main():
     """Test all combinations of base URLs and endpoints"""
     print("🔍 Researching Stake.com Affiliate API...")
@@ -105,6 +108,7 @@ def main():
         print("  • Stake might not have a public affiliate API")
         print("  • API might require different authentication")
         print("  • Need to check Stake's API documentation")
+
 
 if __name__ == "__main__":
     main()

@@ -2,13 +2,13 @@
 
 ## Pre-Deployment Verification
 - [x] Code changes completed in `bot.py`
-- [x] Code changes completed in `oauth_server.py`  
+- [x] Code changes completed in `oauth_server.py`
 - [x] No syntax errors detected
 - [x] Security documentation created (`SECURITY_FIX_OAUTH.md`)
 - [x] All OAuth URL generation points updated (2 locations in bot.py)
 
 ## Environment Variables Check
-✅ **No new environment variables required**  
+✅ **No new environment variables required**
 The fix uses the existing `FLASK_SECRET_KEY` environment variable that's already configured in Railway.
 
 ## Testing Steps (After Deployment)
@@ -77,12 +77,12 @@ The fix uses the existing `FLASK_SECRET_KEY` environment variable that's already
 ```
 
 ### User Support Scenarios
-**Issue**: "My link doesn't work!"  
-**Likely Cause**: Old link from before deployment or link expired (>1 hour)  
+**Issue**: "My link doesn't work!"
+**Likely Cause**: Old link from before deployment or link expired (>1 hour)
 **Solution**: "Please run `!link` again to get a new authorization link"
 
-**Issue**: "I get 403 Forbidden error"  
-**Likely Cause**: Tampered URL or expired signature  
+**Issue**: "I get 403 Forbidden error"
+**Likely Cause**: Tampered URL or expired signature
 **Solution**: "Generate a new link with `!link` command in Discord"
 
 ## Rollback Plan (If Needed)
@@ -93,13 +93,13 @@ If critical issues arise:
 4. Investigate issues before re-attempting fix
 
 ## Success Criteria
-✅ Users can successfully link accounts via `!link` command  
-✅ Reaction-based linking works correctly  
-✅ Unsigned URLs are rejected with 400/403 errors  
-✅ Invalid signatures are rejected with 403 errors  
-✅ Expired signatures (>1 hour) are rejected  
-✅ No errors in Railway logs from signature verification code  
-✅ Attack attempts logged with "🚨 SECURITY" prefix  
+✅ Users can successfully link accounts via `!link` command
+✅ Reaction-based linking works correctly
+✅ Unsigned URLs are rejected with 400/403 errors
+✅ Invalid signatures are rejected with 403 errors
+✅ Expired signatures (>1 hour) are rejected
+✅ No errors in Railway logs from signature verification code
+✅ Attack attempts logged with "🚨 SECURITY" prefix
 
 ## Expected User Impact
 - **Existing linked accounts**: No impact (already linked)

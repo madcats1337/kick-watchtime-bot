@@ -3,8 +3,9 @@ Database Schema Setup for Raffle System
 Creates all tables, indices, and views needed for the monthly raffle
 """
 
-from sqlalchemy import text
 import logging
+
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +198,7 @@ WHERE rp.status = 'active'
 GROUP BY rp.id, rp.discord_server_id;
 """
 
+
 def setup_raffle_database(engine):
     """
     Create all raffle system tables, indices, and views
@@ -216,17 +218,17 @@ def setup_raffle_database(engine):
             statements = []
             current_statement = []
 
-            for line in RAFFLE_SCHEMA_SQL.split('\n'):
+            for line in RAFFLE_SCHEMA_SQL.split("\n"):
                 # Skip comments and empty lines
                 stripped = line.strip()
-                if not stripped or stripped.startswith('--'):
+                if not stripped or stripped.startswith("--"):
                     continue
 
                 current_statement.append(line)
 
                 # Check if this line ends a statement
-                if stripped.endswith(';'):
-                    statement = '\n'.join(current_statement)
+                if stripped.endswith(";"):
+                    statement = "\n".join(current_statement)
                     statements.append(statement)
                     current_statement = []
 
@@ -246,6 +248,7 @@ def setup_raffle_database(engine):
         logger.error(f"❌ Failed to setup raffle database: {e}")
         return False
 
+
 def verify_raffle_schema(engine):
     """
     Verify that all required tables exist
@@ -257,14 +260,14 @@ def verify_raffle_schema(engine):
         dict: Status of each table (True/False)
     """
     required_tables = [
-        'raffle_periods',
-        'raffle_tickets',
-        'raffle_watchtime_converted',
-        'raffle_gifted_subs',
-        'raffle_shuffle_wagers',
-        'raffle_shuffle_links',
-        'raffle_ticket_log',
-        'raffle_draws'
+        "raffle_periods",
+        "raffle_tickets",
+        "raffle_watchtime_converted",
+        "raffle_gifted_subs",
+        "raffle_shuffle_wagers",
+        "raffle_shuffle_links",
+        "raffle_ticket_log",
+        "raffle_draws",
     ]
 
     status = {}
@@ -272,18 +275,23 @@ def verify_raffle_schema(engine):
     try:
         with engine.begin() as conn:
             for table in required_tables:
-                result = conn.execute(text(f"""
+                result = conn.execute(
+                    text(
+                        f"""
                     SELECT EXISTS (
                         SELECT FROM information_schema.tables
                         WHERE table_name = '{table}'
                     );
-                """))
+                """
+                    )
+                )
                 status[table] = result.scalar()
 
     except Exception as e:
         logger.error(f"Failed to verify schema: {e}")
 
     return status
+
 
 def get_current_period(engine, discord_server_id=None):
     """
@@ -299,36 +307,46 @@ def get_current_period(engine, discord_server_id=None):
     try:
         with engine.begin() as conn:
             if discord_server_id is not None:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT id, start_date, end_date, status, total_tickets
                     FROM raffle_periods
                     WHERE status = 'active' AND discord_server_id = :server_id
                     ORDER BY start_date DESC
                     LIMIT 1
-                """), {'server_id': discord_server_id})
+                """
+                    ),
+                    {"server_id": discord_server_id},
+                )
             else:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT id, start_date, end_date, status, total_tickets
                     FROM raffle_periods
                     WHERE status = 'active'
                     ORDER BY start_date DESC
                     LIMIT 1
-                """))
+                """
+                    )
+                )
             row = result.fetchone()
 
             if row:
                 return {
-                    'id': row[0],
-                    'start_date': row[1],
-                    'end_date': row[2],
-                    'status': row[3],
-                    'total_tickets': row[4]
+                    "id": row[0],
+                    "start_date": row[1],
+                    "end_date": row[2],
+                    "status": row[3],
+                    "total_tickets": row[4],
                 }
             return None
 
     except Exception as e:
         logger.error(f"Failed to get current period: {e}")
         return None
+
 
 def create_new_period(engine, start_date, end_date, clear_tickets=True, discord_server_id=None):
     """
@@ -349,84 +367,121 @@ def create_new_period(engine, start_date, end_date, clear_tickets=True, discord_
         with engine.begin() as conn:
             # Get the old active period if it exists (filter by server)
             if discord_server_id is not None:
-                old_period = conn.execute(text("""
+                old_period = conn.execute(
+                    text(
+                        """
                     SELECT id FROM raffle_periods
                     WHERE status = 'active' AND discord_server_id = :server_id
                     ORDER BY id DESC
                     LIMIT 1
-                """), {'server_id': discord_server_id}).fetchone()
+                """
+                    ),
+                    {"server_id": discord_server_id},
+                ).fetchone()
             else:
-                old_period = conn.execute(text("""
+                old_period = conn.execute(
+                    text(
+                        """
                     SELECT id FROM raffle_periods
                     WHERE status = 'active'
                     ORDER BY id DESC
                     LIMIT 1
-                """)).fetchone()
+                """
+                    )
+                ).fetchone()
 
             # Close any active periods
             if old_period:
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     UPDATE raffle_periods
                     SET status = 'ended'
                     WHERE id = :period_id
-                """), {'period_id': old_period[0]})
+                """
+                    ),
+                    {"period_id": old_period[0]},
+                )
                 logger.info(f"Closed old raffle period #{old_period[0]}")
 
             # Create new period
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 INSERT INTO raffle_periods (start_date, end_date, status, discord_server_id)
                 VALUES (:start, :end, 'active', :server_id)
                 RETURNING id
-            """), {
-                'start': start_date,
-                'end': end_date,
-                'server_id': discord_server_id or 0
-            })
+            """
+                ),
+                {"start": start_date, "end": end_date, "server_id": discord_server_id or 0},
+            )
             period_id = result.scalar()
 
             # NEVER delete tickets - preserve all historical data!
             # Tickets are tied to period_id so they don't interfere with new periods
             # The clear_tickets parameter is now ignored for safety
             if old_period:
-                logger.info(f"Period #{old_period[0]} closed. All {old_period[0]} tickets preserved for historical records.")
+                logger.info(
+                    f"Period #{old_period[0]} closed. All {old_period[0]} tickets preserved for historical records."
+                )
             logger.info(f"New period #{period_id} created. Tickets are isolated by period_id.")
 
             # Snapshot current watchtime as "already converted" for new period
             # This prevents awarding tickets for watchtime earned before this period
             if discord_server_id is not None:
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     INSERT INTO raffle_watchtime_converted (period_id, kick_name, minutes_converted, tickets_awarded)
                     SELECT :period_id, username, minutes, 0
                     FROM watchtime
                     WHERE minutes > 0 AND discord_server_id = :server_id
-                """), {'period_id': period_id, 'server_id': discord_server_id})
+                """
+                    ),
+                    {"period_id": period_id, "server_id": discord_server_id},
+                )
             else:
                 # Backward compatibility: snapshot all watchtime if no server_id
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     INSERT INTO raffle_watchtime_converted (period_id, kick_name, minutes_converted, tickets_awarded)
                     SELECT :period_id, username, minutes, 0
                     FROM watchtime
                     WHERE minutes > 0
-                """), {'period_id': period_id})
+                """
+                    ),
+                    {"period_id": period_id},
+                )
             logger.info(f"Snapshotted existing watchtime for new period (prevents double-awarding)")
 
             # Delete gifted subs only for this server
             if discord_server_id is not None:
-                deleted_subs = conn.execute(text("""
-                    DELETE FROM raffle_gifted_subs 
+                deleted_subs = conn.execute(
+                    text(
+                        """
+                    DELETE FROM raffle_gifted_subs
                     WHERE period_id IN (
                         SELECT id FROM raffle_periods WHERE discord_server_id = :server_id
                     )
-                """), {'server_id': discord_server_id}).rowcount
+                """
+                    ),
+                    {"server_id": discord_server_id},
+                ).rowcount
                 logger.info(f"Deleted {deleted_subs} gifted sub records for server {discord_server_id}")
 
                 # Clear shuffle wager tracking only for this server
-                deleted_wagers = conn.execute(text("""
-                    DELETE FROM raffle_shuffle_wagers 
+                deleted_wagers = conn.execute(
+                    text(
+                        """
+                    DELETE FROM raffle_shuffle_wagers
                     WHERE period_id IN (
                         SELECT id FROM raffle_periods WHERE discord_server_id = :server_id
                     )
-                """), {'server_id': discord_server_id}).rowcount
+                """
+                    ),
+                    {"server_id": discord_server_id},
+                ).rowcount
                 logger.info(f"Deleted {deleted_wagers} shuffle wager records for server {discord_server_id}")
             else:
                 # Backward compatibility: delete all if no server_id
@@ -443,6 +498,7 @@ def create_new_period(engine, start_date, end_date, clear_tickets=True, discord_
         logger.error(f"Failed to create new period: {e}")
         return None
 
+
 def migrate_add_created_at_to_shuffle_wagers(engine):
     """
     Migration: Add created_at column to raffle_shuffle_wagers table
@@ -451,29 +507,41 @@ def migrate_add_created_at_to_shuffle_wagers(engine):
     try:
         with engine.begin() as conn:
             # Check if column already exists
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 SELECT column_name
                 FROM information_schema.columns
                 WHERE table_name = 'raffle_shuffle_wagers'
                 AND column_name = 'created_at'
-            """))
+            """
+                )
+            )
 
             if result.fetchone():
                 logger.info("✓ Column 'created_at' already exists in raffle_shuffle_wagers")
                 return True
 
             # Add the column
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 ALTER TABLE raffle_shuffle_wagers
                 ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            """))
+            """
+                )
+            )
 
             # Set created_at for existing rows to last_checked (best approximation)
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 UPDATE raffle_shuffle_wagers
                 SET created_at = last_checked
                 WHERE created_at IS NULL
-            """))
+            """
+                )
+            )
 
             logger.info("✅ Added 'created_at' column to raffle_shuffle_wagers table")
             return True
@@ -481,6 +549,7 @@ def migrate_add_created_at_to_shuffle_wagers(engine):
     except Exception as e:
         logger.error(f"Migration failed: {e}")
         return False
+
 
 def migrate_add_platform_to_wager_tables(engine):
     """
@@ -492,52 +561,76 @@ def migrate_add_platform_to_wager_tables(engine):
 
         with engine.begin() as conn:
             # Add platform column to raffle_shuffle_wagers if it doesn't exist
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 SELECT column_name
                 FROM information_schema.columns
                 WHERE table_name = 'raffle_shuffle_wagers'
                 AND column_name = 'platform'
-            """))
+            """
+                )
+            )
 
             if not result.fetchone():
                 # Add the column
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     ALTER TABLE raffle_shuffle_wagers
                     ADD COLUMN platform VARCHAR(50) DEFAULT 'shuffle'
-                """))
+                """
+                    )
+                )
 
                 # Set platform for existing rows
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     UPDATE raffle_shuffle_wagers
                     SET platform = 'shuffle'
                     WHERE platform IS NULL
-                """))
+                """
+                    )
+                )
 
                 logger.info("✅ Added 'platform' column to raffle_shuffle_wagers table")
             else:
                 logger.info("✓ Column 'platform' already exists in raffle_shuffle_wagers")
 
             # Add platform column to raffle_shuffle_links if it doesn't exist
-            result2 = conn.execute(text("""
+            result2 = conn.execute(
+                text(
+                    """
                 SELECT column_name
                 FROM information_schema.columns
                 WHERE table_name = 'raffle_shuffle_links'
                 AND column_name = 'platform'
-            """))
+            """
+                )
+            )
 
             if not result2.fetchone():
                 # Add the column
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     ALTER TABLE raffle_shuffle_links
                     ADD COLUMN platform VARCHAR(50) DEFAULT 'shuffle'
-                """))
+                """
+                    )
+                )
 
                 # Set platform for existing rows
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     UPDATE raffle_shuffle_links
                     SET platform = 'shuffle'
                     WHERE platform IS NULL
-                """))
+                """
+                    )
+                )
 
                 logger.info("✅ Added 'platform' column to raffle_shuffle_links table")
             else:
@@ -549,19 +642,18 @@ def migrate_add_platform_to_wager_tables(engine):
         logger.error(f"Migration failed: {e}")
         return False
 
+
 if __name__ == "__main__":
     """
     Run this script directly to setup the database schema
     """
     import os
+
     from dotenv import load_dotenv
     from sqlalchemy import create_engine
 
     # Setup logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
     # Load environment variables
     load_dotenv()

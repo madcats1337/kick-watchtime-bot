@@ -1,8 +1,8 @@
 # 🔒 OAuth Security Fix - Account Takeover Prevention
 
 ## ⚠️ Vulnerability Discovered
-**Date**: Current deployment  
-**Severity**: Critical  
+**Date**: Current deployment
+**Severity**: Critical
 **Impact**: Account takeover via OAuth initiation spoofing
 
 ### Attack Scenario
@@ -89,7 +89,7 @@ def verify_discord_id_signature(discord_id: str, timestamp: int, signature: str)
         if abs(now - timestamp) > 3600:  # 1 hour
             print(f"⚠️ OAuth signature expired: {abs(now - timestamp)}s old")
             return False
-        
+
         expected_sig = sign_discord_id(discord_id, timestamp)
         return hmac.compare_digest(expected_sig, signature)
     except Exception as e:
@@ -102,13 +102,13 @@ def auth_kick():
     discord_id = request.args.get('discord_id')
     timestamp_str = request.args.get('timestamp')
     signature = request.args.get('signature')
-    
+
     if not all([discord_id, timestamp_str, signature]):
         return "❌ Missing required parameters", 400
-    
+
     if not verify_discord_id_signature(discord_id, int(timestamp_str), signature):
         return "❌ Invalid or expired authentication token. Please generate a new link using !link", 403
-    
+
     # ... rest of OAuth flow
 ```
 
@@ -129,11 +129,11 @@ def auth_kick():
 4. **User impact** - Users will need to generate new `!link` URLs after deployment (old ones expire anyway)
 
 ## 🔐 Security Guarantees
-✅ **Prevents OAuth initiation spoofing** - Attackers cannot create valid URLs for other users  
-✅ **Prevents replay attacks** - Signatures expire after 1 hour  
-✅ **Prevents timing attacks** - Uses `hmac.compare_digest()` for constant-time comparison  
-✅ **No secret leakage** - HMAC signatures are one-way (cannot derive secret key)  
-✅ **URL integrity** - Any modification to discord_id, timestamp, or signature invalidates the URL  
+✅ **Prevents OAuth initiation spoofing** - Attackers cannot create valid URLs for other users
+✅ **Prevents replay attacks** - Signatures expire after 1 hour
+✅ **Prevents timing attacks** - Uses `hmac.compare_digest()` for constant-time comparison
+✅ **No secret leakage** - HMAC signatures are one-way (cannot derive secret key)
+✅ **URL integrity** - Any modification to discord_id, timestamp, or signature invalidates the URL
 
 ## 📊 Impact Assessment
 - **Attack Surface Reduced**: OAuth endpoint now requires cryptographic proof

@@ -8,16 +8,18 @@ Settings loaded from database (bot_settings table) with env var fallbacks:
 - wager_tickets_per_1000 / WAGER_TICKETS_PER_1000_USD: Tickets to award per $1000 wagered
 """
 
-from sqlalchemy import text
-from datetime import datetime
-import logging
-import aiohttp
 import asyncio
+import logging
 import os
+from datetime import datetime
+
+import aiohttp
+from sqlalchemy import text
 
 from .tickets import TicketManager
 
 logger = logging.getLogger(__name__)
+
 
 class ShuffleWagerTracker:
     """
@@ -38,7 +40,7 @@ class ShuffleWagerTracker:
 
         print(f"[Shuffle Tracker] 🎰 Initialized for platform: {self.platform_name}")
         # Show campaign codes (supports comma-separated multiple codes)
-        codes = [c.strip() for c in self.campaign_code.split(',')]
+        codes = [c.strip() for c in self.campaign_code.split(",")]
         if len(codes) > 1:
             print(f"[Shuffle Tracker] 📊 Campaign codes ({len(codes)}): {', '.join(codes)}")
         else:
@@ -55,10 +57,10 @@ class ShuffleWagerTracker:
             # Refresh to get latest values
             self.bot_settings.refresh()
 
-            self.affiliate_url = self.bot_settings.shuffle_affiliate_url or ''
-            self.campaign_code = self.bot_settings.shuffle_campaign_code or 'lele'
+            self.affiliate_url = self.bot_settings.shuffle_affiliate_url or ""
+            self.campaign_code = self.bot_settings.shuffle_campaign_code or "lele"
             self.tickets_per_1000 = self.bot_settings.shuffle_tickets_per_1000 or 20
-            self.platform_name = self.bot_settings.get('wager_platform_name') or 'shuffle'
+            self.platform_name = self.bot_settings.get("wager_platform_name") or "shuffle"
         else:
             # Fallback to environment variables
             self.affiliate_url = os.getenv("WAGER_AFFILIATE_URL") or os.getenv("SHUFFLE_AFFILIATE_URL", "")
@@ -69,7 +71,7 @@ class ShuffleWagerTracker:
     def refresh_settings(self):
         """Reload settings from database"""
         self._load_settings()
-        codes = [c.strip() for c in self.campaign_code.split(',')]
+        codes = [c.strip() for c in self.campaign_code.split(",")]
         codes_str = f"{len(codes)} codes" if len(codes) > 1 else self.campaign_code
         print(f"[Shuffle Tracker] 🔄 Settings refreshed - URL: {bool(self.affiliate_url)}, Codes: {codes_str}")
 
@@ -88,41 +90,42 @@ class ShuffleWagerTracker:
             period_id = self._get_active_period_id()
             if not period_id:
                 logger.warning(f"No active raffle period - skipping {self.platform_name} wager update")
-                return {'status': 'no_active_period', 'updates': 0}
+                return {"status": "no_active_period", "updates": 0}
 
             # Fetch current wager data from platform
             wager_data = await self._fetch_shuffle_data()
 
             if not wager_data:
                 logger.error(f"Failed to fetch {self.platform_name} affiliate data")
-                return {'status': 'fetch_failed', 'updates': 0}
+                return {"status": "fetch_failed", "updates": 0}
 
             # Filter for campaign code(s) - supports multiple codes separated by comma
-            campaign_codes = [code.strip().lower() for code in self.campaign_code.split(',')]
-            filtered_data = [
-                user for user in wager_data
-                if user.get('campaignCode', '').lower() in campaign_codes
-            ]
+            campaign_codes = [code.strip().lower() for code in self.campaign_code.split(",")]
+            filtered_data = [user for user in wager_data if user.get("campaignCode", "").lower() in campaign_codes]
 
             if not filtered_data:
                 logger.warning(f"No users found with campaign codes '{self.campaign_code}' on {self.platform_name}")
-                return {'status': 'no_users', 'updates': 0}
+                return {"status": "no_users", "updates": 0}
 
-            logger.info(f"Found {len(filtered_data)} users with campaign codes '{self.campaign_code}' on {self.platform_name}")
+            logger.info(
+                f"Found {len(filtered_data)} users with campaign codes '{self.campaign_code}' on {self.platform_name}"
+            )
 
             updates = []
             tickets_to_award = []  # Store ticket awards to process after wager updates
 
             with self.engine.begin() as conn:
                 for user_data in filtered_data:
-                    shuffle_username = user_data.get('username')
-                    current_wager = float(user_data.get('wagerAmount', 0))
+                    shuffle_username = user_data.get("username")
+                    current_wager = float(user_data.get("wagerAmount", 0))
 
                     if not shuffle_username:
                         continue
 
                     # Get previous wager amount for this period
-                    prev_result = conn.execute(text("""
+                    prev_result = conn.execute(
+                        text(
+                            """
                         SELECT
                             last_known_wager,
                             tickets_awarded,
@@ -130,10 +133,10 @@ class ShuffleWagerTracker:
                             kick_name
                         FROM raffle_shuffle_wagers
                         WHERE period_id = :period_id AND shuffle_username = :username
-                    """), {
-                        'period_id': period_id,
-                        'username': shuffle_username
-                    })
+                    """
+                        ),
+                        {"period_id": period_id, "username": shuffle_username},
+                    )
 
                     prev_row = prev_result.fetchone()
 
@@ -157,7 +160,9 @@ class ShuffleWagerTracker:
 
                         if new_tickets == 0:
                             # Less than threshold, update wager but no tickets
-                            conn.execute(text("""
+                            conn.execute(
+                                text(
+                                    """
                                 UPDATE raffle_shuffle_wagers
                                 SET
                                     last_known_wager = :current_wager,
@@ -165,29 +170,32 @@ class ShuffleWagerTracker:
                                     last_checked = CURRENT_TIMESTAMP,
                                     last_updated = CURRENT_TIMESTAMP
                                 WHERE period_id = :period_id AND shuffle_username = :username
-                            """), {
-                                'period_id': period_id,
-                                'username': shuffle_username,
-                                'current_wager': current_wager
-                            })
+                            """
+                                ),
+                                {"period_id": period_id, "username": shuffle_username, "current_wager": current_wager},
+                            )
                             continue
 
                         # Award tickets if user is linked
                         if discord_id and kick_name:
                             # Queue ticket award to happen after wager update transaction
-                            tickets_to_award.append({
-                                'discord_id': discord_id,
-                                'kick_name': kick_name,
-                                'tickets': new_tickets,
-                                'description': f"{self.platform_name.capitalize()} wager: ${wager_delta:.2f} (${last_known_wager:.2f} → ${current_wager:.2f})",
-                                'period_id': period_id,
-                                'shuffle_username': shuffle_username,
-                                'wager_delta': wager_delta,
-                                'current_wager': current_wager
-                            })
-                            
+                            tickets_to_award.append(
+                                {
+                                    "discord_id": discord_id,
+                                    "kick_name": kick_name,
+                                    "tickets": new_tickets,
+                                    "description": f"{self.platform_name.capitalize()} wager: ${wager_delta:.2f} (${last_known_wager:.2f} → ${current_wager:.2f})",
+                                    "period_id": period_id,
+                                    "shuffle_username": shuffle_username,
+                                    "wager_delta": wager_delta,
+                                    "current_wager": current_wager,
+                                }
+                            )
+
                             # Update wager tracking (will commit with transaction)
-                            conn.execute(text("""
+                            conn.execute(
+                                text(
+                                    """
                                 UPDATE raffle_shuffle_wagers
                                 SET
                                     last_known_wager = :current_wager,
@@ -196,15 +204,20 @@ class ShuffleWagerTracker:
                                     last_checked = CURRENT_TIMESTAMP,
                                     last_updated = CURRENT_TIMESTAMP
                                 WHERE period_id = :period_id AND shuffle_username = :username
-                            """), {
-                                'period_id': period_id,
-                                'username': shuffle_username,
-                                'current_wager': current_wager,
-                                'new_tickets': new_tickets
-                            })
+                            """
+                                ),
+                                {
+                                    "period_id": period_id,
+                                    "username": shuffle_username,
+                                    "current_wager": current_wager,
+                                    "new_tickets": new_tickets,
+                                },
+                            )
                         else:
                             # User exists but not linked - just update wager
-                            conn.execute(text("""
+                            conn.execute(
+                                text(
+                                    """
                                 UPDATE raffle_shuffle_wagers
                                 SET
                                     last_known_wager = :current_wager,
@@ -212,17 +225,21 @@ class ShuffleWagerTracker:
                                     last_checked = CURRENT_TIMESTAMP,
                                     last_updated = CURRENT_TIMESTAMP
                                 WHERE period_id = :period_id AND shuffle_username = :username
-                            """), {
-                                'period_id': period_id,
-                                'username': shuffle_username,
-                                'current_wager': current_wager
-                            })
+                            """
+                                ),
+                                {"period_id": period_id, "username": shuffle_username, "current_wager": current_wager},
+                            )
                     else:
                         # New user - check if they're linked
-                        link_result = conn.execute(text("""
+                        link_result = conn.execute(
+                            text(
+                                """
                             SELECT discord_id, kick_name FROM raffle_shuffle_links
                             WHERE shuffle_username = :username AND verified = TRUE
-                        """), {'username': shuffle_username})
+                        """
+                            ),
+                            {"username": shuffle_username},
+                        )
 
                         link_row = link_result.fetchone()
                         discord_id = link_row[0] if link_row else None
@@ -230,64 +247,72 @@ class ShuffleWagerTracker:
 
                         # Create wager tracking entry
                         # Set last_known_wager = total_wager so only FUTURE wagers earn tickets
-                        conn.execute(text("""
+                        conn.execute(
+                            text(
+                                """
                             INSERT INTO raffle_shuffle_wagers
                                 (period_id, shuffle_username, kick_name, discord_id,
                                  total_wager_usd, last_known_wager, tickets_awarded, platform)
                             VALUES
                                 (:period_id, :username, :kick_name, :discord_id,
                                  :wager, :wager, 0, :platform)
-                        """), {
-                            'period_id': period_id,
-                            'username': shuffle_username,
-                            'kick_name': kick_name,
-                            'discord_id': discord_id,
-                            'wager': current_wager,
-                            'platform': self.platform_name
-                        })
+                        """
+                            ),
+                            {
+                                "period_id": period_id,
+                                "username": shuffle_username,
+                                "kick_name": kick_name,
+                                "discord_id": discord_id,
+                                "wager": current_wager,
+                                "platform": self.platform_name,
+                            },
+                        )
 
                         # No tickets awarded for initial/existing wagers
-                        logger.info(f"📊 Tracking new Shuffle user: {shuffle_username} (${current_wager:.2f}) - "
-                                  f"{'Linked to ' + kick_name if kick_name else 'Not linked'}")
+                        logger.info(
+                            f"📊 Tracking new Shuffle user: {shuffle_username} (${current_wager:.2f}) - "
+                            f"{'Linked to ' + kick_name if kick_name else 'Not linked'}"
+                        )
 
             # Wager transaction is complete, now award tickets in separate transactions
             for award in tickets_to_award:
                 try:
                     success = self.ticket_manager.award_tickets(
-                        discord_id=award['discord_id'],
-                        kick_name=award['kick_name'],
-                        tickets=award['tickets'],
-                        source='shuffle_wager',
-                        description=award['description'],
-                        period_id=award['period_id']
+                        discord_id=award["discord_id"],
+                        kick_name=award["kick_name"],
+                        tickets=award["tickets"],
+                        source="shuffle_wager",
+                        description=award["description"],
+                        period_id=award["period_id"],
                     )
-                    
+
                     if success:
-                        updates.append({
-                            'shuffle_username': award['shuffle_username'],
-                            'kick_name': award['kick_name'],
-                            'wager_delta': award['wager_delta'],
-                            'tickets_awarded': award['tickets'],
-                            'total_wager': award['current_wager']
-                        })
-                        logger.info(f"💰 {award['kick_name']} ({award['shuffle_username']}): "
-                                  f"${award['wager_delta']:.2f} wagered → {award['tickets']} tickets")
+                        updates.append(
+                            {
+                                "shuffle_username": award["shuffle_username"],
+                                "kick_name": award["kick_name"],
+                                "wager_delta": award["wager_delta"],
+                                "tickets_awarded": award["tickets"],
+                                "total_wager": award["current_wager"],
+                            }
+                        )
+                        logger.info(
+                            f"💰 {award['kick_name']} ({award['shuffle_username']}): "
+                            f"${award['wager_delta']:.2f} wagered → {award['tickets']} tickets"
+                        )
                     else:
                         logger.error(f"Failed to award {award['tickets']} tickets to {award['kick_name']}")
                 except Exception as e:
                     logger.error(f"Error awarding tickets to {award['kick_name']}: {e}")
 
-            return {
-                'status': 'success',
-                'updates': len(updates),
-                'details': updates
-            }
+            return {"status": "success", "updates": len(updates), "details": updates}
 
         except Exception as e:
             logger.error(f"Failed to update Shuffle wagers: {e}")
             import traceback
+
             traceback.print_exc()
-            return {'status': 'error', 'error': str(e), 'updates': 0}
+            return {"status": "error", "error": str(e), "updates": 0}
 
     def _get_active_period_id(self):
         """Get the ID of the currently active raffle period"""
@@ -295,20 +320,29 @@ class ShuffleWagerTracker:
             with self.engine.begin() as conn:
                 if self.server_id:
                     # Multiserver: filter by discord_server_id
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         SELECT id FROM raffle_periods
                         WHERE status = 'active' AND discord_server_id = :sid
                         ORDER BY start_date DESC
                         LIMIT 1
-                    """), {"sid": self.server_id})
+                    """
+                        ),
+                        {"sid": self.server_id},
+                    )
                 else:
                     # Backwards compatible: no server filter
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         SELECT id FROM raffle_periods
                         WHERE status = 'active'
                         ORDER BY start_date DESC
                         LIMIT 1
-                    """))
+                    """
+                        )
+                    )
                 row = result.fetchone()
                 return row[0] if row else None
         except Exception as e:
@@ -362,86 +396,110 @@ class ShuffleWagerTracker:
         try:
             with self.engine.begin() as conn:
                 # Check if shuffle username already linked
-                existing = conn.execute(text("""
+                existing = conn.execute(
+                    text(
+                        """
                     SELECT discord_id, kick_name FROM raffle_shuffle_links
                     WHERE shuffle_username = :username
-                """), {'username': shuffle_username})
+                """
+                    ),
+                    {"username": shuffle_username},
+                )
 
                 existing_row = existing.fetchone()
 
                 if existing_row:
                     return {
-                        'status': 'already_linked',
-                        'existing_discord_id': existing_row[0],
-                        'existing_kick_name': existing_row[1]
+                        "status": "already_linked",
+                        "existing_discord_id": existing_row[0],
+                        "existing_kick_name": existing_row[1],
                     }
 
                 # Check if discord_id already has a shuffle link
-                discord_check = conn.execute(text("""
+                discord_check = conn.execute(
+                    text(
+                        """
                     SELECT shuffle_username FROM raffle_shuffle_links
                     WHERE discord_id = :discord_id
-                """), {'discord_id': discord_id})
+                """
+                    ),
+                    {"discord_id": discord_id},
+                )
 
                 discord_row = discord_check.fetchone()
 
                 if discord_row:
-                    return {
-                        'status': 'discord_already_linked',
-                        'existing_shuffle_username': discord_row[0]
-                    }
+                    return {"status": "discord_already_linked", "existing_shuffle_username": discord_row[0]}
 
                 # Create the link
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     INSERT INTO raffle_shuffle_links
                         (shuffle_username, kick_name, discord_id, verified, verified_by_discord_id, verified_at)
                     VALUES
                         (:shuffle_username, :kick_name, :discord_id, :verified, :verified_by,
                          CASE WHEN :verified THEN CURRENT_TIMESTAMP ELSE NULL END)
-                """), {
-                    'shuffle_username': shuffle_username,
-                    'kick_name': kick_name,
-                    'discord_id': discord_id,
-                    'verified': verified,
-                    'verified_by': verified_by
-                })
+                """
+                    ),
+                    {
+                        "shuffle_username": shuffle_username,
+                        "kick_name": kick_name,
+                        "discord_id": discord_id,
+                        "verified": verified,
+                        "verified_by": verified_by,
+                    },
+                )
 
-            logger.info(f"🔗 Linked Shuffle account: {shuffle_username} → {kick_name} (Discord: {discord_id}, verified: {verified})")
+            logger.info(
+                f"🔗 Linked Shuffle account: {shuffle_username} → {kick_name} (Discord: {discord_id}, verified: {verified})"
+            )
 
             return {
-                'status': 'success',
-                'shuffle_username': shuffle_username,
-                'kick_name': kick_name,
-                'discord_id': discord_id,
-                'verified': verified
+                "status": "success",
+                "shuffle_username": shuffle_username,
+                "kick_name": kick_name,
+                "discord_id": discord_id,
+                "verified": verified,
             }
 
         except Exception as e:
             logger.error(f"Failed to link Shuffle account: {e}")
-            return {'status': 'error', 'error': str(e)}
+            return {"status": "error", "error": str(e)}
 
     def _get_active_period_id(self):
         """Get the ID of the currently active raffle period"""
         try:
             with self.engine.begin() as conn:
                 if self.server_id is not None:
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         SELECT id FROM raffle_periods
                         WHERE status = 'active' AND discord_server_id = :server_id
                         ORDER BY start_date DESC
                         LIMIT 1
-                    """), {'server_id': self.server_id})
+                    """
+                        ),
+                        {"server_id": self.server_id},
+                    )
                 else:
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         SELECT id FROM raffle_periods
                         WHERE status = 'active'
                         ORDER BY start_date DESC
                         LIMIT 1
-                    """))
+                    """
+                        )
+                    )
                 row = result.fetchone()
                 return row[0] if row else None
         except Exception as e:
             logger.error(f"Failed to get active period: {e}")
             return None
+
 
 async def setup_shuffle_tracker(bot, engine, server_id=None, bot_settings=None):
     """
@@ -471,25 +529,28 @@ async def setup_shuffle_tracker(bot, engine, server_id=None, bot_settings=None):
             print("[Shuffle Tracker] 🔄 Checking wagers...")
             result = await tracker.update_shuffle_wagers()
 
-            if result['status'] == 'success' and result['updates'] > 0:
+            if result["status"] == "success" and result["updates"] > 0:
                 print(f"[Shuffle Tracker] ✅ Updated {result['updates']} wager(s)")
                 # Print details of each update
-                for detail in result.get('details', []):
-                    print(f"  💰 {detail['kick_name']} ({detail['shuffle_username']}): "
-                          f"${detail['wager_delta']:.2f} → +{detail['tickets_awarded']} tickets")
-            elif result['status'] == 'success':
+                for detail in result.get("details", []):
+                    print(
+                        f"  💰 {detail['kick_name']} ({detail['shuffle_username']}): "
+                        f"${detail['wager_delta']:.2f} → +{detail['tickets_awarded']} tickets"
+                    )
+            elif result["status"] == "success":
                 print(f"[Shuffle Tracker] ℹ️ No new wagers found")
-            elif result['status'] == 'no_active_period':
+            elif result["status"] == "no_active_period":
                 print("[Shuffle Tracker] ⏸️ No active raffle period")
-            elif result['status'] == 'no_users':
+            elif result["status"] == "no_users":
                 print(f"[Shuffle Tracker] ℹ️ No users found with campaign code(s): {tracker.campaign_code}")
-            elif result['status'] == 'fetch_failed':
+            elif result["status"] == "fetch_failed":
                 print(f"[Shuffle Tracker] ❌ Failed to fetch data from affiliate URL")
-            elif result['status'] == 'error':
+            elif result["status"] == "error":
                 print(f"[Shuffle Tracker] ❌ Update failed: {result.get('error')}")
         except Exception as e:
             print(f"[Shuffle Tracker] ❌ Task error: {e}")
             import traceback
+
             traceback.print_exc()
 
     @update_shuffle_task.before_loop

@@ -17,9 +17,9 @@ from raffle_system import setup_shuffle_tracker
 @bot.event
 async def on_ready():
     print(f'Bot logged in as {bot.user}')
-    
+
     # ... existing setup code ...
-    
+
     # CRITICAL: Start shuffle wager polling (runs every 15 minutes)
     # Do this for each guild/server the bot is in
     for guild in bot.guilds:

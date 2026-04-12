@@ -6,7 +6,7 @@
 - ✅ `raffle_system/watchtime_converter.py` - Automatic watchtime → tickets conversion
 - ✅ `test_watchtime_converter.py` - Test suite for the converter
 
-### Files Modified  
+### Files Modified
 - ✅ `bot.py` - Added raffle system initialization in `on_ready()`
 
 ## How It Works
@@ -42,11 +42,11 @@ Result:
 
 ### Key Features
 
-✅ **No double-counting** - Tracks what watchtime has been converted per period  
-✅ **Only full hours** - Partial hours don't convert (prevents fractional tickets)  
-✅ **Linked users only** - Requires Discord ↔ Kick account linking  
-✅ **Audit trail** - Every conversion logged in `raffle_ticket_log`  
-✅ **Per-period tracking** - Resets when new raffle period starts  
+✅ **No double-counting** - Tracks what watchtime has been converted per period
+✅ **Only full hours** - Partial hours don't convert (prevents fractional tickets)
+✅ **Linked users only** - Requires Discord ↔ Kick account linking
+✅ **Audit trail** - Every conversion logged in `raffle_ticket_log`
+✅ **Per-period tracking** - Resets when new raffle period starts
 
 ## Integration with Bot
 
@@ -99,7 +99,7 @@ Test results:
 
 ## Next Steps
 
-The watchtime integration is complete and ready for production! 
+The watchtime integration is complete and ready for production!
 
 **Phase 3 next:** Gifted Sub Tracking
 - Listen for Kick websocket gifted sub events

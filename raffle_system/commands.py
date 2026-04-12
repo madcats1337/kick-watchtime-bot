@@ -5,14 +5,17 @@ Handles user and admin commands for raffle participation
 
 import logging
 from datetime import datetime
+
 import discord
 from discord.ext import commands
 from sqlalchemy import text
-from .tickets import TicketManager
+
 from .draw import RaffleDraw
 from .shuffle_tracker import ShuffleWagerTracker
+from .tickets import TicketManager
 
 logger = logging.getLogger(__name__)
+
 
 class RaffleCommands(commands.Cog):
     """Discord commands for raffle system"""
@@ -23,51 +26,55 @@ class RaffleCommands(commands.Cog):
         self.ticket_manager = TicketManager(engine)  # Default manager (backward compat)
         self.raffle_draw = RaffleDraw(engine)  # Default draw (backward compat)
         self.shuffle_tracker = ShuffleWagerTracker(engine)  # Default tracker (backward compat)
-    
+
     def _get_guild_managers(self, ctx):
         """Get guild-specific managers for multiserver support"""
         guild_id = ctx.guild.id if ctx.guild else None
         return {
-            'ticket_manager': TicketManager(self.engine, server_id=guild_id),
-            'raffle_draw': RaffleDraw(self.engine),  # RaffleDraw doesn't need server_id, uses period_id
-            'shuffle_tracker': ShuffleWagerTracker(self.engine, server_id=guild_id)
+            "ticket_manager": TicketManager(self.engine, server_id=guild_id),
+            "raffle_draw": RaffleDraw(self.engine),  # RaffleDraw doesn't need server_id, uses period_id
+            "shuffle_tracker": ShuffleWagerTracker(self.engine, server_id=guild_id),
         }
 
     # ========================================
     # USER COMMANDS
     # ========================================
 
-    @commands.command(name='tickets', aliases=['ticket', 'mytickets'])
+    @commands.command(name="tickets", aliases=["ticket", "mytickets"])
     async def check_tickets(self, ctx):
         """
         Check your raffle ticket balance
         Usage: !tickets
         """
-        logger.info(f"[TICKETS] Command called by {ctx.author} (ID: {ctx.author.id}) in guild {ctx.guild.name if ctx.guild else 'DM'}")
+        logger.info(
+            f"[TICKETS] Command called by {ctx.author} (ID: {ctx.author.id}) in guild {ctx.guild.name if ctx.guild else 'DM'}"
+        )
         try:
             discord_id = ctx.author.id
             managers = self._get_guild_managers(ctx)
-            ticket_manager = managers['ticket_manager']
-            raffle_draw = managers['raffle_draw']
-            
+            ticket_manager = managers["ticket_manager"]
+            raffle_draw = managers["raffle_draw"]
+
             logger.info(f"[TICKETS] Getting tickets for user {discord_id}")
             tickets = ticket_manager.get_user_tickets(discord_id)
 
-            if not tickets or tickets['total_tickets'] == 0:
-                await ctx.send(f"❌ {ctx.author.mention} You don't have any raffle tickets yet!\n"
-                             f"Earn tickets by:\n"
-                             f"• Watching streams (10 tickets per hour)\n"
-                             f"• Gifting subs (15 tickets per sub)\n"
-                             f"• Wagering on Shuffle.com with code 'lele' (20 tickets per $1000)")
+            if not tickets or tickets["total_tickets"] == 0:
+                await ctx.send(
+                    f"❌ {ctx.author.mention} You don't have any raffle tickets yet!\n"
+                    f"Earn tickets by:\n"
+                    f"• Watching streams (10 tickets per hour)\n"
+                    f"• Gifting subs (15 tickets per sub)\n"
+                    f"• Wagering on Shuffle.com with code 'lele' (20 tickets per $1000)"
+                )
                 return
 
             # Get user's rank
             rank = ticket_manager.get_user_rank(discord_id)
             stats = ticket_manager.get_period_stats()
-            total_participants = stats['total_participants'] if stats else 0
+            total_participants = stats["total_participants"] if stats else 0
 
             # Calculate win probability
-            win_prob = raffle_draw.get_user_win_probability(discord_id, stats['period_id']) if stats else None
+            win_prob = raffle_draw.get_user_win_probability(discord_id, stats["period_id"]) if stats else None
             win_prob_text = f"{win_prob['probability_percent']:.2f}%" if win_prob else "N/A"
 
             embed_text = f"""
@@ -92,7 +99,7 @@ Use `!leaderboard` to see top participants!
             logger.error(f"Error checking tickets: {e}")
             await ctx.send(f"❌ Error checking tickets. Please try again.")
 
-    @commands.command(name='raffleboard', aliases=['raffletop', 'rafflerankings'])
+    @commands.command(name="raffleboard", aliases=["raffletop", "rafflerankings"])
     async def raffle_leaderboard(self, ctx, limit: int = 10):
         """
         View raffle ticket leaderboard
@@ -102,9 +109,9 @@ Use `!leaderboard` to see top participants!
         try:
             if limit < 1 or limit > 50:
                 limit = 10
-            
+
             managers = self._get_guild_managers(ctx)
-            ticket_manager = managers['ticket_manager']
+            ticket_manager = managers["ticket_manager"]
 
             leaderboard = ticket_manager.get_leaderboard(limit=limit)
 
@@ -120,10 +127,10 @@ Use `!leaderboard` to see top participants!
             response += f"**Total Participants**: {stats['total_participants']}\n\n"
 
             for entry in leaderboard:
-                rank = entry['rank']
-                kick_name = entry['kick_name'] or 'Unknown'
-                total = entry['total_tickets']
-                prob = (total / stats['total_tickets']) if stats['total_tickets'] > 0 else 0
+                rank = entry["rank"]
+                kick_name = entry["kick_name"] or "Unknown"
+                total = entry["total_tickets"]
+                prob = (total / stats["total_tickets"]) if stats["total_tickets"] > 0 else 0
 
                 medal = ""
                 if rank == 1:
@@ -145,7 +152,7 @@ Use `!leaderboard` to see top participants!
             logger.error(f"Error showing leaderboard: {e}")
             await ctx.send(f"❌ Error loading leaderboard. Please try again.")
 
-    @commands.command(name='raffleinfo', aliases=['raffle'])
+    @commands.command(name="raffleinfo", aliases=["raffle"])
     async def raffle_info(self, ctx):
         """
         View current raffle period information
@@ -153,13 +160,13 @@ Use `!leaderboard` to see top participants!
         """
         try:
             from datetime import datetime
-            
+
             managers = self._get_guild_managers(ctx)
-            ticket_manager = managers['ticket_manager']
-            raffle_draw = managers['raffle_draw']
+            ticket_manager = managers["ticket_manager"]
+            raffle_draw = managers["raffle_draw"]
 
             stats = ticket_manager.get_period_stats()
-            
+
             # Debug logging
             logger.info(f"[raffleinfo] guild_id={ctx.guild.id}, server_id={managers['ticket_manager'].server_id}")
             logger.info(f"[raffleinfo] stats={stats}")
@@ -170,13 +177,13 @@ Use `!leaderboard` to see top participants!
 
             # Check if period hasn't started yet
             now = datetime.now()
-            start_date = stats['start_date']
-            end_date = stats['end_date']
+            start_date = stats["start_date"]
+            end_date = stats["end_date"]
 
             if now < start_date:
                 # Period hasn't started
                 days_until = (start_date - now).days
-                hours_until = ((start_date - now).seconds // 3600)
+                hours_until = (start_date - now).seconds // 3600
                 time_msg = f"{days_until} days" if days_until > 0 else f"{hours_until} hours"
 
                 response = f"""
@@ -209,7 +216,7 @@ Get ready to participate when the period starts!
 
                 # Check if auto-leaderboard is configured (from database settings)
                 leaderboard_channel_id = None
-                if hasattr(self.bot, 'settings_manager') and self.bot.settings_manager:
+                if hasattr(self.bot, "settings_manager") and self.bot.settings_manager:
                     leaderboard_channel_id = self.bot.settings_manager.raffle_leaderboard_channel_id
 
                 leaderboard_note = ""
@@ -217,7 +224,9 @@ Get ready to participate when the period starts!
                     try:
                         channel = self.bot.get_channel(int(leaderboard_channel_id))
                         if channel:
-                            leaderboard_note = f"\n📊 **Live Leaderboard**: Check <#{leaderboard_channel_id}> for real-time standings!"
+                            leaderboard_note = (
+                                f"\n📊 **Live Leaderboard**: Check <#{leaderboard_channel_id}> for real-time standings!"
+                            )
                     except:
                         pass
 
@@ -246,9 +255,9 @@ Get ready to participate when the period starts!
                 """
 
                 if last_winner:
-                    winner_tickets = last_winner.get('total_tickets', 0)
+                    winner_tickets = last_winner.get("total_tickets", 0)
                     # Calculate win probability if we have the data
-                    win_prob = last_winner.get('win_probability', 0)
+                    win_prob = last_winner.get("win_probability", 0)
                     if win_prob:
                         response += f"\n**Last Winner**: {last_winner['winner_kick_name']} ({winner_tickets:,} tickets, {win_prob:.2%} chance)"
                     else:
@@ -259,10 +268,11 @@ Get ready to participate when the period starts!
         except Exception as e:
             logger.error(f"Error showing raffle info: {e}")
             import traceback
+
             traceback.print_exc()
             await ctx.send(f"❌ Error loading raffle info. Please try again.")
 
-    @commands.command(name='linkshuffle')
+    @commands.command(name="linkshuffle")
     async def link_shuffle(self, ctx, shuffle_username: str = None):
         """
         Link your Shuffle.com account to earn raffle tickets automatically
@@ -273,28 +283,37 @@ Get ready to participate when the period starts!
         """
         try:
             if not shuffle_username:
-                await ctx.send(f"❌ {ctx.author.mention} Please provide your Shuffle username!\n\n"
-                             f"**Usage**: `!linkshuffle <your_shuffle_username>`\n"
-                             f"**Example**: `!linkshuffle CryptoKing420`\n\n"
-                             f"💡 **Tip**: Use code **'lele'** on Shuffle to earn 20 tickets per $1000 wagered!")
+                await ctx.send(
+                    f"❌ {ctx.author.mention} Please provide your Shuffle username!\n\n"
+                    f"**Usage**: `!linkshuffle <your_shuffle_username>`\n"
+                    f"**Example**: `!linkshuffle CryptoKing420`\n\n"
+                    f"💡 **Tip**: Use code **'lele'** on Shuffle to earn 20 tickets per $1000 wagered!"
+                )
                 return
 
             discord_id = ctx.author.id
             guild_id = ctx.guild.id if ctx.guild else None
-            
+
             managers = self._get_guild_managers(ctx)
-            shuffle_tracker = managers['shuffle_tracker']
+            shuffle_tracker = managers["shuffle_tracker"]
 
             # Get Kick name from links table
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT kick_name FROM links WHERE discord_id = :discord_id AND discord_server_id = :guild_id
-                """), {'discord_id': discord_id, 'guild_id': guild_id})
+                """
+                    ),
+                    {"discord_id": discord_id, "guild_id": guild_id},
+                )
 
                 row = result.fetchone()
                 if not row:
-                    await ctx.send(f"❌ {ctx.author.mention} You must link your Kick account first!\n"
-                                 f"React to the link panel or use `!link` to get started.")
+                    await ctx.send(
+                        f"❌ {ctx.author.mention} You must link your Kick account first!\n"
+                        f"React to the link panel or use `!link` to get started."
+                    )
                     return
 
                 kick_name = row[0]
@@ -304,30 +323,36 @@ Get ready to participate when the period starts!
                 shuffle_username=shuffle_username,
                 kick_name=kick_name,
                 discord_id=discord_id,
-                verified=False  # Requires admin verification
+                verified=False,  # Requires admin verification
             )
 
-            if result['status'] == 'success':
-                await ctx.send(f"✅ {ctx.author.mention} Shuffle link request created!\n\n"
-                             f"**Shuffle**: `{shuffle_username}`\n"
-                             f"**Kick**: `{kick_name}`\n\n"
-                             f"⏳ **Pending Admin Verification**\n"
-                             f"An admin will review your request. Once verified:\n"
-                             f"• Your Shuffle wagers under code **'lele'** will earn **20 tickets per $1000**\n"
-                             f"• Tickets are awarded automatically for future wagers\n"
-                             f"• Use `!tickets` to check your balance!")
+            if result["status"] == "success":
+                await ctx.send(
+                    f"✅ {ctx.author.mention} Shuffle link request created!\n\n"
+                    f"**Shuffle**: `{shuffle_username}`\n"
+                    f"**Kick**: `{kick_name}`\n\n"
+                    f"⏳ **Pending Admin Verification**\n"
+                    f"An admin will review your request. Once verified:\n"
+                    f"• Your Shuffle wagers under code **'lele'** will earn **20 tickets per $1000**\n"
+                    f"• Tickets are awarded automatically for future wagers\n"
+                    f"• Use `!tickets` to check your balance!"
+                )
 
                 # Notify admins (optional - send to admin channel)
                 logger.info(f"🔗 New Shuffle link request: {shuffle_username} → {kick_name} (Discord: {discord_id})")
 
-            elif result['status'] == 'already_linked':
-                await ctx.send(f"❌ {ctx.author.mention} Shuffle username '{shuffle_username}' is already linked to "
-                             f"{result['existing_kick_name']}!")
+            elif result["status"] == "already_linked":
+                await ctx.send(
+                    f"❌ {ctx.author.mention} Shuffle username '{shuffle_username}' is already linked to "
+                    f"{result['existing_kick_name']}!"
+                )
 
-            elif result['status'] == 'discord_already_linked':
-                await ctx.send(f"❌ {ctx.author.mention} You already have a Shuffle account linked: "
-                             f"{result['existing_shuffle_username']}\n"
-                             f"Contact an admin if you need to change it.")
+            elif result["status"] == "discord_already_linked":
+                await ctx.send(
+                    f"❌ {ctx.author.mention} You already have a Shuffle account linked: "
+                    f"{result['existing_shuffle_username']}\n"
+                    f"Contact an admin if you need to change it."
+                )
             else:
                 await ctx.send(f"❌ Error creating link request: {result.get('error', 'Unknown error')}")
 
@@ -339,7 +364,7 @@ Get ready to participate when the period starts!
     # ADMIN COMMANDS
     # ========================================
 
-    @commands.command(name='verifyshuffle', aliases=['shuffleverify', 'raffleverify'])
+    @commands.command(name="verifyshuffle", aliases=["shuffleverify", "raffleverify"])
     @commands.has_permissions(administrator=True)
     async def verify_shuffle_link(self, ctx, user: commands.UserConverter, shuffle_username: str):
         """
@@ -350,16 +375,21 @@ Get ready to participate when the period starts!
         try:
             guild_id = ctx.guild.id
             managers = self._get_guild_managers(ctx)
-            ticket_manager = managers['ticket_manager']
-            
+            ticket_manager = managers["ticket_manager"]
+
             discord_id = user.id
             admin_id = ctx.author.id
 
             with self.engine.begin() as conn:
                 # Get kick name from links table
-                link_result = conn.execute(text("""
+                link_result = conn.execute(
+                    text(
+                        """
                     SELECT kick_name FROM links WHERE discord_id = :discord_id AND discord_server_id = :guild_id
-                """), {'discord_id': discord_id, 'guild_id': guild_id})
+                """
+                    ),
+                    {"discord_id": discord_id, "guild_id": guild_id},
+                )
 
                 link_row = link_result.fetchone()
                 if not link_row:
@@ -369,10 +399,15 @@ Get ready to participate when the period starts!
                 kick_name = link_row[0]
 
                 # Check if link already exists
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT verified FROM raffle_shuffle_links
                     WHERE discord_id = :discord_id AND shuffle_username = :username
-                """), {'discord_id': discord_id, 'username': shuffle_username})
+                """
+                    ),
+                    {"discord_id": discord_id, "username": shuffle_username},
+                )
 
                 row = result.fetchone()
 
@@ -383,7 +418,9 @@ Get ready to participate when the period starts!
                 # Create or update the link
                 if not row:
                     # Create new link
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         INSERT INTO raffle_shuffle_links
                         (shuffle_username, kick_name, discord_id, verified, verified_by_discord_id, verified_at)
                         VALUES (:username, :kick_name, :discord_id, TRUE, :admin_id, CURRENT_TIMESTAMP)
@@ -394,16 +431,23 @@ Get ready to participate when the period starts!
                             verified = TRUE,
                             verified_by_discord_id = EXCLUDED.verified_by_discord_id,
                             verified_at = CURRENT_TIMESTAMP
-                    """), {
-                        'username': shuffle_username,
-                        'kick_name': kick_name,
-                        'discord_id': discord_id,
-                        'admin_id': admin_id
-                    })
-                    logger.info(f"✅ Admin {ctx.author} created and verified Shuffle link: {shuffle_username} → {kick_name} (Discord {discord_id})")
+                    """
+                        ),
+                        {
+                            "username": shuffle_username,
+                            "kick_name": kick_name,
+                            "discord_id": discord_id,
+                            "admin_id": admin_id,
+                        },
+                    )
+                    logger.info(
+                        f"✅ Admin {ctx.author} created and verified Shuffle link: {shuffle_username} → {kick_name} (Discord {discord_id})"
+                    )
                 else:
                     # Update existing unverified link
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         UPDATE raffle_shuffle_links
                         SET
                             verified = TRUE,
@@ -411,18 +455,28 @@ Get ready to participate when the period starts!
                             verified_at = CURRENT_TIMESTAMP,
                             kick_name = :kick_name
                         WHERE discord_id = :discord_id AND shuffle_username = :username
-                    """), {
-                        'admin_id': admin_id,
-                        'discord_id': discord_id,
-                        'username': shuffle_username,
-                        'kick_name': kick_name
-                    })
-                    logger.info(f"✅ Admin {ctx.author} verified existing Shuffle link: {shuffle_username} → {kick_name} (Discord {discord_id})")
+                    """
+                        ),
+                        {
+                            "admin_id": admin_id,
+                            "discord_id": discord_id,
+                            "username": shuffle_username,
+                            "kick_name": kick_name,
+                        },
+                    )
+                    logger.info(
+                        f"✅ Admin {ctx.author} verified existing Shuffle link: {shuffle_username} → {kick_name} (Discord {discord_id})"
+                    )
 
                 # Get current period info
-                period_result = conn.execute(text("""
+                period_result = conn.execute(
+                    text(
+                        """
                     SELECT id, start_date FROM raffle_periods WHERE status = 'active' AND discord_server_id = :guild_id
-                """), {'guild_id': guild_id})
+                """
+                    ),
+                    {"guild_id": guild_id},
+                )
                 period_row = period_result.fetchone()
 
                 if not period_row:
@@ -433,14 +487,16 @@ Get ready to participate when the period starts!
                 period_start = period_row[1]
 
                 # Check if user has wager tracking for current period
-                wager_result = conn.execute(text("""
+                wager_result = conn.execute(
+                    text(
+                        """
                     SELECT total_wager_usd, created_at
                     FROM raffle_shuffle_wagers
                     WHERE shuffle_username = :username AND period_id = :period_id
-                """), {
-                    'username': shuffle_username,
-                    'period_id': period_id
-                })
+                """
+                    ),
+                    {"username": shuffle_username, "period_id": period_id},
+                )
 
                 wager_row = wager_result.fetchone()
                 tickets_awarded = 0
@@ -452,6 +508,7 @@ Get ready to participate when the period starts!
                     # If wager tracking was created AFTER period started, award tickets for the wager
                     if wager_created >= period_start and total_wager > 0:
                         from .config import SHUFFLE_TICKETS_PER_1000_USD
+
                         # Convert Decimal to float for calculation
                         tickets_awarded = int((float(total_wager) / 1000.0) * SHUFFLE_TICKETS_PER_1000_USD)
 
@@ -461,14 +518,16 @@ Get ready to participate when the period starts!
                                 discord_id=discord_id,
                                 kick_name=kick_name,
                                 tickets=tickets_awarded,
-                                source='shuffle_wager',
+                                source="shuffle_wager",
                                 description=f"Shuffle wagers during period (pre-verification): ${total_wager:.2f}",
-                                period_id=period_id
+                                period_id=period_id,
                             )
 
                             if success:
                                 # Update wager tracking
-                                conn.execute(text("""
+                                conn.execute(
+                                    text(
+                                        """
                                     UPDATE raffle_shuffle_wagers
                                     SET
                                         discord_id = :discord_id,
@@ -476,30 +535,40 @@ Get ready to participate when the period starts!
                                         last_known_wager = total_wager_usd,
                                         tickets_awarded = :tickets
                                     WHERE shuffle_username = :username AND period_id = :period_id
-                                """), {
-                                    'discord_id': discord_id,
-                                    'kick_name': kick_name,
-                                    'tickets': tickets_awarded,
-                                    'username': shuffle_username,
-                                    'period_id': period_id
-                                })
+                                """
+                                    ),
+                                    {
+                                        "discord_id": discord_id,
+                                        "kick_name": kick_name,
+                                        "tickets": tickets_awarded,
+                                        "username": shuffle_username,
+                                        "period_id": period_id,
+                                    },
+                                )
 
-                                logger.info(f"💰 Awarded {tickets_awarded} tickets for pre-verification wagers: {shuffle_username} (${total_wager:.2f})")
+                                logger.info(
+                                    f"💰 Awarded {tickets_awarded} tickets for pre-verification wagers: {shuffle_username} (${total_wager:.2f})"
+                                )
                     else:
                         # Wagers were from previous period, don't award tickets
-                        conn.execute(text("""
+                        conn.execute(
+                            text(
+                                """
                             UPDATE raffle_shuffle_wagers
                             SET
                                 discord_id = :discord_id,
                                 kick_name = :kick_name,
                                 last_known_wager = total_wager_usd
                             WHERE shuffle_username = :username AND period_id = :period_id
-                        """), {
-                            'discord_id': discord_id,
-                            'kick_name': kick_name,
-                            'username': shuffle_username,
-                            'period_id': period_id
-                        })
+                        """
+                            ),
+                            {
+                                "discord_id": discord_id,
+                                "kick_name": kick_name,
+                                "username": shuffle_username,
+                                "period_id": period_id,
+                            },
+                        )
 
             # Assign "Shuffle Code User" role
             role_assigned = False
@@ -521,15 +590,21 @@ Get ready to participate when the period starts!
 
             if tickets_awarded > 0:
                 role_msg = "\n🎭 **Role assigned:** Shuffle Code User" if role_assigned else ""
-                await ctx.send(f"✅ **Verified!** {user.mention}'s Shuffle account '{shuffle_username}' is now linked.\n"
-                             f"🎟️ **Awarded {tickets_awarded:,} tickets** for ${wager_row[0]:.2f} wagered this period!\n"
-                             f"Future wagers under code 'lele' will continue earning tickets.{role_msg}")
+                await ctx.send(
+                    f"✅ **Verified!** {user.mention}'s Shuffle account '{shuffle_username}' is now linked.\n"
+                    f"🎟️ **Awarded {tickets_awarded:,} tickets** for ${wager_row[0]:.2f} wagered this period!\n"
+                    f"Future wagers under code 'lele' will continue earning tickets.{role_msg}"
+                )
             else:
                 role_msg = "\n🎭 **Role assigned:** Shuffle Code User" if role_assigned else ""
-                await ctx.send(f"✅ **Verified!** {user.mention}'s Shuffle account '{shuffle_username}' is now linked.\n"
-                             f"Future wagers under code 'lele' will earn raffle tickets!{role_msg}")
+                await ctx.send(
+                    f"✅ **Verified!** {user.mention}'s Shuffle account '{shuffle_username}' is now linked.\n"
+                    f"Future wagers under code 'lele' will earn raffle tickets!{role_msg}"
+                )
 
-            logger.info(f"✅ Admin {ctx.author} verified Shuffle link: {shuffle_username} → {kick_name} (Discord {discord_id}) - {tickets_awarded} tickets awarded")
+            logger.info(
+                f"✅ Admin {ctx.author} verified Shuffle link: {shuffle_username} → {kick_name} (Discord {discord_id}) - {tickets_awarded} tickets awarded"
+            )
 
         except commands.BadArgument:
             await ctx.send(f"❌ Invalid user mention. Usage: `!verifyshuffle @user <shuffle_username>`")
@@ -537,7 +612,7 @@ Get ready to participate when the period starts!
             logger.error(f"Error verifying Shuffle link: {e}")
             await ctx.send(f"❌ Error verifying link. Please try again.")
 
-    @commands.command(name='rafflegive')
+    @commands.command(name="rafflegive")
     @commands.has_permissions(administrator=True)
     async def give_tickets(self, ctx, user: commands.UserConverter, tickets: int, *, reason: str = "Admin bonus"):
         """
@@ -548,8 +623,8 @@ Get ready to participate when the period starts!
         try:
             guild_id = ctx.guild.id
             managers = self._get_guild_managers(ctx)
-            ticket_manager = managers['ticket_manager']
-            
+            ticket_manager = managers["ticket_manager"]
+
             if tickets <= 0:
                 await ctx.send(f"❌ Ticket amount must be positive!")
                 return
@@ -558,9 +633,14 @@ Get ready to participate when the period starts!
 
             # Get kick name
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT kick_name FROM links WHERE discord_id = :discord_id AND discord_server_id = :guild_id
-                """), {'discord_id': discord_id, 'guild_id': guild_id})
+                """
+                    ),
+                    {"discord_id": discord_id, "guild_id": guild_id},
+                )
 
                 row = result.fetchone()
                 if not row:
@@ -574,13 +654,12 @@ Get ready to participate when the period starts!
                 discord_id=discord_id,
                 kick_name=kick_name,
                 tickets=tickets,
-                source='bonus',
-                description=f"Manual award by {ctx.author.name}: {reason}"
+                source="bonus",
+                description=f"Manual award by {ctx.author.name}: {reason}",
             )
 
             if success:
-                await ctx.send(f"✅ Awarded **{tickets:,} tickets** to {user.mention}!\n"
-                             f"Reason: {reason}")
+                await ctx.send(f"✅ Awarded **{tickets:,} tickets** to {user.mention}!\n" f"Reason: {reason}")
                 logger.info(f"🎁 Admin {ctx.author} awarded {tickets} tickets to {user} ({kick_name}): {reason}")
             else:
                 await ctx.send(f"❌ Failed to award tickets. Check logs for details.")
@@ -591,7 +670,7 @@ Get ready to participate when the period starts!
             logger.error(f"Error giving tickets: {e}")
             await ctx.send(f"❌ Error awarding tickets. Please try again.")
 
-    @commands.command(name='raffleremove')
+    @commands.command(name="raffleremove")
     @commands.has_permissions(administrator=True)
     async def remove_tickets(self, ctx, user: commands.UserConverter, tickets: int, *, reason: str = "Admin removal"):
         """
@@ -602,8 +681,8 @@ Get ready to participate when the period starts!
         try:
             guild_id = ctx.guild.id
             managers = self._get_guild_managers(ctx)
-            ticket_manager = managers['ticket_manager']
-            
+            ticket_manager = managers["ticket_manager"]
+
             if tickets <= 0:
                 await ctx.send(f"❌ Ticket amount must be positive!")
                 return
@@ -612,9 +691,14 @@ Get ready to participate when the period starts!
 
             # Get kick name
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT kick_name FROM links WHERE discord_id = :discord_id AND discord_server_id = :guild_id
-                """), {'discord_id': discord_id, 'guild_id': guild_id})
+                """
+                    ),
+                    {"discord_id": discord_id, "guild_id": guild_id},
+                )
 
                 row = result.fetchone()
                 if not row:
@@ -625,15 +709,11 @@ Get ready to participate when the period starts!
 
             # Remove tickets
             success = ticket_manager.remove_tickets(
-                discord_id=discord_id,
-                kick_name=kick_name,
-                tickets=tickets,
-                reason=reason
+                discord_id=discord_id, kick_name=kick_name, tickets=tickets, reason=reason
             )
 
             if success:
-                await ctx.send(f"✅ Removed **{tickets:,} tickets** from {user.mention}!\n"
-                             f"Reason: {reason}")
+                await ctx.send(f"✅ Removed **{tickets:,} tickets** from {user.mention}!\n" f"Reason: {reason}")
                 logger.info(f"🗑️ Admin {ctx.author} removed {tickets} tickets from {user} ({kick_name}): {reason}")
             else:
                 await ctx.send(f"❌ Failed to remove tickets. User may not have enough tickets.")
@@ -644,7 +724,7 @@ Get ready to participate when the period starts!
             logger.error(f"Error removing tickets: {e}")
             await ctx.send(f"❌ Error removing tickets. Please try again.")
 
-    @commands.command(name='raffledraw')
+    @commands.command(name="raffledraw")
     @commands.has_permissions(administrator=True)
     async def draw_winner(self, ctx, *, prize_description: str = "Monthly Raffle Prize"):
         """
@@ -654,55 +734,61 @@ Get ready to participate when the period starts!
         """
         try:
             managers = self._get_guild_managers(ctx)
-            ticket_manager = managers['ticket_manager']
-            raffle_draw = managers['raffle_draw']
-            
+            ticket_manager = managers["ticket_manager"]
+            raffle_draw = managers["raffle_draw"]
+
             admin_id = ctx.author.id
 
             # Get current period stats
             stats = ticket_manager.get_period_stats()
 
-            if not stats or stats['total_tickets'] == 0:
+            if not stats or stats["total_tickets"] == 0:
                 await ctx.send(f"❌ Cannot draw winner: No tickets in current raffle period!")
                 return
 
             # Check if already drawn
             with self.engine.begin() as conn:
-                existing = conn.execute(text("""
+                existing = conn.execute(
+                    text(
+                        """
                     SELECT winner_kick_name FROM raffle_draws
                     WHERE period_id = :period_id
-                """), {'period_id': stats['period_id']})
+                """
+                    ),
+                    {"period_id": stats["period_id"]},
+                )
 
                 if existing.fetchone():
                     await ctx.send(f"❌ A winner has already been drawn for this period!")
                     return
 
             # Confirmation message
-            await ctx.send(f"🎲 **Drawing raffle winner...**\n"
-                         f"Period: #{stats['period_id']}\n"
-                         f"Total Tickets: {stats['total_tickets']:,}\n"
-                         f"Total Participants: {stats['total_participants']}\n"
-                         f"Prize: {prize_description}")
+            await ctx.send(
+                f"🎲 **Drawing raffle winner...**\n"
+                f"Period: #{stats['period_id']}\n"
+                f"Total Tickets: {stats['total_tickets']:,}\n"
+                f"Total Participants: {stats['total_participants']}\n"
+                f"Prize: {prize_description}"
+            )
 
             # Draw winner
             result = raffle_draw.draw_winner(
-                period_id=stats['period_id'],
-                prize_description=prize_description,
-                drawn_by_discord_id=admin_id
+                period_id=stats["period_id"], prize_description=prize_description, drawn_by_discord_id=admin_id
             )
 
             if result:
                 # Get Discord user object if possible
                 try:
-                    discord_user = await self.bot.fetch_user(result['winner_discord_id'])
+                    discord_user = await self.bot.fetch_user(result["winner_discord_id"])
                     mention = discord_user.mention
                 except:
                     mention = f"Discord ID: {result['winner_discord_id']}"
 
                 # Get full ticket breakdown
-                winner_tickets = ticket_manager.get_user_tickets(result['winner_discord_id'])
+                winner_tickets = ticket_manager.get_user_tickets(result["winner_discord_id"])
 
-                await ctx.send(f"""
+                await ctx.send(
+                    f"""
 🎉 **RAFFLE WINNER DRAWN!** 🎉
 
 **Winner**: {result['winner_kick_name']} ({mention})
@@ -717,7 +803,8 @@ Get ready to participate when the period starts!
 • Bonus: {winner_tickets.get('bonus_tickets', 0)} tickets
 
 Congratulations! 🎊
-                """.strip())
+                """.strip()
+                )
 
                 logger.info(f"🎉 Raffle winner drawn: {result['winner_kick_name']} (Period #{stats['period_id']})")
 
@@ -727,10 +814,11 @@ Congratulations! 🎊
         except Exception as e:
             logger.error(f"Error drawing raffle winner: {e}")
             import traceback
+
             traceback.print_exc()
             await ctx.send(f"❌ Error drawing winner. Please try again.")
 
-    @commands.command(name='rafflestats')
+    @commands.command(name="rafflestats")
     @commands.has_permissions(administrator=True)
     async def raffle_stats(self, ctx, user: discord.Member = None):
         """
@@ -739,9 +827,9 @@ Congratulations! 🎊
         """
         try:
             managers = self._get_guild_managers(ctx)
-            ticket_manager = managers['ticket_manager']
-            raffle_draw = managers['raffle_draw']
-            
+            ticket_manager = managers["ticket_manager"]
+            raffle_draw = managers["raffle_draw"]
+
             if user:
                 # Show user-specific stats
                 discord_id = user.id
@@ -758,35 +846,50 @@ Congratulations! 🎊
                 # Get detailed breakdown from tables
                 with self.engine.begin() as conn:
                     # Watchtime stats
-                    watchtime_result = conn.execute(text("""
+                    watchtime_result = conn.execute(
+                        text(
+                            """
                         SELECT SUM(minutes_converted), SUM(tickets_awarded)
                         FROM raffle_watchtime_converted
                         WHERE kick_name = :kick_name
-                    """), {'kick_name': tickets['kick_name']})
+                    """
+                        ),
+                        {"kick_name": tickets["kick_name"]},
+                    )
                     wt_row = watchtime_result.fetchone()
                     total_minutes = wt_row[0] or 0
 
                     # Gifted sub stats
-                    subs_result = conn.execute(text("""
+                    subs_result = conn.execute(
+                        text(
+                            """
                         SELECT COUNT(*), SUM(sub_count), SUM(tickets_awarded)
                         FROM raffle_gifted_subs
                         WHERE gifter_kick_name = :kick_name
-                    """), {'kick_name': tickets['kick_name']})
+                    """
+                        ),
+                        {"kick_name": tickets["kick_name"]},
+                    )
                     subs_row = subs_result.fetchone()
                     gift_events = subs_row[0] or 0
                     total_subs = subs_row[1] or 0
 
                     # Shuffle stats
-                    shuffle_result = conn.execute(text("""
+                    shuffle_result = conn.execute(
+                        text(
+                            """
                         SELECT total_wager_usd, tickets_awarded
                         FROM raffle_shuffle_wagers
                         WHERE discord_id = :discord_id
-                    """), {'discord_id': discord_id})
+                    """
+                        ),
+                        {"discord_id": discord_id},
+                    )
                     shuffle_row = shuffle_result.fetchone()
                     total_wager = shuffle_row[0] if shuffle_row else 0
 
                 # Get win probability
-                win_prob = raffle_draw.get_user_win_probability(discord_id, stats['period_id'])
+                win_prob = raffle_draw.get_user_win_probability(discord_id, stats["period_id"])
                 win_prob_text = f"{win_prob['probability_percent']:.2f}%" if win_prob else "N/A"
 
                 response = f"""
@@ -842,7 +945,7 @@ Use `!rafflestats @user` to see individual stats
     # PERIOD MANAGEMENT COMMANDS
     # ========================================
 
-    @commands.command(name='raffleend', aliases=['endraffle'])
+    @commands.command(name="raffleend", aliases=["endraffle"])
     @commands.has_permissions(administrator=True)
     async def end_raffle(self, ctx):
         """
@@ -851,16 +954,21 @@ Use `!rafflestats @user` to see individual stats
         """
         try:
             guild_id = ctx.guild.id
-            
+
             with self.engine.begin() as conn:
                 # Get current period
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT id, start_date, end_date, status
                     FROM raffle_periods
                     WHERE status = 'active' AND discord_server_id = :guild_id
                     ORDER BY start_date DESC
                     LIMIT 1
-                """), {'guild_id': guild_id})
+                """
+                    ),
+                    {"guild_id": guild_id},
+                )
                 period = result.fetchone()
 
                 if not period:
@@ -868,20 +976,27 @@ Use `!rafflestats @user` to see individual stats
                     return
 
                 # End the period
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     UPDATE raffle_periods
                     SET status = 'ended', end_date = CURRENT_TIMESTAMP
                     WHERE id = :period_id
-                """), {'period_id': period[0]})
+                """
+                    ),
+                    {"period_id": period[0]},
+                )
 
-                await ctx.send(f"✅ Raffle period #{period[0]} has been ended.\n"
-                             f"Use `!raffledraw` to select a winner, then `!rafflestart` to begin a new period.")
+                await ctx.send(
+                    f"✅ Raffle period #{period[0]} has been ended.\n"
+                    f"Use `!raffledraw` to select a winner, then `!rafflestart` to begin a new period."
+                )
 
         except Exception as e:
             logger.error(f"Error ending raffle period: {e}")
             await ctx.send(f"❌ Error ending raffle period: {str(e)}")
 
-    @commands.command(name='rafflestart', aliases=['newraffle'])
+    @commands.command(name="rafflestart", aliases=["newraffle"])
     @commands.has_permissions(administrator=True)
     async def start_raffle(self, ctx, start_day: int = None, end_day: int = None):
         """
@@ -893,15 +1008,21 @@ Use `!rafflestats @user` to see individual stats
         try:
             guild_id = ctx.guild.id
             from datetime import datetime
+
             from dateutil.relativedelta import relativedelta
 
             # Check if there's already an active period
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT id FROM raffle_periods
                     WHERE status = 'active' AND discord_server_id = :guild_id
                     LIMIT 1
-                """), {'guild_id': guild_id})
+                """
+                    ),
+                    {"guild_id": guild_id},
+                )
                 if result.fetchone():
                     await ctx.send("❌ There's already an active raffle period! Use `!raffleend` first.")
                     return
@@ -919,22 +1040,29 @@ Use `!rafflestats @user` to see individual stats
                     end = next_month - relativedelta(seconds=1)
 
                 # Create new period
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     INSERT INTO raffle_periods (start_date, end_date, status, discord_server_id)
                     VALUES (:start, :end, 'active', :guild_id)
                     RETURNING id
-                """), {'start': start, 'end': end, 'guild_id': guild_id})
+                """
+                    ),
+                    {"start": start, "end": end, "guild_id": guild_id},
+                )
                 period_id = result.fetchone()[0]
 
-                await ctx.send(f"✅ New raffle period #{period_id} started!\n"
-                             f"**Duration**: {start.strftime('%b %d, %Y')} - {end.strftime('%b %d, %Y')}\n"
-                             f"Users can now earn tickets!")
+                await ctx.send(
+                    f"✅ New raffle period #{period_id} started!\n"
+                    f"**Duration**: {start.strftime('%b %d, %Y')} - {end.strftime('%b %d, %Y')}\n"
+                    f"Users can now earn tickets!"
+                )
 
         except Exception as e:
             logger.error(f"Error starting raffle period: {e}")
             await ctx.send(f"❌ Error starting raffle period: {str(e)}")
 
-    @commands.command(name='rafflerestart', aliases=['resetraffle'])
+    @commands.command(name="rafflerestart", aliases=["resetraffle"])
     @commands.has_permissions(administrator=True)
     async def restart_raffle(self, ctx):
         """
@@ -944,26 +1072,37 @@ Use `!rafflestats @user` to see individual stats
         try:
             guild_id = ctx.guild.id
             from datetime import datetime
+
             from dateutil.relativedelta import relativedelta
 
             with self.engine.begin() as conn:
                 # Get current period
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT id, total_tickets
                     FROM raffle_periods
                     WHERE status = 'active' AND discord_server_id = :guild_id
                     ORDER BY start_date DESC
                     LIMIT 1
-                """), {'guild_id': guild_id})
+                """
+                    ),
+                    {"guild_id": guild_id},
+                )
                 current_period = result.fetchone()
 
                 if current_period:
                     # End current period
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         UPDATE raffle_periods
                         SET status = 'ended', end_date = CURRENT_TIMESTAMP
                         WHERE id = :period_id
-                    """), {'period_id': current_period[0]})
+                    """
+                        ),
+                        {"period_id": current_period[0]},
+                    )
 
                     old_tickets = current_period[1]
                 else:
@@ -975,23 +1114,30 @@ Use `!rafflestats @user` to see individual stats
                 start = next_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
                 end = (start + relativedelta(months=1)) - relativedelta(seconds=1)
 
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     INSERT INTO raffle_periods (start_date, end_date, status, discord_server_id)
                     VALUES (:start, :end, 'active', :guild_id)
                     RETURNING id
-                """), {'start': start, 'end': end, 'guild_id': guild_id})
+                """
+                    ),
+                    {"start": start, "end": end, "guild_id": guild_id},
+                )
                 new_period_id = result.fetchone()[0]
 
-                await ctx.send(f"✅ Raffle reset complete!\n\n"
-                             f"**Old Period**: Ended with {old_tickets:,} total tickets\n"
-                             f"**New Period #{new_period_id}**: {start.strftime('%b %d, %Y')} - {end.strftime('%b %d, %Y')}\n\n"
-                             f"💡 Don't forget to draw a winner from the old period: `!raffledraw`")
+                await ctx.send(
+                    f"✅ Raffle reset complete!\n\n"
+                    f"**Old Period**: Ended with {old_tickets:,} total tickets\n"
+                    f"**New Period #{new_period_id}**: {start.strftime('%b %d, %Y')} - {end.strftime('%b %d, %Y')}\n\n"
+                    f"💡 Don't forget to draw a winner from the old period: `!raffledraw`"
+                )
 
         except Exception as e:
             logger.error(f"Error restarting raffle: {e}")
             await ctx.send(f"❌ Error restarting raffle: {str(e)}")
 
-    @commands.command(name='rafflesetdate', aliases=['raffledates'])
+    @commands.command(name="rafflesetdate", aliases=["raffledates"])
     @commands.has_permissions(administrator=True)
     async def set_raffle_dates(self, ctx, start_date: str, end_date: str):
         """
@@ -1005,8 +1151,8 @@ Use `!rafflestats @user` to see individual stats
 
             # Parse dates
             try:
-                start = datetime.strptime(start_date, '%Y-%m-%d')
-                end = datetime.strptime(end_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59)
+                start = datetime.strptime(start_date, "%Y-%m-%d")
+                end = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
             except ValueError:
                 await ctx.send("❌ Invalid date format! Use YYYY-MM-DD (e.g., 2025-11-01)")
                 return
@@ -1017,12 +1163,17 @@ Use `!rafflestats @user` to see individual stats
 
             with self.engine.begin() as conn:
                 # Get current active period
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT id FROM raffle_periods
                     WHERE status = 'active' AND discord_server_id = :guild_id
                     ORDER BY start_date DESC
                     LIMIT 1
-                """), {'guild_id': guild_id})
+                """
+                    ),
+                    {"guild_id": guild_id},
+                )
                 period = result.fetchone()
 
                 if not period:
@@ -1030,20 +1181,27 @@ Use `!rafflestats @user` to see individual stats
                     return
 
                 # Update dates
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     UPDATE raffle_periods
                     SET start_date = :start, end_date = :end
                     WHERE id = :period_id
-                """), {'start': start, 'end': end, 'period_id': period[0]})
+                """
+                    ),
+                    {"start": start, "end": end, "period_id": period[0]},
+                )
 
-                await ctx.send(f"✅ Raffle period #{period[0]} dates updated!\n"
-                             f"**New Duration**: {start.strftime('%b %d, %Y')} - {end.strftime('%b %d, %Y')}")
+                await ctx.send(
+                    f"✅ Raffle period #{period[0]} dates updated!\n"
+                    f"**New Duration**: {start.strftime('%b %d, %Y')} - {end.strftime('%b %d, %Y')}"
+                )
 
         except Exception as e:
             logger.error(f"Error setting raffle dates: {e}")
             await ctx.send(f"❌ Error updating dates: {str(e)}")
 
-    @commands.command(name='shuffledebug')
+    @commands.command(name="shuffledebug")
     @commands.has_permissions(administrator=True)
     async def shuffle_debug(self, ctx):
         """
@@ -1056,6 +1214,7 @@ Use `!rafflestats @user` to see individual stats
 
             # Fetch raw data
             import aiohttp
+
             from .config import SHUFFLE_AFFILIATE_URL, SHUFFLE_CAMPAIGN_CODE
 
             async with aiohttp.ClientSession() as session:
@@ -1074,13 +1233,12 @@ Use `!rafflestats @user` to see individual stats
                     await ctx.send(f"📊 Total users in affiliate data: {len(data)}")
 
                     # Show all campaign codes found
-                    campaign_codes = set(user.get('campaignCode', 'NONE') for user in data)
+                    campaign_codes = set(user.get("campaignCode", "NONE") for user in data)
                     await ctx.send(f"📋 Campaign codes found: {', '.join(sorted(campaign_codes))}")
 
                     # Filter for our campaign code
                     filtered = [
-                        user for user in data
-                        if user.get('campaignCode', '').lower() == SHUFFLE_CAMPAIGN_CODE.lower()
+                        user for user in data if user.get("campaignCode", "").lower() == SHUFFLE_CAMPAIGN_CODE.lower()
                     ]
 
                     await ctx.send(f"🎯 Users with code '{SHUFFLE_CAMPAIGN_CODE}': {len(filtered)}")
@@ -1089,23 +1247,28 @@ Use `!rafflestats @user` to see individual stats
                     if filtered:
                         response_text = "**Sample users:**\n"
                         for user in filtered[:5]:
-                            username = user.get('username', 'Unknown')
-                            wager = user.get('wagerAmount', 0)
-                            code = user.get('campaignCode', 'NONE')
+                            username = user.get("username", "Unknown")
+                            wager = user.get("wagerAmount", 0)
+                            code = user.get("campaignCode", "NONE")
                             response_text += f"• {username}: ${wager:.2f} (code: {code})\n"
 
                         await ctx.send(response_text)
 
                     # Check database tracking
                     with self.engine.begin() as conn:
-                        result = conn.execute(text("""
+                        result = conn.execute(
+                            text(
+                                """
                             SELECT shuffle_username, total_wager_usd, last_known_wager,
                                    tickets_awarded, kick_name, discord_id
                             FROM raffle_shuffle_wagers
                             WHERE period_id = (SELECT id FROM raffle_periods WHERE status = 'active' AND discord_server_id = :guild_id)
                             ORDER BY total_wager_usd DESC
                             LIMIT 5
-                        """), {'guild_id': guild_id})
+                        """
+                            ),
+                            {"guild_id": guild_id},
+                        )
 
                         rows = result.fetchall()
                         if rows:
@@ -1119,10 +1282,11 @@ Use `!rafflestats @user` to see individual stats
         except Exception as e:
             logger.error(f"Shuffle debug error: {e}")
             import traceback
+
             traceback.print_exc()
             await ctx.send(f"❌ Error: {str(e)}")
 
-    @commands.command(name='shuffleunlinked')
+    @commands.command(name="shuffleunlinked")
     @commands.has_permissions(administrator=True)
     async def shuffle_unlinked(self, ctx, limit: int = 20):
         """
@@ -1131,9 +1295,11 @@ Use `!rafflestats @user` to see individual stats
         """
         try:
             guild_id = ctx.guild.id
-            
+
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT shuffle_username, total_wager_usd, last_checked
                     FROM raffle_shuffle_wagers
                     WHERE period_id = (SELECT id FROM raffle_periods WHERE status = 'active' AND discord_server_id = :guild_id)
@@ -1141,7 +1307,10 @@ Use `!rafflestats @user` to see individual stats
                       AND total_wager_usd > 0
                     ORDER BY total_wager_usd DESC
                     LIMIT :limit
-                """), {'limit': limit, 'guild_id': guild_id})
+                """
+                    ),
+                    {"limit": limit, "guild_id": guild_id},
+                )
 
                 rows = result.fetchall()
 
@@ -1155,7 +1324,7 @@ Use `!rafflestats @user` to see individual stats
                 for row in rows:
                     username = row[0]
                     wager = row[1]
-                    last_check = row[2].strftime('%Y-%m-%d %H:%M') if row[2] else 'Never'
+                    last_check = row[2].strftime("%Y-%m-%d %H:%M") if row[2] else "Never"
                     response += f"• **{username}**: ${wager:,.2f} wagered (last checked: {last_check})\n"
 
                 response += f"\n**To link:** Users run `!linkshuffle <username>`, then you verify with `!verifyshuffle @user <username>`"
@@ -1166,7 +1335,7 @@ Use `!rafflestats @user` to see individual stats
             logger.error(f"Error showing unlinked Shuffle users: {e}")
             await ctx.send(f"❌ Error: {str(e)}")
 
-    @commands.command(name='raffleupdateboard', aliases=['updateraffleboard', 'refreshraffle'])
+    @commands.command(name="raffleupdateboard", aliases=["updateraffleboard", "refreshraffle"])
     @commands.has_permissions(administrator=True)
     async def update_raffle_board(self, ctx):
         """
@@ -1175,17 +1344,19 @@ Use `!rafflestats @user` to see individual stats
         """
         try:
             # Get the auto_leaderboard instance from bot
-            if hasattr(self.bot, 'auto_leaderboard') and self.bot.auto_leaderboard:
+            if hasattr(self.bot, "auto_leaderboard") and self.bot.auto_leaderboard:
                 await ctx.send("🔄 Updating raffle leaderboard...")
                 await self.bot.auto_leaderboard.update_leaderboard()
                 await ctx.send("✅ Raffle leaderboard updated!")
             else:
-                await ctx.send("❌ Auto-leaderboard is not configured. Set `raffle_leaderboard_channel_id` in the dashboard.")
+                await ctx.send(
+                    "❌ Auto-leaderboard is not configured. Set `raffle_leaderboard_channel_id` in the dashboard."
+                )
         except Exception as e:
             logger.error(f"Error manually updating leaderboard: {e}")
             await ctx.send(f"❌ Error updating leaderboard: {str(e)}")
 
-    @commands.command(name='rafflecleartickets', aliases=['cleartickets', 'resettickets'])
+    @commands.command(name="rafflecleartickets", aliases=["cleartickets", "resettickets"])
     @commands.has_permissions(administrator=True)
     async def clear_all_tickets(self, ctx):
         """
@@ -1195,13 +1366,15 @@ Use `!rafflestats @user` to see individual stats
         WARNING: This will delete all tickets, watchtime conversions, gifted subs, and shuffle wagers for this guild!
         """
         guild_id = ctx.guild.id
-        await ctx.send("⚠️ **WARNING:** This will DELETE ALL raffle tickets and history for this server!\nType `CONFIRM DELETE` to proceed.")
+        await ctx.send(
+            "⚠️ **WARNING:** This will DELETE ALL raffle tickets and history for this server!\nType `CONFIRM DELETE` to proceed."
+        )
 
         def check(m):
             return m.author == ctx.author and m.channel == ctx.channel
 
         try:
-            msg = await self.bot.wait_for('message', timeout=30.0, check=check)
+            msg = await self.bot.wait_for("message", timeout=30.0, check=check)
 
             if msg.content != "CONFIRM DELETE":
                 await ctx.send("❌ Cancelled. Tickets were NOT deleted.")
@@ -1210,17 +1383,31 @@ Use `!rafflestats @user` to see individual stats
             # Delete everything for this guild's active period
             with self.engine.begin() as conn:
                 # Get guild's active period
-                period_result = conn.execute(text("""
+                period_result = conn.execute(
+                    text(
+                        """
                     SELECT id FROM raffle_periods WHERE status = 'active' AND discord_server_id = :guild_id
-                """), {'guild_id': guild_id})
+                """
+                    ),
+                    {"guild_id": guild_id},
+                )
                 period = period_result.fetchone()
-                
+
                 if period:
                     period_id = period[0]
-                    deleted_tickets = conn.execute(text("DELETE FROM raffle_tickets WHERE period_id = :period_id"), {'period_id': period_id}).rowcount
-                    deleted_watchtime = conn.execute(text("DELETE FROM raffle_watchtime_converted WHERE period_id = :period_id"), {'period_id': period_id}).rowcount
-                    deleted_subs = conn.execute(text("DELETE FROM raffle_gifted_subs WHERE period_id = :period_id"), {'period_id': period_id}).rowcount
-                    deleted_wagers = conn.execute(text("DELETE FROM raffle_shuffle_wagers WHERE period_id = :period_id"), {'period_id': period_id}).rowcount
+                    deleted_tickets = conn.execute(
+                        text("DELETE FROM raffle_tickets WHERE period_id = :period_id"), {"period_id": period_id}
+                    ).rowcount
+                    deleted_watchtime = conn.execute(
+                        text("DELETE FROM raffle_watchtime_converted WHERE period_id = :period_id"),
+                        {"period_id": period_id},
+                    ).rowcount
+                    deleted_subs = conn.execute(
+                        text("DELETE FROM raffle_gifted_subs WHERE period_id = :period_id"), {"period_id": period_id}
+                    ).rowcount
+                    deleted_wagers = conn.execute(
+                        text("DELETE FROM raffle_shuffle_wagers WHERE period_id = :period_id"), {"period_id": period_id}
+                    ).rowcount
                 else:
                     deleted_tickets = deleted_watchtime = deleted_subs = deleted_wagers = 0
 
@@ -1234,14 +1421,14 @@ Use `!rafflestats @user` to see individual stats
             )
 
             # Update leaderboard
-            if hasattr(self.bot, 'auto_leaderboard') and self.bot.auto_leaderboard:
+            if hasattr(self.bot, "auto_leaderboard") and self.bot.auto_leaderboard:
                 await self.bot.auto_leaderboard.update_leaderboard()
 
         except Exception as e:
             logger.error(f"Error clearing tickets: {e}")
             await ctx.send(f"❌ Error: {str(e)}")
 
-    @commands.command(name='rafflecleanup', aliases=['cleanupwatchtime'])
+    @commands.command(name="rafflecleanup", aliases=["cleanupwatchtime"])
     @commands.has_permissions(administrator=True)
     async def cleanup_watchtime_tickets(self, ctx):
         """
@@ -1254,42 +1441,67 @@ Use `!rafflestats @user` to see individual stats
 
             # Get active period for this guild
             with self.engine.begin() as conn:
-                period_result = conn.execute(text("""
+                period_result = conn.execute(
+                    text(
+                        """
                     SELECT id FROM raffle_periods WHERE status = 'active' AND discord_server_id = :guild_id
-                """), {'guild_id': guild_id})
+                """
+                    ),
+                    {"guild_id": guild_id},
+                )
                 period_row = period_result.fetchone()
-                
+
                 if not period_row:
                     await ctx.send("❌ No active raffle period found for this server!")
                     return
-                    
+
                 period_id = period_row[0]
                 # Step 1: Get all users' current watchtime BEFORE resetting
-                watchtime_snapshot = conn.execute(text("""
+                watchtime_snapshot = conn.execute(
+                    text(
+                        """
                     SELECT w.username, w.minutes
                     FROM watchtime w
                     JOIN links l ON l.kick_name = w.username
                     WHERE w.minutes > 0 AND l.discord_server_id = :guild_id
-                """), {'guild_id': guild_id}).fetchall()
+                """
+                    ),
+                    {"guild_id": guild_id},
+                ).fetchall()
 
                 # Step 2: Reset ONLY watchtime_tickets to 0 (keep wager and gifted sub tickets!)
-                reset_count = conn.execute(text("""
+                reset_count = conn.execute(
+                    text(
+                        """
                     UPDATE raffle_tickets
                     SET watchtime_tickets = 0,
                         total_tickets = gifted_sub_tickets + shuffle_wager_tickets + bonus_tickets
                     WHERE period_id = :period_id
-                """), {'period_id': period_id}).rowcount
+                """
+                    ),
+                    {"period_id": period_id},
+                ).rowcount
 
                 # Step 3: Delete users who now have 0 total tickets
-                deleted_empty = conn.execute(text("""
+                deleted_empty = conn.execute(
+                    text(
+                        """
                     DELETE FROM raffle_tickets
                     WHERE period_id = :period_id AND total_tickets = 0
-                """), {'period_id': period_id}).rowcount
+                """
+                    ),
+                    {"period_id": period_id},
+                ).rowcount
 
                 # Step 4: Delete old watchtime conversion tracking
-                deleted_watchtime = conn.execute(text("""
+                deleted_watchtime = conn.execute(
+                    text(
+                        """
                     DELETE FROM raffle_watchtime_converted WHERE period_id = :period_id
-                """), {'period_id': period_id}).rowcount
+                """
+                    ),
+                    {"period_id": period_id},
+                ).rowcount
 
                 # Step 5: Mark ALL current watchtime as "already converted" (with 0 tickets awarded)
                 # This prevents re-awarding tickets for historical watchtime
@@ -1298,16 +1510,17 @@ Use `!rafflestats @user` to see individual stats
                     if minutes >= 60:  # Only track if they have at least 1 hour
                         hours = minutes // 60
                         tracked_minutes = hours * 60  # Only track full hours
-                        conn.execute(text("""
+                        conn.execute(
+                            text(
+                                """
                             INSERT INTO raffle_watchtime_converted
                                 (period_id, kick_name, minutes_converted, tickets_awarded)
                             VALUES
                                 (:period_id, :kick_name, :minutes, 0)
-                        """), {
-                            'period_id': period_id,
-                            'kick_name': kick_name,
-                            'minutes': tracked_minutes
-                        })
+                        """
+                            ),
+                            {"period_id": period_id, "kick_name": kick_name, "minutes": tracked_minutes},
+                        )
                         conversion_count += 1
 
             await ctx.send(
@@ -1320,16 +1533,17 @@ Use `!rafflestats @user` to see individual stats
             )
 
             # Update leaderboard
-            if hasattr(self.bot, 'auto_leaderboard') and self.bot.auto_leaderboard:
+            if hasattr(self.bot, "auto_leaderboard") and self.bot.auto_leaderboard:
                 await self.bot.auto_leaderboard.update_leaderboard()
 
         except Exception as e:
             logger.error(f"Error in watchtime cleanup: {e}")
             await ctx.send(f"❌ Error: {str(e)}")
             import traceback
+
             traceback.print_exc()
 
-    @commands.command(name='rafflerestoresubs', aliases=['restoresubs'])
+    @commands.command(name="rafflerestoresubs", aliases=["restoresubs"])
     @commands.has_permissions(administrator=True)
     async def restore_gifted_sub_tickets(self, ctx):
         """
@@ -1342,23 +1556,30 @@ Use `!rafflestats @user` to see individual stats
 
             # Get active period for this guild
             with self.engine.begin() as conn:
-                period_result = conn.execute(text("""
+                period_result = conn.execute(
+                    text(
+                        """
                     SELECT id FROM raffle_periods WHERE status = 'active' AND discord_server_id = :guild_id
-                """), {'guild_id': guild_id})
+                """
+                    ),
+                    {"guild_id": guild_id},
+                )
                 period_row = period_result.fetchone()
-                
+
                 if not period_row:
                     await ctx.send("❌ No active raffle period found for this server!")
                     return
-                    
+
                 period_id = period_row[0]
-            
+
             managers = self._get_guild_managers(ctx)
-            ticket_manager = managers['ticket_manager']
+            ticket_manager = managers["ticket_manager"]
 
             with self.engine.begin() as conn:
                 # Get all gifted subs for this period
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT
                         gifter_kick_name,
                         gifter_discord_id,
@@ -1367,7 +1588,10 @@ Use `!rafflestats @user` to see individual stats
                     FROM raffle_gifted_subs
                     WHERE period_id = :period_id
                     ORDER BY gifted_at
-                """), {'period_id': period_id})
+                """
+                    ),
+                    {"period_id": period_id},
+                )
 
                 subs = list(result)
 
@@ -1385,9 +1609,9 @@ Use `!rafflestats @user` to see individual stats
                             discord_id=discord_id,
                             kick_name=kick_name,
                             tickets=tickets,
-                            source='gifted_sub',
+                            source="gifted_sub",
                             description=f"Restored: Gifted {sub_count} sub(s)",
-                            period_id=period_id
+                            period_id=period_id,
                         )
                         if success:
                             restored_count += 1
@@ -1401,16 +1625,17 @@ Use `!rafflestats @user` to see individual stats
             )
 
             # Update leaderboard
-            if hasattr(self.bot, 'auto_leaderboard') and self.bot.auto_leaderboard:
+            if hasattr(self.bot, "auto_leaderboard") and self.bot.auto_leaderboard:
                 await self.bot.auto_leaderboard.update_leaderboard()
 
         except Exception as e:
             logger.error(f"Error restoring gifted sub tickets: {e}")
             await ctx.send(f"❌ Error: {str(e)}")
             import traceback
+
             traceback.print_exc()
 
-    @commands.command(name='rafflechecktables', aliases=['checktables'])
+    @commands.command(name="rafflechecktables", aliases=["checktables"])
     @commands.has_permissions(administrator=True)
     async def check_raffle_tables(self, ctx):
         """
@@ -1423,57 +1648,82 @@ Use `!rafflestats @user` to see individual stats
 
             # Get active period for this guild
             with self.engine.begin() as conn:
-                period_result = conn.execute(text("""
+                period_result = conn.execute(
+                    text(
+                        """
                     SELECT id FROM raffle_periods WHERE status = 'active' AND discord_server_id = :guild_id
-                """), {'guild_id': guild_id})
+                """
+                    ),
+                    {"guild_id": guild_id},
+                )
                 period_row = period_result.fetchone()
-                
+
                 if not period_row:
                     await ctx.send("❌ No active raffle period found for this server!")
                     return
-                    
+
                 period_id = period_row[0]
 
             output = [f"**📊 Raffle Database Check (Period #{period_id})**\n"]
 
             with self.engine.begin() as conn:
                 # Check raffle_tickets
-                tickets_count = conn.execute(text("""
+                tickets_count = conn.execute(
+                    text(
+                        """
                     SELECT COUNT(*), SUM(total_tickets)
                     FROM raffle_tickets
                     WHERE period_id = :period_id
-                """), {'period_id': period_id}).fetchone()
+                """
+                    ),
+                    {"period_id": period_id},
+                ).fetchone()
 
                 output.append(f"**raffle_tickets:**")
                 output.append(f"  • {tickets_count[0] or 0} users")
                 output.append(f"  • {tickets_count[1] or 0} total tickets\n")
 
                 # Check raffle_watchtime_converted
-                watchtime_count = conn.execute(text("""
+                watchtime_count = conn.execute(
+                    text(
+                        """
                     SELECT COUNT(*) FROM raffle_watchtime_converted
                     WHERE period_id = :period_id
-                """), {'period_id': period_id}).scalar()
+                """
+                    ),
+                    {"period_id": period_id},
+                ).scalar()
 
                 output.append(f"**raffle_watchtime_converted:**")
                 output.append(f"  • {watchtime_count or 0} conversion records\n")
 
                 # Check raffle_gifted_subs
-                subs_result = conn.execute(text("""
+                subs_result = conn.execute(
+                    text(
+                        """
                     SELECT COUNT(*), SUM(tickets_awarded)
                     FROM raffle_gifted_subs
                     WHERE period_id = :period_id
-                """), {'period_id': period_id}).fetchone()
+                """
+                    ),
+                    {"period_id": period_id},
+                ).fetchone()
 
                 output.append(f"**raffle_gifted_subs:**")
                 output.append(f"  • {subs_result[0] or 0} gifted sub events")
                 output.append(f"  • {subs_result[1] or 0} tickets awarded\n")
 
                 # Check raffle_shuffle_wagers
-                wagers_result = conn.execute(text("""
+                wagers_result = conn.execute(
+                    text(
+                        """
                     SELECT COUNT(*), SUM(tickets_awarded), SUM(total_wager_usd)
                     FROM raffle_shuffle_wagers
                     WHERE period_id = :period_id
-                """), {'period_id': period_id}).fetchone()
+                """
+                    ),
+                    {"period_id": period_id},
+                ).fetchone()
 
                 output.append(f"**raffle_shuffle_wagers:**")
                 output.append(f"  • {wagers_result[0] or 0} wager records")
@@ -1481,9 +1731,13 @@ Use `!rafflestats @user` to see individual stats
                 output.append(f"  • ${wagers_result[2] or 0:.2f} total wagered\n")
 
                 # Check raffle_shuffle_links
-                links_count = conn.execute(text("""
+                links_count = conn.execute(
+                    text(
+                        """
                     SELECT COUNT(*) FROM raffle_shuffle_links WHERE verified = TRUE
-                """)).scalar()
+                """
+                    )
+                ).scalar()
 
                 output.append(f"**raffle_shuffle_links:**")
                 output.append(f"  • {links_count or 0} verified links")
@@ -1494,9 +1748,10 @@ Use `!rafflestats @user` to see individual stats
             logger.error(f"Error checking tables: {e}")
             await ctx.send(f"❌ Error: {str(e)}")
             import traceback
+
             traceback.print_exc()
 
-    @commands.command(name='raffleclearwatchtime', aliases=['clearwatchtimetickets'])
+    @commands.command(name="raffleclearwatchtime", aliases=["clearwatchtimetickets"])
     @commands.has_permissions(administrator=True)
     async def clear_watchtime_tickets_only(self, ctx):
         """
@@ -1510,18 +1765,25 @@ Use `!rafflestats @user` to see individual stats
 
             # Get active period for this guild
             with self.engine.begin() as conn:
-                period_result = conn.execute(text("""
+                period_result = conn.execute(
+                    text(
+                        """
                     SELECT id FROM raffle_periods WHERE status = 'active' AND discord_server_id = :guild_id
-                """), {'guild_id': guild_id})
+                """
+                    ),
+                    {"guild_id": guild_id},
+                )
                 period_row = period_result.fetchone()
-                
+
                 if not period_row:
                     await ctx.send("❌ No active raffle period found for this server!")
                     return
-                    
+
                 period_id = period_row[0]
                 # Get current state
-                current_state = conn.execute(text("""
+                current_state = conn.execute(
+                    text(
+                        """
                     SELECT
                         COUNT(*) as user_count,
                         COALESCE(SUM(watchtime_tickets), 0) as watchtime_total,
@@ -1530,22 +1792,35 @@ Use `!rafflestats @user` to see individual stats
                         COALESCE(SUM(bonus_tickets), 0) as bonus_total
                     FROM raffle_tickets
                     WHERE period_id = :period_id
-                """), {'period_id': period_id}).fetchone()
+                """
+                    ),
+                    {"period_id": period_id},
+                ).fetchone()
 
                 # Reset watchtime tickets and recalculate totals
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     UPDATE raffle_tickets
                     SET
                         watchtime_tickets = 0,
                         total_tickets = gifted_sub_tickets + shuffle_wager_tickets + bonus_tickets
                     WHERE period_id = :period_id
-                """), {'period_id': period_id})
+                """
+                    ),
+                    {"period_id": period_id},
+                )
 
                 # Delete watchtime conversion tracking
-                deleted_conversions = conn.execute(text("""
+                deleted_conversions = conn.execute(
+                    text(
+                        """
                     DELETE FROM raffle_watchtime_converted
                     WHERE period_id = :period_id
-                """), {'period_id': period_id}).rowcount
+                """
+                    ),
+                    {"period_id": period_id},
+                ).rowcount
 
             embed = discord.Embed(
                 title="🧹 Cleared Watchtime Tickets",
@@ -1562,7 +1837,7 @@ Use `!rafflestats @user` to see individual stats
                     f"✅ Gifted sub & wager tickets preserved\n\n"
                     f"**Next Step:** Run `!raffleresetwatchtime` to set baseline"
                 ),
-                color=discord.Color.green()
+                color=discord.Color.green(),
             )
             await ctx.send(embed=embed)
 
@@ -1570,9 +1845,10 @@ Use `!rafflestats @user` to see individual stats
             logger.error(f"Error clearing watchtime tickets: {e}")
             await ctx.send(f"❌ Error: {str(e)}")
             import traceback
+
             traceback.print_exc()
 
-    @commands.command(name='rafflestatus', aliases=['rafflechecksystems'])
+    @commands.command(name="rafflestatus", aliases=["rafflechecksystems"])
     @commands.has_permissions(administrator=True)
     async def check_raffle_systems(self, ctx):
         """
@@ -1617,11 +1893,12 @@ Use `!rafflestats @user` to see individual stats
 
             # Check database connectivity
             from .database import get_current_period
+
             current_period = get_current_period(self.engine)
 
             if current_period:
-                start = current_period['start_date']
-                end = current_period['end_date']
+                start = current_period["start_date"]
+                end = current_period["end_date"]
                 output.append(f"\n**Current Period:** #{current_period['id']}")
                 output.append(f"📅 {start.strftime('%b %d')} - {end.strftime('%b %d, %Y')}")
             else:
@@ -1633,7 +1910,7 @@ Use `!rafflestats @user` to see individual stats
             logger.error(f"Error checking systems: {e}")
             await ctx.send(f"❌ Error: {str(e)}")
 
-    @commands.command(name='raffledebugwatchtime', aliases=['debugwatchtime'])
+    @commands.command(name="raffledebugwatchtime", aliases=["debugwatchtime"])
     @commands.has_permissions(administrator=True)
     async def debug_watchtime_conversion(self, ctx, kick_name: str = None):
         """
@@ -1646,15 +1923,20 @@ Use `!rafflestats @user` to see individual stats
 
             # Get active period for this guild
             with self.engine.begin() as conn:
-                period_result = conn.execute(text("""
+                period_result = conn.execute(
+                    text(
+                        """
                     SELECT id FROM raffle_periods WHERE status = 'active' AND discord_server_id = :guild_id
-                """), {'guild_id': guild_id})
+                """
+                    ),
+                    {"guild_id": guild_id},
+                )
                 period_row = period_result.fetchone()
-                
+
                 if not period_row:
                     await ctx.send("❌ No active raffle period for this server!")
                     return
-                    
+
                 period_id = period_row[0]
 
             with self.engine.begin() as conn:
@@ -1673,11 +1955,9 @@ Use `!rafflestats @user` to see individual stats
                         WHERE w.username = :kick_name
                         GROUP BY w.username, w.minutes, l.discord_id
                     """
-                    result = conn.execute(text(query), {
-                        'period_id': period_id,
-                        'kick_name': kick_name,
-                        'guild_id': guild_id
-                    }).fetchone()
+                    result = conn.execute(
+                        text(query), {"period_id": period_id, "kick_name": kick_name, "guild_id": guild_id}
+                    ).fetchone()
 
                     if not result:
                         await ctx.send(f"❌ User `{kick_name}` not found in watchtime table")
@@ -1722,7 +2002,7 @@ Use `!rafflestats @user` to see individual stats
                         ORDER BY w.minutes DESC
                         LIMIT 10
                     """
-                    results = conn.execute(text(query), {'period_id': period_id, 'guild_id': guild_id}).fetchall()
+                    results = conn.execute(text(query), {"period_id": period_id, "guild_id": guild_id}).fetchall()
 
                     if not results:
                         await ctx.send("📭 No users with watchtime found")
@@ -1734,7 +2014,9 @@ Use `!rafflestats @user` to see individual stats
                         unconverted = total - converted
                         convertible = unconverted // 60
                         link_icon = "✅" if discord_id else "❌"
-                        output.append(f"{link_icon} **{username}**: {total}m total, {converted}m converted, {unconverted}m remaining ({convertible}h convertible)")
+                        output.append(
+                            f"{link_icon} **{username}**: {total}m total, {converted}m converted, {unconverted}m remaining ({convertible}h convertible)"
+                        )
 
                     await ctx.send("\n".join(output))
 
@@ -1742,9 +2024,10 @@ Use `!rafflestats @user` to see individual stats
             logger.error(f"Error debugging watchtime: {e}")
             await ctx.send(f"❌ Error: {str(e)}")
             import traceback
+
             traceback.print_exc()
 
-    @commands.command(name='raffleresetwatchtime', aliases=['resetwatchtimebase'])
+    @commands.command(name="raffleresetwatchtime", aliases=["resetwatchtimebase"])
     @commands.has_permissions(administrator=True)
     async def reset_watchtime_baseline(self, ctx):
         """
@@ -1757,30 +2040,45 @@ Use `!rafflestats @user` to see individual stats
 
             # Get active period for this guild
             with self.engine.begin() as conn:
-                period_result = conn.execute(text("""
+                period_result = conn.execute(
+                    text(
+                        """
                     SELECT id FROM raffle_periods WHERE status = 'active' AND discord_server_id = :guild_id
-                """), {'guild_id': guild_id})
+                """
+                    ),
+                    {"guild_id": guild_id},
+                )
                 period_row = period_result.fetchone()
-                
+
                 if not period_row:
                     await ctx.send("❌ No active raffle period for this server!")
                     return
-                    
+
                 period_id = period_row[0]
 
             with self.engine.begin() as conn:
                 # Get all users' current watchtime
-                watchtime_snapshot = conn.execute(text("""
+                watchtime_snapshot = conn.execute(
+                    text(
+                        """
                     SELECT w.username, w.minutes
                     FROM watchtime w
                     JOIN links l ON l.kick_name = w.username
                     WHERE w.minutes > 0 AND l.discord_server_id = :guild_id
-                """), {'guild_id': guild_id}).fetchall()
+                """
+                    ),
+                    {"guild_id": guild_id},
+                ).fetchall()
 
                 # Delete old conversion tracking
-                deleted = conn.execute(text("""
+                deleted = conn.execute(
+                    text(
+                        """
                     DELETE FROM raffle_watchtime_converted WHERE period_id = :period_id
-                """), {'period_id': period_id}).rowcount
+                """
+                    ),
+                    {"period_id": period_id},
+                ).rowcount
 
                 # Mark ALL current watchtime as "already converted" with 0 tickets
                 conversion_count = 0
@@ -1788,16 +2086,17 @@ Use `!rafflestats @user` to see individual stats
                     if minutes >= 60:  # Only track if they have at least 1 hour
                         hours = minutes // 60
                         tracked_minutes = hours * 60  # Only track full hours
-                        conn.execute(text("""
+                        conn.execute(
+                            text(
+                                """
                             INSERT INTO raffle_watchtime_converted
                                 (period_id, kick_name, minutes_converted, tickets_awarded)
                             VALUES
                                 (:period_id, :kick_name, :minutes, 0)
-                        """), {
-                            'period_id': period_id,
-                            'kick_name': kick_name,
-                            'minutes': tracked_minutes
-                        })
+                        """
+                            ),
+                            {"period_id": period_id, "kick_name": kick_name, "minutes": tracked_minutes},
+                        )
                         conversion_count += 1
 
             await ctx.send(
@@ -1810,6 +2109,7 @@ Use `!rafflestats @user` to see individual stats
         except Exception as e:
             logger.error(f"Error resetting watchtime baseline: {e}")
             await ctx.send(f"❌ Error: {str(e)}")
+
 
 async def setup(bot, engine):
     """Add raffle commands to bot"""

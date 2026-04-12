@@ -258,9 +258,9 @@ The bot uses **session-based authentication** (more reliable than OAuth). Follow
    - Keep this secret - it protects the bot authorization endpoint
 
 2. **Get Session Tokens (Bearer + XSRF + Cookies):**
-   
+
    See **[KICK_SESSION_AUTH_GUIDE.md](KICK_SESSION_AUTH_GUIDE.md)** for detailed instructions.
-   
+
    Quick steps:
    - Log into kick.com as your bot account in browser
    - Open DevTools (F12) → Network tab
@@ -447,7 +447,7 @@ Bot: Creates panel with "Link Account" button
 ```
 [User clicks "Link Account" button or types !link]
 
-Bot (ephemeral message - only user sees it): 
+Bot (ephemeral message - only user sees it):
 🔗 Link Your Kick Account
 [Button: 🎮 Link with Kick]
 

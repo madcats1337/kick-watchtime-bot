@@ -175,14 +175,14 @@
 
 ## 🎖️ Why This Bot Stands Out
 
-✅ **Fully Automated** - Set it and forget it  
-✅ **Provably Fair** - Complete transparency in all drawings  
-✅ **Multi-Platform** - Seamless Discord + Kick integration + configurable gambling platforms  
-✅ **Production-Ready** - Battle-tested with enterprise security  
-✅ **Custom Built** - Tailored specifically for Kick streamers  
-✅ **Highly Configurable** - Environment-based platform selection, multiple campaign codes, custom ticket rates  
-✅ **User-Friendly** - Separate command lists for users and admins  
-✅ **Active Support** - Ongoing maintenance and feature updates  
+✅ **Fully Automated** - Set it and forget it
+✅ **Provably Fair** - Complete transparency in all drawings
+✅ **Multi-Platform** - Seamless Discord + Kick integration + configurable gambling platforms
+✅ **Production-Ready** - Battle-tested with enterprise security
+✅ **Custom Built** - Tailored specifically for Kick streamers
+✅ **Highly Configurable** - Environment-based platform selection, multiple campaign codes, custom ticket rates
+✅ **User-Friendly** - Separate command lists for users and admins
+✅ **Active Support** - Ongoing maintenance and feature updates
 
 ---
 
@@ -197,5 +197,5 @@
 
 ---
 
-*Built with Discord.py, PostgreSQL, and enterprise-grade security practices*  
+*Built with Discord.py, PostgreSQL, and enterprise-grade security practices*
 *Designed for high-traffic streaming communities with professional operational needs*

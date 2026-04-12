@@ -97,8 +97,8 @@ VALUES (
     CURRENT_TIMESTAMP,
     CURRENT_TIMESTAMP
 )
-ON CONFLICT (bot_username) 
-DO UPDATE SET 
+ON CONFLICT (bot_username)
+DO UPDATE SET
     bearer_token = EXCLUDED.bearer_token,
     xsrf_token = EXCLUDED.xsrf_token,
     cookies = EXCLUDED.cookies,
@@ -161,11 +161,11 @@ You **no longer need:**
 
 ## Benefits of Session-Based Auth
 
-✅ **More Reliable** - Matches Kick's actual API implementation  
-✅ **Longer Sessions** - Tokens last longer than OAuth tokens  
-✅ **Simpler** - No OAuth flow complications  
-✅ **Proven** - Same method used by kick-js library  
-✅ **Better Error Messages** - Clearer instructions when tokens expire  
+✅ **More Reliable** - Matches Kick's actual API implementation
+✅ **Longer Sessions** - Tokens last longer than OAuth tokens
+✅ **Simpler** - No OAuth flow complications
+✅ **Proven** - Same method used by kick-js library
+✅ **Better Error Messages** - Clearer instructions when tokens expire
 
 ## References
 

@@ -4,6 +4,7 @@ Run this once to ensure the table exists.
 """
 
 import os
+
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 
@@ -20,9 +21,9 @@ if DATABASE_URL.startswith("postgres://"):
 
 engine = create_engine(DATABASE_URL)
 
-print("\n" + "="*70)
+print("\n" + "=" * 70)
 print("CREATING BOT_TOKENS TABLE")
-print("="*70)
+print("=" * 70)
 
 try:
     with engine.begin() as conn:
@@ -30,7 +31,9 @@ try:
         conn.execute(text("DROP TABLE IF EXISTS bot_tokens"))
 
         # Create bot_tokens table with OAuth authentication fields and expiration tracking
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
             CREATE TABLE IF NOT EXISTS bot_tokens (
                 bot_username TEXT PRIMARY KEY,
                 access_token TEXT NOT NULL,
@@ -38,7 +41,9 @@ try:
                 expires_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """))
+        """
+            )
+        )
         print("\n✅ bot_tokens table created successfully (OAuth with expiration tracking)!")
 
         # Check if table exists and show structure (works for both PostgreSQL and SQLite)
@@ -56,12 +61,13 @@ try:
 except Exception as e:
     print(f"\n❌ Error creating table: {e}")
     import traceback
+
     traceback.print_exc()
     exit(1)
 
-print("\n" + "="*70)
+print("\n" + "=" * 70)
 print("✅ Database is ready for bot authorization!")
-print("="*70)
+print("=" * 70)
 print("\nYou can now visit:")
 print("https://kick-dicord-bot-test-production.up.railway.app/bot/authorize")
-print("="*70 + "\n")
+print("=" * 70 + "\n")

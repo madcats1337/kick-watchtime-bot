@@ -5,8 +5,9 @@ Run this to verify database connectivity.
 
 import os
 import sys
-from sqlalchemy import create_engine, text
+
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 load_dotenv()
 
@@ -30,7 +31,7 @@ try:
 
         # Check tables
         print("\n📋 Checking tables...")
-        tables = ['watchtime', 'links', 'pending_links']
+        tables = ["watchtime", "links", "pending_links"]
         for table in tables:
             try:
                 result = conn.execute(text(f"SELECT COUNT(*) FROM {table}"))

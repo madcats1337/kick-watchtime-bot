@@ -9,8 +9,9 @@ Run with: python migrations/add_guild_id_to_timed_messages.py
 
 import os
 import sys
-from sqlalchemy import create_engine, text
+
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 # Load environment variables
 load_dotenv()
@@ -18,32 +19,41 @@ load_dotenv()
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+
 def run_migration():
     """Run the migration"""
-    DATABASE_URL = os.getenv('DATABASE_URL')
+    DATABASE_URL = os.getenv("DATABASE_URL")
     if not DATABASE_URL:
         print("❌ DATABASE_URL environment variable not set")
         return False
 
     engine = create_engine(DATABASE_URL)
     db_url = str(engine.url)
-    is_postgres = 'postgresql' in db_url.lower()
+    is_postgres = "postgresql" in db_url.lower()
 
     try:
         with engine.begin() as conn:
             # Check if guild_id column already exists
             if is_postgres:
-                result = conn.execute(text("""
-                    SELECT column_name 
-                    FROM information_schema.columns 
+                result = conn.execute(
+                    text(
+                        """
+                    SELECT column_name
+                    FROM information_schema.columns
                     WHERE table_name = 'timed_messages' AND column_name = 'guild_id'
-                """)).fetchone()
+                """
+                    )
+                ).fetchone()
             else:  # SQLite
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT COUNT(*) as col_exists
                     FROM pragma_table_info('timed_messages')
                     WHERE name = 'guild_id'
-                """)).fetchone()
+                """
+                    )
+                ).fetchone()
                 result = None if result[0] == 0 else result
 
             if result:
@@ -53,10 +63,14 @@ def run_migration():
             print("🔄 Adding guild_id column to timed_messages table...")
 
             # Add guild_id column (nullable for backwards compatibility with existing rows)
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 ALTER TABLE timed_messages
                 ADD COLUMN guild_id BIGINT
-            """))
+            """
+                )
+            )
 
             print("✅ Migration completed successfully")
             print("ℹ️  Existing timed messages have guild_id = NULL")
@@ -67,13 +81,14 @@ def run_migration():
         print(f"❌ Migration failed: {e}")
         return False
 
+
 if __name__ == "__main__":
     print("=" * 60)
     print("Migration: Add guild_id to timed_messages")
     print("=" * 60)
-    
+
     success = run_migration()
-    
+
     if success:
         print("\n✅ Migration completed successfully!")
     else:

@@ -102,7 +102,7 @@ Based on the migration, these tables have discord_server_id and need filtering i
 
 ✅ **Already have column:**
 - links
-- pending_links  
+- pending_links
 - watchtime
 - watchtime_roles
 - custom_commands
@@ -130,7 +130,7 @@ Based on the migration, these tables have discord_server_id and need filtering i
 
 ❌ **System tables (no filtering needed):**
 - oauth_states
-- oauth_notifications  
+- oauth_notifications
 - bot_tokens
 
 ## Implementation Strategy
@@ -165,7 +165,7 @@ INSERT INTO links (discord_id, kick_name, discord_server_id) VALUES (%s, %s, %s)
 ## Estimated Effort
 
 - **bot.py**: ~15-20 queries to update
-- **features/**: ~5-10 queries to update  
+- **features/**: ~5-10 queries to update
 - **Testing**: 2-3 hours
 - **Total**: 4-6 hours
 

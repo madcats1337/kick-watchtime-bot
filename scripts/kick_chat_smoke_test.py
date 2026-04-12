@@ -10,10 +10,11 @@ Requirements:
 
 If --channel is omitted, uses env KICK_CHANNEL.
 """
-import os
-import sys
+
 import argparse
 import asyncio
+import os
+import sys
 from datetime import datetime, timezone
 
 try:
@@ -22,21 +23,22 @@ except Exception as e:
     print(f"kickpython not installed or import failed: {e}")
     sys.exit(1)
 
+
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--channel', dest='channel', default=os.getenv('KICK_CHANNEL'))
-    parser.add_argument('--message', dest='message', default='smoke test')
-    parser.add_argument('--timeout', dest='timeout', type=int, default=10)
+    parser.add_argument("--channel", dest="channel", default=os.getenv("KICK_CHANNEL"))
+    parser.add_argument("--message", dest="message", default="smoke test")
+    parser.add_argument("--timeout", dest="timeout", type=int, default=10)
     args = parser.parse_args()
 
     if not args.channel:
         print("--channel or env KICK_CHANNEL required")
         sys.exit(2)
 
-    token = os.getenv('KICK_BOT_USER_TOKEN')
-    cid = os.getenv('KICK_CLIENT_ID')
-    csec = os.getenv('KICK_CLIENT_SECRET')
-    base = os.getenv('OAUTH_BASE_URL', '')
+    token = os.getenv("KICK_BOT_USER_TOKEN")
+    cid = os.getenv("KICK_CLIENT_ID")
+    csec = os.getenv("KICK_CLIENT_SECRET")
+    base = os.getenv("OAUTH_BASE_URL", "")
 
     if not token:
         print("KICK_BOT_USER_TOKEN env is required")
@@ -51,7 +53,7 @@ async def main():
         ts = datetime.now(timezone.utc).isoformat()
         print(f"[{ts}] recv: {msg.get('sender_username')}: {msg.get('content')}")
         # If we see our message content, set event (best-effort)
-        if args.message in str(msg.get('content', '')):
+        if args.message in str(msg.get("content", "")):
             got_message.set()
 
     api.add_message_handler(on_msg)
@@ -64,7 +66,7 @@ async def main():
     await asyncio.sleep(2)
 
     # Try to send a message (needs chatroom_id resolved inside kickpython)
-    if hasattr(api, 'chatroom_id') and api.chatroom_id:
+    if hasattr(api, "chatroom_id") and api.chatroom_id:
         try:
             print(f"Sending message to chatroom {api.chatroom_id} ...")
             await api.post_chat(channel_id=api.chatroom_id, content=args.message)
@@ -87,5 +89,6 @@ async def main():
     except asyncio.CancelledError:
         pass
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     asyncio.run(main())

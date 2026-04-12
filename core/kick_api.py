@@ -11,14 +11,16 @@ For official API access, see core/kick_official_api.py
 
 import asyncio
 import json
-import random
 import os
-from typing import Optional, Dict, Any, List
+import random
+from typing import Any, Dict, List, Optional
+
 import aiohttp
 
 # Import official API client for authenticated requests
 try:
-    from .kick_official_api import KickOfficialAPI, KICK_API_PUBLIC
+    from .kick_official_api import KICK_API_PUBLIC, KickOfficialAPI
+
     HAS_OFFICIAL_API = True
 except ImportError:
     HAS_OFFICIAL_API = False
@@ -27,6 +29,7 @@ except ImportError:
 # Optional: kickpython for robust chatroom_id resolution
 try:
     from kickpython import KickAPI as KickPyAPI  # type: ignore
+
     HAS_KICKPYTHON = True
 except Exception:
     HAS_KICKPYTHON = False
@@ -49,6 +52,7 @@ REFERRERS = [
 
 # Country codes for geolocation
 COUNTRY_CODES = ["US", "GB", "CA", "AU", "DE", "FR"]
+
 
 class KickAPI:
     """Simplified Kick API class using HTTP requests only (no Playwright)"""
@@ -90,23 +94,25 @@ class KickAPI:
 
                 async with aiohttp.ClientSession() as session:
                     headers = {
-                        'User-Agent': random.choice(USER_AGENTS),
-                        'Accept': 'application/json',
-                        'Referer': 'https://kick.com/',
+                        "User-Agent": random.choice(USER_AGENTS),
+                        "Accept": "application/json",
+                        "Referer": "https://kick.com/",
                     }
                     async with session.get(
-                        f'https://kick.com/api/v2/channels/{channel_name}',
+                        f"https://kick.com/api/v2/channels/{channel_name}",
                         headers=headers,
-                        timeout=aiohttp.ClientTimeout(total=10)
+                        timeout=aiohttp.ClientTimeout(total=10),
                     ) as response:
                         if response.status == 200:
                             data = await response.json()
-                            chatroom_id = data.get('chatroom', {}).get('id')
+                            chatroom_id = data.get("chatroom", {}).get("id")
                             if chatroom_id:
                                 print(f"[Kick] ✅ Found chatroom ID: {chatroom_id}")
                                 return str(chatroom_id)
                         elif response.status == 403:
-                            print(f"[Kick] ⚠️ Cloudflare blocked request. Set KICK_CHATROOM_ID environment variable to bypass.")
+                            print(
+                                f"[Kick] ⚠️ Cloudflare blocked request. Set KICK_CHATROOM_ID environment variable to bypass."
+                            )
                         else:
                             print(f"[Kick] HTTP request returned status: {response.status}")
             except Exception as e:
@@ -149,11 +155,12 @@ class KickAPI:
 
             # Start connection in background and wait for chatroom_id to appear
             import asyncio
+
             task = asyncio.create_task(api.connect_to_chatroom(channel_name))
             try:
                 for _ in range(timeout_seconds * 5):  # check every 200ms up to timeout
                     await asyncio.sleep(0.2)
-                    if getattr(api, 'chatroom_id', None):
+                    if getattr(api, "chatroom_id", None):
                         chat_id = str(api.chatroom_id)
                         print(f"[Kick] ✅ kickpython resolved chatroom_id: {chat_id}")
                         return chat_id
@@ -167,8 +174,10 @@ class KickAPI:
             print(f"[Kick] ⚠️ kickpython resolver failed: {type(e).__name__}: {str(e)}")
         return None
 
+
 # Global API instance
 _api = None
+
 
 async def fetch_chatroom_id(channel_name: str, max_retries: int = 5) -> Optional[str]:
     """
@@ -197,6 +206,7 @@ async def fetch_chatroom_id(channel_name: str, max_retries: int = 5) -> Optional
         _api = None
         return None
 
+
 async def check_stream_live(channel_name: str) -> bool:
     """
     Check if a Kick channel is currently live streaming.
@@ -216,19 +226,19 @@ async def check_stream_live(channel_name: str) -> bool:
     try:
         async with aiohttp.ClientSession() as session:
             headers = {
-                'User-Agent': random.choice(USER_AGENTS),
-                'Accept': 'application/json',
-                'Referer': 'https://kick.com/',
+                "User-Agent": random.choice(USER_AGENTS),
+                "Accept": "application/json",
+                "Referer": "https://kick.com/",
             }
             async with session.get(
-                f'https://kick.com/api/v2/channels/{channel_name}',
+                f"https://kick.com/api/v2/channels/{channel_name}",
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10)
+                timeout=aiohttp.ClientTimeout(total=10),
             ) as response:
                 if response.status == 200:
                     data = await response.json()
                     # Check if livestream exists and is active
-                    livestream = data.get('livestream')
+                    livestream = data.get("livestream")
                     if livestream and isinstance(livestream, dict):
                         # If livestream object exists and has data, stream is live
                         return True
@@ -245,6 +255,7 @@ async def check_stream_live(channel_name: str) -> bool:
         # Re-raise with context
         raise Exception(f"Stream status check failed: {type(e).__name__}: {str(e)}")
 
+
 async def get_channel_info(channel_name: str) -> Optional[Dict[str, Any]]:
     """
     Get full channel information from Kick API.
@@ -258,14 +269,14 @@ async def get_channel_info(channel_name: str) -> Optional[Dict[str, Any]]:
     try:
         async with aiohttp.ClientSession() as session:
             headers = {
-                'User-Agent': random.choice(USER_AGENTS),
-                'Accept': 'application/json',
-                'Referer': 'https://kick.com/',
+                "User-Agent": random.choice(USER_AGENTS),
+                "Accept": "application/json",
+                "Referer": "https://kick.com/",
             }
             async with session.get(
-                f'https://kick.com/api/v2/channels/{channel_name}',
+                f"https://kick.com/api/v2/channels/{channel_name}",
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10)
+                timeout=aiohttp.ClientTimeout(total=10),
             ) as response:
                 if response.status == 200:
                     return await response.json()
@@ -276,7 +287,10 @@ async def get_channel_info(channel_name: str) -> Optional[Dict[str, Any]]:
         print(f"[Kick] Error getting channel info: {type(e).__name__}: {str(e)}")
         return None
 
-async def create_clip(channel_name: str, duration_seconds: int = 30, title: str = None, access_token: str = None) -> Optional[Dict[str, Any]]:
+
+async def create_clip(
+    channel_name: str, duration_seconds: int = 30, title: str = None, access_token: str = None
+) -> Optional[Dict[str, Any]]:
     """
     Create a clip of the current livestream.
 
@@ -301,49 +315,46 @@ async def create_clip(channel_name: str, duration_seconds: int = 30, title: str 
 
     if not access_token:
         print("[Kick] ❌ No access token provided for clip creation")
-        return {'error': 'authentication_required', 'message': 'No OAuth token available for clip creation'}
+        return {"error": "authentication_required", "message": "No OAuth token available for clip creation"}
 
     try:
         async with aiohttp.ClientSession() as session:
             headers = {
-                'User-Agent': random.choice(USER_AGENTS),
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-                'Referer': f'https://kick.com/{channel_name}',
-                'Origin': 'https://kick.com',
-                'Authorization': f'Bearer {access_token}',
+                "User-Agent": random.choice(USER_AGENTS),
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Referer": f"https://kick.com/{channel_name}",
+                "Origin": "https://kick.com",
+                "Authorization": f"Bearer {access_token}",
             }
 
             # Step 1: Initialize clip creation
-            init_url = f'https://kick.com/api/v2/channels/{channel_name}/clips/init'
+            init_url = f"https://kick.com/api/v2/channels/{channel_name}/clips/init"
             async with session.get(init_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
-                content_type = response.headers.get('Content-Type', '')
+                content_type = response.headers.get("Content-Type", "")
 
                 # Check if we got HTML instead of JSON (Cloudflare block)
-                if 'text/html' in content_type:
+                if "text/html" in content_type:
                     print(f"[Kick] ❌ Clip API blocked by Cloudflare (got HTML response)")
-                    return {'error': 'cloudflare_blocked', 'message': 'Clip API blocked - use Kick website to clip'}
+                    return {"error": "cloudflare_blocked", "message": "Clip API blocked - use Kick website to clip"}
 
                 if response.status == 200:
                     init_data = await response.json()
                     print(f"[Kick] Clip init response: {init_data}")
 
                     # Step 2: Finalize the clip with duration
-                    finalize_url = f'https://kick.com/api/v2/channels/{channel_name}/clips/finalize'
+                    finalize_url = f"https://kick.com/api/v2/channels/{channel_name}/clips/finalize"
                     finalize_data = {
-                        'duration': duration_seconds,
-                        'title': title or f'Clip from {channel_name}',
+                        "duration": duration_seconds,
+                        "title": title or f"Clip from {channel_name}",
                     }
 
                     # Add any required fields from init response
-                    if 'clip_id' in init_data:
-                        finalize_data['clip_id'] = init_data['clip_id']
+                    if "clip_id" in init_data:
+                        finalize_data["clip_id"] = init_data["clip_id"]
 
                     async with session.post(
-                        finalize_url,
-                        headers=headers,
-                        json=finalize_data,
-                        timeout=aiohttp.ClientTimeout(total=15)
+                        finalize_url, headers=headers, json=finalize_data, timeout=aiohttp.ClientTimeout(total=15)
                     ) as finalize_response:
                         if finalize_response.status == 200:
                             clip_data = await finalize_response.json()
@@ -356,13 +367,13 @@ async def create_clip(channel_name: str, duration_seconds: int = 30, title: str 
 
                 elif response.status == 401:
                     print(f"[Kick] ❌ Authentication required for clip creation")
-                    return {'error': 'authentication_required', 'message': 'Clip creation requires authentication'}
+                    return {"error": "authentication_required", "message": "Clip creation requires authentication"}
                 elif response.status == 403:
                     print(f"[Kick] ❌ Cloudflare blocked clip creation")
-                    return {'error': 'cloudflare_blocked', 'message': 'Request blocked by Cloudflare'}
+                    return {"error": "cloudflare_blocked", "message": "Request blocked by Cloudflare"}
                 elif response.status == 404:
                     print(f"[Kick] ❌ Channel not found or not live")
-                    return {'error': 'not_found', 'message': 'Channel not found or stream not live'}
+                    return {"error": "not_found", "message": "Channel not found or stream not live"}
                 else:
                     error_text = await response.text()
                     print(f"[Kick] ❌ Clip init failed: HTTP {response.status} - {error_text}")
@@ -370,10 +381,11 @@ async def create_clip(channel_name: str, duration_seconds: int = 30, title: str 
 
     except asyncio.TimeoutError:
         print(f"[Kick] ❌ Clip creation timed out")
-        return {'error': 'timeout', 'message': 'Request timed out'}
+        return {"error": "timeout", "message": "Request timed out"}
     except Exception as e:
         print(f"[Kick] ❌ Error creating clip: {type(e).__name__}: {str(e)}")
         return None
+
 
 async def get_clips(channel_name: str, limit: int = 10) -> Optional[list]:
     """
@@ -389,18 +401,18 @@ async def get_clips(channel_name: str, limit: int = 10) -> Optional[list]:
     try:
         async with aiohttp.ClientSession() as session:
             headers = {
-                'User-Agent': random.choice(USER_AGENTS),
-                'Accept': 'application/json',
-                'Referer': 'https://kick.com/',
+                "User-Agent": random.choice(USER_AGENTS),
+                "Accept": "application/json",
+                "Referer": "https://kick.com/",
             }
             async with session.get(
-                f'https://kick.com/api/v2/channels/{channel_name}/clips',
+                f"https://kick.com/api/v2/channels/{channel_name}/clips",
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10)
+                timeout=aiohttp.ClientTimeout(total=10),
             ) as response:
                 if response.status == 200:
                     data = await response.json()
-                    clips = data.get('clips', [])[:limit]
+                    clips = data.get("clips", [])[:limit]
                     return clips
                 else:
                     print(f"[Kick] Failed to get clips: HTTP {response.status}")
@@ -409,13 +421,15 @@ async def get_clips(channel_name: str, limit: int = 10) -> Optional[list]:
         print(f"[Kick] Error getting clips: {type(e).__name__}: {str(e)}")
         return None
 
+
 # Playback URL cache to reduce API calls and Cloudflare detection risk
 _playback_cache = {}
+
 
 async def get_playback_url(channel_name: str, force_refresh: bool = False) -> Optional[str]:
     """
     Get HLS playback URL for a live channel with caching and validation.
-    
+
     This function attempts multiple strategies to obtain a valid playback URL:
     1. Return cached URL if still valid (60 second TTL)
     2. Check top-level playback_url field from v2 API
@@ -423,191 +437,188 @@ async def get_playback_url(channel_name: str, force_refresh: bool = False) -> Op
     4. Fallback to cloudscraper if aiohttp gets blocked
     5. Fallback to KICK_PLAYBACK_URL environment variable
     6. Validate URL is M3U8 format
-    
+
     Args:
         channel_name: The Kick channel name/slug
         force_refresh: Force a new API fetch even if cached
-    
+
     Returns:
         Valid M3U8 playback URL string, or None if unavailable
     """
     import time
-    
+
     cache_key = f"playback:{channel_name}"
     cache_ttl = 60  # seconds
-    
+
     # Check cache first (unless force refresh)
     if not force_refresh and cache_key in _playback_cache:
         cached_data = _playback_cache[cache_key]
-        age = time.time() - cached_data['timestamp']
+        age = time.time() - cached_data["timestamp"]
         if age < cache_ttl:
             print(f"[Kick] 📦 Using cached playback URL (age: {age:.1f}s)")
-            return cached_data['url']
-    
+            return cached_data["url"]
+
     print(f"[Kick] 🔍 Fetching playback URL for {channel_name}...")
-    
+
     try:
         # Try aiohttp first (faster)
         channel_info = await get_channel_info(channel_name)
-        
+
         if channel_info and isinstance(channel_info, dict):
             playback_url = _extract_playback_url(channel_info)
             if playback_url:
                 _cache_playback_url(cache_key, playback_url)
                 return playback_url
-        
+
         # If aiohttp failed or returned no URL, try cloudscraper (Cloudflare bypass)
         print(f"[Kick] 🔄 Trying cloudscraper for Cloudflare bypass...")
         playback_url = await _fetch_with_cloudscraper(channel_name)
         if playback_url:
             _cache_playback_url(cache_key, playback_url)
             return playback_url
-        
+
         # Strategy 3: Environment variable override
         env_url = _check_env_override()
         if env_url:
             _cache_playback_url(cache_key, env_url)
             return env_url
-        
+
         print(f"[Kick] ❌ No valid playback URL found in any source")
         print(f"[Kick] 💡 TIP: Set KICK_PLAYBACK_URL env var as fallback")
         return None
-        
+
     except Exception as e:
         print(f"[Kick] ❌ Error fetching playback URL: {type(e).__name__}: {str(e)}")
         return _check_env_override()
+
 
 async def _fetch_with_cloudscraper(channel_name: str) -> Optional[str]:
     """
     Fetch channel info using cloudscraper to bypass Cloudflare protection.
     Runs in thread pool to avoid blocking the async event loop.
-    
+
     Args:
         channel_name: The Kick channel name/slug
-    
+
     Returns:
         Valid playback URL or None
     """
+
     def _sync_fetch():
         try:
             import cloudscraper
-            scraper = cloudscraper.create_scraper(
-                browser={
-                    'browser': 'chrome',
-                    'platform': 'windows',
-                    'mobile': False
-                }
-            )
-            
-            response = scraper.get(
-                f'https://kick.com/api/v2/channels/{channel_name}',
-                timeout=15
-            )
-            
+
+            scraper = cloudscraper.create_scraper(browser={"browser": "chrome", "platform": "windows", "mobile": False})
+
+            response = scraper.get(f"https://kick.com/api/v2/channels/{channel_name}", timeout=15)
+
             if response.status_code == 200:
                 data = response.json()
                 return _extract_playback_url(data)
             else:
                 print(f"[Kick] Cloudscraper returned: HTTP {response.status_code}")
                 return None
-                
+
         except Exception as e:
             print(f"[Kick] Cloudscraper error: {type(e).__name__}: {str(e)}")
             return None
-    
+
     # Run in thread pool to avoid blocking
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _sync_fetch)
 
+
 def _extract_playback_url(channel_info: dict) -> Optional[str]:
     """
     Extract and validate playback URL from channel info dict.
-    
+
     Args:
         channel_info: Channel data from API
-    
+
     Returns:
         Valid playback URL or None
     """
     # Strategy 1: Check top-level playback_url field (most reliable)
-    playback_url = channel_info.get('playback_url')
+    playback_url = channel_info.get("playback_url")
     if playback_url and _validate_playback_url(playback_url):
         print(f"[Kick] ✅ Found top-level playback_url")
         return playback_url
-    
+
     # Strategy 2: Check nested livestream object
-    livestream = channel_info.get('livestream')
+    livestream = channel_info.get("livestream")
     if isinstance(livestream, dict):
         # Try multiple possible field names
-        for field in ['playback_url', 'hls_url', 'source', 'video_url']:
+        for field in ["playback_url", "hls_url", "source", "video_url"]:
             url = livestream.get(field)
             if url and _validate_playback_url(url):
                 print(f"[Kick] ✅ Found playback URL in livestream.{field}")
                 return url
-    
+
     return None
+
 
 def _validate_playback_url(url: str) -> bool:
     """
     Validate that a URL is a valid M3U8 playlist.
-    
+
     Args:
         url: URL string to validate
-    
+
     Returns:
         True if URL appears valid, False otherwise
     """
     if not url or not isinstance(url, str):
         return False
-    
+
     url_lower = url.lower()
-    
+
     # Must be HTTP/HTTPS
-    if not (url_lower.startswith('http://') or url_lower.startswith('https://')):
+    if not (url_lower.startswith("http://") or url_lower.startswith("https://")):
         return False
-    
+
     # Must contain .m3u8 or be an index/master playlist
-    if '.m3u8' not in url_lower:
+    if ".m3u8" not in url_lower:
         return False
-    
+
     # Reject HTML responses (Cloudflare blocks)
-    if any(pattern in url_lower for pattern in ['<html', '<!doctype', '<head>']):
+    if any(pattern in url_lower for pattern in ["<html", "<!doctype", "<head>"]):
         print(f"[Kick] ⚠️ Rejected HTML-like URL (likely Cloudflare block)")
         return False
-    
+
     return True
+
 
 def _check_env_override() -> Optional[str]:
     """
     Check for KICK_PLAYBACK_URL environment variable override.
-    
+
     Returns:
         Environment URL if set and valid, None otherwise
     """
-    env_url = os.getenv('KICK_PLAYBACK_URL')
+    env_url = os.getenv("KICK_PLAYBACK_URL")
     if env_url and _validate_playback_url(env_url):
         print(f"[Kick] 📺 Using KICK_PLAYBACK_URL from environment")
         return env_url
     return None
 
+
 def _cache_playback_url(cache_key: str, url: str) -> None:
     """
     Store playback URL in cache with timestamp.
-    
+
     Args:
         cache_key: Cache key for this channel
         url: Playback URL to cache
     """
     import time
-    _playback_cache[cache_key] = {
-        'url': url,
-        'timestamp': time.time()
-    }
+
+    _playback_cache[cache_key] = {"url": url, "timestamp": time.time()}
+
 
 def clear_playback_cache(channel_name: Optional[str] = None) -> None:
     """
     Clear playback URL cache for a specific channel or all channels.
-    
+
     Args:
         channel_name: Channel to clear, or None to clear all
     """
@@ -619,6 +630,7 @@ def clear_playback_cache(channel_name: Optional[str] = None) -> None:
     else:
         _playback_cache.clear()
         print(f"[Kick] 🗑️ Cleared all playback cache")
+
 
 class KickHybridAPI:
     """
@@ -938,17 +950,18 @@ class KickHybridAPI:
             print(f"[KickHybrid] ❌ Failed to get kicks leaderboard: {e}")
             return None
 
+
 # Export all public interfaces
 __all__ = [
-    'KickAPI',
-    'KickHybridAPI',
-    'fetch_chatroom_id',
-    'check_stream_live',
-    'get_channel_info',
-    'create_clip',
-    'get_clips',
-    'USER_AGENTS',
-    'REFERRERS',
-    'COUNTRY_CODES',
-    'HAS_OFFICIAL_API',
+    "KickAPI",
+    "KickHybridAPI",
+    "fetch_chatroom_id",
+    "check_stream_live",
+    "get_channel_info",
+    "create_clip",
+    "get_clips",
+    "USER_AGENTS",
+    "REFERRERS",
+    "COUNTRY_CODES",
+    "HAS_OFFICIAL_API",
 ]

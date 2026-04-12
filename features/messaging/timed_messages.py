@@ -2,30 +2,39 @@
 Timed Messages System - Schedule recurring messages to Kick chat
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, Dict, List
+from typing import Dict, List, Optional
+
 import discord
 from discord.ext import commands, tasks
 from sqlalchemy import text
-import asyncio
 
 logger = logging.getLogger(__name__)
+
 
 class TimedMessage:
     """Represents a timed message"""
 
-    def __init__(self, message_id: int, message: str, interval_minutes: int,
-                 enabled: bool = True, last_sent: Optional[datetime] = None):
+    def __init__(
+        self,
+        message_id: int,
+        message: str,
+        interval_minutes: int,
+        enabled: bool = True,
+        last_sent: Optional[datetime] = None,
+    ):
         self.message_id = message_id
         self.message = message
         self.interval_minutes = interval_minutes
         self.enabled = enabled
         self.last_sent = last_sent
 
+
 class TimedMessagesManager:
     """Manage timed messages to Kick chat
-    
+
     NOTE: In multiserver deployments, this should be refactored to be per-guild.
     Currently uses guild_id=None to load all messages (backwards compatible).
     """
@@ -47,13 +56,15 @@ class TimedMessagesManager:
         try:
             # Detect database type
             db_url = str(self.engine.url)
-            is_postgres = 'postgresql' in db_url.lower()
+            is_postgres = "postgresql" in db_url.lower()
 
             with self.engine.begin() as conn:
                 if is_postgres:
                     # PostgreSQL uses SERIAL for auto-increment
                     # Use discord_server_id to match dashboard schema
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         CREATE TABLE IF NOT EXISTS timed_messages (
                             id SERIAL PRIMARY KEY,
                             discord_server_id VARCHAR(50),
@@ -66,10 +77,14 @@ class TimedMessagesManager:
                             created_by BIGINT,
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                         )
-                    """))
+                    """
+                        )
+                    )
                 else:
                     # SQLite uses AUTOINCREMENT
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         CREATE TABLE IF NOT EXISTS timed_messages (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             discord_server_id VARCHAR(50),
@@ -82,7 +97,9 @@ class TimedMessagesManager:
                             created_by BIGINT,
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                         )
-                    """))
+                    """
+                        )
+                    )
             logger.info("timed_messages table initialized")
         except Exception as e:
             logger.error(f"Failed to initialize timed_messages table: {e}")
@@ -97,19 +114,28 @@ class TimedMessagesManager:
                 # Load messages for this guild or all guilds (if guild_id=None)
                 if self.guild_id is not None:
                     # Load for specific guild (use discord_server_id column)
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         SELECT id, message, interval_minutes, enabled, last_sent
                         FROM timed_messages
                         WHERE discord_server_id = :guild_id OR discord_server_id IS NULL
                         ORDER BY id
-                    """), {'guild_id': str(self.guild_id)}).fetchall()
+                    """
+                        ),
+                        {"guild_id": str(self.guild_id)},
+                    ).fetchall()
                 else:
                     # Load all messages (backwards compatible)
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         SELECT id, message, interval_minutes, enabled, last_sent
                         FROM timed_messages
                         ORDER BY id
-                    """)).fetchall()
+                    """
+                        )
+                    ).fetchall()
 
                 self.messages.clear()
                 for row in result:
@@ -118,7 +144,7 @@ class TimedMessagesManager:
                         message=row[1],
                         interval_minutes=row[2],
                         enabled=bool(row[3]),
-                        last_sent=row[4]
+                        last_sent=row[4],
                     )
                     self.messages[msg.message_id] = msg
 
@@ -129,163 +155,199 @@ class TimedMessagesManager:
     def add_message(self, message: str, interval_minutes: int, created_by: int) -> Dict:
         """Add a new timed message"""
         if not self.engine:
-            return {'status': 'error', 'message': 'No database connection'}
+            return {"status": "error", "message": "No database connection"}
 
         if interval_minutes < 1:
-            return {'status': 'error', 'message': 'Interval must be at least 1 minute'}
+            return {"status": "error", "message": "Interval must be at least 1 minute"}
 
         if len(message) > 500:
-            return {'status': 'error', 'message': 'Message too long (max 500 chars)'}
+            return {"status": "error", "message": "Message too long (max 500 chars)"}
 
         try:
             # Detect database type
             db_url = str(self.engine.url)
-            is_postgres = 'postgresql' in db_url.lower()
+            is_postgres = "postgresql" in db_url.lower()
 
             with self.engine.begin() as conn:
                 if is_postgres:
                     # PostgreSQL returns ID with RETURNING clause
                     # Use discord_server_id to match dashboard schema
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         INSERT INTO timed_messages (discord_server_id, message, interval_minutes, enabled, created_by)
                         VALUES (:guild_id, :message, :interval, TRUE, :created_by)
                         RETURNING id
-                    """), {
-                        'guild_id': str(self.guild_id) if self.guild_id else None,
-                        'message': message,
-                        'interval': interval_minutes,
-                        'created_by': created_by
-                    })
+                    """
+                        ),
+                        {
+                            "guild_id": str(self.guild_id) if self.guild_id else None,
+                            "message": message,
+                            "interval": interval_minutes,
+                            "created_by": created_by,
+                        },
+                    )
                     message_id = result.scalar()
                 else:
                     # SQLite uses lastrowid
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         INSERT INTO timed_messages (discord_server_id, message, interval_minutes, enabled, created_by)
                         VALUES (:guild_id, :message, :interval, TRUE, :created_by)
-                    """), {
-                        'guild_id': str(self.guild_id) if self.guild_id else None,
-                        'message': message,
-                        'interval': interval_minutes,
-                        'created_by': created_by
-                    })
+                    """
+                        ),
+                        {
+                            "guild_id": str(self.guild_id) if self.guild_id else None,
+                            "message": message,
+                            "interval": interval_minutes,
+                            "created_by": created_by,
+                        },
+                    )
                     message_id = result.lastrowid
 
             # Reload messages
             self._load_messages()
 
             logger.info(f"Added timed message #{message_id}: {message[:50]}...")
-            return {
-                'status': 'success',
-                'message': f'Added timed message #{message_id}',
-                'message_id': message_id
-            }
+            return {"status": "success", "message": f"Added timed message #{message_id}", "message_id": message_id}
         except Exception as e:
             logger.error(f"Error adding timed message: {e}")
-            return {'status': 'error', 'message': str(e)}
+            return {"status": "error", "message": str(e)}
 
     def remove_message(self, message_id: int) -> Dict:
         """Remove a timed message"""
         if not self.engine:
-            return {'status': 'error', 'message': 'No database connection'}
+            return {"status": "error", "message": "No database connection"}
 
         try:
             with self.engine.begin() as conn:
                 # Delete with discord_server_id filter for multiserver isolation
                 if self.guild_id is not None:
-                    result = conn.execute(text("""
-                        DELETE FROM timed_messages 
+                    result = conn.execute(
+                        text(
+                            """
+                        DELETE FROM timed_messages
                         WHERE id = :id AND (discord_server_id = :guild_id OR discord_server_id IS NULL)
-                    """), {'id': message_id, 'guild_id': str(self.guild_id)})
+                    """
+                        ),
+                        {"id": message_id, "guild_id": str(self.guild_id)},
+                    )
                 else:
                     # No guild filter (backwards compatible)
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         DELETE FROM timed_messages WHERE id = :id
-                    """), {'id': message_id})
+                    """
+                        ),
+                        {"id": message_id},
+                    )
 
                 if result.rowcount == 0:
-                    return {'status': 'error', 'message': f'Message #{message_id} not found'}
+                    return {"status": "error", "message": f"Message #{message_id} not found"}
 
             # Reload messages
             self._load_messages()
 
             logger.info(f"Removed timed message #{message_id}")
-            return {'status': 'success', 'message': f'Removed timed message #{message_id}'}
+            return {"status": "success", "message": f"Removed timed message #{message_id}"}
         except Exception as e:
             logger.error(f"Error removing timed message: {e}")
-            return {'status': 'error', 'message': str(e)}
+            return {"status": "error", "message": str(e)}
 
     def toggle_message(self, message_id: int, enabled: bool) -> Dict:
         """Enable or disable a timed message"""
         if not self.engine:
-            return {'status': 'error', 'message': 'No database connection'}
+            return {"status": "error", "message": "No database connection"}
 
         try:
             with self.engine.begin() as conn:
                 # Update with discord_server_id filter for multiserver isolation
                 if self.guild_id is not None:
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         UPDATE timed_messages
                         SET enabled = :enabled, updated_at = CURRENT_TIMESTAMP
                         WHERE id = :id AND (discord_server_id = :guild_id OR discord_server_id IS NULL)
-                    """), {'id': message_id, 'enabled': enabled, 'guild_id': str(self.guild_id)})
+                    """
+                        ),
+                        {"id": message_id, "enabled": enabled, "guild_id": str(self.guild_id)},
+                    )
                 else:
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         UPDATE timed_messages
                         SET enabled = :enabled, updated_at = CURRENT_TIMESTAMP
                         WHERE id = :id
-                    """), {'id': message_id, 'enabled': enabled})
+                    """
+                        ),
+                        {"id": message_id, "enabled": enabled},
+                    )
 
                 if result.rowcount == 0:
-                    return {'status': 'error', 'message': f'Message #{message_id} not found'}
+                    return {"status": "error", "message": f"Message #{message_id} not found"}
 
             # Reload messages
             self._load_messages()
 
             status = "enabled" if enabled else "disabled"
             logger.info(f"Timed message #{message_id} {status}")
-            return {'status': 'success', 'message': f'Message #{message_id} {status}'}
+            return {"status": "success", "message": f"Message #{message_id} {status}"}
         except Exception as e:
             logger.error(f"Error toggling timed message: {e}")
-            return {'status': 'error', 'message': str(e)}
+            return {"status": "error", "message": str(e)}
 
     def update_interval(self, message_id: int, interval_minutes: int) -> Dict:
         """Update message interval"""
         if not self.engine:
-            return {'status': 'error', 'message': 'No database connection'}
+            return {"status": "error", "message": "No database connection"}
 
         if interval_minutes < 1:
-            return {'status': 'error', 'message': 'Interval must be at least 1 minute'}
+            return {"status": "error", "message": "Interval must be at least 1 minute"}
 
         try:
             with self.engine.begin() as conn:
                 # Update with discord_server_id filter for multiserver isolation
                 if self.guild_id is not None:
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         UPDATE timed_messages
                         SET interval_minutes = :interval, updated_at = CURRENT_TIMESTAMP
                         WHERE id = :id AND (discord_server_id = :guild_id OR discord_server_id IS NULL)
-                    """), {'id': message_id, 'interval': interval_minutes, 'guild_id': str(self.guild_id)})
+                    """
+                        ),
+                        {"id": message_id, "interval": interval_minutes, "guild_id": str(self.guild_id)},
+                    )
                 else:
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         UPDATE timed_messages
                         SET interval_minutes = :interval, updated_at = CURRENT_TIMESTAMP
                         WHERE id = :id
-                    """), {'id': message_id, 'interval': interval_minutes})
+                    """
+                        ),
+                        {"id": message_id, "interval": interval_minutes},
+                    )
 
                 if result.rowcount == 0:
-                    return {'status': 'error', 'message': f'Message #{message_id} not found'}
+                    return {"status": "error", "message": f"Message #{message_id} not found"}
 
             # Reload messages
             self._load_messages()
 
             logger.info(f"Updated timed message #{message_id} interval to {interval_minutes}m")
             return {
-                'status': 'success',
-                'message': f'Updated message #{message_id} interval to {interval_minutes} minutes'
+                "status": "success",
+                "message": f"Updated message #{message_id} interval to {interval_minutes} minutes",
             }
         except Exception as e:
             logger.error(f"Error updating interval: {e}")
-            return {'status': 'error', 'message': str(e)}
+            return {"status": "error", "message": str(e)}
 
     def reload_messages(self):
         """Reload messages from database (public method for external calls)"""
@@ -338,30 +400,43 @@ class TimedMessagesManager:
                 try:
                     # Send the message with guild_id for proper routing
                     await self.kick_send_callback(msg.message, guild_id=self.guild_id)
-                    logger.info(f"[Guild {self.guild_id}] Sent timed message #{msg.message_id}: {msg.message[:50]}... ({active_chatters_count} active chatters)")
+                    logger.info(
+                        f"[Guild {self.guild_id}] Sent timed message #{msg.message_id}: {msg.message[:50]}... ({active_chatters_count} active chatters)"
+                    )
 
                     # Update last_sent timestamp
                     if self.engine:
                         with self.engine.begin() as conn:
                             # Update with discord_server_id filter for multiserver isolation
                             if self.guild_id is not None:
-                                conn.execute(text("""
+                                conn.execute(
+                                    text(
+                                        """
                                     UPDATE timed_messages
                                     SET last_sent = CURRENT_TIMESTAMP
                                     WHERE id = :id AND (discord_server_id = :guild_id OR discord_server_id IS NULL)
-                                """), {'id': msg.message_id, 'guild_id': str(self.guild_id)})
+                                """
+                                    ),
+                                    {"id": msg.message_id, "guild_id": str(self.guild_id)},
+                                )
                             else:
-                                conn.execute(text("""
+                                conn.execute(
+                                    text(
+                                        """
                                     UPDATE timed_messages
                                     SET last_sent = CURRENT_TIMESTAMP
                                     WHERE id = :id
-                                """), {'id': msg.message_id})
+                                """
+                                    ),
+                                    {"id": msg.message_id},
+                                )
 
                         # Update in memory
                         msg.last_sent = now
 
                 except Exception as e:
                     logger.error(f"Failed to send timed message #{msg.message_id}: {e}")
+
 
 class TimedMessagesCommands(commands.Cog):
     """Discord commands for managing timed messages"""
@@ -374,28 +449,28 @@ class TimedMessagesCommands(commands.Cog):
     def cog_unload(self):
         """Clean up when cog is unloaded"""
         self.check_messages_task.cancel()
-    
+
     def _get_manager(self, guild_id: int):
         """Get the manager for a specific guild"""
-        if hasattr(self.bot, 'timed_messages_managers'):
+        if hasattr(self.bot, "timed_messages_managers"):
             return self.bot.timed_messages_managers.get(guild_id)
         # Fallback for backwards compatibility
-        if hasattr(self.bot, 'timed_messages_manager'):
+        if hasattr(self.bot, "timed_messages_manager"):
             return self.bot.timed_messages_manager
         return None
 
     @tasks.loop(minutes=1)
     async def check_messages_task(self):
         """Background task to check and send timed messages for all guilds"""
-        if not hasattr(self.bot, 'timed_messages_managers'):
+        if not hasattr(self.bot, "timed_messages_managers"):
             return
-        
+
         for guild_id, manager in self.bot.timed_messages_managers.items():
             # Get active chatters count for this guild
             active_chatters_count = 0
-            if hasattr(self.bot, 'get_active_chatters_count'):
+            if hasattr(self.bot, "get_active_chatters_count"):
                 active_chatters_count = self.bot.get_active_chatters_count(guild_id)
-            
+
             await manager.check_and_send_messages(active_chatters_count)
 
     @check_messages_task.before_loop
@@ -403,7 +478,7 @@ class TimedMessagesCommands(commands.Cog):
         """Wait for bot to be ready before starting task"""
         await self.bot.wait_until_ready()
 
-    @commands.command(name='addtimer', aliases=['addtimedmessage', 'timermessage'])
+    @commands.command(name="addtimer", aliases=["addtimedmessage", "timermessage"])
     @commands.has_permissions(administrator=True)
     async def add_timed_message(self, ctx, interval: int, *, message: str):
         """
@@ -415,21 +490,21 @@ class TimedMessagesCommands(commands.Cog):
         if not manager:
             await ctx.send("❌ Timed messages not initialized for this server")
             return
-        
+
         result = manager.add_message(message, interval, ctx.author.id)
 
-        if result['status'] == 'success':
+        if result["status"] == "success":
             embed = discord.Embed(
                 title="✅ Timed Message Added",
                 description=f"Message #{result['message_id']} will be sent every {interval} minutes",
-                color=discord.Color.green()
+                color=discord.Color.green(),
             )
             embed.add_field(name="Message", value=message, inline=False)
             await ctx.send(embed=embed)
         else:
             await ctx.send(f"❌ {result['message']}")
 
-    @commands.command(name='removetimer', aliases=['deletetimer', 'rmtimer'])
+    @commands.command(name="removetimer", aliases=["deletetimer", "rmtimer"])
     @commands.has_permissions(administrator=True)
     async def remove_timed_message(self, ctx, message_id: int):
         """
@@ -441,15 +516,15 @@ class TimedMessagesCommands(commands.Cog):
         if not manager:
             await ctx.send("❌ Timed messages not initialized for this server")
             return
-        
+
         result = manager.remove_message(message_id)
 
-        if result['status'] == 'success':
+        if result["status"] == "success":
             await ctx.send(f"✅ {result['message']}")
         else:
             await ctx.send(f"❌ {result['message']}")
 
-    @commands.command(name='toggletimer', aliases=['enabletimer', 'disabletimer'])
+    @commands.command(name="toggletimer", aliases=["enabletimer", "disabletimer"])
     @commands.has_permissions(administrator=True)
     async def toggle_timed_message(self, ctx, message_id: int, enabled: str = None):
         """
@@ -469,16 +544,16 @@ class TimedMessagesCommands(commands.Cog):
                 return
             enabled_bool = not msg.enabled
         else:
-            enabled_bool = enabled.lower() in ['on', 'enable', 'enabled', 'true', 'yes']
+            enabled_bool = enabled.lower() in ["on", "enable", "enabled", "true", "yes"]
 
         result = manager.toggle_message(message_id, enabled_bool)
 
-        if result['status'] == 'success':
+        if result["status"] == "success":
             await ctx.send(f"✅ {result['message']}")
         else:
             await ctx.send(f"❌ {result['message']}")
 
-    @commands.command(name='updatetimer', aliases=['settimer'])
+    @commands.command(name="updatetimer", aliases=["settimer"])
     @commands.has_permissions(administrator=True)
     async def update_timer_interval(self, ctx, message_id: int, interval: int):
         """
@@ -490,15 +565,15 @@ class TimedMessagesCommands(commands.Cog):
         if not manager:
             await ctx.send("❌ Timed messages not initialized for this server")
             return
-        
+
         result = manager.update_interval(message_id, interval)
 
-        if result['status'] == 'success':
+        if result["status"] == "success":
             await ctx.send(f"✅ {result['message']}")
         else:
             await ctx.send(f"❌ {result['message']}")
 
-    @commands.command(name='listtimers', aliases=['timers', 'timedmessages'])
+    @commands.command(name="listtimers", aliases=["timers", "timedmessages"])
     @commands.has_permissions(administrator=True)
     async def list_timed_messages(self, ctx):
         """
@@ -509,7 +584,7 @@ class TimedMessagesCommands(commands.Cog):
         if not manager:
             await ctx.send("❌ Timed messages not initialized for this server")
             return
-        
+
         messages = manager.list_messages()
 
         if not messages:
@@ -517,14 +592,12 @@ class TimedMessagesCommands(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="⏰ Timed Messages",
-            description=f"{len(messages)} message(s) configured",
-            color=discord.Color.blue()
+            title="⏰ Timed Messages", description=f"{len(messages)} message(s) configured", color=discord.Color.blue()
         )
 
         for msg in messages:
             status = "✅ Enabled" if msg.enabled else "❌ Disabled"
-            last_sent = msg.last_sent.strftime('%Y-%m-%d %H:%M UTC') if msg.last_sent else "Never"
+            last_sent = msg.last_sent.strftime("%Y-%m-%d %H:%M UTC") if msg.last_sent else "Never"
 
             # Calculate next send time
             if msg.enabled and msg.last_sent:
@@ -546,15 +619,11 @@ class TimedMessagesCommands(commands.Cog):
                 f"**Message:** {msg.message[:100]}"
             )
 
-            embed.add_field(
-                name=f"Message #{msg.message_id}",
-                value=value,
-                inline=False
-            )
+            embed.add_field(name=f"Message #{msg.message_id}", value=value, inline=False)
 
         await ctx.send(embed=embed)
 
-    @commands.command(name='timerpanel', aliases=['managetimers'])
+    @commands.command(name="timerpanel", aliases=["managetimers"])
     @commands.has_permissions(administrator=True)
     async def timer_control_panel(self, ctx):
         """
@@ -571,25 +640,23 @@ class TimedMessagesCommands(commands.Cog):
         if not manager:
             await ctx.send("❌ Timed messages not initialized for this server")
             return
-        
+
         messages = manager.list_messages()
 
         embed = discord.Embed(
             title="⏰ Timed Messages Control Panel",
             description="React to this message to manage timers:\n\n"
-                       "♻️ - Refresh panel\n"
-                       "📋 - Show list of timers\n"
-                       "❌ - Disable timer (will ask for ID)\n"
-                       "✅ - Enable timer (will ask for ID)",
+            "♻️ - Refresh panel\n"
+            "📋 - Show list of timers\n"
+            "❌ - Disable timer (will ask for ID)\n"
+            "✅ - Enable timer (will ask for ID)",
             color=discord.Color.blue(),
-            timestamp=datetime.utcnow()
+            timestamp=datetime.utcnow(),
         )
 
         if not messages:
             embed.add_field(
-                name="📭 No Timers",
-                value="Use `!addtimer <minutes> <message>` to create one!",
-                inline=False
+                name="📭 No Timers", value="Use `!addtimer <minutes> <message>` to create one!", inline=False
             )
         else:
             # Show summary of all messages
@@ -605,7 +672,7 @@ class TimedMessagesCommands(commands.Cog):
             # Show each timer with ID for commands
             for i, msg in enumerate(messages[:10], 1):  # Show max 10
                 status_emoji = "✅" if msg.enabled else "❌"
-                last_sent = msg.last_sent.strftime('%H:%M') if msg.last_sent else "Never"
+                last_sent = msg.last_sent.strftime("%H:%M") if msg.last_sent else "Never"
 
                 # Calculate next send time
                 if msg.enabled and msg.last_sent:
@@ -624,17 +691,13 @@ class TimedMessagesCommands(commands.Cog):
                     f"💬 {msg.message[:60]}{'...' if len(msg.message) > 60 else ''}"
                 )
 
-                embed.add_field(
-                    name=f"Timer #{i}",
-                    value=field_value,
-                    inline=False
-                )
+                embed.add_field(name=f"Timer #{i}", value=field_value, inline=False)
 
             if len(messages) > 10:
                 embed.add_field(
                     name="ℹ️ More Timers",
                     value=f"Showing 10 of {len(messages)}. Use `!listtimers` to see all.",
-                    inline=False
+                    inline=False,
                 )
 
         # Add command reference
@@ -644,7 +707,7 @@ class TimedMessagesCommands(commands.Cog):
                 "`!addtimer <min> <msg>` • `!removetimer <id>`\n"
                 "`!toggletimer <id> on/off` • `!updatetimer <id> <min>`"
             ),
-            inline=False
+            inline=False,
         )
 
         embed.set_footer(text=f"Checks every 1 minute • React to manage")
@@ -666,18 +729,20 @@ class TimedMessagesCommands(commands.Cog):
         if manager and manager.engine:
             try:
                 with manager.engine.begin() as conn:
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         INSERT INTO timer_panels (guild_id, channel_id, message_id)
                         VALUES (:guild, :channel, :message)
                         ON CONFLICT (guild_id, channel_id, message_id) DO NOTHING
-                    """), {
-                        'guild': ctx.guild.id,
-                        'channel': ctx.channel.id,
-                        'message': panel.id
-                    })
+                    """
+                        ),
+                        {"guild": ctx.guild.id, "channel": ctx.channel.id, "message": panel.id},
+                    )
                 logger.info(f"Stored timer panel {panel.id}")
             except Exception as e:
                 logger.error(f"Failed to store timer panel: {e}")
+
 
 async def setup_timed_messages(bot, engine, kick_send_callback=None):
     """
@@ -692,18 +757,17 @@ async def setup_timed_messages(bot, engine, kick_send_callback=None):
         Dict of TimedMessagesManager instances keyed by guild_id
     """
     managers = {}
-    
+
     # Create a manager instance for each guild
     for guild in bot.guilds:
         manager = TimedMessagesManager(engine, kick_send_callback, guild_id=guild.id)
         managers[guild.id] = manager
         logger.info(f"✅ [Guild {guild.name}] Timed messages initialized ({len(manager.messages)} messages)")
-    
+
     # Add commands cog only once (it will access managers via bot attribute)
     if managers:
         # Use first guild's manager for the cog (it will be updated to use per-guild managers)
         first_manager = next(iter(managers.values()))
         await bot.add_cog(TimedMessagesCommands(bot, first_manager))
-    
-    return managers
 
+    return managers

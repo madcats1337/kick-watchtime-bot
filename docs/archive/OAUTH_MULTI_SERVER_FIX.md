@@ -81,8 +81,8 @@ Pass `guild_id` through the entire OAuth flow using URL parameters and cryptogra
 2. **Complete OAuth flow** in browser
 3. **Verify link inserted** with correct `discord_server_id`:
    ```sql
-   SELECT discord_id, kick_name, discord_server_id, linked_at 
-   FROM links 
+   SELECT discord_id, kick_name, discord_server_id, linked_at
+   FROM links
    WHERE discord_id = YOUR_DISCORD_ID;
    ```
 4. **Run diagnostics**: `!fixlinks check` should show no more links with `discord_server_id=0`

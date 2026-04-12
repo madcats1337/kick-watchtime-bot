@@ -239,7 +239,7 @@ CREATE TABLE oauth_states (
 T=0s    Admin runs !setup_link_panel
         ↓ (<1s)
         Bot creates and pins message
-        
+
 T=10s   User reacts with 🔗
         ↓ (<1s)
         Bot detects reaction
@@ -247,7 +247,7 @@ T=10s   User reacts with 🔗
         Bot sends DM with OAuth link
         ↓
         Bot removes reaction
-        
+
 T=15s   User clicks OAuth button in DM
         ↓ (varies - user must log in)
         User authorizes on Kick
@@ -255,7 +255,7 @@ T=15s   User clicks OAuth button in DM
         OAuth server links accounts
         ↓
         Success page shown
-        
+
 T=20s   Background task runs (every 5s)
         ↓ (<1s)
         Task detects new link
@@ -280,9 +280,9 @@ Channel Timeline:
 ...
 [20+ messages visible, scrolling continues]
 ```
-❌ Cluttered  
-❌ Spam  
-❌ Hard to find  
+❌ Cluttered
+❌ Spam
+❌ Hard to find
 
 ### Reaction Method
 ```
@@ -291,12 +291,12 @@ Channel Timeline:
 10:00 AM | Bot: [Pinned OAuth instructions]
            📌 Pinned to top
            [No other messages - reactions are invisible]
-           
+
 [Users react → get DMs → no channel spam]
 ```
-✅ Clean  
-✅ Professional  
-✅ Always visible  
+✅ Clean
+✅ Professional
+✅ Always visible
 
 ## Security Features
 

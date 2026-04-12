@@ -9,20 +9,24 @@ Creates tables for keyword-based giveaway system separate from raffle:
 
 import os
 import sys
+
 from sqlalchemy import create_engine, text
 
 # Get database URL from environment
-DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///watchtime.db')
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///watchtime.db")
+
 
 def run_migration():
     """Run the migration"""
     engine = create_engine(DATABASE_URL)
-    
+
     with engine.connect() as conn:
         print("Creating giveaway system tables...")
-        
+
         # Create giveaways table
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
             CREATE TABLE IF NOT EXISTS giveaways (
                 id SERIAL PRIMARY KEY,
                 discord_server_id BIGINT NOT NULL,
@@ -43,11 +47,15 @@ def run_migration():
                 created_by VARCHAR(255),
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """))
+        """
+            )
+        )
         print("✅ Created giveaways table")
-        
+
         # Create giveaway_entries table
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
             CREATE TABLE IF NOT EXISTS giveaway_entries (
                 id SERIAL PRIMARY KEY,
                 giveaway_id INTEGER NOT NULL,
@@ -60,11 +68,15 @@ def run_migration():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (giveaway_id) REFERENCES giveaways(id) ON DELETE CASCADE
             )
-        """))
+        """
+            )
+        )
         print("✅ Created giveaway_entries table")
-        
+
         # Create giveaway_chat_activity table
-        conn.execute(text("""
+        conn.execute(
+            text(
+                """
             CREATE TABLE IF NOT EXISTS giveaway_chat_activity (
                 id SERIAL PRIMARY KEY,
                 giveaway_id INTEGER NOT NULL,
@@ -75,29 +87,44 @@ def run_migration():
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (giveaway_id) REFERENCES giveaways(id) ON DELETE CASCADE
             )
-        """))
+        """
+            )
+        )
         print("✅ Created giveaway_chat_activity table")
-        
+
         # Create indexes for performance
-        conn.execute(text("""
-            CREATE INDEX IF NOT EXISTS idx_giveaways_server_status 
+        conn.execute(
+            text(
+                """
+            CREATE INDEX IF NOT EXISTS idx_giveaways_server_status
             ON giveaways(discord_server_id, status)
-        """))
-        
-        conn.execute(text("""
-            CREATE INDEX IF NOT EXISTS idx_giveaway_entries_giveaway 
+        """
+            )
+        )
+
+        conn.execute(
+            text(
+                """
+            CREATE INDEX IF NOT EXISTS idx_giveaway_entries_giveaway
             ON giveaway_entries(giveaway_id, kick_username)
-        """))
-        
-        conn.execute(text("""
-            CREATE INDEX IF NOT EXISTS idx_giveaway_chat_activity_tracking 
+        """
+            )
+        )
+
+        conn.execute(
+            text(
+                """
+            CREATE INDEX IF NOT EXISTS idx_giveaway_chat_activity_tracking
             ON giveaway_chat_activity(giveaway_id, kick_username, timestamp)
-        """))
-        
+        """
+            )
+        )
+
         print("✅ Created indexes")
-        
+
         conn.commit()
         print("\n✅ Migration completed successfully!")
+
 
 if __name__ == "__main__":
     try:

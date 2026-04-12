@@ -3,16 +3,18 @@ Multi-Platform Wager Tracking Configuration
 Supports Shuffle.com, Stake.com, Stake.us, and extensible for more platforms
 """
 
-import os
-from typing import Dict, List, Optional
-from dataclasses import dataclass
 import logging
+import os
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class WagerPlatformConfig:
     """Configuration for a single wager tracking platform"""
+
     platform_name: str
     campaign_code: str
     affiliate_api_url: str
@@ -29,6 +31,7 @@ class WagerPlatformConfig:
             raise ValueError("affiliate_api_url cannot be empty")
         if self.tickets_per_1000_usd <= 0:
             raise ValueError("tickets_per_1000_usd must be positive")
+
 
 class MultiPlatformWagerConfig:
     """Manages multiple wager tracking platform configurations"""
@@ -72,7 +75,7 @@ class MultiPlatformWagerConfig:
                     campaign_code=wager_code,
                     affiliate_api_url=wager_url,
                     tickets_per_1000_usd=wager_tickets,
-                    enabled=True
+                    enabled=True,
                 )
             except Exception as e:
                 logger.error(f"Failed to load wager platform config: {e}")
@@ -104,7 +107,7 @@ class MultiPlatformWagerConfig:
                     campaign_code=code,
                     affiliate_api_url=url,
                     tickets_per_1000_usd=tickets,
-                    enabled=enabled
+                    enabled=enabled,
                 )
                 logger.info(f"✅ Loaded wager platform: {normalized_name} (code: {code}, tickets: {tickets}/1k)")
             except Exception as e:
@@ -164,8 +167,10 @@ class MultiPlatformWagerConfig:
             return True
         return False
 
+
 # Global instance
 _wager_config = None
+
 
 def get_wager_config() -> MultiPlatformWagerConfig:
     """Get the global wager configuration instance"""
@@ -173,6 +178,7 @@ def get_wager_config() -> MultiPlatformWagerConfig:
     if _wager_config is None:
         _wager_config = MultiPlatformWagerConfig()
     return _wager_config
+
 
 # For backwards compatibility with existing code
 def get_shuffle_config() -> Optional[WagerPlatformConfig]:

@@ -155,14 +155,14 @@ CREATE INDEX IF NOT EXISTS idx_kick_oauth_tokens_server ON kick_oauth_tokens(dis
 
 ## Success Criteria
 
-✅ Bot can join multiple Discord servers  
-✅ Each server has isolated settings  
-✅ Each server has isolated raffle data  
-✅ Each server has isolated custom commands  
-✅ Each server has isolated point system  
-✅ Each server has isolated slot requests  
-✅ No data leakage between servers  
-✅ Backwards compatible with single-server setup  
+✅ Bot can join multiple Discord servers
+✅ Each server has isolated settings
+✅ Each server has isolated raffle data
+✅ Each server has isolated custom commands
+✅ Each server has isolated point system
+✅ Each server has isolated slot requests
+✅ No data leakage between servers
+✅ Backwards compatible with single-server setup
 
 ## Rollback Plan
 

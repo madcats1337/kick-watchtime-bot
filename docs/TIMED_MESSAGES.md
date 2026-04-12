@@ -190,7 +190,7 @@ To implement full reaction handling, add:
 async def on_reaction_add(self, reaction, user):
     if user.bot:
         return
-    
+
     # Check if reaction is on a timer panel
     # Handle different reaction types
     # Update panel accordingly

@@ -10,7 +10,7 @@
 - **Endpoint**: `POST https://api.kick.com/public/v1/chat`
 - **Documentation**: https://docs.kick.com/apis/chat
 - **Authentication**: OAuth Bearer token (what you already have!)
-- **Payload Format**: 
+- **Payload Format**:
   ```json
   {
     "content": "Your message here",
@@ -86,7 +86,7 @@ Once deployed and authorized, test by running a timer command in Discord:
 
 ## 🚨 Important Notes
 
-1. **No Automatic Token Refresh**: 
+1. **No Automatic Token Refresh**:
    - OAuth tokens from Kick expire
    - When expired, user must re-authorize at the authorization URL
    - Bot will print clear instructions in logs

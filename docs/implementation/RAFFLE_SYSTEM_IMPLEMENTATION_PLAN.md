@@ -51,16 +51,16 @@ CREATE TABLE raffle_tickets (
     period_id INTEGER REFERENCES raffle_periods(id),
     discord_id BIGINT NOT NULL,
     kick_name TEXT NOT NULL,
-    
+
     -- Ticket sources
     watchtime_tickets INTEGER DEFAULT 0,
     gifted_sub_tickets INTEGER DEFAULT 0,
     shuffle_wager_tickets INTEGER DEFAULT 0,
     bonus_tickets INTEGER DEFAULT 0,  -- Manual admin awards
-    
+
     -- Totals
     total_tickets INTEGER DEFAULT 0,
-    
+
     -- Metadata
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(period_id, discord_id)
@@ -96,12 +96,12 @@ CREATE TABLE raffle_shuffle_wagers (
     shuffle_username TEXT NOT NULL,
     kick_name TEXT,  -- If we can map shuffle→kick
     discord_id BIGINT,  -- NULL if not linked
-    
+
     -- Wager tracking
     total_wager_usd DECIMAL(15, 2) DEFAULT 0,
     last_known_wager DECIMAL(15, 2) DEFAULT 0,
     tickets_awarded INTEGER DEFAULT 0,
-    
+
     -- Metadata
     last_checked TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -157,7 +157,7 @@ CREATE INDEX idx_raffle_shuffle_period ON raffle_shuffle_wagers(period_id);
 ```sql
 -- Leaderboard view
 CREATE VIEW raffle_leaderboard AS
-SELECT 
+SELECT
     rt.period_id,
     rt.discord_id,
     rt.kick_name,
@@ -173,7 +173,7 @@ ORDER BY rt.period_id DESC, rt.total_tickets DESC;
 
 -- Current period stats
 CREATE VIEW raffle_current_stats AS
-SELECT 
+SELECT
     rp.id as period_id,
     rp.start_date,
     rp.end_date,
@@ -372,18 +372,18 @@ def draw_winner(period_id: int, engine):
         WHERE period_id = :period_id AND total_tickets > 0
         ORDER BY id
     """), {"period_id": period_id})
-    
+
     participants = list(result)
     if not participants:
         return None  # No entries
-    
+
     # Build ticket number ranges
     # User A: 10 tickets → tickets 1-10
     # User B: 25 tickets → tickets 11-35
     # User C: 5 tickets → tickets 36-40
     ticket_ranges = []
     current_ticket = 1
-    
+
     for discord_id, kick_name, ticket_count in participants:
         ticket_ranges.append({
             'discord_id': discord_id,
@@ -393,12 +393,12 @@ def draw_winner(period_id: int, engine):
             'end_ticket': current_ticket + ticket_count - 1
         })
         current_ticket += ticket_count
-    
+
     total_tickets = current_ticket - 1
-    
+
     # Draw winning ticket using cryptographic randomness
     winning_ticket = secrets.randbelow(total_tickets) + 1
-    
+
     # Find winner
     for entry in ticket_ranges:
         if entry['start_ticket'] <= winning_ticket <= entry['end_ticket']:
@@ -409,7 +409,7 @@ def draw_winner(period_id: int, engine):
                 'total_tickets': total_tickets,
                 'total_participants': len(participants)
             }
-    
+
     return None  # Should never happen
 ```
 

@@ -1,17 +1,19 @@
 """
 Startup script to run both Discord bot and OAuth web server
 """
+
 import os
-import sys
-import time
-import subprocess
 import signal
+import subprocess
+import sys
 import threading
+import time
+
 
 def stream_output(process, name):
     """Stream process output to stdout in real-time"""
     try:
-        for line in iter(process.stdout.readline, ''):
+        for line in iter(process.stdout.readline, ""):
             if line:
                 print(f"[{name}] {line.rstrip()}", flush=True)
     except Exception as e:
@@ -19,6 +21,7 @@ def stream_output(process, name):
     finally:
         if process.stdout:
             process.stdout.close()
+
 
 def main():
     print("🚀 Starting Kick Discord Bot with OAuth Server...", flush=True)
@@ -29,10 +32,10 @@ def main():
     print(f"Files in directory: {os.listdir('.')}", flush=True)
 
     # Check if critical files exist
-    if not os.path.exists('core/oauth_server.py'):
+    if not os.path.exists("core/oauth_server.py"):
         print("❌ ERROR: core/oauth_server.py not found!", flush=True)
         sys.exit(1)
-    if not os.path.exists('bot.py'):
+    if not os.path.exists("bot.py"):
         print("❌ ERROR: bot.py not found!", flush=True)
         sys.exit(1)
 
@@ -50,7 +53,7 @@ def main():
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 universal_newlines=True,
-                bufsize=1
+                bufsize=1,
             )
             processes.append(("Flask", flask_process))
 
@@ -84,7 +87,7 @@ def main():
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 universal_newlines=True,
-                bufsize=1
+                bufsize=1,
             )
             processes.append(("Bot", bot_process))
 
@@ -135,11 +138,13 @@ def main():
     except Exception as e:
         print(f"❌ Fatal error: {e}", flush=True)
         import traceback
+
         traceback.print_exc()
         for name, process in processes:
             if process.poll() is None:
                 process.terminate()
         sys.exit(1)
+
 
 if __name__ == "__main__":
     try:
@@ -147,5 +152,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"❌ Startup failed: {e}", flush=True)
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

@@ -1,6 +1,8 @@
 import psycopg2
 
-conn = psycopg2.connect('postgresql://postgres:QzzlAELgpwfZtHIVCuIHpuGxhXorXTZv@shinkansen.proxy.rlwy.net:57221/railway')
+conn = psycopg2.connect(
+    "postgresql://postgres:QzzlAELgpwfZtHIVCuIHpuGxhXorXTZv@shinkansen.proxy.rlwy.net:57221/railway"
+)
 cur = conn.cursor()
 cur.execute("SELECT key, value, discord_server_id FROM bot_settings WHERE key = 'kick_channel';")
 results = cur.fetchall()

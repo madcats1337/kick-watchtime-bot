@@ -3,15 +3,17 @@ Gifted Sub Tracker
 Listens for Kick gifted subscription events and awards raffle tickets
 """
 
-from sqlalchemy import text
-from datetime import datetime
-import logging
 import json
+import logging
+from datetime import datetime
+
+from sqlalchemy import text
 
 from .config import GIFTED_SUB_TICKETS
 from .tickets import TicketManager
 
 logger = logging.getLogger(__name__)
+
 
 class GiftedSubTracker:
     """Tracks gifted subs and awards raffle tickets"""
@@ -22,14 +24,14 @@ class GiftedSubTracker:
         self.bot_settings = bot_settings
         self.ticket_manager = TicketManager(engine, server_id=server_id)
         self._load_settings()
-    
+
     def _load_settings(self):
         """Load gifted sub ticket settings from bot_settings or config"""
         if self.bot_settings:
             # Try to get from database settings
             try:
                 self.bot_settings.refresh()
-                self.gifted_sub_tickets = int(self.bot_settings.get('gifted_sub_tickets') or GIFTED_SUB_TICKETS)
+                self.gifted_sub_tickets = int(self.bot_settings.get("gifted_sub_tickets") or GIFTED_SUB_TICKETS)
             except (ValueError, AttributeError):
                 self.gifted_sub_tickets = GIFTED_SUB_TICKETS
         else:
@@ -77,7 +79,9 @@ class GiftedSubTracker:
                 recipients = event_data.get("usernames", [])
                 # If recipients list is empty or None, default to 1 sub
                 gift_count = len(recipients) if (recipients and len(recipients) > 0) else 1
-                logger.info(f"[GiftedSubTracker] Gifter: {gifter_kick_name}, Recipients: {recipients}, Count: {gift_count}")
+                logger.info(
+                    f"[GiftedSubTracker] Gifter: {gifter_kick_name}, Recipients: {recipients}, Count: {gift_count}"
+                )
             else:
                 # For regular subs, the subscriber might be in "sender" or directly in event
                 sender = event_data.get("sender", {})
@@ -85,10 +89,10 @@ class GiftedSubTracker:
 
                 # Try different possible field names for gift count
                 gift_count = (
-                    event_data.get("gift_count") or
-                    event_data.get("quantity") or
-                    event_data.get("count") or
-                    event_data.get("gifted_usernames", [])  # If it's an array of recipients
+                    event_data.get("gift_count")
+                    or event_data.get("quantity")
+                    or event_data.get("count")
+                    or event_data.get("gifted_usernames", [])  # If it's an array of recipients
                 )
 
                 # If gift_count is a list (recipients), count the length
@@ -100,7 +104,7 @@ class GiftedSubTracker:
 
             if not gifter_kick_name:
                 logger.warning("Gifted sub event missing gifter username")
-                return {'status': 'error', 'error': 'missing_username'}
+                return {"status": "error", "error": "missing_username"}
 
             if not event_id:
                 # Generate a fallback ID if none provided
@@ -111,30 +115,45 @@ class GiftedSubTracker:
             period_id = self._get_active_period_id()
             if not period_id:
                 logger.warning("No active raffle period - cannot award tickets for gifted sub")
-                return {'status': 'no_active_period'}
+                return {"status": "no_active_period"}
 
             # Check if this event has already been processed (prevent duplicates)
             with self.engine.begin() as conn:
-                existing = conn.execute(text("""
+                existing = conn.execute(
+                    text(
+                        """
                     SELECT id FROM raffle_gifted_subs
                     WHERE kick_event_id = :event_id
-                """), {'event_id': event_id})
+                """
+                    ),
+                    {"event_id": event_id},
+                )
 
                 if existing.fetchone():
                     logger.debug(f"Gifted sub event {event_id} already processed - skipping")
-                    return {'status': 'duplicate', 'event_id': event_id}
+                    return {"status": "duplicate", "event_id": event_id}
 
                 # Look up Discord ID from links table (multiserver: filter by server_id)
                 if self.server_id:
-                    discord_result = conn.execute(text("""
+                    discord_result = conn.execute(
+                        text(
+                            """
                         SELECT discord_id FROM links
                         WHERE kick_name = :kick_name AND discord_server_id = :sid
-                    """), {'kick_name': gifter_kick_name, 'sid': self.server_id})
+                    """
+                        ),
+                        {"kick_name": gifter_kick_name, "sid": self.server_id},
+                    )
                 else:
-                    discord_result = conn.execute(text("""
+                    discord_result = conn.execute(
+                        text(
+                            """
                         SELECT discord_id FROM links
                         WHERE kick_name = :kick_name
-                    """), {'kick_name': gifter_kick_name})
+                    """
+                        ),
+                        {"kick_name": gifter_kick_name},
+                    )
 
                 discord_row = discord_result.fetchone()
                 discord_id = discord_row[0] if discord_row else None
@@ -142,19 +161,24 @@ class GiftedSubTracker:
                 if not discord_id:
                     logger.warning(f"User {gifter_kick_name} not linked - cannot award tickets")
                     # Still log the event but don't award tickets
-                    conn.execute(text("""
+                    conn.execute(
+                        text(
+                            """
                         INSERT INTO raffle_gifted_subs
                             (period_id, gifter_kick_name, gifter_discord_id, sub_count,
                              tickets_awarded, kick_event_id)
                         VALUES
                             (:period_id, :kick_name, NULL, :sub_count, 0, :event_id)
-                    """), {
-                        'period_id': period_id,
-                        'kick_name': gifter_kick_name,
-                        'sub_count': gift_count,
-                        'event_id': event_id
-                    })
-                    return {'status': 'not_linked', 'kick_name': gifter_kick_name}
+                    """
+                        ),
+                        {
+                            "period_id": period_id,
+                            "kick_name": gifter_kick_name,
+                            "sub_count": gift_count,
+                            "event_id": event_id,
+                        },
+                    )
+                    return {"status": "not_linked", "kick_name": gifter_kick_name}
 
                 # Calculate tickets
                 tickets_to_award = gift_count * self.gifted_sub_tickets
@@ -165,45 +189,50 @@ class GiftedSubTracker:
                     discord_id=discord_id,
                     kick_name=gifter_kick_name,
                     tickets=tickets_to_award,
-                    source='gifted_sub',
+                    source="gifted_sub",
                     description=f"{sub_description} in chat",
-                    period_id=period_id
+                    period_id=period_id,
                 )
 
                 if not success:
                     logger.error(f"Failed to award tickets to {gifter_kick_name}")
-                    return {'status': 'award_failed'}
+                    return {"status": "award_failed"}
 
                 # Log the gifted sub event
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     INSERT INTO raffle_gifted_subs
                         (period_id, gifter_kick_name, gifter_discord_id, sub_count,
                          tickets_awarded, kick_event_id)
                     VALUES
                         (:period_id, :kick_name, :discord_id, :sub_count,
                          :tickets, :event_id)
-                """), {
-                    'period_id': period_id,
-                    'kick_name': gifter_kick_name,
-                    'discord_id': discord_id,
-                    'sub_count': gift_count,
-                    'tickets': tickets_to_award,
-                    'event_id': event_id
-                })
+                """
+                    ),
+                    {
+                        "period_id": period_id,
+                        "kick_name": gifter_kick_name,
+                        "discord_id": discord_id,
+                        "sub_count": gift_count,
+                        "tickets": tickets_to_award,
+                        "event_id": event_id,
+                    },
+                )
 
             logger.info(f"🎁 {gifter_kick_name} gifted {gift_count} sub(s) → {tickets_to_award} tickets")
 
             return {
-                'status': 'success',
-                'gifter': gifter_kick_name,
-                'discord_id': discord_id,
-                'gift_count': gift_count,
-                'tickets_awarded': tickets_to_award
+                "status": "success",
+                "gifter": gifter_kick_name,
+                "discord_id": discord_id,
+                "gift_count": gift_count,
+                "tickets_awarded": tickets_to_award,
             }
 
         except Exception as e:
             logger.error(f"Failed to handle gifted sub event: {e}")
-            return {'status': 'error', 'error': str(e)}
+            return {"status": "error", "error": str(e)}
 
     def get_user_gifted_subs(self, discord_id, period_id=None):
         """
@@ -223,7 +252,9 @@ class GiftedSubTracker:
                     return []
 
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT
                         sub_count,
                         tickets_awarded,
@@ -231,18 +262,14 @@ class GiftedSubTracker:
                     FROM raffle_gifted_subs
                     WHERE period_id = :period_id AND gifter_discord_id = :discord_id
                     ORDER BY gifted_at DESC
-                """), {
-                    'period_id': period_id,
-                    'discord_id': discord_id
-                })
+                """
+                    ),
+                    {"period_id": period_id, "discord_id": discord_id},
+                )
 
                 events = []
                 for row in result:
-                    events.append({
-                        'sub_count': row[0],
-                        'tickets_awarded': row[1],
-                        'gifted_at': row[2]
-                    })
+                    events.append({"sub_count": row[0], "tickets_awarded": row[1], "gifted_at": row[2]})
 
                 return events
 
@@ -256,25 +283,35 @@ class GiftedSubTracker:
             with self.engine.begin() as conn:
                 if self.server_id:
                     # Multiserver: filter by discord_server_id
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         SELECT id FROM raffle_periods
                         WHERE status = 'active' AND discord_server_id = :sid
                         ORDER BY start_date DESC
                         LIMIT 1
-                    """), {"sid": self.server_id})
+                    """
+                        ),
+                        {"sid": self.server_id},
+                    )
                 else:
                     # Backwards compatible: no server filter
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         SELECT id FROM raffle_periods
                         WHERE status = 'active'
                         ORDER BY start_date DESC
                         LIMIT 1
-                    """))
+                    """
+                        )
+                    )
                 row = result.fetchone()
                 return row[0] if row else None
         except Exception as e:
             logger.error(f"Failed to get active period: {e}")
             return None
+
 
 def setup_gifted_sub_handler(engine, server_id=None, bot_settings=None):
     """

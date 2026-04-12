@@ -1,6 +1,6 @@
 # ✅ Pre-Commit Security Verification
 
-**Date**: October 27, 2025  
+**Date**: October 27, 2025
 **Status**: ✅ **SAFE TO COMMIT**
 
 ---
@@ -31,7 +31,7 @@
 All sensitive data properly loaded from environment:
 ```python
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-DATABASE_URL = os.getenv("DATABASE_URL") 
+DATABASE_URL = os.getenv("DATABASE_URL")
 KICK_CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET")
 FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
 ```

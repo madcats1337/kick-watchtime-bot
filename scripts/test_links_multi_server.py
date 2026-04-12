@@ -19,6 +19,7 @@ Exit codes:
 
 import os
 import sys
+
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
@@ -34,15 +35,15 @@ if not DATABASE_URL:
     print("❌ DATABASE_URL not set. Set env variable first.")
     sys.exit(2)
 
+
 def connect():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
+
 def column_exists(cur, table, column):
-    cur.execute(
-        "SELECT 1 FROM information_schema.columns WHERE table_name=%s AND column_name=%s",
-        (table, column)
-    )
+    cur.execute("SELECT 1 FROM information_schema.columns WHERE table_name=%s AND column_name=%s", (table, column))
     return cur.fetchone() is not None
+
 
 def main():
     print("=== Multi-Server Links Table Diagnostic ===\n")
@@ -59,21 +60,25 @@ def main():
     print("✅ Schema columns present.")
 
     # 2. Row distribution per server
-    cur.execute("""
+    cur.execute(
+        """
         SELECT COALESCE(discord_server_id, 0) as server_id, COUNT(*) as cnt
         FROM links
         GROUP BY COALESCE(discord_server_id, 0)
         ORDER BY cnt DESC
-    """)
+    """
+    )
     dist = cur.fetchall()
     print("\nServer distribution:")
     for row in dist:
-        sid = row['server_id']
-        label = 'MISSING/0' if sid in (0, None) else str(sid)
+        sid = row["server_id"]
+        label = "MISSING/0" if sid in (0, None) else str(sid)
         print(f"  {label}: {row['cnt']} links")
 
     # 3. Rows needing backfill
-    cur.execute("SELECT discord_id, kick_name FROM links WHERE discord_server_id IS NULL OR discord_server_id = 0 LIMIT 25")
+    cur.execute(
+        "SELECT discord_id, kick_name FROM links WHERE discord_server_id IS NULL OR discord_server_id = 0 LIMIT 25"
+    )
     missing_rows = cur.fetchall()
     if missing_rows:
         print(f"\n❌ Found {len(missing_rows)} rows with NULL/0 discord_server_id (showing up to 25):")
@@ -83,14 +88,16 @@ def main():
         print("\n✅ No rows with NULL/0 discord_server_id.")
 
     # 4. Duplicate kick_name across servers
-    cur.execute("""
+    cur.execute(
+        """
         SELECT kick_name, COUNT(DISTINCT discord_server_id) as server_count
         FROM links
         GROUP BY kick_name
         HAVING COUNT(DISTINCT discord_server_id) > 1
         ORDER BY server_count DESC, kick_name
         LIMIT 25
-    """)
+    """
+    )
     dupes = cur.fetchall()
     if dupes:
         print("\n⚠️ Duplicate kick_name across servers (possible shared accounts):")
@@ -103,7 +110,7 @@ def main():
     if TARGET_SERVER_ID:
         cur.execute(
             "SELECT discord_id, kick_name, linked_at FROM links WHERE discord_server_id = %s ORDER BY linked_at DESC LIMIT 10",
-            (TARGET_SERVER_ID,)
+            (TARGET_SERVER_ID,),
         )
         sample = cur.fetchall()
         print(f"\nSample (latest 10) for server {TARGET_SERVER_ID}:")
@@ -118,9 +125,13 @@ def main():
         print("\n=== Suggested Fix ===")
         if TARGET_SERVER_ID:
             print("Use this SQL to backfill missing server ids:")
-            print(f"UPDATE links SET discord_server_id = {TARGET_SERVER_ID} WHERE discord_server_id IS NULL OR discord_server_id = 0;")
+            print(
+                f"UPDATE links SET discord_server_id = {TARGET_SERVER_ID} WHERE discord_server_id IS NULL OR discord_server_id = 0;"
+            )
         else:
-            print("Provide a server id argument to generate backfill SQL (e.g., python test_links_multi_server.py 914986636629143562)")
+            print(
+                "Provide a server id argument to generate backfill SQL (e.g., python test_links_multi_server.py 914986636629143562)"
+            )
         exit_code = 1
     else:
         exit_code = 0
@@ -129,6 +140,7 @@ def main():
     conn.close()
     print("\nDiagnostics complete.")
     sys.exit(exit_code)
+
 
 if __name__ == "__main__":
     main()

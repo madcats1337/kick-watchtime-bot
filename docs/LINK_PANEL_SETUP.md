@@ -4,11 +4,11 @@
 The Link Panel is a reaction-based system that allows users to link their Discord and Kick accounts via OAuth without cluttering your bot channel with commands. Users simply react to a pinned message to start the linking process.
 
 ## Features
-✅ **Clean UX**: No command spam in your bot channel  
-✅ **Automatic**: Users get a DM with their personal OAuth link  
-✅ **Fallback**: `!link` command still works if reactions fail  
-✅ **Auto-cleanup**: Reactions are automatically removed after sending the link  
-✅ **Privacy**: OAuth links are sent via DM (falls back to channel if DMs disabled)  
+✅ **Clean UX**: No command spam in your bot channel
+✅ **Automatic**: Users get a DM with their personal OAuth link
+✅ **Fallback**: `!link` command still works if reactions fail
+✅ **Auto-cleanup**: Reactions are automatically removed after sending the link
+✅ **Privacy**: OAuth links are sent via DM (falls back to channel if DMs disabled)
 
 ## Setup Instructions
 
@@ -73,11 +73,11 @@ Unlink your Discord from your Kick account
 ## Troubleshooting
 
 ### Bot can't pin messages
-**Error**: "I don't have permission to pin messages"  
+**Error**: "I don't have permission to pin messages"
 **Solution**: Grant the bot "Manage Messages" permission in that channel
 
 ### User didn't receive DM
-**Cause**: User has DMs from server members disabled  
+**Cause**: User has DMs from server members disabled
 **Solution**: Bot automatically sends the link in the channel instead (deletes after 60 seconds)
 
 ### Reaction not working
@@ -179,17 +179,17 @@ You can also use !link command as a fallback
 
 ## FAQ
 
-**Q: Can I have multiple link panels?**  
+**Q: Can I have multiple link panels?**
 A: Yes, but only one per channel. You can create panels in different channels.
 
-**Q: What happens to old panels when I create a new one?**  
+**Q: What happens to old panels when I create a new one?**
 A: The old panel message stays, but only the new one will be active in the database.
 
-**Q: Can users abuse this by spamming reactions?**  
+**Q: Can users abuse this by spamming reactions?**
 A: No, reactions are automatically removed and users can only link once per account.
 
-**Q: Does this replace the !link command?**  
+**Q: Does this replace the !link command?**
 A: No, the `!link` command is kept as a fallback option.
 
-**Q: Can I customize the embed?**  
+**Q: Can I customize the embed?**
 A: Currently no, but you can modify the code in `bot.py` around line 1572.

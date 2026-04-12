@@ -24,11 +24,12 @@ Usage:
     python setup_webhooks.py --all
 """
 
-import os
-import sys
 import argparse
 import asyncio
+import os
 import secrets
+import sys
+
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 
@@ -46,9 +47,9 @@ except ImportError:
     sys.exit(1)
 
 # Database connection
-DATABASE_URL = os.getenv('DATABASE_URL', '')
-if DATABASE_URL.startswith('postgres://'):
-    DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 # Webhook URL
 WEBHOOK_URL = "https://bot.lelebot.xyz/webhooks/kick"
@@ -73,51 +74,63 @@ def get_database_engine():
 
 async def get_oauth_tokens(engine, discord_server_id: str):
     """Get OAuth tokens and broadcaster info from database
-    
+
     Checks both bot_settings and kick_oauth_tokens tables for OAuth data
     """
     with engine.connect() as conn:
         # OPTION 1: Try bot_settings table (key-value store)
-        result = conn.execute(text("""
-            SELECT key, value 
+        result = conn.execute(
+            text(
+                """
+            SELECT key, value
             FROM bot_settings
             WHERE discord_server_id = :server_id
             AND key IN ('kick_channel', 'kick_broadcaster_user_id', 'kick_oauth_token', 'kick_access_token', 'kick_refresh_token')
-        """), {"server_id": discord_server_id}).fetchall()
-        
+        """
+            ),
+            {"server_id": discord_server_id},
+        ).fetchall()
+
         if result:
             # Parse key-value pairs from bot_settings
             data = {}
             for row in result:
                 key = row[0]
                 value = row[1]
-                
-                if key == 'kick_channel':
-                    data['username'] = value
-                elif key == 'kick_broadcaster_user_id':
-                    data['broadcaster_user_id'] = value
-                elif key == 'kick_oauth_token' or key == 'kick_access_token':
-                    data['access_token'] = value
-                elif key == 'kick_refresh_token':
-                    data['refresh_token'] = value
-            
-            if data.get('username'):
+
+                if key == "kick_channel":
+                    data["username"] = value
+                elif key == "kick_broadcaster_user_id":
+                    data["broadcaster_user_id"] = value
+                elif key == "kick_oauth_token" or key == "kick_access_token":
+                    data["access_token"] = value
+                elif key == "kick_refresh_token":
+                    data["refresh_token"] = value
+
+            if data.get("username"):
                 print(f"✅ Found OAuth data in bot_settings for: {data.get('username')}")
                 return data
-        
+
         # OPTION 2: Try kick_oauth_tokens table (dedicated OAuth table)
         # First get the kick_channel to look up in oauth tokens table
-        channel_result = conn.execute(text("""
+        channel_result = conn.execute(
+            text(
+                """
             SELECT value FROM bot_settings
             WHERE discord_server_id = :server_id AND key = 'kick_channel'
-        """), {"server_id": discord_server_id}).fetchone()
-        
+        """
+            ),
+            {"server_id": discord_server_id},
+        ).fetchone()
+
         if channel_result and channel_result[0]:
             kick_username = channel_result[0].lower()
-            
+
             # Look up in kick_oauth_tokens table
-            oauth_result = conn.execute(text("""
-                SELECT 
+            oauth_result = conn.execute(
+                text(
+                    """
+                SELECT
                     user_id,
                     kick_username,
                     access_token,
@@ -125,17 +138,20 @@ async def get_oauth_tokens(engine, discord_server_id: str):
                 FROM kick_oauth_tokens
                 WHERE LOWER(kick_username) = :username
                 LIMIT 1
-            """), {"username": kick_username}).fetchone()
-            
+            """
+                ),
+                {"username": kick_username},
+            ).fetchone()
+
             if oauth_result:
                 print(f"✅ Found OAuth data in kick_oauth_tokens for: {oauth_result[1]}")
                 return {
-                    'broadcaster_user_id': oauth_result[0],  # user_id is the broadcaster ID
-                    'username': oauth_result[1],
-                    'access_token': oauth_result[2],
-                    'refresh_token': oauth_result[3]
+                    "broadcaster_user_id": oauth_result[0],  # user_id is the broadcaster ID
+                    "username": oauth_result[1],
+                    "access_token": oauth_result[2],
+                    "refresh_token": oauth_result[3],
                 }
-        
+
         print(f"❌ No OAuth data found for server {discord_server_id}")
         return None
 
@@ -145,170 +161,177 @@ async def setup_webhooks_for_server(discord_server_id: str):
     print(f"\n{'='*60}")
     print(f"Setting up webhooks for Discord server: {discord_server_id}")
     print(f"{'='*60}\n")
-    
+
     engine = get_database_engine()
-    
+
     # Get OAuth tokens from database
     print("🔍 Looking up OAuth tokens...")
     oauth_data = await get_oauth_tokens(engine, discord_server_id)
-    
+
     if not oauth_data:
         print(f"❌ No OAuth data found for Discord server {discord_server_id}")
         print("   Run OAuth flow first to connect Kick account")
         return False
-    
-    broadcaster_user_id = oauth_data.get('broadcaster_user_id')
-    username = oauth_data.get('username', 'Unknown')
-    access_token = oauth_data.get('access_token')
-    refresh_token = oauth_data.get('refresh_token')
-    
+
+    broadcaster_user_id = oauth_data.get("broadcaster_user_id")
+    username = oauth_data.get("username", "Unknown")
+    access_token = oauth_data.get("access_token")
+    refresh_token = oauth_data.get("refresh_token")
+
     if not broadcaster_user_id:
         print(f"❌ No broadcaster_user_id found for server {discord_server_id}")
         return False
-    
+
     print(f"✅ Found broadcaster: {username} (ID: {broadcaster_user_id})")
-    
+
     # Initialize API client
     client_id = os.getenv("KICK_CLIENT_ID")
     client_secret = os.getenv("KICK_CLIENT_SECRET")
-    
+
     if not client_id or not client_secret:
         print("❌ KICK_CLIENT_ID and KICK_CLIENT_SECRET must be set")
         return False
-    
-    api = KickOfficialAPI(
-        client_id=client_id,
-        client_secret=client_secret,
-        access_token=access_token
-    )
-    
+
+    api = KickOfficialAPI(client_id=client_id, client_secret=client_secret, access_token=access_token)
+
     try:
         # NOTE: OAuth auto-refresh is handled elsewhere in the system
         # We use the existing access token from database
         # If it's expired, the API calls will fail and user needs to re-authenticate
-        
+
         if not access_token:
             print("❌ No access token available")
             print("   User needs to complete OAuth linking first")
             return False
-        
+
         print(f"✅ Using access token for {username}")
-        
+
         # List existing webhooks
         print("\n📋 Checking existing webhooks...")
         existing_subs = await api.get_webhook_subscriptions()
-        
+
         print(f"Found {len(existing_subs)} existing webhook(s)")
-        
+
         # Delete existing webhooks for this broadcaster
         deleted_count = 0
         for sub in existing_subs:
-            sub_dict = sub.__dict__ if hasattr(sub, '__dict__') else sub
-            sub_broadcaster = sub_dict.get('broadcaster_user_id')
-            
+            sub_dict = sub.__dict__ if hasattr(sub, "__dict__") else sub
+            sub_broadcaster = sub_dict.get("broadcaster_user_id")
+
             # Compare as strings or ints
             if str(sub_broadcaster) == str(broadcaster_user_id):
-                sub_id = sub_dict.get('id')
-                event = sub_dict.get('event')
+                sub_id = sub_dict.get("id")
+                event = sub_dict.get("event")
                 print(f"🗑️  Deleting old webhook: {event} (ID: {sub_id})")
                 try:
                     await api.delete_webhook_subscription(sub_id)
                     deleted_count += 1
                 except Exception as e:
                     print(f"   ⚠️  Failed to delete: {e}")
-        
+
         if deleted_count > 0:
             print(f"✅ Deleted {deleted_count} old webhook(s)")
         elif len(existing_subs) == 0:
             print("ℹ️  No existing webhooks found")
         else:
             print(f"ℹ️  No webhooks found for broadcaster {broadcaster_user_id}")
-        
+
         # Generate ONE webhook secret for this streamer (used for ALL events)
         webhook_secret = secrets.token_hex(32)  # 256-bit secret
         print(f"\n🔐 Generated webhook secret for {username}: {webhook_secret[:8]}...{webhook_secret[-8:]}")
-        
+
         # Register new webhooks - ALL use the SAME secret
         print(f"\n📨 Registering webhooks for events: {', '.join(WEBHOOK_EVENTS)}")
-        
+
         registered_count = 0
         for event_type in WEBHOOK_EVENTS:
             print(f"\n🔧 Registering: {event_type}")
-            
+
             try:
                 response = await api.subscribe_webhook(
                     event=event_type,
                     callback_url=WEBHOOK_URL,
                     broadcaster_user_id=broadcaster_user_id,
-                    secret=webhook_secret  # Same secret for all events
+                    secret=webhook_secret,  # Same secret for all events
                 )
-                
+
                 print(f"   ✅ Webhook registered (API returned OK)")
                 registered_count += 1
-                
+
             except Exception as e:
                 print(f"   ❌ Failed to register: {e}")
-        
+
         # Query Kick API to get actual subscription IDs
         print(f"\n📋 Fetching subscription IDs from Kick API...")
         try:
             current_subs = await api.get_webhook_subscriptions()
-            
+
             for sub in current_subs:
-                sub_dict = sub if isinstance(sub, dict) else (sub.__dict__ if hasattr(sub, '__dict__') else {})
-                sub_broadcaster = str(sub_dict.get('broadcaster_user_id', ''))
-                
+                sub_dict = sub if isinstance(sub, dict) else (sub.__dict__ if hasattr(sub, "__dict__") else {})
+                sub_broadcaster = str(sub_dict.get("broadcaster_user_id", ""))
+
                 if sub_broadcaster == str(broadcaster_user_id):
-                    sub_id = sub_dict.get('id')
-                    event = sub_dict.get('event')
-                    
+                    sub_id = sub_dict.get("id")
+                    event = sub_dict.get("event")
+
                     if sub_id and event in WEBHOOK_EVENTS:
                         print(f"   📥 {event}: {sub_id}")
-                        
+
                         # Store in database with the real subscription ID
                         with engine.begin() as conn:
                             # First, delete any fallback entries for this event
                             fallback_id = f"{broadcaster_user_id}_{event}"
-                            conn.execute(text("""
-                                DELETE FROM kick_webhook_subscriptions 
+                            conn.execute(
+                                text(
+                                    """
+                                DELETE FROM kick_webhook_subscriptions
                                 WHERE subscription_id = :fallback_id
-                            """), {"fallback_id": fallback_id})
-                            
+                            """
+                                ),
+                                {"fallback_id": fallback_id},
+                            )
+
                             # Insert/update with real subscription ID
-                            conn.execute(text("""
-                                INSERT INTO kick_webhook_subscriptions 
+                            conn.execute(
+                                text(
+                                    """
+                                INSERT INTO kick_webhook_subscriptions
                                 (subscription_id, discord_server_id, broadcaster_user_id, event_type, webhook_url, webhook_secret, status)
                                 VALUES (:sub_id, :server_id, :broadcaster_id, :event, :url, :secret, 'active')
-                                ON CONFLICT (subscription_id) 
-                                DO UPDATE SET 
+                                ON CONFLICT (subscription_id)
+                                DO UPDATE SET
                                     webhook_secret = EXCLUDED.webhook_secret,
                                     discord_server_id = EXCLUDED.discord_server_id,
                                     status = 'active',
                                     updated_at = NOW()
-                            """), {
-                                "sub_id": sub_id,
-                                "server_id": discord_server_id,
-                                "broadcaster_id": broadcaster_user_id,
-                                "event": event,
-                                "url": WEBHOOK_URL,
-                                "secret": webhook_secret
-                            })
+                            """
+                                ),
+                                {
+                                    "sub_id": sub_id,
+                                    "server_id": discord_server_id,
+                                    "broadcaster_id": broadcaster_user_id,
+                                    "event": event,
+                                    "url": WEBHOOK_URL,
+                                    "secret": webhook_secret,
+                                },
+                            )
                         print(f"   ✅ Stored in database")
         except Exception as fetch_err:
             print(f"   ⚠️  Could not fetch subscription IDs: {fetch_err}")
             print(f"   ⚠️  Webhooks registered but IDs not stored - may cause issues")
-        
+
         print(f"\n{'='*60}")
         print(f"✅ Webhook setup complete for {username}!")
         print(f"   Registered {registered_count}/{len(WEBHOOK_EVENTS)} events")
         print(f"   All events use the same webhook secret")
         print(f"{'='*60}\n")
-        
+
         return True
-        
+
     except Exception as e:
         print(f"\n❌ Error setting up webhooks: {e}")
         import traceback
+
         traceback.print_exc()
         return False
     finally:
@@ -318,33 +341,37 @@ async def setup_webhooks_for_server(discord_server_id: str):
 async def setup_all_servers():
     """Setup webhooks for all servers with OAuth tokens"""
     engine = get_database_engine()
-    
+
     print("🔍 Looking for all servers with Kick OAuth tokens...")
-    
+
     with engine.connect() as conn:
         # Get all Discord servers with broadcaster_user_id
-        result = conn.execute(text("""
+        result = conn.execute(
+            text(
+                """
             SELECT DISTINCT discord_server_id
             FROM bot_settings
             WHERE key = 'kick_broadcaster_user_id'
             AND value IS NOT NULL
             AND value != ''
-        """)).fetchall()
-        
+        """
+            )
+        ).fetchall()
+
         server_ids = [row[0] for row in result]
-    
+
     if not server_ids:
         print("❌ No servers found with Kick OAuth configured")
         return
-    
+
     print(f"✅ Found {len(server_ids)} server(s)")
-    
+
     success_count = 0
     for server_id in server_ids:
         success = await setup_webhooks_for_server(server_id)
         if success:
             success_count += 1
-    
+
     print(f"\n{'='*60}")
     print(f"Setup complete: {success_count}/{len(server_ids)} servers successful")
     print(f"{'='*60}")
@@ -358,26 +385,18 @@ def main():
 Examples:
   # Setup webhooks for specific Discord server
   python setup_webhooks.py --discord-server-id 1234567890
-  
+
   # Setup webhooks for all configured servers
   python setup_webhooks.py --all
-        """
+        """,
     )
-    
-    parser.add_argument(
-        '--discord-server-id',
-        type=str,
-        help='Discord server ID to setup webhooks for'
-    )
-    
-    parser.add_argument(
-        '--all',
-        action='store_true',
-        help='Setup webhooks for all servers with OAuth configured'
-    )
-    
+
+    parser.add_argument("--discord-server-id", type=str, help="Discord server ID to setup webhooks for")
+
+    parser.add_argument("--all", action="store_true", help="Setup webhooks for all servers with OAuth configured")
+
     args = parser.parse_args()
-    
+
     if args.all:
         asyncio.run(setup_all_servers())
     elif args.discord_server_id:

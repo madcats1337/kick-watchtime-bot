@@ -37,9 +37,9 @@ User3: !link
 User4: !link
 ... spam continues ...
 ```
-❌ Channel gets messy  
-❌ Commands scroll away  
-❌ Users might miss instructions  
+❌ Channel gets messy
+❌ Commands scroll away
+❌ Users might miss instructions
 
 ### After (using reaction panel):
 ```
@@ -49,9 +49,9 @@ React with 🔗 below...
 
 [No visible reactions in channel]
 ```
-✅ Clean channel  
-✅ Always visible (pinned)  
-✅ One-click process  
+✅ Clean channel
+✅ Always visible (pinned)
+✅ One-click process
 
 ## Fallback Option
 

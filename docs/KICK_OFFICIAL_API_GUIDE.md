@@ -6,9 +6,9 @@ This document explains how to use the official Kick API integration in the bot.
 
 As of November 2025, Kick has released their official API with proper OAuth 2.1 authentication, webhooks, and REST endpoints. This replaces the need for unofficial WebSocket connections and browser automation.
 
-**Official Documentation:** https://docs.kick.com  
-**API Server:** https://api.kick.com  
-**OAuth Server:** https://id.kick.com  
+**Official Documentation:** https://docs.kick.com
+**API Server:** https://api.kick.com
+**OAuth Server:** https://id.kick.com
 **OpenAPI Spec:** https://api.kick.com/swagger/v1/doc.yaml
 
 ## Available Features

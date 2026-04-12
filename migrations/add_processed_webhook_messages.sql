@@ -7,17 +7,17 @@ CREATE TABLE IF NOT EXISTS processed_webhook_messages (
     broadcaster_user_id VARCHAR(50) NOT NULL,
     event_type VARCHAR(100),
     processed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    
+
     -- Unique constraint on message_id (each message should only be processed once)
     CONSTRAINT unique_message_id UNIQUE (message_id)
 );
 
 -- Index for fast lookups
-CREATE INDEX IF NOT EXISTS idx_processed_webhook_messages_lookup 
+CREATE INDEX IF NOT EXISTS idx_processed_webhook_messages_lookup
 ON processed_webhook_messages(message_id, broadcaster_user_id);
 
 -- Index for cleanup of old records
-CREATE INDEX IF NOT EXISTS idx_processed_webhook_messages_processed_at 
+CREATE INDEX IF NOT EXISTS idx_processed_webhook_messages_processed_at
 ON processed_webhook_messages(processed_at);
 
 -- Optional: Add a cleanup function to remove old records (older than 24 hours)

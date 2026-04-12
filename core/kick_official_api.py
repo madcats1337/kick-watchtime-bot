@@ -30,14 +30,15 @@ Webhook Events:
 """
 
 import asyncio
+import base64
+import hashlib
+import json
 import os
 import secrets
-import hashlib
-import base64
-import json
-from typing import Optional, Dict, Any, List
-from datetime import datetime, timezone
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
 import aiohttp
 
 # -------------------------
@@ -87,9 +88,11 @@ WEBHOOK_EVENTS = [
     "kicks.gifted",
 ]
 
+
 @dataclass
 class OAuthTokens:
     """OAuth token response data"""
+
     access_token: str
     refresh_token: str
     token_type: str
@@ -117,8 +120,10 @@ class OAuthTokens:
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
+
 class WebhookSubscription:
     """Webhook subscription data - fully permissive constructor"""
+
     def __init__(
         self,
         *,
@@ -132,7 +137,7 @@ class WebhookSubscription:
         callback_url=None,
         created_at=None,
         updated_at=None,
-        **kwargs  # Accept any other fields Kick might add
+        **kwargs,  # Accept any other fields Kick might add
     ):
         self.id = id
         self.app_id = app_id
@@ -147,6 +152,7 @@ class WebhookSubscription:
         # Store any extra fields
         for key, value in kwargs.items():
             setattr(self, key, value)
+
 
 class KickOfficialAPI:
     """
@@ -200,12 +206,12 @@ class KickOfficialAPI:
             Tuple of (code_verifier, code_challenge)
         """
         # Generate random 32 bytes for code verifier
-        code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8').rstrip('=')
+        code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("utf-8").rstrip("=")
 
         # Create SHA256 hash of verifier for challenge
-        code_challenge = base64.urlsafe_b64encode(
-            hashlib.sha256(code_verifier.encode('utf-8')).digest()
-        ).decode('utf-8').rstrip('=')
+        code_challenge = (
+            base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode("utf-8")).digest()).decode("utf-8").rstrip("=")
+        )
 
         return code_verifier, code_challenge
 
@@ -355,12 +361,7 @@ class KickOfficialAPI:
     # API Request Helpers
     # -------------------------
 
-    async def _request(
-        self,
-        method: str,
-        url: str,
-        **kwargs
-    ) -> Dict[str, Any]:
+    async def _request(self, method: str, url: str, **kwargs) -> Dict[str, Any]:
         """Make an authenticated API request"""
         session = await self._get_session()
 
@@ -472,10 +473,7 @@ class KickOfficialAPI:
             data["language"] = language
 
         return await self._request(
-            "PATCH",
-            KICK_CHANNELS_URL,
-            params={"broadcaster_user_id": broadcaster_user_id},
-            json=data
+            "PATCH", KICK_CHANNELS_URL, params={"broadcaster_user_id": broadcaster_user_id}, json=data
         )
 
     # -------------------------
@@ -508,40 +506,44 @@ class KickOfficialAPI:
         if not chatroom_id:
             if broadcaster_user_id:
                 # Try to look up chatroom_id from bot_settings
-                from bot import engine
                 from sqlalchemy import text
+
+                from bot import engine
+
                 with engine.connect() as conn:
-                    result = conn.execute(text("""
-                        SELECT value FROM bot_settings 
+                    result = conn.execute(
+                        text(
+                            """
+                        SELECT value FROM bot_settings
                         WHERE key = 'kick_chatroom_id'
                         LIMIT 1
-                    """)).fetchone()
-                    
+                    """
+                        )
+                    ).fetchone()
+
                     if result and result[0]:
                         chatroom_id = int(result[0])
-            
+
             if not chatroom_id:
                 raise ValueError("chatroom_id is required for sending chat messages")
-        
+
         # v1 endpoint doesn't use chatroom_id in path, uses it in payload
         url = KICK_CHAT_URL
-        
+
         payload = {
             "content": content,
             "chatroom_id": chatroom_id,
         }
 
         if reply_to_message_id:
-            payload["reply_to_original_message"] = {
-                "original_message_id": reply_to_message_id
-            }
-        
+            payload["reply_to_original_message"] = {"original_message_id": reply_to_message_id}
+
         print(f"[Kick API] 📤 Sending chat message:")
         print(f"[Kick API]   URL: {url}")
         print(f"[Kick API]   Payload: {payload}")
         print(f"[Kick API]   Content length: {len(content)}")
         print(f"[Kick API]   Chatroom ID: {chatroom_id}")
-        
+
         headers = {"Content-Type": "application/json"}
         try:
             result = await self._post(url, json=payload, headers=headers)
@@ -550,9 +552,9 @@ class KickOfficialAPI:
         except Exception as e:
             print(f"[Kick API] ❌ Error sending chat message: {e}")
             print(f"[Kick API]   Error type: {type(e).__name__}")
-            if hasattr(e, 'status'):
+            if hasattr(e, "status"):
                 print(f"[Kick API]   Status: {e.status}")
-            if hasattr(e, 'message'):
+            if hasattr(e, "message"):
                 print(f"[Kick API]   Message: {e.message}")
             raise
 
@@ -716,20 +718,20 @@ class KickOfficialAPI:
             "callback_url": callback_url,
             "broadcaster_user_id": int(broadcaster_user_id),
         }
-        
+
         # Add secret if provided (for HMAC signature verification)
         if secret:
             data["secret"] = secret
-        
+
         response = await self._post(KICK_WEBHOOKS_URL, json=data)
-        
+
         # Kick may return 200/201/204 with empty body, list, or dict
         # ALL are SUCCESS - we don't fail on empty responses
         # HTTP status code determines success, not response body
-        
+
         print(f"[API] Webhook creation response type: {type(response)}")
         print(f"[API] Webhook creation response: {response}")
-        
+
         # Return response as-is (may be empty, list, or dict)
         # Caller doesn't need WebhookSubscription object for creation
         return response if response else {"event": event, "status": "created"}
@@ -855,13 +857,16 @@ class KickOfficialAPI:
 
         return await self._get(f"{KICK_API_PUBLIC}/livestreams", params=params)
 
+
 # -------------------------
 # Webhook Payload Classes
 # -------------------------
 
+
 @dataclass
 class WebhookChatMessage:
     """Parsed chat.message.sent webhook payload"""
+
     message_id: str
     broadcaster_user_id: int
     sender_user_id: int
@@ -882,9 +887,11 @@ class WebhookChatMessage:
             badges=data.get("sender", {}).get("badges", []),
         )
 
+
 @dataclass
 class WebhookSubscription:
     """Parsed channel.subscription.* webhook payload"""
+
     broadcaster_user_id: int
     broadcaster_username: str
     subscriber_user_id: int
@@ -903,9 +910,11 @@ class WebhookSubscription:
             duration=data.get("duration", 1),
         )
 
+
 @dataclass
 class WebhookGiftedSubs:
     """Parsed channel.subscription.gifts webhook payload"""
+
     broadcaster_user_id: int
     broadcaster_username: str
     gifter_user_id: int
@@ -924,9 +933,11 @@ class WebhookGiftedSubs:
             giftees=data.get("giftees", []),
         )
 
+
 @dataclass
 class WebhookKicksGifted:
     """Parsed kicks.gifted webhook payload (Tips)"""
+
     broadcaster_user_id: int
     broadcaster_username: str
     sender_user_id: int
@@ -947,9 +958,11 @@ class WebhookKicksGifted:
             kick_count=data.get("kick_count", 0),
         )
 
+
 @dataclass
 class WebhookLivestreamStatus:
     """Parsed livestream.status.updated webhook payload"""
+
     broadcaster_user_id: int
     broadcaster_username: str
     is_live: bool
@@ -968,9 +981,11 @@ class WebhookLivestreamStatus:
             started_at=data.get("livestream", {}).get("created_at"),
         )
 
+
 # -------------------------
 # Utility Functions
 # -------------------------
+
 
 def verify_webhook_signature(
     signature: str,
@@ -995,22 +1010,21 @@ def verify_webhook_signature(
         True if signature is valid
     """
     message = f"{message_id}.{timestamp}.{body.decode()}"
-    expected = hashlib.sha256(
-        (secret + message).encode()
-    ).hexdigest()
+    expected = hashlib.sha256((secret + message).encode()).hexdigest()
 
     return signature == expected
 
+
 # Export all public interfaces
 __all__ = [
-    'KickOfficialAPI',
-    'OAuthTokens',
-    'WebhookSubscription',
-    'WebhookChatMessage',
-    'WebhookGiftedSubs',
-    'WebhookKicksGifted',
-    'WebhookLivestreamStatus',
-    'verify_webhook_signature',
-    'OAUTH_SCOPES',
-    'WEBHOOK_EVENTS',
+    "KickOfficialAPI",
+    "OAuthTokens",
+    "WebhookSubscription",
+    "WebhookChatMessage",
+    "WebhookGiftedSubs",
+    "WebhookKicksGifted",
+    "WebhookLivestreamStatus",
+    "verify_webhook_signature",
+    "OAUTH_SCOPES",
+    "WEBHOOK_EVENTS",
 ]

@@ -6,7 +6,7 @@
 - ✅ `raffle_system/gifted_sub_tracker.py` - Real-time gifted sub event handler
 - ✅ `test_gifted_sub_tracker.py` - Test suite for the tracker
 
-### Files Modified  
+### Files Modified
 - ✅ `bot.py` - Added gifted sub event detection in `kick_chat_loop()`
 
 ## How It Works
@@ -69,12 +69,12 @@ Within these events, it checks for:
 
 ### Key Features
 
-✅ **Immediate awarding** - Tickets granted in real-time (not hourly like watchtime)  
-✅ **Duplicate prevention** - Uses `kick_event_id` to prevent double-processing  
-✅ **Multi-gift support** - Handles single gifts and mass gifts (e.g., 5 subs)  
-✅ **Linked users only** - Requires Discord ↔ Kick account linking  
-✅ **Unlinked tracking** - Logs unlinked gifts (0 tickets) for later manual award  
-✅ **Full audit trail** - Every gift logged in `raffle_ticket_log`  
+✅ **Immediate awarding** - Tickets granted in real-time (not hourly like watchtime)
+✅ **Duplicate prevention** - Uses `kick_event_id` to prevent double-processing
+✅ **Multi-gift support** - Handles single gifts and mass gifts (e.g., 5 subs)
+✅ **Linked users only** - Requires Discord ↔ Kick account linking
+✅ **Unlinked tracking** - Logs unlinked gifts (0 tickets) for later manual award
+✅ **Full audit trail** - Every gift logged in `raffle_ticket_log`
 
 ## Integration with Bot
 
@@ -85,7 +85,7 @@ The gifted sub tracker is now integrated into your Kick websocket listener:
 if event_type in ["GiftedSubscriptionsEvent", "SubscriptionEvent", "ChatMessageEvent"]:
     if is_gift and gifted_sub_tracker:
         result = await gifted_sub_tracker.handle_gifted_sub_event(event_data)
-        
+
         if result['status'] == 'success':
             print(f"[Raffle] 🎁 {result['gifter']} gifted {result['gift_count']} sub(s) → +{result['tickets_awarded']} tickets")
 ```

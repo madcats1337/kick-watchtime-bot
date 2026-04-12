@@ -84,7 +84,7 @@ USE_DUAL_MODE=false
 
 1. **Environment Variables** (already set on Railway):
    - `USE_DUAL_MODE=true` (default, can omit)
-   
+
 2. **Database**: kick_webhook_subscriptions table created ✅
 
 3. **Webhook Subscription**: Active subscription registered via OAuth ✅

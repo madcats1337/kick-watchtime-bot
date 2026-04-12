@@ -4,8 +4,8 @@
 
 Your GitHub repository has been updated with the production-ready build!
 
-**Repository:** `madcats1337/Kick-dicord-bot-test`  
-**Commit:** `337ceb2`  
+**Repository:** `madcats1337/Kick-dicord-bot-test`
+**Commit:** `337ceb2`
 **Branch:** `main`
 
 ---
@@ -118,7 +118,7 @@ View your updated repository:
 
 ## 📝 **Commit Details**
 
-**Commit Hash:** `337ceb2`  
+**Commit Hash:** `337ceb2`
 **Message:** "🚀 Production-ready release: Cloud deployment + API consolidation"
 
 **Includes:**

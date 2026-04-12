@@ -6,9 +6,9 @@ This migration adds `discord_server_id` columns to tables that don't have them y
 ## Tables That Already Have discord_server_id
 These tables are already multiserver-ready from the Admin Dashboard:
 - ✅ bot_settings (key, discord_server_id) - PRIMARY KEY
-- ✅ custom_commands (id, discord_server_id) 
+- ✅ custom_commands (id, discord_server_id)
 - ✅ timed_messages (id, discord_server_id)
-- ✅ point_settings (key, discord_server_id) - PRIMARY KEY  
+- ✅ point_settings (key, discord_server_id) - PRIMARY KEY
 - ✅ raffle_periods (id, discord_server_id)
 - ✅ raffle_tickets (linked via raffle_periods)
 - ✅ raffle_draws (linked via raffle_periods)
@@ -37,14 +37,14 @@ UPDATE user_points SET discord_server_id = (
 ALTER TABLE user_points DROP CONSTRAINT IF EXISTS user_points_kick_username_key;
 
 -- Add composite primary key
-ALTER TABLE user_points ADD CONSTRAINT user_points_pkey_multiserver 
+ALTER TABLE user_points ADD CONSTRAINT user_points_pkey_multiserver
     PRIMARY KEY (kick_username, discord_server_id);
 
 -- Add index for queries
 CREATE INDEX IF NOT EXISTS idx_user_points_server ON user_points(discord_server_id);
 ```
 
-### 2. points_watchtime_converted  
+### 2. points_watchtime_converted
 **Current**: No PK constraint
 **Strategy**: Add discord_server_id as foreign key reference
 
@@ -93,7 +93,7 @@ UPDATE watchtime SET discord_server_id = (
 
 -- Recreate primary key as composite
 ALTER TABLE watchtime DROP CONSTRAINT IF EXISTS watchtime_pkey;
-ALTER TABLE watchtime ADD CONSTRAINT watchtime_pkey_multiserver 
+ALTER TABLE watchtime ADD CONSTRAINT watchtime_pkey_multiserver
     PRIMARY KEY (username, discord_server_id);
 
 -- Add index
@@ -218,7 +218,7 @@ DECLARE
 BEGIN
     -- Get first server ID
     SELECT discord_server_id INTO first_server_id FROM servers LIMIT 1;
-    
+
     IF first_server_id IS NOT NULL THEN
         -- Backfill all tables
         UPDATE user_points SET discord_server_id = first_server_id WHERE discord_server_id IS NULL;
@@ -229,7 +229,7 @@ BEGIN
         UPDATE clips SET discord_server_id = first_server_id WHERE discord_server_id IS NULL;
         UPDATE pending_links SET discord_server_id = first_server_id WHERE discord_server_id IS NULL;
         UPDATE oauth_notifications SET discord_server_id = first_server_id WHERE discord_server_id IS NULL;
-        
+
         RAISE NOTICE 'Backfilled all tables with server ID: %', first_server_id;
     ELSE
         RAISE WARNING 'No server found in servers table - skipping backfill';
@@ -240,12 +240,12 @@ END $$;
 -- user_points: (kick_username, discord_server_id)
 ALTER TABLE user_points DROP CONSTRAINT IF EXISTS user_points_kick_username_key;
 ALTER TABLE user_points DROP CONSTRAINT IF EXISTS user_points_pkey;
-ALTER TABLE user_points ADD CONSTRAINT user_points_pkey_multiserver 
+ALTER TABLE user_points ADD CONSTRAINT user_points_pkey_multiserver
     PRIMARY KEY (kick_username, discord_server_id);
 
 -- watchtime: (username, discord_server_id)
 ALTER TABLE watchtime DROP CONSTRAINT IF EXISTS watchtime_pkey;
-ALTER TABLE watchtime ADD CONSTRAINT watchtime_pkey_multiserver 
+ALTER TABLE watchtime ADD CONSTRAINT watchtime_pkey_multiserver
     PRIMARY KEY (username, discord_server_id);
 
 -- Step 4: Create indexes for performance

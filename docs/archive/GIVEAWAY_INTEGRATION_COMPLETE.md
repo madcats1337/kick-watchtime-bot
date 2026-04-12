@@ -45,14 +45,14 @@ if guild_id in giveaway_managers:
     if giveaway_manager.active_giveaway:
         try:
             entry_method = giveaway_manager.active_giveaway['entry_method']
-            
+
             # Keyword detection
             if entry_method == 'keyword':
                 keyword = giveaway_manager.active_giveaway.get('keyword', '').lower()
                 if keyword and keyword in content_stripped.lower():
                     await giveaway_manager.add_entry(username, entry_method='keyword')
                     print(f"[{guild_name}] 🎁 Giveaway entry added: {username} (keyword: {keyword})")
-            
+
             # Active chatter tracking
             elif entry_method == 'active_chatter':
                 await giveaway_manager.track_message(username, content)

@@ -202,7 +202,7 @@ kickuser456: !sr Gates of Olympus
 **Example:**
 ```
 Every 15 minutes in Kick chat:
-"🎮 Join our Discord: discord.gg/yourserver | 
+"🎮 Join our Discord: discord.gg/yourserver |
  🎰 Use code 'LELE' on Shuffle.com"
 ```
 
@@ -621,7 +621,7 @@ This bot transforms your Kick.com streaming channel into a professional, engagin
 
 **Key Takeaways:**
 ✅ Fully automated - runs 24/7 with minimal maintenance
-✅ Professional - polished UI and reliable performance  
+✅ Professional - polished UI and reliable performance
 ✅ Engaging - gamification keeps viewers coming back
 ✅ Secure - industry-standard OAuth and encryption
 ✅ Affordable - ~$5/month hosting costs
@@ -631,6 +631,6 @@ This bot transforms your Kick.com streaming channel into a professional, engagin
 
 ---
 
-*For technical setup instructions, see [README.md](README.md)*  
-*For deployment guide, see [DEPLOYMENT.md](DEPLOYMENT.md)*  
+*For technical setup instructions, see [README.md](README.md)*
+*For deployment guide, see [DEPLOYMENT.md](DEPLOYMENT.md)*
 *For OAuth configuration, see [docs/OAUTH_SETUP.md](docs/OAUTH_SETUP.md)*

@@ -1,0 +1,30 @@
+﻿Mounting volume on: /var/lib/containers/railwayapp/bind-mounts/81d96a84-dd4e-4100-9596-df09b3e673e3/vol_ewnsfppzn4tv7ur0
+Starting Container
+­ƒÜÇ Starting combined OAuth + Discord Bot server...
+Python: 3.11.14 (main, Feb  4 2026, 20:24:25) [GCC 14.2.0]
+Working directory: /app
+­ƒôï Running database migration...
+   ­ƒôè Current primary key columns: ['discord_id', 'discord_server_id']
+   Ô£à Database schema is up to date
+­ƒñû Starting Discord bot subprocess...
+Ô£à Bot subprocess started (PID: 2)
+ÔÅ│ Waiting for bot to initialize...
+­ƒôí Starting OAuth web server with Gunicorn...
+­ƒîÉ Port: 8080
+­ƒîÉ OAuth Base URL: https://bot.lelebot.xyz
+Ô£à Gunicorn started (PID: 4)
+[2026-02-11 18:26:02 +0000] [4] [INFO] Starting gunicorn 23.0.0
+[2026-02-11 18:26:02 +0000] [4] [INFO] Listening at: http://0.0.0.0:8080 (4)
+[2026-02-11 18:26:02 +0000] [4] [INFO] Using worker: sync
+[2026-02-11 18:26:02 +0000] [5] [INFO] Booting worker with pid: 5
+[2026-02-11 18:26:02 +0000] [6] [INFO] Booting worker with pid: 6
+[Webhook] Ô£à Registered Kick webhook routes at /webhooks/kick
+[OAuth] Ô£à Webhook routes registered at /webhooks/kick
+[OAuth] Clips directory: /app/clips
+[OAuth] FLASK_SECRET_KEY configured: YES
+[OAuth] FLASK_SECRET_KEY configured: YES
+[Webhook] Ô£à Registered Kick webhook routes at /webhooks/kick
+[OAuth] Ô£à Webhook routes registered at /webhooks/kick
+[OAuth] Clips directory: /app/clips
+[BOT] ÔÜá´©Å Redis unavailable for bot publisher: Timeout connecting to server
+[BOT] Ô£à Multiserver mode: Settings loaded per-guild dynamically

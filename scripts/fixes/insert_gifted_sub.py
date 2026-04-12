@@ -1,11 +1,14 @@
 """Manually insert a gifted sub event into the database"""
+
 import os
-from sqlalchemy import create_engine, text
 from datetime import datetime, timedelta
+
+from sqlalchemy import create_engine, text
+
 from raffle_system.tickets import TicketManager
 
 # Database connection
-database_url = os.getenv('DATABASE_URL')
+database_url = os.getenv("DATABASE_URL")
 if not database_url:
     raise ValueError("DATABASE_URL environment variable not set")
 engine = create_engine(database_url)
@@ -29,12 +32,16 @@ print(f"Event Time: {EVENT_TIME}")
 
 with engine.begin() as conn:
     # Get active raffle period
-    result = conn.execute(text("""
+    result = conn.execute(
+        text(
+            """
         SELECT id FROM raffle_periods
         WHERE status = 'active'
         ORDER BY start_date DESC
         LIMIT 1;
-    """))
+    """
+        )
+    )
     row = result.fetchone()
     if not row:
         print("\n❌ ERROR: No active raffle period found!")
@@ -44,10 +51,15 @@ with engine.begin() as conn:
     print(f"\nActive Period ID: {period_id}")
 
     # Check if gifter is linked
-    result = conn.execute(text("""
+    result = conn.execute(
+        text(
+            """
         SELECT discord_id FROM links
         WHERE LOWER(kick_name) = LOWER(:kick_name)
-    """), {'kick_name': GIFTER_KICK_NAME})
+    """
+        ),
+        {"kick_name": GIFTER_KICK_NAME},
+    )
 
     row = result.fetchone()
     gifter_discord_id = row[0] if row else None
@@ -63,9 +75,9 @@ with engine.begin() as conn:
             discord_id=gifter_discord_id,
             kick_name=GIFTER_KICK_NAME,
             tickets=tickets_awarded,
-            source='gifted_sub',
+            source="gifted_sub",
             description=f"Gifted {SUB_COUNT} sub(s) in chat (manual entry)",
-            period_id=period_id
+            period_id=period_id,
         )
 
         if success:
@@ -81,24 +93,29 @@ with engine.begin() as conn:
     event_id = f"manual_{GIFTER_KICK_NAME}_{int(EVENT_TIME.timestamp())}"
     print(f"\n📝 Logging gifted sub event (ID: {event_id})...")
 
-    conn.execute(text("""
+    conn.execute(
+        text(
+            """
         INSERT INTO raffle_gifted_subs
             (period_id, gifter_kick_name, gifter_discord_id, recipient_kick_name,
              sub_count, tickets_awarded, gifted_at, kick_event_id, discord_server_id)
         VALUES
             (:period_id, :gifter_kick_name, :gifter_discord_id, :recipient_kick_name,
              :sub_count, :tickets_awarded, :gifted_at, :event_id, :discord_server_id)
-    """), {
-        'period_id': period_id,
-        'gifter_kick_name': GIFTER_KICK_NAME,
-        'gifter_discord_id': gifter_discord_id,
-        'recipient_kick_name': RECIPIENT_KICK_NAME,
-        'sub_count': SUB_COUNT,
-        'tickets_awarded': tickets_awarded,
-        'gifted_at': EVENT_TIME,
-        'event_id': event_id,
-        'discord_server_id': DISCORD_SERVER_ID
-    })
+    """
+        ),
+        {
+            "period_id": period_id,
+            "gifter_kick_name": GIFTER_KICK_NAME,
+            "gifter_discord_id": gifter_discord_id,
+            "recipient_kick_name": RECIPIENT_KICK_NAME,
+            "sub_count": SUB_COUNT,
+            "tickets_awarded": tickets_awarded,
+            "gifted_at": EVENT_TIME,
+            "event_id": event_id,
+            "discord_server_id": DISCORD_SERVER_ID,
+        },
+    )
 
     print(f"✅ Logged gifted sub event in database")
 

@@ -3,11 +3,13 @@ Core Ticket Management Logic
 Handles all ticket operations (award, remove, query, transfer)
 """
 
-from sqlalchemy import text
-from datetime import datetime
 import logging
+from datetime import datetime
+
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
+
 
 class TicketManager:
     """Manages raffle tickets for all users"""
@@ -35,7 +37,9 @@ class TicketManager:
                     return None
 
             with self.engine.begin() as conn:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT
                         kick_name,
                         watchtime_tickets,
@@ -46,23 +50,23 @@ class TicketManager:
                         last_updated
                     FROM raffle_tickets
                     WHERE period_id = :period_id AND discord_id = :discord_id
-                """), {
-                    'period_id': period_id,
-                    'discord_id': discord_id
-                })
+                """
+                    ),
+                    {"period_id": period_id, "discord_id": discord_id},
+                )
 
                 row = result.fetchone()
                 if row:
                     return {
-                        'discord_id': discord_id,
-                        'kick_name': row[0],
-                        'watchtime_tickets': row[1],
-                        'gifted_sub_tickets': row[2],
-                        'shuffle_wager_tickets': row[3],
-                        'bonus_tickets': row[4],
-                        'total_tickets': row[5],
-                        'last_updated': row[6],
-                        'period_id': period_id
+                        "discord_id": discord_id,
+                        "kick_name": row[0],
+                        "watchtime_tickets": row[1],
+                        "gifted_sub_tickets": row[2],
+                        "shuffle_wager_tickets": row[3],
+                        "bonus_tickets": row[4],
+                        "total_tickets": row[5],
+                        "last_updated": row[6],
+                        "period_id": period_id,
                     }
                 return None
 
@@ -99,10 +103,10 @@ class TicketManager:
 
             # Determine which column to update based on source
             source_column_map = {
-                'watchtime': 'watchtime_tickets',
-                'gifted_sub': 'gifted_sub_tickets',
-                'shuffle_wager': 'shuffle_wager_tickets',
-                'bonus': 'bonus_tickets'
+                "watchtime": "watchtime_tickets",
+                "gifted_sub": "gifted_sub_tickets",
+                "shuffle_wager": "shuffle_wager_tickets",
+                "bonus": "bonus_tickets",
             }
 
             source_column = source_column_map.get(source)
@@ -112,9 +116,14 @@ class TicketManager:
 
             with self.engine.begin() as conn:
                 # Get discord_server_id from the period
-                period_result = conn.execute(text("""
+                period_result = conn.execute(
+                    text(
+                        """
                     SELECT discord_server_id FROM raffle_periods WHERE id = :period_id
-                """), {'period_id': period_id})
+                """
+                    ),
+                    {"period_id": period_id},
+                )
                 period_row = period_result.fetchone()
                 if not period_row:
                     logger.error(f"Period {period_id} not found")
@@ -122,7 +131,9 @@ class TicketManager:
                 discord_server_id = period_row[0]
 
                 # Insert or update user's ticket balance
-                conn.execute(text(f"""
+                conn.execute(
+                    text(
+                        f"""
                     INSERT INTO raffle_tickets
                         (period_id, discord_server_id, discord_id, kick_name, {source_column}, total_tickets, last_updated)
                     VALUES
@@ -132,28 +143,36 @@ class TicketManager:
                         {source_column} = raffle_tickets.{source_column} + :tickets,
                         total_tickets = raffle_tickets.total_tickets + :tickets,
                         last_updated = CURRENT_TIMESTAMP
-                """), {
-                    'period_id': period_id,
-                    'server_id': discord_server_id,
-                    'discord_id': discord_id,
-                    'kick_name': kick_name,
-                    'tickets': tickets
-                })
+                """
+                    ),
+                    {
+                        "period_id": period_id,
+                        "server_id": discord_server_id,
+                        "discord_id": discord_id,
+                        "kick_name": kick_name,
+                        "tickets": tickets,
+                    },
+                )
 
                 # Log the transaction
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     INSERT INTO raffle_ticket_log
                         (period_id, discord_id, kick_name, ticket_change, source, description)
                     VALUES
                         (:period_id, :discord_id, :kick_name, :change, :source, :desc)
-                """), {
-                    'period_id': period_id,
-                    'discord_id': discord_id,
-                    'kick_name': kick_name,
-                    'change': tickets,
-                    'source': source,
-                    'desc': description or f"Awarded {tickets} tickets from {source}"
-                })
+                """
+                    ),
+                    {
+                        "period_id": period_id,
+                        "discord_id": discord_id,
+                        "kick_name": kick_name,
+                        "change": tickets,
+                        "source": source,
+                        "desc": description or f"Awarded {tickets} tickets from {source}",
+                    },
+                )
 
             logger.info(f"✅ Awarded {tickets} {source} tickets to {kick_name} (Discord ID: {discord_id})")
             return True
@@ -190,13 +209,15 @@ class TicketManager:
 
             with self.engine.begin() as conn:
                 # Get current balance
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT total_tickets FROM raffle_tickets
                     WHERE period_id = :period_id AND discord_id = :discord_id
-                """), {
-                    'period_id': period_id,
-                    'discord_id': discord_id
-                })
+                """
+                    ),
+                    {"period_id": period_id, "discord_id": discord_id},
+                )
                 row = result.fetchone()
 
                 if not row:
@@ -208,39 +229,50 @@ class TicketManager:
                 actual_removed = current_total - new_total
 
                 # Update total tickets (proportionally reduce all sources)
-                # Use MAX instead of GREATEST for SQLite compatibility
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     UPDATE raffle_tickets
                     SET
-                        watchtime_tickets = MAX(0, CAST(watchtime_tickets * :ratio AS INTEGER)),
-                        gifted_sub_tickets = MAX(0, CAST(gifted_sub_tickets * :ratio AS INTEGER)),
-                        shuffle_wager_tickets = MAX(0, CAST(shuffle_wager_tickets * :ratio AS INTEGER)),
-                        bonus_tickets = MAX(0, CAST(bonus_tickets * :ratio AS INTEGER)),
+                        watchtime_tickets = GREATEST(0, CAST(watchtime_tickets * :ratio AS INTEGER)),
+                        gifted_sub_tickets = GREATEST(0, CAST(gifted_sub_tickets * :ratio AS INTEGER)),
+                        shuffle_wager_tickets = GREATEST(0, CAST(shuffle_wager_tickets * :ratio AS INTEGER)),
+                        bonus_tickets = GREATEST(0, CAST(bonus_tickets * :ratio AS INTEGER)),
                         total_tickets = :new_total,
                         last_updated = CURRENT_TIMESTAMP
                     WHERE period_id = :period_id AND discord_id = :discord_id
-                """), {
-                    'period_id': period_id,
-                    'discord_id': discord_id,
-                    'ratio': new_total / current_total if current_total > 0 else 0,
-                    'new_total': new_total
-                })
+                """
+                    ),
+                    {
+                        "period_id": period_id,
+                        "discord_id": discord_id,
+                        "ratio": new_total / current_total if current_total > 0 else 0,
+                        "new_total": new_total,
+                    },
+                )
 
                 # Log the removal
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     INSERT INTO raffle_ticket_log
                         (period_id, discord_id, kick_name, ticket_change, source, description)
                     VALUES
                         (:period_id, :discord_id, :kick_name, :change, 'admin_removal', :reason)
-                """), {
-                    'period_id': period_id,
-                    'discord_id': discord_id,
-                    'kick_name': kick_name,
-                    'change': -actual_removed,
-                    'reason': reason
-                })
+                """
+                    ),
+                    {
+                        "period_id": period_id,
+                        "discord_id": discord_id,
+                        "kick_name": kick_name,
+                        "change": -actual_removed,
+                        "reason": reason,
+                    },
+                )
 
-            logger.info(f"✅ Removed {actual_removed} tickets from {kick_name} (Discord ID: {discord_id}). Reason: {reason}")
+            logger.info(
+                f"✅ Removed {actual_removed} tickets from {kick_name} (Discord ID: {discord_id}). Reason: {reason}"
+            )
             return True
 
         except Exception as e:
@@ -268,13 +300,17 @@ class TicketManager:
             with self.engine.begin() as conn:
                 # Build WHERE clause based on multiserver support
                 if self.server_id:
-                    where_clause = "WHERE period_id = :period_id AND discord_server_id = :server_id AND total_tickets > 0"
-                    params = {'period_id': period_id, 'server_id': self.server_id, 'limit': limit}
+                    where_clause = (
+                        "WHERE period_id = :period_id AND discord_server_id = :server_id AND total_tickets > 0"
+                    )
+                    params = {"period_id": period_id, "server_id": self.server_id, "limit": limit}
                 else:
                     where_clause = "WHERE period_id = :period_id AND total_tickets > 0"
-                    params = {'period_id': period_id, 'limit': limit}
-                
-                result = conn.execute(text(f"""
+                    params = {"period_id": period_id, "limit": limit}
+
+                result = conn.execute(
+                    text(
+                        f"""
                     SELECT
                         discord_id,
                         kick_name,
@@ -288,20 +324,25 @@ class TicketManager:
                     {where_clause}
                     ORDER BY total_tickets DESC
                     LIMIT :limit
-                """), params)
+                """
+                    ),
+                    params,
+                )
 
                 leaderboard = []
                 for row in result:
-                    leaderboard.append({
-                        'discord_id': row[0],
-                        'kick_name': row[1],
-                        'watchtime_tickets': row[2],
-                        'gifted_sub_tickets': row[3],
-                        'shuffle_wager_tickets': row[4],
-                        'bonus_tickets': row[5],
-                        'total_tickets': row[6],
-                        'rank': row[7]
-                    })
+                    leaderboard.append(
+                        {
+                            "discord_id": row[0],
+                            "kick_name": row[1],
+                            "watchtime_tickets": row[2],
+                            "gifted_sub_tickets": row[3],
+                            "shuffle_wager_tickets": row[4],
+                            "bonus_tickets": row[5],
+                            "total_tickets": row[6],
+                            "rank": row[7],
+                        }
+                    )
 
                 return leaderboard
 
@@ -330,16 +371,23 @@ class TicketManager:
             with self.engine.begin() as conn:
                 # Build WHERE clause based on multiserver support
                 if self.server_id:
-                    where_clause = "WHERE period_id = :period_id AND discord_server_id = :server_id AND discord_id = :discord_id"
-                    params = {'period_id': period_id, 'server_id': self.server_id, 'discord_id': discord_id}
+                    where_clause = (
+                        "WHERE period_id = :period_id AND discord_server_id = :server_id AND discord_id = :discord_id"
+                    )
+                    params = {"period_id": period_id, "server_id": self.server_id, "discord_id": discord_id}
                 else:
                     where_clause = "WHERE period_id = :period_id AND discord_id = :discord_id"
-                    params = {'period_id': period_id, 'discord_id': discord_id}
-                
-                result = conn.execute(text(f"""
+                    params = {"period_id": period_id, "discord_id": discord_id}
+
+                result = conn.execute(
+                    text(
+                        f"""
                     SELECT rank FROM raffle_leaderboard
                     {where_clause}
-                """), params)
+                """
+                    ),
+                    params,
+                )
 
                 row = result.fetchone()
                 return row[0] if row else None
@@ -369,30 +417,35 @@ class TicketManager:
                 # Build WHERE clause based on multiserver support
                 if self.server_id:
                     where_clause = "WHERE period_id = :period_id AND discord_server_id = :server_id"
-                    params = {'period_id': period_id, 'server_id': self.server_id}
+                    params = {"period_id": period_id, "server_id": self.server_id}
                 else:
                     where_clause = "WHERE period_id = :period_id"
-                    params = {'period_id': period_id}
-                
-                result = conn.execute(text(f"""
+                    params = {"period_id": period_id}
+
+                result = conn.execute(
+                    text(
+                        f"""
                     SELECT * FROM raffle_current_stats
                     {where_clause}
-                """), params)
+                """
+                    ),
+                    params,
+                )
 
                 row = result.fetchone()
                 if row:
                     return {
-                        'period_id': row[0],
-                        'discord_server_id': row[1],
-                        'start_date': row[2],
-                        'end_date': row[3],
-                        'status': row[4],
-                        'total_participants': row[5],
-                        'total_tickets': row[6],
-                        'watchtime_tickets': row[7],
-                        'gifted_sub_tickets': row[8],
-                        'shuffle_wager_tickets': row[9],
-                        'bonus_tickets': row[10]
+                        "period_id": row[0],
+                        "discord_server_id": row[1],
+                        "start_date": row[2],
+                        "end_date": row[3],
+                        "status": row[4],
+                        "total_participants": row[5],
+                        "total_tickets": row[6],
+                        "watchtime_tickets": row[7],
+                        "gifted_sub_tickets": row[8],
+                        "shuffle_wager_tickets": row[9],
+                        "bonus_tickets": row[10],
                     }
                 return None
 
@@ -406,20 +459,29 @@ class TicketManager:
             with self.engine.begin() as conn:
                 if self.server_id:
                     # Multiserver: filter by discord_server_id
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         SELECT id FROM raffle_periods
                         WHERE status = 'active' AND discord_server_id = :sid
                         ORDER BY start_date DESC
                         LIMIT 1
-                    """), {"sid": self.server_id})
+                    """
+                        ),
+                        {"sid": self.server_id},
+                    )
                 else:
                     # Backwards compatible: no server filter
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         SELECT id FROM raffle_periods
                         WHERE status = 'active'
                         ORDER BY start_date DESC
                         LIMIT 1
-                    """))
+                    """
+                        )
+                    )
                 row = result.fetchone()
                 return row[0] if row else None
         except Exception as e:

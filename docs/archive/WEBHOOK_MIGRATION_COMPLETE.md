@@ -8,7 +8,7 @@ Successfully migrated from **Pusher WebSocket** (deprecated) to **Kick Official 
 ## What's Working Now
 
 ### ✅ Chat Message Tracking (via Webhooks)
-- **Event**: `chat.message.sent` 
+- **Event**: `chat.message.sent`
 - **Flow**: Kick → Webhook → Flask → Redis → Bot
 - **Features Enabled**:
   - Watchtime tracking (`active_viewers_by_guild` updated per message)
@@ -226,6 +226,6 @@ If webhooks stop working:
 
 ---
 
-**Migration Date**: December 16, 2025  
-**Status**: ✅ Complete for chat events  
+**Migration Date**: December 16, 2025
+**Status**: ✅ Complete for chat events
 **Next Steps**: Wait for Kick to add subscription/status webhooks

@@ -6,8 +6,8 @@ All configurable parameters for the raffle system
 import os
 
 # Ticket conversion rates
-WATCHTIME_TICKETS_PER_HOUR = 10      # 1 hour of watchtime = 10 tickets
-GIFTED_SUB_TICKETS = 15              # 1 gifted sub = 15 tickets
+WATCHTIME_TICKETS_PER_HOUR = 10  # 1 hour of watchtime = 10 tickets
+GIFTED_SUB_TICKETS = 15  # 1 gifted sub = 15 tickets
 
 # Wager tracking configuration (environment variable based)
 # Each streamer sets their own affiliate URL and campaign code
@@ -29,14 +29,14 @@ SHUFFLE_CHECK_INTERVAL = WAGER_CHECK_INTERVAL  # Backwards compatibility
 
 # Monthly reset configuration
 RESET_DAY_OF_MONTH = 1  # 1st day of the month
-RESET_HOUR_UTC = 0      # 00:00 UTC
+RESET_HOUR_UTC = 0  # 00:00 UTC
 
 # Raffle settings
 MINIMUM_TICKETS_TO_ENTER = 1
 AUTO_DRAW_ON_RESET = False  # Manual draw by admin (set True for automatic)
 
 # Notifications
-TICKET_NOTIFICATION_THRESHOLD = 20     # Only notify for 20+ tickets earned at once
+TICKET_NOTIFICATION_THRESHOLD = 20  # Only notify for 20+ tickets earned at once
 ENABLE_TICKET_NOTIFICATIONS = True
 
 # Security & Anti-cheat

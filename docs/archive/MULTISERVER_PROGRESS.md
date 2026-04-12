@@ -121,8 +121,8 @@ def get_guild_settings(guild_id: Optional[int]) -> BotSettingsManager:
     ...
 
 # Queries with server filtering
-SELECT * FROM user_points 
-WHERE kick_username = 'user123' 
+SELECT * FROM user_points
+WHERE kick_username = 'user123'
 AND discord_server_id = 123456789
 ```
 
@@ -193,6 +193,6 @@ When complete, the bot will support:
 
 **Last Updated**: December 15, 2025
 **Branch**: main
-**Commits**: 
+**Commits**:
 - Admin Dashboard: `e273ec4` → deployed
 - Kick Bot: `665bddf` → pushed to GitHub

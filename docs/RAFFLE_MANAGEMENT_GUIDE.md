@@ -51,7 +51,7 @@ Updates current period to Nov 1-30, 2025.
 - Reminds you to draw winner from old period
 
 **Example Flow:**
-1. October 31st: `!rafflerestart` 
+1. October 31st: `!rafflerestart`
 2. Old period ends, new period created for Nov 1-30
 3. `!raffledraw` to pick winner from October
 4. Winners announced, November raffle begins!

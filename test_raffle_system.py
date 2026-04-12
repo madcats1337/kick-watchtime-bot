@@ -6,11 +6,12 @@ Tests all critical raffle functionality before production use
 import os
 import sys
 from datetime import datetime, timedelta
-from sqlalchemy import create_engine, text
+
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 # Import raffle modules
-from raffle_system.database import get_current_period, create_new_period
+from raffle_system.database import create_new_period, get_current_period
 from raffle_system.draw import RaffleDraw
 from raffle_system.scheduler import RaffleScheduler
 
@@ -36,21 +37,23 @@ if not DATABASE_URL:
 
 # Safely extract host from DATABASE_URL for logging
 try:
-    if '@' in DATABASE_URL and '/' in DATABASE_URL:
-        host_part = DATABASE_URL.split('@')[1].split('/')[0]
+    if "@" in DATABASE_URL and "/" in DATABASE_URL:
+        host_part = DATABASE_URL.split("@")[1].split("/")[0]
     else:
-        host_part = 'database'
+        host_part = "database"
 except (IndexError, AttributeError):
-    host_part = 'database'
+    host_part = "database"
 
 print(f"🔗 Connecting to: {host_part}")
 engine = create_engine(DATABASE_URL)
+
 
 def print_section(title):
     """Print formatted section header"""
     print(f"\n{'='*60}")
     print(f"  {title}")
     print(f"{'='*60}\n")
+
 
 def test_exclusion_logic():
     """Test 1: Verify bots and streamer are excluded from raffle"""
@@ -67,7 +70,9 @@ def test_exclusion_logic():
             print(f"📅 Testing period #{period['id']}")
 
             # Check if bot accounts or streamer have tickets
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 SELECT discord_id, kick_name, total_tickets
                 FROM raffle_tickets
                 WHERE period_id = :period_id
@@ -77,7 +82,10 @@ def test_exclusion_logic():
                     OR kick_name LIKE '%Bot%'
                 )
                 ORDER BY total_tickets DESC
-            """), {'period_id': period['id']})
+            """
+                ),
+                {"period_id": period["id"]},
+            )
 
             excluded_accounts = list(result)
 
@@ -96,6 +104,7 @@ def test_exclusion_logic():
         print(f"❌ ERROR: {e}")
         return False
 
+
 def test_raffle_draw():
     """Test 2: Perform a test raffle draw"""
     print_section("TEST 2: Raffle Draw Functionality")
@@ -110,11 +119,16 @@ def test_raffle_draw():
 
         # Get participant count
         with engine.begin() as conn:
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 SELECT COUNT(*), SUM(total_tickets)
                 FROM raffle_tickets
                 WHERE period_id = :period_id AND total_tickets > 0
-            """), {'period_id': period['id']})
+            """
+                ),
+                {"period_id": period["id"]},
+            )
 
             row = result.fetchone()
             participant_count = row[0]
@@ -133,9 +147,7 @@ def test_raffle_draw():
 
         print("\n🎲 Drawing winner...")
         winner = raffle_draw.draw_winner(
-            period_id=period['id'],
-            prize_description="TEST DRAW - Not a real raffle",
-            drawn_by_discord_id=None
+            period_id=period["id"], prize_description="TEST DRAW - Not a real raffle", drawn_by_discord_id=None
         )
 
         if not winner:
@@ -145,13 +157,12 @@ def test_raffle_draw():
         print(f"\n🎉 Winner Details:")
         print(f"   Kick Name: {winner['winner_kick_name']}")
         print(f"   Discord ID: {winner['winner_discord_id']}")
-        if winner.get('winner_shuffle_name'):
+        if winner.get("winner_shuffle_name"):
             print(f"   Shuffle Name: {winner['winner_shuffle_name']}")
         print(f"   Winning Ticket: #{winner['winning_ticket']}/{winner['total_tickets']}")
         print(f"   Winner's Tickets: {winner['winner_tickets']}")
         print(f"   Win Probability: {winner['win_probability']:.2f}%")
         print(f"   Total Participants: {winner['total_participants']}")
-
 
         print("\n✅ PASS: Draw completed successfully")
 
@@ -159,18 +170,28 @@ def test_raffle_draw():
         print("\n🧹 Cleaning up test draw...")
         with engine.begin() as conn:
             # Remove test draw record
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 DELETE FROM raffle_draws
                 WHERE period_id = :period_id
                 AND prize_description = 'TEST DRAW - Not a real raffle'
-            """), {'period_id': period['id']})
+            """
+                ),
+                {"period_id": period["id"]},
+            )
 
             # Reset period status (no winner fields to reset)
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 UPDATE raffle_periods
                 SET status = 'active'
                 WHERE id = :period_id
-            """), {'period_id': period['id']})
+            """
+                ),
+                {"period_id": period["id"]},
+            )
 
         print("✅ Test draw cleaned up - period reset to active")
         return True
@@ -178,8 +199,10 @@ def test_raffle_draw():
     except Exception as e:
         print(f"❌ ERROR: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 def test_period_transition():
     """Test 3: Test automatic period transition"""
@@ -193,8 +216,8 @@ def test_period_transition():
 
         print(f"📅 Current Period #{period['id']}")
 
-        start_date = period['start_date']
-        end_date = period['end_date']
+        start_date = period["start_date"]
+        end_date = period["end_date"]
 
         # Ensure dates are datetime objects
         if isinstance(start_date, str):
@@ -241,8 +264,10 @@ def test_period_transition():
     except Exception as e:
         print(f"❌ ERROR: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 def test_draw_history():
     """Test 4: Check draw history"""
@@ -262,7 +287,7 @@ def test_draw_history():
         for i, draw in enumerate(history, 1):
             print(f"{i}. Period #{draw['period_id']}")
             print(f"   Winner: {draw['winner_kick_name']} (Discord: {draw['winner_discord_id']})")
-            if draw.get('winner_shuffle_name'):
+            if draw.get("winner_shuffle_name"):
                 print(f"   Shuffle: {draw['winner_shuffle_name']}")
             print(f"   Ticket: #{draw['winning_ticket']}/{draw['total_tickets']}")
             print(f"   Participants: {draw['total_participants']}")
@@ -276,21 +301,23 @@ def test_draw_history():
     except Exception as e:
         print(f"❌ ERROR: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
+
 def run_all_tests():
     """Run all raffle tests"""
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("  RAFFLE SYSTEM COMPREHENSIVE TEST")
     print("  Environment: PRODUCTION DATABASE")
-    print("="*60)
+    print("=" * 60)
 
     tests = [
         ("Bot & Streamer Exclusion", test_exclusion_logic),
         ("Raffle Draw Functionality", test_raffle_draw),
         ("Period Transition Logic", test_period_transition),
-        ("Draw History", test_draw_history)
+        ("Draw History", test_draw_history),
     ]
 
     results = []
@@ -324,6 +351,7 @@ def run_all_tests():
     print(f"{'='*60}\n")
 
     return passed_count == total_count
+
 
 if __name__ == "__main__":
     success = run_all_tests()

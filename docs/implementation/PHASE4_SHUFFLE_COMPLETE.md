@@ -136,12 +136,12 @@ SHUFFLE_CHECK_INTERVAL_MINUTES=15
 1. **Every 15 minutes:**
    - Bot fetches Shuffle affiliate JSON
    - Filters users with campaignCode "lele"
-   
+
 2. **For each user:**
    - Check if Shuffle username exists in `raffle_shuffle_links`
    - If new user: create record in `raffle_shuffle_wagers` (baseline)
    - If existing: calculate wager delta
-   
+
 3. **Award tickets:**
    - Only if delta > 0
    - Only if verified link exists
@@ -173,10 +173,10 @@ Future commands for managing Shuffle links:
 
 1. **SQLite Database Locking** - Occasional concurrent transaction issues (test showed one lock error)
    - Solution: PostgreSQL in production eliminates this
-   
+
 2. **API Rate Limits** - No rate limiting implemented yet
    - Current 15-minute interval is conservative
-   
+
 3. **No Wager Decrease Handling** - User cashouts don't reduce tickets
    - Design decision: tickets never removed for wagers
 

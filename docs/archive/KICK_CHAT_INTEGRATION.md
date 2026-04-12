@@ -76,7 +76,7 @@ async def send_kick_message(message: str, guild_id: int) -> bool:
     # Try kickpython WS if enabled and connected
     if KICK_USE_KICKPYTHON_WS and guild_id in kick_ws_manager.connections:
         return await kick_ws_manager.send_message(...)
-    
+
     # Fall back to Official API
     return await send_via_official_api(...)
 ```
@@ -91,7 +91,7 @@ key = 'kick_broadcaster_user_id'
 value = '123456'  -- Used for Official API chat sends
 
 -- From kickpython (via core.kick_api.fetch_chatroom_id)
-key = 'kick_chatroom_id'  
+key = 'kick_chatroom_id'
 value = '789012'  -- Used for WebSocket sends (if enabled)
 
 -- The configured channel
@@ -124,7 +124,7 @@ async def handle_chat(event_data):
     username = event_data['sender']['username']
     content = event_data['content']
     guild_id = event_data['_server_id']  # Multiserver routing
-    
+
     # Your chat processing logic here
     # Updates watchtime, processes commands, etc.
 ```
@@ -135,7 +135,7 @@ async def handle_chat(event_data):
 async def _handle_incoming_message(self, guild_id, guild_name, msg):
     username = msg.get('sender_username')
     content = msg.get('content')
-    
+
     # Updates recent_chatters_by_guild
     # Publishes to Redis
     # Processes commands if needed

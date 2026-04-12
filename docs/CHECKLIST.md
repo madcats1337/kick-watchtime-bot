@@ -53,7 +53,7 @@ https://discord.com/api/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=26
 Create these roles in your Discord server (Settings → Roles):
 
 1. **🎯 Fan** (1 hour)
-2. **🔥 Superfan** (5 hours)  
+2. **🔥 Superfan** (5 hours)
 3. **💎 Elite Viewer** (16+ hours)
 
 **Important:** Bot's role must be ABOVE these roles in the hierarchy!

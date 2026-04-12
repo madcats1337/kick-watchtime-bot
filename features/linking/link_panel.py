@@ -4,12 +4,14 @@ Uses buttons and ephemeral messages instead of reactions and DMs
 """
 
 import logging
+
 import discord
 from discord.ext import commands
-from discord.ui import View, Button
+from discord.ui import Button, View
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
+
 
 class LinkPanelView(View):
     """Button view for link panel"""
@@ -20,12 +22,7 @@ class LinkPanelView(View):
         self.engine = engine
         self.oauth_url_generator = oauth_url_generator
 
-    @discord.ui.button(
-        style=discord.ButtonStyle.success,
-        label="Link Account",
-        emoji="🔗",
-        custom_id="link_account"
-    )
+    @discord.ui.button(style=discord.ButtonStyle.success, label="Link Account", emoji="🔗", custom_id="link_account")
     async def link_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Handle link account button click"""
         try:
@@ -48,22 +45,21 @@ class LinkPanelView(View):
         try:
             with self.engine.connect() as conn:
                 server_id = guild_id
-                existing = conn.execute(text(
-                    "SELECT kick_name FROM links WHERE discord_id = :d AND (:sid IS NULL OR discord_server_id = :sid)"
-                ), {"d": discord_id, "sid": server_id}).fetchone()
+                existing = conn.execute(
+                    text(
+                        "SELECT kick_name FROM links WHERE discord_id = :d AND (:sid IS NULL OR discord_server_id = :sid)"
+                    ),
+                    {"d": discord_id, "sid": server_id},
+                ).fetchone()
 
                 if existing:
                     await interaction.response.send_message(
-                        f"✅ You are already linked to **{existing[0]}**!",
-                        ephemeral=True
+                        f"✅ You are already linked to **{existing[0]}**!", ephemeral=True
                     )
                     return
         except Exception as e:
             logger.error(f"Error checking existing link: {e}")
-            await interaction.response.send_message(
-                "❌ Database error. Please try again.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("❌ Database error. Please try again.", ephemeral=True)
             return
 
         # Generate OAuth URL with guild_id
@@ -72,29 +68,22 @@ class LinkPanelView(View):
         except Exception as e:
             logger.error(f"Error generating OAuth URL: {e}")
             await interaction.response.send_message(
-                "❌ Failed to generate OAuth link. Please contact an admin.",
-                ephemeral=True
+                "❌ Failed to generate OAuth link. Please contact an admin.", ephemeral=True
             )
             return
 
         # Create simple view with just the OAuth link button
         view = View(timeout=600)  # 10 minute timeout
-        oauth_button = Button(
-            label="Authorize with Kick",
-            style=discord.ButtonStyle.link,
-            url=oauth_url,
-            emoji="🎮"
-        )
+        oauth_button = Button(label="Authorize with Kick", style=discord.ButtonStyle.link, url=oauth_url, emoji="🎮")
         view.add_item(oauth_button)
 
         # Send simple ephemeral message - just the button, no extra steps
         await interaction.response.send_message(
-            "🔗 Click the button below to link your Kick account (expires in 10 minutes):",
-            view=view,
-            ephemeral=True
+            "🔗 Click the button below to link your Kick account (expires in 10 minutes):", view=view, ephemeral=True
         )
 
         logger.info(f"Sent OAuth link to {interaction.user.name} (ID: {discord_id}) via ephemeral message")
+
 
 class LinkPanel:
     """Manages the link panel message for a specific guild"""
@@ -111,7 +100,7 @@ class LinkPanel:
 
     def _load_panel_info(self):
         """Load panel message info from database for this guild
-        
+
         In multiserver deployments, loads only this guild's panel.
         """
         if not self.engine or self.guild_id is None:
@@ -120,13 +109,18 @@ class LinkPanel:
         try:
             with self.engine.connect() as conn:
                 # Get the most recent link panel for this guild
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT guild_id, channel_id, message_id
                     FROM link_panels
                     WHERE guild_id = :guild_id
                     ORDER BY created_at DESC
                     LIMIT 1
-                """), {'guild_id': self.guild_id}).fetchone()
+                """
+                    ),
+                    {"guild_id": self.guild_id},
+                ).fetchone()
 
                 if result:
                     self.panel_guild_id = result[0]
@@ -145,19 +139,25 @@ class LinkPanel:
         try:
             with self.engine.begin() as conn:
                 # Delete old panels for this guild
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     DELETE FROM link_panels WHERE guild_id = :guild_id
-                """), {"guild_id": guild_id})
+                """
+                    ),
+                    {"guild_id": guild_id},
+                )
 
                 # Insert new panel info
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     INSERT INTO link_panels (guild_id, channel_id, message_id, emoji, created_at)
                     VALUES (:guild_id, :channel_id, :message_id, '🔗', CURRENT_TIMESTAMP)
-                """), {
-                    "guild_id": guild_id,
-                    "channel_id": channel_id,
-                    "message_id": message_id
-                })
+                """
+                    ),
+                    {"guild_id": guild_id, "channel_id": channel_id, "message_id": message_id},
+                )
 
         except Exception as e:
             logger.error(f"Failed to save link panel info: {e}")
@@ -177,12 +177,10 @@ class LinkPanel:
                     "• Earn roles based on Kick chat activity\n"
                     "• Track your stats and progress"
                 ),
-                color=0x53FC18
+                color=0x53FC18,
             )
             embed.add_field(
-                name="How to Link",
-                value="Click the **'Link Account'** button below to get started!",
-                inline=False
+                name="How to Link", value="Click the **'Link Account'** button below to get started!", inline=False
             )
             embed.add_field(
                 name="🔒 Privacy & Security",
@@ -191,7 +189,7 @@ class LinkPanel:
                     "• Links are sent in private messages only you can see\n"
                     "• Your Kick password is never shared with this bot"
                 ),
-                inline=False
+                inline=False,
             )
             embed.set_footer(text="Click 'Link Account' to get your personal OAuth link")
 
@@ -214,18 +212,19 @@ class LinkPanel:
             logger.error(f"Failed to create link panel: {e}")
             return False
 
+
 async def setup_link_panel_system(bot, engine, oauth_url_generator):
     """Setup the link panel system with per-guild instances"""
     panels = {}
-    
+
     # Create a panel instance for each guild
     for guild in bot.guilds:
         panel = LinkPanel(bot, engine, oauth_url_generator, guild_id=guild.id)
         panels[guild.id] = panel
         logger.info(f"✅ [Guild {guild.name}] Link panel initialized")
-    
+
     # Add command only once
-    @bot.command(name='createlinkpanel')
+    @bot.command(name="createlinkpanel")
     @commands.has_permissions(administrator=True)
     async def create_link_panel_cmd(ctx):
         """[ADMIN] Create the link panel in this channel"""
@@ -233,7 +232,7 @@ async def setup_link_panel_system(bot, engine, oauth_url_generator):
         if not panel:
             await ctx.send("❌ Link panel not initialized for this server")
             return
-        
+
         success = await panel.create_panel(ctx.channel)
         if success:
             await ctx.send("✅ Link panel created! Users can now click the button to link their accounts.")
@@ -256,4 +255,3 @@ async def setup_link_panel_system(bot, engine, oauth_url_generator):
                 logger.error(f"Failed to re-attach link panel view for guild {guild_id}: {e}")
 
     return panels
-

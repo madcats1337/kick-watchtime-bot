@@ -3,14 +3,16 @@ Watchtime to Tickets Converter
 Automatically converts accumulated watchtime into raffle tickets
 """
 
-from sqlalchemy import text
-from datetime import datetime
 import logging
+from datetime import datetime
+
+from sqlalchemy import text
 
 from .config import WATCHTIME_TICKETS_PER_HOUR
 from .tickets import TicketManager
 
 logger = logging.getLogger(__name__)
+
 
 class WatchtimeConverter:
     """Converts watchtime tracking into raffle tickets"""
@@ -21,14 +23,16 @@ class WatchtimeConverter:
         self.bot_settings = bot_settings
         self.ticket_manager = TicketManager(engine, server_id=server_id)
         self._load_settings()
-    
+
     def _load_settings(self):
         """Load watchtime ticket settings from bot_settings or config"""
         if self.bot_settings:
             # Try to get from database settings
             try:
                 self.bot_settings.refresh()
-                self.watchtime_tickets_per_hour = int(self.bot_settings.get('watchtime_tickets_per_hour') or WATCHTIME_TICKETS_PER_HOUR)
+                self.watchtime_tickets_per_hour = int(
+                    self.bot_settings.get("watchtime_tickets_per_hour") or WATCHTIME_TICKETS_PER_HOUR
+                )
             except (ValueError, AttributeError):
                 self.watchtime_tickets_per_hour = WATCHTIME_TICKETS_PER_HOUR
         else:
@@ -54,26 +58,33 @@ class WatchtimeConverter:
             period_id = self._get_active_period_id()
             if not period_id:
                 logger.warning("No active raffle period - skipping watchtime conversion")
-                return {'status': 'no_active_period', 'conversions': 0}
+                return {"status": "no_active_period", "conversions": 0}
 
             conversions = []
 
             with self.engine.begin() as conn:
                 # Get period start date to filter conversions
-                period_result = conn.execute(text("""
+                period_result = conn.execute(
+                    text(
+                        """
                     SELECT start_date, created_at FROM raffle_periods WHERE id = :period_id
-                """), {'period_id': period_id})
+                """
+                    ),
+                    {"period_id": period_id},
+                )
                 period_row = period_result.fetchone()
                 if not period_row:
-                    return {'status': 'no_active_period', 'conversions': 0}
-                
+                    return {"status": "no_active_period", "conversions": 0}
+
                 period_start = period_row[0]
                 period_created = period_row[1]
                 self.discord_server_id = self.server_id
 
                 # Get all users with watchtime and their Discord IDs from links table (per-guild)
                 # Use LOWER() for case-insensitive comparison
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT
                         w.username as kick_name,
                         w.minutes as total_minutes,
@@ -83,7 +94,10 @@ class WatchtimeConverter:
                         AND l.discord_server_id = :server_id
                     WHERE w.minutes > 0
                         AND w.discord_server_id = :server_id
-                """), {"server_id": self.server_id})
+                """
+                    ),
+                    {"server_id": self.server_id},
+                )
 
                 users = list(result)
 
@@ -91,25 +105,29 @@ class WatchtimeConverter:
 
                 if not users:
                     logger.info("No linked users with watchtime found")
-                    return {'status': 'no_users', 'conversions': 0}
+                    return {"status": "no_users", "conversions": 0}
 
                 for kick_name, total_minutes, discord_id in users:
                     # Check how much watchtime has already been converted this period
-                    converted_result = conn.execute(text("""
+                    converted_result = conn.execute(
+                        text(
+                            """
                         SELECT COALESCE(SUM(minutes_converted), 0)
                         FROM raffle_watchtime_converted
                         WHERE period_id = :period_id AND kick_name = :kick_name
-                    """), {
-                        'period_id': period_id,
-                        'kick_name': kick_name
-                    })
+                    """
+                        ),
+                        {"period_id": period_id, "kick_name": kick_name},
+                    )
 
                     minutes_already_converted_this_period = converted_result.scalar() or 0
 
                     # Calculate new minutes to convert
                     new_minutes = total_minutes - minutes_already_converted_this_period
 
-                    print(f"🔍 [WATCHTIME] {kick_name}: {total_minutes} total - {minutes_already_converted_this_period} this period = {new_minutes} new")
+                    print(
+                        f"🔍 [WATCHTIME] {kick_name}: {total_minutes} total - {minutes_already_converted_this_period} this period = {new_minutes} new"
+                    )
 
                     if new_minutes < 60:
                         # Need at least 1 hour to convert
@@ -128,56 +146,66 @@ class WatchtimeConverter:
                         discord_id=discord_id,
                         kick_name=kick_name,
                         tickets=tickets_to_award,
-                        source='watchtime',
+                        source="watchtime",
                         description=f"Converted {hours_to_convert}h watchtime to {tickets_to_award} tickets",
-                        period_id=period_id
+                        period_id=period_id,
                     )
 
                     if success:
                         # Log the conversion to prevent double-counting (raffle-specific)
-                        conn.execute(text("""
+                        conn.execute(
+                            text(
+                                """
                             INSERT INTO raffle_watchtime_converted
                                 (period_id, kick_name, minutes_converted, tickets_awarded)
                             VALUES
                                 (:period_id, :kick_name, :minutes, :tickets)
-                        """), {
-                            'period_id': period_id,
-                            'kick_name': kick_name,
-                            'minutes': minutes_to_convert,
-                            'tickets': tickets_to_award
-                        })
+                        """
+                            ),
+                            {
+                                "period_id": period_id,
+                                "kick_name": kick_name,
+                                "minutes": minutes_to_convert,
+                                "tickets": tickets_to_award,
+                            },
+                        )
 
                         # ALSO log to permanent watchtime_conversion_logs (NEVER deleted)
-                        conn.execute(text("""
+                        conn.execute(
+                            text(
+                                """
                             INSERT INTO watchtime_conversion_logs
                                 (discord_id, kick_name, discord_server_id, raffle_minutes, points_minutes, converted_at)
                             VALUES
                                 (:discord_id, :kick_name, :server_id, :minutes, 0, NOW())
-                        """), {
-                            'discord_id': discord_id,
-                            'kick_name': kick_name,
-                            'server_id': self.discord_server_id,
-                            'minutes': minutes_to_convert
-                        })
+                        """
+                            ),
+                            {
+                                "discord_id": discord_id,
+                                "kick_name": kick_name,
+                                "server_id": self.discord_server_id,
+                                "minutes": minutes_to_convert,
+                            },
+                        )
 
-                        conversions.append({
-                            'kick_name': kick_name,
-                            'discord_id': discord_id,
-                            'hours_converted': hours_to_convert,
-                            'tickets_awarded': tickets_to_award
-                        })
+                        conversions.append(
+                            {
+                                "kick_name": kick_name,
+                                "discord_id": discord_id,
+                                "hours_converted": hours_to_convert,
+                                "tickets_awarded": tickets_to_award,
+                            }
+                        )
 
-                        logger.info(f"✅ Converted {hours_to_convert}h watchtime → {tickets_to_award} tickets for {kick_name}")
+                        logger.info(
+                            f"✅ Converted {hours_to_convert}h watchtime → {tickets_to_award} tickets for {kick_name}"
+                        )
 
-            return {
-                'status': 'success',
-                'conversions': len(conversions),
-                'details': conversions
-            }
+            return {"status": "success", "conversions": len(conversions), "details": conversions}
 
         except Exception as e:
             logger.error(f"Failed to convert watchtime to tickets: {e}")
-            return {'status': 'error', 'error': str(e), 'conversions': 0}
+            return {"status": "error", "error": str(e), "conversions": 0}
 
     def get_unconverted_watchtime(self, kick_name, period_id=None):
         """
@@ -198,10 +226,15 @@ class WatchtimeConverter:
 
             with self.engine.begin() as conn:
                 # Get total watchtime
-                watchtime_result = conn.execute(text("""
+                watchtime_result = conn.execute(
+                    text(
+                        """
                     SELECT minutes FROM watchtime
                     WHERE username = :kick_name
-                """), {'kick_name': kick_name})
+                """
+                    ),
+                    {"kick_name": kick_name},
+                )
 
                 row = watchtime_result.fetchone()
                 if not row:
@@ -210,14 +243,16 @@ class WatchtimeConverter:
                 total_minutes = row[0]
 
                 # Get converted watchtime
-                converted_result = conn.execute(text("""
+                converted_result = conn.execute(
+                    text(
+                        """
                     SELECT COALESCE(SUM(minutes_converted), 0)
                     FROM raffle_watchtime_converted
                     WHERE period_id = :period_id AND kick_name = :kick_name
-                """), {
-                    'period_id': period_id,
-                    'kick_name': kick_name
-                })
+                """
+                    ),
+                    {"period_id": period_id, "kick_name": kick_name},
+                )
 
                 minutes_converted = converted_result.scalar() or 0
 
@@ -227,12 +262,12 @@ class WatchtimeConverter:
                 potential_tickets = convertible_hours * WATCHTIME_TICKETS_PER_HOUR
 
                 return {
-                    'kick_name': kick_name,
-                    'total_minutes': total_minutes,
-                    'converted_minutes': minutes_converted,
-                    'unconverted_minutes': unconverted_minutes,
-                    'convertible_hours': convertible_hours,
-                    'potential_tickets': potential_tickets
+                    "kick_name": kick_name,
+                    "total_minutes": total_minutes,
+                    "converted_minutes": minutes_converted,
+                    "unconverted_minutes": unconverted_minutes,
+                    "convertible_hours": convertible_hours,
+                    "potential_tickets": potential_tickets,
                 }
 
         except Exception as e:
@@ -245,25 +280,35 @@ class WatchtimeConverter:
             with self.engine.begin() as conn:
                 if self.server_id:
                     # Multiserver: filter by discord_server_id
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         SELECT id FROM raffle_periods
                         WHERE status = 'active' AND discord_server_id = :sid
                         ORDER BY start_date DESC
                         LIMIT 1
-                    """), {"sid": self.server_id})
+                    """
+                        ),
+                        {"sid": self.server_id},
+                    )
                 else:
                     # Backwards compatible: no server filter
-                    result = conn.execute(text("""
+                    result = conn.execute(
+                        text(
+                            """
                         SELECT id FROM raffle_periods
                         WHERE status = 'active'
                         ORDER BY start_date DESC
                         LIMIT 1
-                    """))
+                    """
+                        )
+                    )
                 row = result.fetchone()
                 return row[0] if row else None
         except Exception as e:
             logger.error(f"Failed to get active period: {e}")
             return None
+
 
 async def setup_watchtime_converter(bot, engine, server_id=None):
     """
@@ -278,7 +323,7 @@ async def setup_watchtime_converter(bot, engine, server_id=None):
 
     # Get bot_settings from bot if available
     bot_settings = None
-    if hasattr(bot, 'settings_manager') and bot.settings_manager:
+    if hasattr(bot, "settings_manager") and bot.settings_manager:
         bot_settings = bot.settings_manager
 
     converter = WatchtimeConverter(engine, server_id=server_id, bot_settings=bot_settings)
@@ -292,12 +337,12 @@ async def setup_watchtime_converter(bot, engine, server_id=None):
 
         print(f"🔄 [WATCHTIME] Result: {result}")
 
-        if result['status'] == 'success' and result['conversions'] > 0:
+        if result["status"] == "success" and result["conversions"] > 0:
             print(f"✅ [WATCHTIME] Converted watchtime for {result['conversions']} users")
             logger.info(f"✅ Converted watchtime for {result['conversions']} users")
-        elif result['status'] == 'no_users':
+        elif result["status"] == "no_users":
             print(f"ℹ️ [WATCHTIME] No users with 60+ minutes of unconverted watchtime")
-        elif result['status'] == 'no_active_period':
+        elif result["status"] == "no_active_period":
             print(f"⚠️ [WATCHTIME] No active raffle period found!")
 
             # Optional: Send notification to raffle announcement channel
@@ -312,9 +357,9 @@ async def setup_watchtime_converter(bot, engine, server_id=None):
             #         ])
             #         await channel.send(f"🎟️ **Watchtime Converted**\n{summary}")
 
-        elif result['status'] == 'no_active_period':
+        elif result["status"] == "no_active_period":
             logger.debug("No active raffle period")
-        elif result['status'] == 'error':
+        elif result["status"] == "error":
             logger.error(f"Watchtime conversion failed: {result.get('error')}")
 
     @convert_watchtime_task.before_loop

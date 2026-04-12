@@ -16,16 +16,16 @@ This guide explains how to set up Kick OAuth authentication for instant account 
 2. Click "Create App" or "New Application"
 3. Fill in the application details:
 
-   **App Name:** `[Your Bot Name] Discord Bot`  
+   **App Name:** `[Your Bot Name] Discord Bot`
    Example: `Maikelele Discord Bot`
 
    **Description:**
    ```
-   Discord bot that rewards community members with roles based on Kick chat participation. 
+   Discord bot that rewards community members with roles based on Kick chat participation.
    Tracks watchtime for active viewers and automatically assigns tiered roles.
    ```
 
-   **Redirect URI:** `https://[your-railway-domain].up.railway.app/auth/kick/callback`  
+   **Redirect URI:** `https://[your-railway-domain].up.railway.app/auth/kick/callback`
    Example: `https://kick-discord-bot-production-1a2b.up.railway.app/auth/kick/callback`
 
    **Scopes:** `user:read`
@@ -148,9 +148,9 @@ If you get a different Railway domain after deployment:
 
 ## Security Notes
 
-🔒 **NEVER commit your `CLIENT_SECRET` to git!**  
-🔒 **Only use HTTPS in production** (Railway provides this automatically)  
-🔒 **Keep your Kick developer account secure** (2FA enabled)  
+🔒 **NEVER commit your `CLIENT_SECRET` to git!**
+🔒 **Only use HTTPS in production** (Railway provides this automatically)
+🔒 **Keep your Kick developer account secure** (2FA enabled)
 🔒 **Regularly rotate CLIENT_SECRET** if compromised
 
 ---
