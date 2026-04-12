@@ -6645,6 +6645,11 @@ async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
     print(f"📺 Monitoring Kick channel: {KICK_CHANNEL}")
 
+    # Guard against running full initialization on Discord gateway reconnects.
+    # on_ready fires every time the bot reconnects (not just on first login).
+    # Cog registration, command registration, and task creation must only happen once.
+    _first_ready = not hasattr(bot, '_bot_initialized')
+
     # START KICKPYTHON WEBSOCKET (for chat messages)
     # NOTE: Subscription events are now handled via Kick webhooks (channel.subscription.*)
     if KICK_USE_KICKPYTHON_WS:
@@ -6713,8 +6718,12 @@ async def on_ready():
     print(f"✅ Giveaway managers initialized for {len(giveaway_managers)} guilds")
 
     # Start Redis subscriber with Kick message callback
+    # Guard against creating duplicate subscriber tasks on Discord gateway reconnects
+    # (on_ready fires every time the bot reconnects, not just on first login)
     kick_callback = send_kick_message if KICK_BOT_USER_TOKEN else None
-    asyncio.create_task(start_redis_subscriber(bot, kick_callback))
+    if not hasattr(bot, '_redis_subscriber_started'):
+        bot._redis_subscriber_started = True
+        asyncio.create_task(start_redis_subscriber(bot, kick_callback))
 
     if kick_callback:
         print("✅ Redis subscriber will send messages to Kick chat")
@@ -6791,7 +6800,7 @@ async def on_ready():
                 if role_config["name"] not in existing_roles:
                     print(f"⚠️ [Guild {guild.name}] Role {role_config['name']} does not exist in the server!")
 
-        # Start background tasks
+        # Start background tasks (guarded: tasks already check is_running())
         if not update_watchtime_task.is_running():
             update_watchtime_task.start()
             print("✅ Watchtime updater started")
@@ -6816,6 +6825,13 @@ async def on_ready():
         if not clip_buffer_management_task.is_running():
             clip_buffer_management_task.start()
             print("✅ Clip buffer management task started (monitors stream status)")
+
+        # Initialize raffle system — skip cog/command registration on gateway reconnects.
+        # (on_ready fires on every reconnect; cog/command re-registration would raise errors.)
+        if not _first_ready:
+            print("♻️  Gateway reconnect — background tasks checked, initialization skipped")
+            return
+        bot._bot_initialized = True
 
         # Initialize raffle system
         try:
@@ -7640,7 +7656,9 @@ async def on_command_error(ctx, error):
         # If the command has a local error handler, let it handle the error fully.
         # Without this guard, both the local handler AND this global handler fire
         # for the same error, causing duplicate messages.
-        if ctx.command and hasattr(ctx.command, 'on_error'):
+        # NOTE: hasattr() is NOT sufficient here — discord.py sets on_error=None on every
+        # Command by default, so hasattr() always returns True. Must check `is not None`.
+        if ctx.command and ctx.command.on_error is not None:
             return
 
         if isinstance(error, commands.MissingRequiredArgument):
