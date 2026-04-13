@@ -2092,6 +2092,24 @@ intents.reactions = True  # Enable reaction events
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+
+@bot.before_invoke
+async def deduplicate_command(ctx):
+    """
+    Prevent duplicate command responses during Railway zero-downtime deployments.
+    Railway briefly runs TWO containers simultaneously when deploying — both receive
+    the same Discord gateway message and would both respond. This hook claims the
+    Discord message ID in Redis with a 10-second TTL; the first instance to claim it
+    proceeds, the second raises CheckFailure and is silently ignored.
+    """
+    if not redis_client:
+        return  # Redis unavailable — allow command through
+    key = f"cmd_dedup:{ctx.message.id}"
+    if not redis_client.set(key, "1", nx=True, ex=10):
+        # Another instance already claimed this message ID — suppress this invocation
+        raise commands.CheckFailure("duplicate_suppressed")
+
+
 # Store settings manager on bot for access throughout
 bot.settings_manager = bot_settings
 
@@ -5228,8 +5246,6 @@ async def link_logs_toggle(ctx, action: str = None):
     channel_id = ctx.channel.id
 
     if action is None or action.lower() == "status":
-        on_msg_listeners = bot.extra_events.get('on_message', [])
-        print(f"[linklogs] extra_events on_message count: {len(on_msg_listeners)} — {[getattr(f,'__qualname__','?') for f in on_msg_listeners]}", flush=True)
         # Check current status
         with engine.connect() as conn:
             result = conn.execute(
@@ -5251,8 +5267,7 @@ async def link_logs_toggle(ctx, action: str = None):
             log_channel = bot.get_channel(result[0])
             status = "🟢 ENABLED" if result[1] else "🔴 DISABLED"
             channel_mention = log_channel.mention if log_channel else f"<#{result[0]}>"
-            sent_msg = await ctx.send(f"📊 **Link Logging Status:** {status}\n**Log Channel:** {channel_mention}")
-            print(f"[linklogs] status message sent — ID: {sent_msg.id}, channel: {ctx.channel.id}", flush=True)
+            await ctx.send(f"📊 **Link Logging Status:** {status}\n**Log Channel:** {channel_mention}")
             return
 
     if action.lower() == "on":
@@ -7662,6 +7677,10 @@ async def on_command_error(ctx, error):
         # NOTE: hasattr() is NOT sufficient here — discord.py sets on_error=None on every
         # Command by default, so hasattr() always returns True. Must check `is not None`.
         if ctx.command and ctx.command.on_error is not None:
+            return
+
+        # Silently ignore commands suppressed by the deduplication hook
+        if isinstance(error, commands.CheckFailure) and str(error) == "duplicate_suppressed":
             return
 
         if isinstance(error, commands.MissingRequiredArgument):
