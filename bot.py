@@ -5228,6 +5228,9 @@ async def link_logs_toggle(ctx, action: str = None):
     channel_id = ctx.channel.id
 
     if action is None or action.lower() == "status":
+        import traceback as _tb
+        print(f"[linklogs status] invoked by {ctx.author} in guild {ctx.guild.id} — stack:", flush=True)
+        _tb.print_stack()
         # Check current status
         with engine.connect() as conn:
             result = conn.execute(
