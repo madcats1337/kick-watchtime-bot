@@ -10,9 +10,9 @@ from typing import Tuple
 # Multiplier brackets: (range_check_function, multiplier, label)
 # Checked in order - first match wins
 ROLL_BRACKETS = [
-    (lambda r: r == 1 or r == 100, 10.0, "🎯 JACKPOT"),
-    (lambda r: r <= 5 or r >= 96, 5.0, "🔥 Excellent"),
-    (lambda r: r <= 15 or r >= 86, 3.0, "⭐ Great"),
+    (lambda r: r == 1 or r == 100, 5.0, "🎯 JACKPOT"),
+    (lambda r: r <= 5 or r >= 96, 3.0, "🔥 Excellent"),
+    (lambda r: r <= 15 or r >= 86, 2.0, "⭐ Great"),
     (lambda r: r <= 25 or r >= 76, 1.5, "✅ Good"),
     (lambda r: r <= 39 or r >= 62, 0.5, "📉 Partial Loss"),
     (lambda r: True, 0.0, "💀 Total Loss"),  # 40-61 inclusive

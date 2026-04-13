@@ -349,7 +349,7 @@ class GamblingCog(commands.Cog, name="Gambling"):
         if not amount:
             await ctx.reply(
                 "Usage: `!roll <amount>` — e.g. `!roll 100`\n"
-                "🎯 1 or 100 = **10x** | 🔥 2-5/96-99 = **5x** | ⭐ 6-15/86-95 = **3x**\n"
+                "🎯 1 or 100 = **5x** | 🔥 2-5/96-99 = **3x** | ⭐ 6-15/86-95 = **2x**\n"
                 "✅ 16-25/76-85 = **1.5x** | 📉 26-39/62-75 = **0.5x** | 💀 40-61 = **0x**",
                 delete_after=20,
             )
