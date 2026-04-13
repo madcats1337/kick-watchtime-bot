@@ -5228,9 +5228,8 @@ async def link_logs_toggle(ctx, action: str = None):
     channel_id = ctx.channel.id
 
     if action is None or action.lower() == "status":
-        import traceback as _tb
-        print(f"[linklogs status] invoked by {ctx.author} in guild {ctx.guild.id} — stack:", flush=True)
-        _tb.print_stack()
+        on_msg_listeners = bot.extra_events.get('on_message', [])
+        print(f"[linklogs] extra_events on_message count: {len(on_msg_listeners)} — {[getattr(f,'__qualname__','?') for f in on_msg_listeners]}", flush=True)
         # Check current status
         with engine.connect() as conn:
             result = conn.execute(
@@ -5252,7 +5251,8 @@ async def link_logs_toggle(ctx, action: str = None):
             log_channel = bot.get_channel(result[0])
             status = "🟢 ENABLED" if result[1] else "🔴 DISABLED"
             channel_mention = log_channel.mention if log_channel else f"<#{result[0]}>"
-            await ctx.send(f"📊 **Link Logging Status:** {status}\n**Log Channel:** {channel_mention}")
+            sent_msg = await ctx.send(f"📊 **Link Logging Status:** {status}\n**Log Channel:** {channel_mention}")
+            print(f"[linklogs] status message sent — ID: {sent_msg.id}, channel: {ctx.channel.id}", flush=True)
             return
 
     if action.lower() == "on":
