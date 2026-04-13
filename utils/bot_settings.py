@@ -271,6 +271,11 @@ class BotSettingsManager:
         return self.slot_calls_channel_id
 
     @property
+    def gambling_channel_id(self) -> Optional[int]:
+        """Discord channel ID for gambling commands"""
+        return self.get_int("gambling_channel_id")
+
+    @property
     def clip_duration(self) -> int:
         """Default clip duration in seconds"""
         return self.get_int("clip_duration", default=30)

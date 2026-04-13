@@ -35,6 +35,7 @@ logging.getLogger("discord.gateway").setLevel(logging.ERROR)
 
 # Custom commands import
 from features.custom_commands import CustomCommandsManager
+from features.games.gambling import setup_gambling
 from features.games.gtb_panel import setup_gtb_panel
 
 # Guess the Balance import
@@ -1676,6 +1677,43 @@ try:
             )
         )
 
+        # -------------------------
+        # Gambling History Table
+        # -------------------------
+        conn.execute(
+            text(
+                """
+        CREATE TABLE IF NOT EXISTS gambling_history (
+            id SERIAL PRIMARY KEY,
+            discord_server_id BIGINT NOT NULL,
+            discord_id BIGINT NOT NULL,
+            kick_username TEXT NOT NULL,
+            game_type TEXT NOT NULL,
+            bet_amount BIGINT NOT NULL,
+            payout_amount BIGINT NOT NULL,
+            net_result BIGINT NOT NULL,
+            game_data JSONB,
+            server_seed TEXT NOT NULL,
+            client_seed TEXT NOT NULL,
+            nonce TEXT NOT NULL,
+            proof_hash TEXT NOT NULL,
+            random_value NUMERIC(5,2),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+            )
+        )
+
+        # Index for efficient lookups
+        conn.execute(
+            text(
+                """
+        CREATE INDEX IF NOT EXISTS idx_gambling_history_server_user
+        ON gambling_history (discord_server_id, discord_id, created_at DESC);
+        """
+            )
+        )
+
     print("✅ Database tables initialized successfully")
 except Exception as e:
     print(f"⚠️ Database initialization error: {e}")
@@ -2228,7 +2266,9 @@ def load_watchtime_roles():
 # -------------------------
 # Link logging helper
 # -------------------------
-async def log_link_attempt(discord_user, kick_username: str, success: bool, error_message: str = None, guild_id: int = None):
+async def log_link_attempt(
+    discord_user, kick_username: str, success: bool, error_message: str = None, guild_id: int = None
+):
     """Log account linking attempts to configured Discord channel."""
     if not guild_id:
         print("⚠️ log_link_attempt: No guild_id provided, skipping log")
@@ -3008,7 +3048,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                     SELECT value FROM bot_settings WHERE key = 'clip_duration' AND discord_server_id = :guild_id
                                                 """
                                                     ),
-                                                    {"guild_id": guild_id}
+                                                    {"guild_id": guild_id},
                                                 ).fetchone()
                                                 if result:
                                                     clip_duration = int(result[0])
@@ -3120,7 +3160,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                                         SELECT value FROM bot_settings WHERE key = 'clip_channel_id' AND discord_server_id = :guild_id
                                                                     """
                                                                         ),
-                                                                        {"guild_id": guild_id}
+                                                                        {"guild_id": guild_id},
                                                                     ).fetchone()
                                                                     if result and result[0]:
                                                                         clip_channel_id = int(result[0])
@@ -3789,7 +3829,11 @@ async def check_oauth_notifications_task():
 
                             # Log the failed attempt
                             await log_link_attempt(
-                                user, actual_kick_username, success=False, error_message=error_message, guild_id=guild_id
+                                user,
+                                actual_kick_username,
+                                success=False,
+                                error_message=error_message,
+                                guild_id=guild_id,
                             )
                         else:
                             # Send success message via DM
@@ -3827,11 +3871,14 @@ async def check_oauth_notifications_task():
 
                             # Log the successful link attempt
                             await log_link_attempt(user, actual_kick_username, success=True, guild_id=guild_id)
-                            
+
                             # Grant linked role if configured
                             if guild_id:
                                 try:
-                                    print(f"🔍 Attempting to grant linked role for guild_id={guild_id}, discord_id={discord_id}", flush=True)
+                                    print(
+                                        f"🔍 Attempting to grant linked role for guild_id={guild_id}, discord_id={discord_id}",
+                                        flush=True,
+                                    )
                                     guild = bot.get_guild(int(guild_id))
                                     if not guild:
                                         print(f"⚠️ Guild {guild_id} not found in bot", flush=True)
@@ -3843,33 +3890,47 @@ async def check_oauth_notifications_task():
                                             # Get linked role ID from bot_settings
                                             try:
                                                 linked_role_id = conn.execute(
-                                                    text("""
-                                                        SELECT value FROM bot_settings 
+                                                    text(
+                                                        """
+                                                        SELECT value FROM bot_settings
                                                         WHERE key = 'kick_linked_role_id' AND discord_server_id = :guild_id
-                                                    """),
-                                                    {"guild_id": guild_id}
+                                                    """
+                                                    ),
+                                                    {"guild_id": guild_id},
                                                 ).scalar()
                                                 print(f"📋 Linked role ID from DB: {linked_role_id!r}", flush=True)
                                             except Exception as query_err:
                                                 print(f"❌ Failed to query linked role ID: {query_err}", flush=True)
                                                 linked_role_id = None
-                                            
+
                                             if linked_role_id and linked_role_id.strip():
                                                 try:
                                                     role = guild.get_role(int(linked_role_id))
                                                     if not role:
-                                                        print(f"⚠️ Linked role ID {linked_role_id} not found in guild {guild.name}", flush=True)
+                                                        print(
+                                                            f"⚠️ Linked role ID {linked_role_id} not found in guild {guild.name}",
+                                                            flush=True,
+                                                        )
                                                     elif role in member.roles:
-                                                        print(f"ℹ️ Member {member.display_name} already has role '{role.name}'", flush=True)
+                                                        print(
+                                                            f"ℹ️ Member {member.display_name} already has role '{role.name}'",
+                                                            flush=True,
+                                                        )
                                                     else:
-                                                        await member.add_roles(role, reason=f"Linked Kick account: {actual_kick_username}")
-                                                        print(f"✅ Granted role '{role.name}' to {member.display_name} for Kick link", flush=True)
+                                                        await member.add_roles(
+                                                            role, reason=f"Linked Kick account: {actual_kick_username}"
+                                                        )
+                                                        print(
+                                                            f"✅ Granted role '{role.name}' to {member.display_name} for Kick link",
+                                                            flush=True,
+                                                        )
                                                 except ValueError as val_err:
                                                     print(f"❌ Invalid role ID {linked_role_id}: {val_err}", flush=True)
                                             else:
                                                 print(f"⚠️ No linked role configured for guild {guild_id}", flush=True)
                                 except Exception as role_error:
                                     import traceback
+
                                     print(f"❌ Error granting linked role: {role_error}", flush=True)
                                     traceback.print_exc()
 
@@ -3909,10 +3970,10 @@ async def check_oauth_notifications_task():
 async def proactive_token_refresh_task():
     """
     Proactive access token refresh task.
-    
+
     NOTE: Refresh tokens are PERMANENT per Kick API (as of Nov 2025).
     This task ONLY refreshes ACCESS TOKENS when they are about to expire.
-    
+
     - expires_at tracks ACCESS TOKEN expiration (they expire ~1 hour after issued)
     - Refresh tokens are permanent and never expire
     - When access token expires, we use refresh_token to get a new one
@@ -3947,26 +4008,31 @@ async def proactive_token_refresh_task():
 
             for user_id, kick_username, refresh_token, expires_at in results:
                 checked += 1
-                
+
                 if expires_at is None:
                     # Legacy token without expiration info - treat as expired to trigger refresh
-                    print(f"[Kick] ⏱️  Token for {kick_username} has no expiration (legacy) - treating as expired, will refresh")
+                    print(
+                        f"[Kick] ⏱️  Token for {kick_username} has no expiration (legacy) - treating as expired, will refresh"
+                    )
                     from datetime import timedelta
+
                     expires_at = now - timedelta(minutes=1)
-                
+
                 # Make timezone-aware if needed
                 if expires_at.tzinfo is None:
                     expires_at = expires_at.replace(tzinfo=timezone.utc)
-                
+
                 time_until_expiry = expires_at - now
                 minutes_until_expiry = time_until_expiry.total_seconds() / 60
-                
+
                 if minutes_until_expiry < 30:
                     # Token expired or expiring soon - refresh it now
                     if minutes_until_expiry < 0:
                         print(f"[Kick] ⏱️  Token for {kick_username} has EXPIRED - refreshing using refresh_token...")
                     else:
-                        print(f"[Kick] ⏱️  Token for {kick_username} expires in {minutes_until_expiry:.0f}m - refreshing now...")
+                        print(
+                            f"[Kick] ⏱️  Token for {kick_username} expires in {minutes_until_expiry:.0f}m - refreshing now..."
+                        )
                     if await refresh_kick_oauth_token_for_user(user_id, kick_username, refresh_token):
                         refreshed += 1
                         print(f"[Kick] ✅ Token refreshed for {kick_username}")
@@ -3977,18 +4043,19 @@ async def proactive_token_refresh_task():
                     # Plenty of time left
                     hours = minutes_until_expiry / 60
                     print(f"[Kick] ✓ {kick_username} token valid for {hours:.1f} more hours")
-            
+
             print(f"[Kick] Token refresh check complete: {refreshed} refreshed, {failed} failed, {checked} checked")
 
     except Exception as e:
         print(f"[Kick] ❌ Error in token refresh task: {e}")
         import traceback
+
         traceback.print_exc()
 
 
 async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, refresh_token: str) -> bool:
     """Refresh OAuth ACCESS TOKEN for a specific user using their REFRESH TOKEN.
-    
+
     NOTE: Only refreshes the ACCESS TOKEN (short-lived ~1hr).
     The REFRESH TOKEN itself is permanent and never needs refresh.
     Uses PostgreSQL advisory lock to prevent race conditions with the dashboard's
@@ -4041,6 +4108,7 @@ async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, re
                     # Kick access tokens expire ~1 hour after issued (expires_in from response)
                     # Refresh tokens are permanent and never expire
                     from datetime import datetime, timedelta, timezone
+
                     expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
                     with engine.begin() as conn:
@@ -4105,7 +4173,7 @@ async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, re
                 else:
                     error_text = await response.text()
                     print(f"[Kick] ❌ Refresh failed for {kick_username} (HTTP {response.status}): {error_text[:100]}")
-                    
+
                     # Special handling for 401 invalid_grant errors - token is permanently invalid
                     if response.status == 401:
                         try:
@@ -4115,12 +4183,14 @@ async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, re
                                 with engine.begin() as conn:
                                     conn.execute(
                                         text("UPDATE kick_oauth_tokens SET refresh_token = NULL WHERE user_id = :uid"),
-                                        {"uid": user_id}
+                                        {"uid": user_id},
                                     )
-                                print(f"[Kick Token] Cleared invalid refresh token for user {user_id} - user needs to re-authenticate")
+                                print(
+                                    f"[Kick Token] Cleared invalid refresh token for user {user_id} - user needs to re-authenticate"
+                                )
                         except Exception as parse_error:
                             print(f"[Kick] Could not parse error response: {parse_error}")
-                    
+
                     # Release lock
                     with engine.connect() as conn:
                         conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": lock_key})
@@ -4572,7 +4642,7 @@ async def unlink_error(ctx, error):
 @commands.has_permissions(administrator=True)
 async def cmd_update_kick(ctx, member: discord.Member, new_kick_username: str):
     """[ADMIN] Update a user's linked Kick username.
-    
+
     This also migrates all associated data (watchtime, points, raffle tickets, etc.)
     to the new username to prevent data loss.
 
@@ -4591,11 +4661,13 @@ async def cmd_update_kick(ctx, member: discord.Member, new_kick_username: str):
         ).fetchone()
 
     if not existing:
-        await ctx.send(f"❌ {member.mention} doesn't have a linked Kick account. They need to link first via the link panel.")
+        await ctx.send(
+            f"❌ {member.mention} doesn't have a linked Kick account. They need to link first via the link panel."
+        )
         return
 
     old_kick_name = existing[0]
-    
+
     if old_kick_name.lower() == new_kick_username.lower():
         await ctx.send(f"❌ The new username is the same as the current one: **{old_kick_name}**")
         return
@@ -4606,52 +4678,58 @@ async def cmd_update_kick(ctx, member: discord.Member, new_kick_username: str):
             text("SELECT discord_id FROM links WHERE kick_name = :new_name AND discord_server_id = :guild_id"),
             {"new_name": new_kick_username, "guild_id": guild_id},
         ).fetchone()
-    
+
     if existing_new and existing_new[0] != discord_id:
         await ctx.send(f"❌ The username **{new_kick_username}** is already linked to another Discord user.")
         return
 
-    status_msg = await ctx.send(f"🔄 Updating **{old_kick_name}** → **{new_kick_username}**...\nMigrating all user data...")
+    status_msg = await ctx.send(
+        f"🔄 Updating **{old_kick_name}** → **{new_kick_username}**...\nMigrating all user data..."
+    )
 
     # Update all tables that reference the kick username
     # Use MERGE logic: if new username already has data, combine it then delete old
     tables_updated = []
-    
+
     with engine.begin() as conn:
         # 1. Update links table
         conn.execute(
-            text("""
-                UPDATE links 
+            text(
+                """
+                UPDATE links
                 SET kick_name = :new_name, linked_at = CURRENT_TIMESTAMP
                 WHERE discord_id = :d AND discord_server_id = :guild_id
-            """),
+            """
+            ),
             {"new_name": new_kick_username, "d": discord_id, "guild_id": guild_id},
         )
         tables_updated.append("links")
-        
+
         # 2. MERGE watchtime table (combine minutes if new username exists)
         # First check if new username already has watchtime
         existing_new_wt = conn.execute(
             text("SELECT minutes FROM watchtime WHERE username = :new_name AND discord_server_id = :guild_id"),
             {"new_name": new_kick_username, "guild_id": guild_id},
         ).fetchone()
-        
+
         old_wt = conn.execute(
             text("SELECT minutes FROM watchtime WHERE username = :old_name AND discord_server_id = :guild_id"),
             {"old_name": old_kick_name, "guild_id": guild_id},
         ).fetchone()
-        
+
         if old_wt:
             old_minutes = old_wt[0] or 0
             if existing_new_wt:
                 # Merge: add old minutes to new, then delete old record
                 new_minutes = existing_new_wt[0] or 0
                 conn.execute(
-                    text("""
-                        UPDATE watchtime 
+                    text(
+                        """
+                        UPDATE watchtime
                         SET minutes = :total, last_active = CURRENT_TIMESTAMP
                         WHERE username = :new_name AND discord_server_id = :guild_id
-                    """),
+                    """
+                    ),
                     {"total": new_minutes + old_minutes, "new_name": new_kick_username, "guild_id": guild_id},
                 )
                 conn.execute(
@@ -4662,56 +4740,62 @@ async def cmd_update_kick(ctx, member: discord.Member, new_kick_username: str):
             else:
                 # Simple rename
                 conn.execute(
-                    text("""
-                        UPDATE watchtime 
+                    text(
+                        """
+                        UPDATE watchtime
                         SET username = :new_name
                         WHERE username = :old_name AND discord_server_id = :guild_id
-                    """),
+                    """
+                    ),
                     {"new_name": new_kick_username, "old_name": old_kick_name, "guild_id": guild_id},
                 )
                 tables_updated.append(f"watchtime ({old_minutes} min)")
-        
+
         # 3. Update raffle_tickets table - ONLY for the ACTIVE period
         # Unique constraint is (period_id, discord_id), so we update kick_name for this user
         # Only carry over tickets from the active period, not historical periods
         result = conn.execute(
-            text("""
+            text(
+                """
                 UPDATE raffle_tickets rt
                 SET kick_name = :new_name
-                WHERE rt.discord_id = :d 
+                WHERE rt.discord_id = :d
                   AND rt.discord_server_id = :guild_id
                   AND rt.period_id = (
-                      SELECT id FROM raffle_periods 
-                      WHERE discord_server_id = :guild_id AND status = 'active' 
+                      SELECT id FROM raffle_periods
+                      WHERE discord_server_id = :guild_id AND status = 'active'
                       LIMIT 1
                   )
-            """),
+            """
+            ),
             {"new_name": new_kick_username, "d": discord_id, "guild_id": guild_id},
         )
         if result.rowcount > 0:
             # Get current ticket count to show in the message
             ticket_info = conn.execute(
-                text("""
+                text(
+                    """
                     SELECT total_tickets FROM raffle_tickets rt
                     WHERE rt.discord_id = :d AND rt.discord_server_id = :guild_id
                       AND rt.period_id = (
-                          SELECT id FROM raffle_periods 
-                          WHERE discord_server_id = :guild_id AND status = 'active' 
+                          SELECT id FROM raffle_periods
+                          WHERE discord_server_id = :guild_id AND status = 'active'
                           LIMIT 1
                       )
-                """),
+                """
+                ),
                 {"d": discord_id, "guild_id": guild_id},
             ).fetchone()
             ticket_count = ticket_info[0] if ticket_info else 0
             tables_updated.append(f"raffle_tickets (active period, {ticket_count} tickets)")
-        
+
         # 4. Handle raffle_watchtime_converted table (no discord_server_id - uses period_id)
         # Check if new username has records - if so, delete old to avoid conflicts
         existing_new_rwc = conn.execute(
             text("SELECT COUNT(*) FROM raffle_watchtime_converted WHERE kick_name = :new_name"),
             {"new_name": new_kick_username},
         ).scalar()
-        
+
         if existing_new_rwc and existing_new_rwc > 0:
             # New username has conversion records - delete old username's records
             result = conn.execute(
@@ -4723,58 +4807,68 @@ async def cmd_update_kick(ctx, member: discord.Member, new_kick_username: str):
         else:
             # Safe to rename
             result = conn.execute(
-                text("""
-                    UPDATE raffle_watchtime_converted 
+                text(
+                    """
+                    UPDATE raffle_watchtime_converted
                     SET kick_name = :new_name
                     WHERE kick_name = :old_name
-                """),
+                """
+                ),
                 {"new_name": new_kick_username, "old_name": old_kick_name},
             )
             if result.rowcount > 0:
                 tables_updated.append(f"raffle_watchtime_converted ({result.rowcount})")
-        
+
         # 5. Update raffle_shuffle_links table (global table - scoped by discord_id)
         # Only update records belonging to this specific user
         result = conn.execute(
-            text("""
-                UPDATE raffle_shuffle_links 
+            text(
+                """
+                UPDATE raffle_shuffle_links
                 SET kick_name = :new_name
                 WHERE discord_id = :d AND kick_name = :old_name
-            """),
+            """
+            ),
             {"new_name": new_kick_username, "old_name": old_kick_name, "d": discord_id},
         )
         if result.rowcount > 0:
             tables_updated.append(f"raffle_shuffle_links ({result.rowcount})")
-        
+
         # 6. MERGE user_points table
         existing_new_pts = conn.execute(
-            text("SELECT points, total_earned, total_spent FROM user_points WHERE kick_username = :new_name AND discord_server_id = :guild_id"),
+            text(
+                "SELECT points, total_earned, total_spent FROM user_points WHERE kick_username = :new_name AND discord_server_id = :guild_id"
+            ),
             {"new_name": new_kick_username, "guild_id": guild_id},
         ).fetchone()
-        
+
         old_pts = conn.execute(
-            text("SELECT points, total_earned, total_spent FROM user_points WHERE kick_username = :old_name AND discord_server_id = :guild_id"),
+            text(
+                "SELECT points, total_earned, total_spent FROM user_points WHERE kick_username = :old_name AND discord_server_id = :guild_id"
+            ),
             {"old_name": old_kick_name, "guild_id": guild_id},
         ).fetchone()
-        
+
         if old_pts:
             if existing_new_pts:
                 # Merge points
                 conn.execute(
-                    text("""
-                        UPDATE user_points 
+                    text(
+                        """
+                        UPDATE user_points
                         SET points = points + :old_pts,
                             total_earned = total_earned + :old_earned,
                             total_spent = total_spent + :old_spent,
                             last_updated = CURRENT_TIMESTAMP
                         WHERE kick_username = :new_name AND discord_server_id = :guild_id
-                    """),
+                    """
+                    ),
                     {
                         "old_pts": old_pts[0] or 0,
                         "old_earned": old_pts[1] or 0,
                         "old_spent": old_pts[2] or 0,
                         "new_name": new_kick_username,
-                        "guild_id": guild_id
+                        "guild_id": guild_id,
                     },
                 )
                 conn.execute(
@@ -4784,72 +4878,86 @@ async def cmd_update_kick(ctx, member: discord.Member, new_kick_username: str):
                 tables_updated.append(f"user_points (merged +{old_pts[0] or 0} pts)")
             else:
                 conn.execute(
-                    text("""
-                        UPDATE user_points 
+                    text(
+                        """
+                        UPDATE user_points
                         SET kick_username = :new_name
                         WHERE kick_username = :old_name AND discord_server_id = :guild_id
-                    """),
+                    """
+                    ),
                     {"new_name": new_kick_username, "old_name": old_kick_name, "guild_id": guild_id},
                 )
                 tables_updated.append(f"user_points ({old_pts[0] or 0} pts)")
-        
+
         # 7. Handle points_watchtime_converted table (may have unique constraint)
         existing_new_pwc = conn.execute(
-            text("SELECT COUNT(*) FROM points_watchtime_converted WHERE kick_username = :new_name AND discord_server_id = :guild_id"),
+            text(
+                "SELECT COUNT(*) FROM points_watchtime_converted WHERE kick_username = :new_name AND discord_server_id = :guild_id"
+            ),
             {"new_name": new_kick_username, "guild_id": guild_id},
         ).scalar()
-        
+
         if existing_new_pwc and existing_new_pwc > 0:
             # New username has conversion records - delete old to avoid conflicts
             result = conn.execute(
-                text("DELETE FROM points_watchtime_converted WHERE kick_username = :old_name AND discord_server_id = :guild_id"),
+                text(
+                    "DELETE FROM points_watchtime_converted WHERE kick_username = :old_name AND discord_server_id = :guild_id"
+                ),
                 {"old_name": old_kick_name, "guild_id": guild_id},
             )
             if result.rowcount > 0:
                 tables_updated.append(f"points_watchtime_converted (cleaned {result.rowcount} old)")
         else:
             result = conn.execute(
-                text("""
-                    UPDATE points_watchtime_converted 
+                text(
+                    """
+                    UPDATE points_watchtime_converted
                     SET kick_username = :new_name
                     WHERE kick_username = :old_name AND discord_server_id = :guild_id
-                """),
+                """
+                ),
                 {"new_name": new_kick_username, "old_name": old_kick_name, "guild_id": guild_id},
             )
             if result.rowcount > 0:
                 tables_updated.append(f"points_watchtime_converted ({result.rowcount})")
-        
+
         # 8. Update slot_requests table (pending requests)
         result = conn.execute(
-            text("""
-                UPDATE slot_requests 
+            text(
+                """
+                UPDATE slot_requests
                 SET kick_username = :new_name
                 WHERE kick_username = :old_name AND discord_server_id = :guild_id
-            """),
+            """
+            ),
             {"new_name": new_kick_username, "old_name": old_kick_name, "guild_id": guild_id},
         )
         if result.rowcount > 0:
             tables_updated.append(f"slot_requests ({result.rowcount})")
-        
+
         # 9. Update raffle_gifted_subs table (uses period_id + gifter_discord_id)
         result = conn.execute(
-            text("""
-                UPDATE raffle_gifted_subs 
+            text(
+                """
+                UPDATE raffle_gifted_subs
                 SET gifter_kick_name = :new_name
                 WHERE gifter_kick_name = :old_name AND gifter_discord_id = :d
-            """),
+            """
+            ),
             {"new_name": new_kick_username, "old_name": old_kick_name, "d": discord_id},
         )
         if result.rowcount > 0:
             tables_updated.append(f"raffle_gifted_subs ({result.rowcount})")
-        
+
         # 10. Update raffle_shuffle_wagers table (uses period_id + discord_id)
         result = conn.execute(
-            text("""
-                UPDATE raffle_shuffle_wagers 
+            text(
+                """
+                UPDATE raffle_shuffle_wagers
                 SET kick_name = :new_name
                 WHERE kick_name = :old_name AND discord_id = :d
-            """),
+            """
+            ),
             {"new_name": new_kick_username, "old_name": old_kick_name, "d": discord_id},
         )
         if result.rowcount > 0:
@@ -4857,10 +4965,13 @@ async def cmd_update_kick(ctx, member: discord.Member, new_kick_username: str):
 
     await status_msg.edit(
         content=f"✅ Updated {member.mention}'s Kick username:\n"
-                f"**{old_kick_name}** → **{new_kick_username}**\n\n"
-                f"📦 Data migrated: {', '.join(tables_updated)}"
+        f"**{old_kick_name}** → **{new_kick_username}**\n\n"
+        f"📦 Data migrated: {', '.join(tables_updated)}"
     )
-    print(f"[Admin] {ctx.author} updated {member}'s Kick: {old_kick_name} → {new_kick_username} | Tables: {tables_updated}", flush=True)
+    print(
+        f"[Admin] {ctx.author} updated {member}'s Kick: {old_kick_name} → {new_kick_username} | Tables: {tables_updated}",
+        flush=True,
+    )
 
 
 @cmd_update_kick.error
@@ -4883,15 +4994,17 @@ async def cmd_grant_link_role(ctx, member: discord.Member = None):
     !grantlinkrole @user - Grant role to a specific linked user
     """
     guild_id = ctx.guild.id if ctx.guild else None
-    
+
     # Get the configured linked role ID
     with engine.connect() as conn:
         linked_role_id = conn.execute(
-            text("""
-                SELECT value FROM bot_settings 
+            text(
+                """
+                SELECT value FROM bot_settings
                 WHERE key = 'kick_linked_role_id' AND discord_server_id = :guild_id
-            """),
-            {"guild_id": guild_id}
+            """
+            ),
+            {"guild_id": guild_id},
         ).scalar()
 
     if not linked_role_id or not linked_role_id.strip():
@@ -4907,7 +5020,7 @@ async def cmd_grant_link_role(ctx, member: discord.Member = None):
     if not ctx.guild.me.guild_permissions.manage_roles:
         await ctx.send("❌ I don't have permission to manage roles.")
         return
-    
+
     if role >= ctx.guild.me.top_role:
         await ctx.send(f"❌ The role **{role.name}** is higher than my highest role. I cannot assign it.")
         return
@@ -4933,7 +5046,7 @@ async def cmd_grant_link_role(ctx, member: discord.Member = None):
     else:
         # Bulk mode - grant to all linked users
         status_msg = await ctx.send("🔄 Scanning linked users and granting roles...")
-        
+
         with engine.connect() as conn:
             linked_users = conn.execute(
                 text("SELECT discord_id, kick_name FROM links WHERE discord_server_id = :guild_id"),
@@ -4975,13 +5088,16 @@ async def cmd_grant_link_role(ctx, member: discord.Member = None):
 
         await status_msg.edit(
             content=f"✅ **Link Role Sync Complete**\n\n"
-                    f"**{role.name}** role:\n"
-                    f"• ✅ Granted to: **{granted}** users\n"
-                    f"• ℹ️ Already had role: **{already_had}** users\n"
-                    f"• ⚠️ Not in server: **{not_in_server}** users\n"
-                    f"• ❌ Errors: **{errors}**"
+            f"**{role.name}** role:\n"
+            f"• ✅ Granted to: **{granted}** users\n"
+            f"• ℹ️ Already had role: **{already_had}** users\n"
+            f"• ⚠️ Not in server: **{not_in_server}** users\n"
+            f"• ❌ Errors: **{errors}**"
         )
-        print(f"[Admin] {ctx.author} synced linked roles: {granted} granted, {already_had} already had, {not_in_server} not in server", flush=True)
+        print(
+            f"[Admin] {ctx.author} synced linked roles: {granted} granted, {already_had} already had, {not_in_server} not in server",
+            flush=True,
+        )
 
 
 @cmd_grant_link_role.error
@@ -5043,9 +5159,9 @@ async def cmd_watchtime(ctx, target: str = None):
                 return
 
             # Check if it's a Discord mention
-            if target.startswith('<@') and target.endswith('>'):
+            if target.startswith("<@") and target.endswith(">"):
                 # Extract Discord ID from mention
-                mention_id = target.replace('<@', '').replace('>', '').replace('!', '')
+                mention_id = target.replace("<@", "").replace(">", "").replace("!", "")
                 try:
                     target_discord_id = int(mention_id)
                     # Look up their linked Kick name
@@ -5053,11 +5169,11 @@ async def cmd_watchtime(ctx, target: str = None):
                         text("SELECT kick_name FROM links WHERE discord_id = :d AND discord_server_id = :guild_id"),
                         {"d": target_discord_id, "guild_id": guild_id},
                     ).fetchone()
-                    
+
                     if not link:
                         await ctx.send(f"❌ <@{target_discord_id}> doesn't have a linked Kick account.")
                         return
-                    
+
                     kick_name = link[0]
                 except ValueError:
                     await ctx.send("❌ Invalid Discord mention.")
@@ -5065,7 +5181,7 @@ async def cmd_watchtime(ctx, target: str = None):
             else:
                 # Admin lookup by Kick username
                 kick_name = target.lower()
-            
+
             watchtime = conn.execute(
                 text("SELECT minutes FROM watchtime WHERE username = :u AND discord_server_id = :guild_id"),
                 {"u": kick_name, "guild_id": guild_id},
@@ -6666,7 +6782,7 @@ async def on_ready():
     # Guard against running full initialization on Discord gateway reconnects.
     # on_ready fires every time the bot reconnects (not just on first login).
     # Cog registration, command registration, and task creation must only happen once.
-    _first_ready = not hasattr(bot, '_bot_initialized')
+    _first_ready = not hasattr(bot, "_bot_initialized")
 
     # START KICKPYTHON WEBSOCKET (for chat messages)
     # NOTE: Subscription events are now handled via Kick webhooks (channel.subscription.*)
@@ -6739,7 +6855,7 @@ async def on_ready():
     # Guard against creating duplicate subscriber tasks on Discord gateway reconnects
     # (on_ready fires every time the bot reconnects, not just on first login)
     kick_callback = send_kick_message if KICK_BOT_USER_TOKEN else None
-    if not hasattr(bot, '_redis_subscriber_started'):
+    if not hasattr(bot, "_redis_subscriber_started"):
         bot._redis_subscriber_started = True
         asyncio.create_task(start_redis_subscriber(bot, kick_callback))
 
@@ -6977,14 +7093,14 @@ async def on_ready():
                 print(f"✅ Slot call commands cog registered")
 
             # Import view classes for persistent registration
-            from features.slot_requests.slot_request_panel import SlotRequestPanel, SlotPanelView
             from features.games.gtb_panel import GTBPanel, GTBPanelView
-            
+            from features.slot_requests.slot_request_panel import SlotPanelView, SlotRequestPanel
+
             # Register persistent views ONCE globally (they look up panels by guild_id)
             slot_persistent_view = SlotPanelView(bot)
             bot.add_view(slot_persistent_view)
             print(f"✅ Slot panel persistent view registered (handles all guilds)")
-            
+
             gtb_persistent_view = GTBPanelView(bot)
             bot.add_view(gtb_persistent_view)
             print(f"✅ GTB panel persistent view registered (handles all guilds)")
@@ -7048,6 +7164,10 @@ async def on_ready():
             # Setup raffle commands (global cog)
             await setup_raffle_commands(bot, engine)
             print("✅ Raffle commands setup complete")
+
+            # Setup gambling commands (!bj, !roll, !double)
+            await setup_gambling(bot, engine)
+            print("✅ Gambling commands setup complete")
 
             # Set legacy global references (use first guild for backward compatibility)
             if bot.guilds:
