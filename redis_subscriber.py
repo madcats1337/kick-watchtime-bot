@@ -1030,11 +1030,22 @@ class RedisSubscriber:
             requirement_footer = notif_data.get("requirement_footer")
             requirement_input = notif_data.get("requirement_input") or notif_data.get("requirement")
             note = notif_data.get("note")
+            item_type = notif_data.get("item_type", "custom")
+            raffle_ticket_amount = notif_data.get("raffle_ticket_amount", 0)
+            sale_status = notif_data.get("sale_status", "pending")
+
+            # Auto-completed items (like raffle tickets) get green embed
+            if sale_status == "completed":
+                embed_color = discord.Color.green()
+                status_label = "Completed (Auto-fulfilled)"
+            else:
+                embed_color = discord.Color.purple()
+                status_label = "Pending"
 
             embed = discord.Embed(
                 title="🛒 New Point Shop Order",
                 description=f"**{buyer}** placed an order.",
-                color=discord.Color.purple(),
+                color=embed_color,
             )
 
             if sale_id is not None:
@@ -1045,7 +1056,11 @@ class RedisSubscriber:
                     embed.add_field(name="Price", value=f"{int(price):,} points", inline=True)
                 except Exception:
                     embed.add_field(name="Price", value=f"{price} points", inline=True)
-            embed.add_field(name="Status", value="Pending", inline=True)
+            embed.add_field(name="Status", value=status_label, inline=True)
+
+            # Show raffle ticket info if applicable
+            if item_type == "raffle_tickets" and raffle_ticket_amount:
+                embed.add_field(name="🎟️ Raffle Tickets", value=f"{raffle_ticket_amount} ticket{'s' if raffle_ticket_amount != 1 else ''} awarded", inline=True)
 
             if requirement_title:
                 embed.add_field(name="Requirement Title", value=str(requirement_title)[:1024], inline=False)

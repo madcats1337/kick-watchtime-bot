@@ -6177,7 +6177,7 @@ async def command_list(ctx):
     # Account Linking
     embed.add_field(
         name="🔗 Account Linking",
-        value=("`!link <kick_username>` - Link your Kick account\n" "`!unlink` - Unlink your Kick account"),
+        value="`!link` - Link your Kick account via OAuth",
         inline=False,
     )
 
@@ -6186,8 +6186,17 @@ async def command_list(ctx):
         name="⏱️ Watchtime & Stats",
         value=(
             "`!watchtime [user]` - Check your or someone's watchtime\n"
-            "`!leaderboard` - View watchtime leaderboard\n"
-            "`!checkwatchtime [kick_username]` - Check watchtime conversion status"
+            "`!leaderboard` - View watchtime leaderboard"
+        ),
+        inline=False,
+    )
+
+    # Points & Shop
+    embed.add_field(
+        name="💰 Points",
+        value=(
+            "`!points` / `!balance` - Check your points balance\n"
+            "`!pointslb` - View points leaderboard"
         ),
         inline=False,
     )
@@ -6199,7 +6208,19 @@ async def command_list(ctx):
             "`!tickets` - View your raffle tickets\n"
             "`!raffleboard` - View ticket leaderboard\n"
             "`!raffleinfo` - View raffle period information\n"
-            "`!linkshuffle <username>` - Link gambling account for wager tracking"
+            "`!linkshuffle <username>` - Link Shuffle account for wager tracking\n"
+            "`!verifyshuffle` - Verify your Shuffle wagers for bonus tickets"
+        ),
+        inline=False,
+    )
+
+    # Gambling
+    embed.add_field(
+        name="🎲 Gambling (Provably Fair)",
+        value=(
+            "`!bj <amount>` - Play blackjack\n"
+            "`!roll <amount>` - Roll 1-100 for multiplied payout\n"
+            "`!double <amount>` - Double or nothing"
         ),
         inline=False,
     )
@@ -6225,12 +6246,23 @@ async def admin_command_list(ctx):
 
     # Tracking Control
     embed.add_field(
-        name="� Tracking Control",
+        name="📡 Tracking Control",
         value=(
             "`!tracking [on|off|status]` - Control watchtime tracking\n"
             "`!tracking force [on|off]` - Force tracking override\n"
             "`!tracking debug [on|off]` - Toggle debug mode\n"
             "`!linklogs` - View recent account links"
+        ),
+        inline=False,
+    )
+
+    # Account Management
+    embed.add_field(
+        name="🔗 Account Management",
+        value=(
+            "`!unlink @user` - Unlink a user's Kick account\n"
+            "`!updatekick @user <newname>` - Update linked Kick username\n"
+            "`!grantlinkrole [@user]` - Grant linked role (or sync all)"
         ),
         inline=False,
     )
@@ -6259,7 +6291,6 @@ async def admin_command_list(ctx):
             "`!rafflestats [@user]` - View raffle statistics\n"
             "`!rafflegive <@user> <amount> [reason]` - Award tickets\n"
             "`!raffleremove <@user> <amount> [reason]` - Remove tickets\n"
-            "`!verifyshuffle <@user> <username>` - Verify gambling account\n"
             "`!convertwatchtime` - Manually convert watchtime\n"
             "`!fixwatchtime` - Fix watchtime tracking"
         ),
@@ -6278,6 +6309,13 @@ async def admin_command_list(ctx):
         inline=False,
     )
 
+    # Gambling Admin
+    embed.add_field(
+        name="🎲 Gambling",
+        value="`!setgamblechannel #channel` - Restrict gambling to a channel",
+        inline=False,
+    )
+
     # Testing & Debug
     embed.add_field(
         name="🧪 Testing & Debug",
@@ -6293,7 +6331,10 @@ async def admin_command_list(ctx):
     embed.add_field(
         name="⚙️ Setup",
         value=(
-            "`!createlinkpanel` - Create button-based linking panel\n" "`!post_link_info` - Post linking instructions"
+            "`!setup_link_panel` - Create button-based linking panel\n"
+            "`!post_link_info` - Post linking instructions\n"
+            "`!creategtbpanel` - Create GTB control panel\n"
+            "`!postshop` - Post/update point shop embed"
         ),
         inline=False,
     )
@@ -8152,6 +8193,8 @@ class PointShopConfirmView(discord.ui.View):
         guild_id: int,
         requirement_value: str = None,
         note: str = None,
+        item_type: str = "custom",
+        raffle_ticket_amount: int = 0,
     ):
         super().__init__(timeout=300)  # 5 minute timeout
         self.item_id = item_id
@@ -8163,6 +8206,8 @@ class PointShopConfirmView(discord.ui.View):
         self.server_id = guild_id  # Set server_id for database queries
         self.requirement_value = requirement_value
         self.note = note
+        self.item_type = item_type or "custom"
+        self.raffle_ticket_amount = raffle_ticket_amount or 0
 
     @discord.ui.button(label="Complete Purchase", style=discord.ButtonStyle.success, emoji="✅")
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -8173,7 +8218,8 @@ class PointShopConfirmView(discord.ui.View):
                 item = conn.execute(
                     text(
                         """
-                    SELECT id, name, price, stock, is_active, requirement_title, requirement_footer
+                    SELECT id, name, price, stock, is_active, requirement_title, requirement_footer,
+                           COALESCE(item_type, 'custom') as item_type, COALESCE(raffle_ticket_amount, 0) as raffle_ticket_amount
                     FROM point_shop_items
                     WHERE id = :id
                 """
@@ -8185,7 +8231,7 @@ class PointShopConfirmView(discord.ui.View):
                     await interaction.response.edit_message(content="❌ This item no longer exists.", view=None)
                     return
 
-                item_id, item_name, price, stock, is_active, requirement_title, requirement_footer = item
+                item_id, item_name, price, stock, is_active, requirement_title, requirement_footer, item_type, raffle_ticket_amount = item
 
                 if not is_active:
                     await interaction.response.edit_message(content="❌ This item is no longer available.", view=None)
@@ -8251,12 +8297,15 @@ class PointShopConfirmView(discord.ui.View):
                         else f"Note: {self.note}"
                     )
 
+                # Determine sale status: auto-complete for raffle ticket items
+                sale_status = 'completed' if item_type == 'raffle_tickets' else 'pending'
+
                 # Create sale record and capture order ID
                 sale_id_row = conn.execute(
                     text(
                         """
                     INSERT INTO point_sales (item_id, kick_username, discord_id, discord_server_id, item_name, price_paid, quantity, status, requirement_input)
-                    VALUES (:item_id, :kick, :discord, :server_id, :name, :price, 1, 'pending', :req_input)
+                    VALUES (:item_id, :kick, :discord, :server_id, :name, :price, 1, :status, :req_input)
                     RETURNING id
                 """
                     ),
@@ -8267,6 +8316,7 @@ class PointShopConfirmView(discord.ui.View):
                         "server_id": self.server_id,
                         "name": item_name,
                         "price": price,
+                        "status": sale_status,
                         "req_input": full_requirement,
                     },
                 ).fetchone()
@@ -8284,6 +8334,9 @@ class PointShopConfirmView(discord.ui.View):
                     "requirement_title": requirement_title,
                     "requirement_footer": requirement_footer,
                     "requirement_input": self.requirement_value,
+                    "item_type": item_type,
+                    "raffle_ticket_amount": raffle_ticket_amount,
+                    "sale_status": sale_status,
                 }
                 if self.note:
                     notification_data["note"] = self.note
@@ -8319,6 +8372,61 @@ class PointShopConfirmView(discord.ui.View):
                     },
                 )
 
+                # Auto-award raffle tickets if applicable
+                raffle_tickets_awarded = False
+                if item_type == 'raffle_tickets' and raffle_ticket_amount > 0:
+                    try:
+                        period_row = conn.execute(
+                            text("""
+                                SELECT id FROM raffle_periods
+                                WHERE discord_server_id = :server_id AND is_active = TRUE
+                                ORDER BY created_at DESC LIMIT 1
+                            """),
+                            {"server_id": self.server_id},
+                        ).fetchone()
+
+                        if period_row:
+                            period_id = period_row[0]
+                            conn.execute(
+                                text("""
+                                    INSERT INTO raffle_tickets
+                                        (period_id, discord_server_id, discord_id, kick_name, bonus_tickets, total_tickets, last_updated)
+                                    VALUES (:period_id, :server_id, :discord_id, :kick_name, :amount, :amount, CURRENT_TIMESTAMP)
+                                    ON CONFLICT (period_id, discord_id)
+                                    DO UPDATE SET
+                                        bonus_tickets = raffle_tickets.bonus_tickets + :amount,
+                                        total_tickets = raffle_tickets.total_tickets + :amount,
+                                        last_updated = CURRENT_TIMESTAMP
+                                """),
+                                {
+                                    "period_id": period_id,
+                                    "server_id": self.server_id,
+                                    "discord_id": self.discord_id,
+                                    "kick_name": self.kick_username,
+                                    "amount": raffle_ticket_amount,
+                                },
+                            )
+                            conn.execute(
+                                text("""
+                                    INSERT INTO raffle_ticket_log
+                                        (period_id, discord_id, kick_name, ticket_change, source, description)
+                                    VALUES (:period_id, :discord_id, :kick_name, :amount, 'bonus', :desc)
+                                """),
+                                {
+                                    "period_id": period_id,
+                                    "discord_id": self.discord_id,
+                                    "kick_name": self.kick_username,
+                                    "amount": raffle_ticket_amount,
+                                    "desc": f"Shop purchase: {raffle_ticket_amount} raffle tickets (Order #{sale_id})",
+                                },
+                            )
+                            raffle_tickets_awarded = True
+                            print(f"[Point Shop] ✅ Auto-awarded {raffle_ticket_amount} raffle tickets to {self.kick_username} (Order #{sale_id})")
+                        else:
+                            print(f"[Point Shop] ⚠️ No active raffle period for server {self.server_id} - tickets NOT awarded for Order #{sale_id}")
+                    except Exception as ticket_err:
+                        print(f"[Point Shop] ⚠️ Failed to auto-award raffle tickets for Order #{sale_id}: {ticket_err}")
+
                 # Get updated balance
                 new_balance = conn.execute(
                     text(
@@ -8339,17 +8447,23 @@ class PointShopConfirmView(discord.ui.View):
                     "buyer": self.kick_username,
                     "price": price,
                     "discord_id": self.discord_id,
+                    "item_type": item_type,
+                    "raffle_ticket_amount": raffle_ticket_amount,
                 },
             )
 
             # Success response
             note_text = f"\n📝 Note: _{self.note}_" if self.note else ""
             req_text = f"\n📋 {self.requirement_value}" if self.requirement_value else ""
+            if raffle_tickets_awarded:
+                fulfillment_text = f"🎟️ **{raffle_ticket_amount} raffle ticket{'s' if raffle_ticket_amount != 1 else ''}** have been added to your balance!"
+            else:
+                fulfillment_text = "_An admin will fulfill your purchase soon._"
             await interaction.response.edit_message(
                 content=f"✅ **Purchase Successful!**\n"
                 f"🛒 You bought **{item_name}** for **{price:,}** points!\n"
                 f"💰 Your new balance: **{new_balance:,}** points{req_text}{note_text}\n\n"
-                f"_An admin will fulfill your purchase soon._",
+                f"{fulfillment_text}",
                 view=None,
             )
 
@@ -8384,6 +8498,8 @@ class PointShopPurchaseModal(discord.ui.Modal):
         stock: int,
         requirement_title: str = None,
         requirement_footer: str = None,
+        item_type: str = "custom",
+        raffle_ticket_amount: int = 0,
     ):
         super().__init__(title=f"Purchase: {item_name[:40]}")
         self.item_id = item_id
@@ -8393,6 +8509,8 @@ class PointShopPurchaseModal(discord.ui.Modal):
         self.stock = stock
         self.requirement_title = requirement_title
         self.requirement_footer = requirement_footer
+        self.item_type = item_type or "custom"
+        self.raffle_ticket_amount = raffle_ticket_amount or 0
 
         # Stock display text
         stock_text = "Unlimited" if stock < 0 else f"{stock} remaining"
@@ -8489,6 +8607,8 @@ class PointShopPurchaseModal(discord.ui.Modal):
             guild_id=interaction.guild_id,
             requirement_value=requirement_value,
             note=note,
+            item_type=self.item_type,
+            raffle_ticket_amount=self.raffle_ticket_amount,
         )
 
         await interaction.response.send_message(confirm_text, view=view, ephemeral=True)
@@ -8502,7 +8622,12 @@ class PointShopItemSelect(discord.ui.Select):
         options = []
 
         for item in items[:25]:  # Discord limit
-            item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer = item
+            # Support both old (9-col) and new (11-col) query results
+            if len(item) >= 11:
+                item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer, item_type, raffle_ticket_amount = item[:11]
+            else:
+                item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer = item[:9]
+                item_type, raffle_ticket_amount = "custom", 0
             if is_active:
                 # Stock display
                 if stock < 0:
@@ -8520,6 +8645,8 @@ class PointShopItemSelect(discord.ui.Select):
                     "stock": stock,
                     "requirement_title": requirement_title,
                     "requirement_footer": requirement_footer,
+                    "item_type": item_type or "custom",
+                    "raffle_ticket_amount": raffle_ticket_amount or 0,
                 }
 
                 # Format: "Item Name: Xpts" with "──── In-stock: X ────" as description
@@ -8611,6 +8738,8 @@ class PointShopItemSelect(discord.ui.Select):
             stock=item["stock"],
             requirement_title=item.get("requirement_title"),
             requirement_footer=item.get("requirement_footer"),
+            item_type=item.get("item_type", "custom"),
+            raffle_ticket_amount=item.get("raffle_ticket_amount", 0),
         )
         await interaction.response.send_modal(modal)
 
@@ -8949,7 +9078,8 @@ async def post_point_shop_to_discord(
             items = conn.execute(
                 text(
                     """
-                SELECT id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer
+                SELECT id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer,
+                       COALESCE(item_type, 'custom') as item_type, COALESCE(raffle_ticket_amount, 0) as raffle_ticket_amount
                 FROM point_shop_items
                 WHERE is_active = TRUE AND discord_server_id = :guild_id
                 ORDER BY price ASC
