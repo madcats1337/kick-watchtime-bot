@@ -8888,7 +8888,7 @@ async def create_shop_mosaic_image(items, max_width=2400):
     downloaded_images = []
     async with aiohttp.ClientSession() as session:
         for item_idx, item in items_with_images:
-            item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer = item
+            item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer = item[:9]
 
             try:
                 async with session.get(image_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
@@ -8951,7 +8951,7 @@ async def create_shop_mosaic_image(items, max_width=2400):
         row_height = row_heights[row_idx]
 
         for col_idx, (item_idx, item, img) in enumerate(row):
-            item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer = item
+            item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer = item[:9]
 
             x = PADDING + col_idx * (cell_width + PADDING)
 
@@ -9348,7 +9348,7 @@ async def post_point_shop_to_discord(
             embed.set_image(url="attachment://shop_items.png")
 
         for idx, item in enumerate(items):
-            item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer = item
+            item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer = item[:9]
             stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "SOLD OUT"
 
             field_value = f"$: **{price:,}** pts | In stock: {stock_text}"
