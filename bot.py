@@ -8359,23 +8359,11 @@ class PointShopConfirmView(discord.ui.View):
 
                 notif_id = int(notif_row[0]) if notif_row and notif_row[0] is not None else None
 
-                publish_redis_event(
-                    "dashboard:notifications",
-                    "new_notification",
-                    {
-                        "notification_id": notif_id,
-                        "discord_server_id": str(self.server_id) if self.server_id is not None else None,
-                        "type": "new_sale",
-                        "title": f"New purchase: {item_name}",
-                        "message": f"{self.kick_username} bought {item_name} for {price:,} points",
-                        "data": notification_data,
-                    },
-                )
-
-                # Auto-award raffle tickets if applicable
+                # Auto-award raffle tickets if applicable (use savepoint so failure doesn't abort main transaction)
                 raffle_tickets_awarded = False
                 if item_type == 'raffle_tickets' and raffle_ticket_amount > 0:
                     try:
+                        savepoint = conn.begin_nested()
                         period_row = conn.execute(
                             text("""
                                 SELECT id FROM raffle_periods
@@ -8420,12 +8408,20 @@ class PointShopConfirmView(discord.ui.View):
                                     "desc": f"Shop purchase: {raffle_ticket_amount} raffle tickets (Order #{sale_id})",
                                 },
                             )
+                            savepoint.commit()
                             raffle_tickets_awarded = True
                             print(f"[Point Shop] ✅ Auto-awarded {raffle_ticket_amount} raffle tickets to {self.kick_username} (Order #{sale_id})")
                         else:
+                            savepoint.rollback()
                             print(f"[Point Shop] ⚠️ No active raffle period for server {self.server_id} - tickets NOT awarded for Order #{sale_id}")
                     except Exception as ticket_err:
+                        try:
+                            savepoint.rollback()
+                        except Exception:
+                            pass
                         print(f"[Point Shop] ⚠️ Failed to auto-award raffle tickets for Order #{sale_id}: {ticket_err}")
+                        import traceback
+                        traceback.print_exc()
 
                 # Get updated balance
                 new_balance = conn.execute(
@@ -8436,6 +8432,20 @@ class PointShopConfirmView(discord.ui.View):
                     ),
                     {"k": self.kick_username, "g": self.guild_id},
                 ).fetchone()[0]
+
+            # Transaction committed — now publish Redis events so subscribers see committed data
+            publish_redis_event(
+                "dashboard:notifications",
+                "new_notification",
+                {
+                    "notification_id": notif_id,
+                    "discord_server_id": str(self.server_id) if self.server_id is not None else None,
+                    "type": "new_sale",
+                    "title": f"New purchase: {item_name}",
+                    "message": f"{self.kick_username} bought {item_name} for {price:,} points",
+                    "data": notification_data,
+                },
+            )
 
             # Publish event to notify dashboard of new purchase
             publish_redis_event(
