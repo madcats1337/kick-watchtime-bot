@@ -8367,7 +8367,7 @@ class PointShopConfirmView(discord.ui.View):
                         period_row = conn.execute(
                             text("""
                                 SELECT id FROM raffle_periods
-                                WHERE discord_server_id = :server_id AND is_active = TRUE
+                                WHERE discord_server_id = :server_id AND status = 'active'
                                 ORDER BY created_at DESC LIMIT 1
                             """),
                             {"server_id": self.server_id},
