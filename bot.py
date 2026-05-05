@@ -473,13 +473,47 @@ class KickWebSocketManager:
                 del self.connected_channels[guild_id]
 
     async def _refresh_oauth_token(self, guild_id: int, guild_name: str) -> Optional[str]:
-        """Refresh OAuth 2.1 token using refresh_token from bot_settings"""
+        """Refresh OAuth token for a guild using canonical kick_oauth_tokens when available."""
         try:
-            import os
+            # Prefer canonical token mapping via kick_channel -> kick_oauth_tokens
+            with engine.connect() as conn:
+                mapped = conn.execute(
+                    text(
+                        """
+                    SELECT kot.user_id, kot.kick_username, kot.refresh_token
+                    FROM bot_settings bs
+                    JOIN kick_oauth_tokens kot
+                      ON LOWER(kot.kick_username) = LOWER(bs.value)
+                    WHERE bs.key = 'kick_channel'
+                      AND bs.discord_server_id = :guild_id
+                      AND kot.refresh_token IS NOT NULL
+                    ORDER BY kot.updated_at DESC
+                    LIMIT 1
+                """
+                    ),
+                    {"guild_id": guild_id},
+                ).fetchone()
 
+                if mapped and mapped[0] and mapped[2]:
+                    user_id, kick_username, refresh_token = mapped
+                    print(f"[{guild_name}] 🔄 Refreshing via kick_oauth_tokens for {kick_username}...")
+
+                    if await refresh_kick_oauth_token_for_user(user_id, kick_username, refresh_token):
+                        latest = conn.execute(
+                            text("SELECT access_token FROM kick_oauth_tokens WHERE user_id = :uid LIMIT 1"),
+                            {"uid": user_id},
+                        ).fetchone()
+                        if latest and latest[0]:
+                            print(f"[{guild_name}] ✅ OAuth token refreshed successfully")
+                            return latest[0]
+
+                    print(f"[{guild_name}] ❌ Token refresh failed via kick_oauth_tokens")
+                    return None
+
+            # Fallback: legacy servers that only have bot_settings tokens
+            import os
             import aiohttp
 
-            # Get refresh_token from bot_settings
             with engine.connect() as conn:
                 result = conn.execute(
                     text(
@@ -494,7 +528,7 @@ class KickWebSocketManager:
                 ).fetchone()
 
                 if not result or not result[0]:
-                    print(f"[{guild_name}] ❌ No refresh_token found in bot_settings")
+                    print(f"[{guild_name}] ❌ No refresh_token found for this guild")
                     return None
 
                 refresh_token = result[0]
@@ -573,14 +607,32 @@ class KickWebSocketManager:
                     result = conn.execute(
                         text(
                             """
-                        SELECT value FROM bot_settings
-                        WHERE key = 'kick_oauth_token'
-                        AND discord_server_id = :guild_id
+                        SELECT kot.access_token
+                        FROM bot_settings bs
+                        JOIN kick_oauth_tokens kot
+                          ON LOWER(kot.kick_username) = LOWER(bs.value)
+                        WHERE bs.key = 'kick_channel'
+                          AND bs.discord_server_id = :guild_id
+                        ORDER BY kot.updated_at DESC
                         LIMIT 1
                     """
                         ),
                         {"guild_id": guild_id},
                     ).fetchone()
+
+                    if not result or not result[0]:
+                        # Legacy fallback if guild has not been mapped into kick_oauth_tokens yet
+                        result = conn.execute(
+                            text(
+                                """
+                            SELECT value FROM bot_settings
+                            WHERE key = 'kick_oauth_token'
+                              AND discord_server_id = :guild_id
+                            LIMIT 1
+                        """
+                            ),
+                            {"guild_id": guild_id},
+                        ).fetchone()
 
                     if result and result[0]:
                         oauth_token = result[0]
@@ -621,14 +673,31 @@ class KickWebSocketManager:
                             result = conn.execute(
                                 text(
                                     """
-                                SELECT value FROM bot_settings
-                                WHERE key = 'kick_oauth_token'
-                                AND discord_server_id = :guild_id
+                                SELECT kot.access_token
+                                FROM bot_settings bs
+                                JOIN kick_oauth_tokens kot
+                                  ON LOWER(kot.kick_username) = LOWER(bs.value)
+                                WHERE bs.key = 'kick_channel'
+                                  AND bs.discord_server_id = :guild_id
+                                ORDER BY kot.updated_at DESC
                                 LIMIT 1
                             """
                                 ),
                                 {"guild_id": guild_id},
                             ).fetchone()
+
+                            if not result or not result[0]:
+                                result = conn.execute(
+                                    text(
+                                        """
+                                    SELECT value FROM bot_settings
+                                    WHERE key = 'kick_oauth_token'
+                                      AND discord_server_id = :guild_id
+                                    LIMIT 1
+                                """
+                                    ),
+                                    {"guild_id": guild_id},
+                                ).fetchone()
 
                             if result and result[0]:
                                 api.access_token = result[0]
