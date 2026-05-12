@@ -15,30 +15,41 @@ from urllib.parse import parse_qs, urlencode, urlparse
 import psycopg2
 import requests
 
-# Load from environment or set here
-CLIENT_ID = os.getenv("KICK_CLIENT_ID", "")
-CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET", "")
-REDIRECT_URI = "http://localhost:8888/callback"
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", ""
-)
+# Credentials must come from the environment. Hardcoded fallbacks were
+# removed because they leaked production secrets into source control —
+# rotate any value that ever lived here in your Kick developer portal
+# and Railway/host. Set these in your shell or `.env` before running:
+#   $env:KICK_CLIENT_ID = "..."
+#   $env:KICK_CLIENT_SECRET = "..."
+#   $env:DATABASE_URL = "postgresql://..."
+CLIENT_ID = os.getenv("KICK_CLIENT_ID")
+CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET")
+REDIRECT_URI = os.getenv("KICK_OAUTH_REDIRECT_URI", "http://localhost:8888/callback")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+if not CLIENT_ID or not CLIENT_SECRET:
+    raise SystemExit(
+        "❌ KICK_CLIENT_ID and KICK_CLIENT_SECRET must be set in the environment.\n"
+        "   PowerShell: $env:KICK_CLIENT_ID = '...'; $env:KICK_CLIENT_SECRET = '...'"
+    )
 
 # Global state for callback
 callback_data = {"code": None, "state": None, "error": None, "done": False}
 
-# Scopes required for the bot
+# Scopes required for the bot.
+# These are the ONLY scopes Kick currently exposes via OAuth 2.1 — anything
+# else (kicks:read, webhook:subscribe, moderator:execute, channel_points_*,
+# channel:rewards:read) returns `invalid_scope`. Webhook subscriptions are
+# covered by `events:subscribe`; moderation actions by `moderation:ban`.
+# Source: https://docs.kick.com
 SCOPES = " ".join(
     [
         "user:read",
         "channel:read",
-        "channel:rewards:read",
+        "channel:write",
         "chat:write",
         "events:subscribe",
-        "kicks:read",
-        "webhook:subscribe",
-        "moderator:execute",
-        "channel_points_rewards:read",
-        "channel_points_rewards:write",
+        "moderation:ban",
     ]
 )
 
@@ -212,6 +223,10 @@ def step2_exchange_code(code, code_verifier, discord_server_id=None):
 
 def save_to_database(discord_server_id, token_data):
     """Save OAuth tokens to database"""
+    if not DATABASE_URL:
+        print("\n⚠️  DATABASE_URL not set — skipping DB save.")
+        print("   Copy the access/refresh tokens above and set them as env vars instead.")
+        return
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
