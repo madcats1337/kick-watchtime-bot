@@ -767,6 +767,42 @@ class RedisSubscriber:
 
                 traceback.print_exc()
 
+        elif action == "leaderboard_post":
+            # Dashboard saved a new raffle leaderboard / announcement channel
+            # ID. Re-initialize the auto-leaderboard so it posts a fresh
+            # message in the new channel immediately instead of waiting for
+            # the next periodic update tick.
+            guild_id = data.get("guild_id")
+            print(f"📋 [RAFFLE] Leaderboard re-post requested (guild_id={guild_id})")
+            try:
+                from sqlalchemy import create_engine
+
+                from raffle_system.auto_leaderboard import setup_auto_leaderboard
+
+                # Refresh settings first so the new channel ID is visible.
+                if hasattr(self.bot, "settings_manager") and self.bot.settings_manager:
+                    self.bot.settings_manager.refresh()
+
+                database_url = os.getenv("DATABASE_URL")
+                engine = create_engine(database_url)
+
+                # setup_auto_leaderboard picks the channel ID from
+                # settings_manager when not passed explicitly, and posts an
+                # initial leaderboard message (or finds an existing one to
+                # update) before kicking off its periodic task.
+                lb = setup_auto_leaderboard(self.bot, engine, channel_id=None, server_id=guild_id)
+                if lb:
+                    await lb.initialize()
+                    await lb.update_leaderboard()
+                    print(f"✅ Leaderboard posted/refreshed for guild {guild_id}")
+                else:
+                    print(f"⚠️ Auto-leaderboard not configured for guild {guild_id}")
+            except Exception as e:
+                print(f"❌ Error handling leaderboard_post: {e}")
+                import traceback
+
+                traceback.print_exc()
+
     async def handle_commands_event(self, action, data):
         """Handle custom commands events from dashboard"""
         guild_id = data.get("discord_server_id")
@@ -1060,7 +1096,11 @@ class RedisSubscriber:
 
             # Show raffle ticket info if applicable
             if item_type == "raffle_tickets" and raffle_ticket_amount:
-                embed.add_field(name="🎟️ Raffle Tickets", value=f"{raffle_ticket_amount} ticket{'s' if raffle_ticket_amount != 1 else ''} awarded", inline=True)
+                embed.add_field(
+                    name="🎟️ Raffle Tickets",
+                    value=f"{raffle_ticket_amount} ticket{'s' if raffle_ticket_amount != 1 else ''} awarded",
+                    inline=True,
+                )
 
             if requirement_title:
                 embed.add_field(name="Requirement Title", value=str(requirement_title)[:1024], inline=False)
@@ -1112,7 +1152,7 @@ class RedisSubscriber:
         print(f"📥 Bot Settings Event: {action}")
 
         if action == "sync":
-            # Refresh bot settings from database
+            # 1. Refresh the global settings_manager (legacy / single-server).
             if hasattr(self.bot, "settings_manager") and self.bot.settings_manager:
                 try:
                     self.bot.settings_manager.refresh()
@@ -1150,6 +1190,53 @@ class RedisSubscriber:
                     traceback.print_exc()
             else:
                 print("⚠️ Bot settings manager not initialized")
+
+            # 2. Refresh every per-guild settings manager + push hot-reloadable
+            #    values into the per-guild trackers.
+            #
+            #    Why this matters: the dashboard writes settings keyed by
+            #    `discord_server_id = <guild_id>`, while the global manager only
+            #    reads `WHERE discord_server_id IS NULL`. Without this block,
+            #    saving "Slot Calls Discord Channel" in the dashboard would
+            #    succeed but the slot-call tracker (constructed once at
+            #    startup with discord_channel_id=None) would never see the
+            #    new value, producing the warning:
+            #        "Slot call received but no Discord channel configured"
+            try:
+                # Pull the per-guild registry out of bot.py without forcing a
+                # circular import at module load time.
+                from bot import guild_settings_managers  # type: ignore
+            except Exception as import_err:
+                print(f"⚠️ Could not import guild_settings_managers: {import_err}")
+                guild_settings_managers = {}
+
+            trackers = getattr(self.bot, "slot_call_trackers_by_guild", {}) or {}
+
+            # Always refresh every guild we know about (either through the
+            # registry or the bot's connected guilds). The dashboard publish
+            # payload doesn't currently carry a guild_id, so refreshing all
+            # is the correct behaviour and is cheap.
+            guild_ids = set(guild_settings_managers.keys()) | {g.id for g in self.bot.guilds}
+            for guild_id in guild_ids:
+                gs = guild_settings_managers.get(guild_id)
+                if gs is None:
+                    continue
+                try:
+                    gs.refresh()
+                except Exception as refresh_err:
+                    print(f"⚠️ [Guild {guild_id}] Settings refresh failed: {refresh_err}")
+                    continue
+
+                new_channel_id = gs.slot_calls_channel_id
+                tracker = trackers.get(guild_id)
+                if tracker is not None:
+                    try:
+                        tracker.discord_channel_id = int(new_channel_id) if new_channel_id else None
+                        print(f"   ✓ [Guild {guild_id}] slot_calls_channel_id = " f"{tracker.discord_channel_id}")
+                    except (TypeError, ValueError) as cast_err:
+                        print(
+                            f"⚠️ [Guild {guild_id}] Bad slot_calls_channel_id " f"value '{new_channel_id}': {cast_err}"
+                        )
 
         elif action == "update":
             key = data.get("key")
