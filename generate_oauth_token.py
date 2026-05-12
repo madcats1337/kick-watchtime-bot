@@ -16,11 +16,11 @@ import psycopg2
 import requests
 
 # Load from environment or set here
-CLIENT_ID = os.getenv("KICK_CLIENT_ID", "01K8QWJTACWW0YCG57W3P09T49")
-CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET", "9a952a04aa3a04fa817e8d2ccbf88866bb0d877b49fd9e699fa43a41aa0dc491")
+CLIENT_ID = os.getenv("KICK_CLIENT_ID", "")
+CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET", "")
 REDIRECT_URI = "http://localhost:8888/callback"
 DATABASE_URL = os.getenv(
-    "DATABASE_URL", "postgresql://postgres:QzzlAELgpwfZtHIVCuIHpuGxhXorXTZv@shinkansen.proxy.rlwy.net:57221/railway"
+    "DATABASE_URL", ""
 )
 
 # Global state for callback
