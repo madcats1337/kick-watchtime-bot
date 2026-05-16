@@ -1,36 +1,39 @@
 # Terms of Service
 
-**Last Updated:** January 2, 2026
+**Last Updated:** May 2026
 
 ## 1. Acceptance of Terms
 
-By using the LeleBot Discord bot and Admin Dashboard (collectively, the "Service"), you agree to be bound by these Terms of Service ("Terms"). If you do not agree to these Terms, please do not use the Service.
+By using the LeleBot Discord bot and associated Admin Dashboard (collectively, the "Service"), you agree to be bound by these Terms of Service ("Terms"). If you do not agree to these Terms, please do not use the Service.
 
 ## 2. Description of Service
 
-The Service provides the following features:
+LeleBot is a comprehensive Discord-Kick integration platform providing automation, community engagement, and fair gaming systems. The Service includes:
 
-**Discord Bot Features:**
-- Watchtime tracking for Kick.com stream viewers
-- Account linking between Discord and Kick.com via OAuth 2.0
-- Automatic Discord role assignment based on watchtime milestones
-- Leaderboard and statistics tracking
-- Slot request system with chat commands
-- Raffle ticket system based on watchtime
-- Giveaway entries and management
-- Custom commands and timed messages
-- Point shop for viewer rewards
+**Core Discord Bot Features:**
+- **Account Linking:** Secure OAuth 2.0 linking between Discord and Kick.com accounts
+- **Watchtime Tracking:** Real-time tracking of viewer activity in Kick.com chat
+- **Automated Role Assignment:** Discord roles assigned based on watchtime milestones
+- **Leaderboard & Statistics:** Display top viewers and personal watchtime data
+- **Raffle System:** Multi-source ticket earning (watchtime, gifted subs, gambling wagers)
+- **Slot Request Management:** Chat commands for requesting slots with Discord notifications
+- **Gifted Subscription Tracking:** Real-time detection and ticket awards for gifted subs
+- **Multi-Platform Gambling Integration:** Support for Shuffle, Stake, Stake.us wager tracking
+- **Guess The Balance Game:** Interactive game with `!gtb` commands
+- **Custom Commands:** User-defined commands without code changes
+- **Giveaway System:** Raffle-integrated giveaway management
+- **Timed Messages:** Scheduled announcements in Kick chat
 
-**Admin Dashboard Features:**
-- Stream management dashboard with multi-server support
-- Bonus hunt tracker and OBS overlays
-- Slot request picker with provably fair selection
-- Raffle system with provably fair draws
-- Giveaway system with provably fair winner selection
-- Point shop management
-- Custom widget creator
-- Real-time synchronization via Redis/Pusher
-- OBS overlay widgets (slot picker, giveaway wheel, raffle draw)
+**Admin Dashboard Features** (Separate Repository):
+- **Analytics & Monitoring:** Real-time bot status, watchtime stats, raffle analytics
+- **Account Management:** Manage linked accounts, verify users, view account history
+- **Raffle Administration:** Monitor tickets, manage periods, view draws and leaderboards
+- **Slot Management:** Configure request limits, search slots, manage blacklists
+- **Gambling Integration:** Configure platforms, verify accounts, track wagers
+- **Role Configuration:** Set watchtime thresholds and manage reward roles
+- **Custom Commands:** Create and edit custom commands with variables
+- **Settings & Configuration:** Manage bot behavior, feature toggles, intervals
+- **Audit Trail:** View activity logs and manage security
 
 ## 3. User Responsibilities
 

@@ -1,233 +1,330 @@
 # Privacy Policy
 
-**Last Updated:** January 2, 2026
+**Last Updated:** May 2026
+
+**Service:** LeleBot - Discord Bot & Admin Dashboard
 
 ## 1. Introduction
 
-This Privacy Policy explains how we collect, use, store, and protect your personal information when you use the LeleBot Discord bot and Admin Dashboard (collectively, the "Service"). By using the Service, you agree to the collection and use of information in accordance with this policy.
+This Privacy Policy explains how we collect, use, store, and protect your personal information when you use the Kick Community Bot (the "Bot") and related services. By using the Bot, you agree to the collection and use of information in accordance with this policy.
 
 ## 2. Information We Collect
 
 ### 2.1 Automatically Collected Information
 
-When you use the Service, we automatically collect:
-
-**Discord Information:**
+**From Discord:**
 - Discord User ID (unique identifier)
 - Discord Username and display name
 - Discord Server (Guild) ID
-- Discord Role assignments
-- Message timestamps (for watchtime calculation)
+- Discord Role assignments and changes
+- Message interaction timestamps
+- Profile information for linked accounts
 
-**Kick.com Information:**
+**From Kick.com:**
 - Kick.com username
 - Kick.com User ID
-- Kick.com chat activity (username and timestamps only)
+- Kick.com chat activity (username and timestamps only - message content not stored)
 - Kick.com profile information accessed via OAuth
+- Chat participation records
+
+**Dashboard-Specific:**
+- Dashboard login timestamps
+- Administrative actions and modifications
+- Settings changes and configuration updates
+- Report generation and export requests
+- Analytics queries and data access
 
 ### 2.2 Information You Provide
 
-When you use the Service, we collect:
-- OAuth authorization tokens (encrypted and stored securely)
+**Account Linking:**
+- OAuth authorization tokens (encrypted)
 - Account linking timestamps
-- Slot requests and preferences
-- Giveaway entries
-- Point shop orders
-- Custom commands and configurations
+- Account linking/unlinking history
+
+**Bot Usage:**
+- Slot requests and selections
+- Game entries (GTB, giveaways, raffles)
+- Custom command definitions
+- Gambling platform account information (for Shuffle, Stake, etc.)
+
+**Dashboard Usage:**
+- Configuration settings for bot behavior
+- Role threshold settings
+- Channel routing preferences
+- Custom command creation
+- Administrative notes and comments
+- Feature toggle preferences
 
 ### 2.3 Generated Data
 
-The Service generates and stores:
-- Watchtime statistics (minutes watched)
-- Chat activity timestamps
-- Leaderboard rankings
-- Role assignment history
-- Raffle ticket allocations
-- Point balances
-- Provably fair seeds and hashes
-- Slot pick history with reward outcomes
-- Giveaway winner records
+**Tracking & Statistics:**
+- Watchtime statistics (minutes watched per period)
+- Chat activity timestamps and frequency
+- Leaderboard rankings and positions
+- Role assignment history and dates
+
+**Raffle System:**
+- Raffle ticket balances (from watchtime, gifts, wagers)
+- Raffle period participation records
+- Raffle draw records and winner history
+- Probability calculations and statistics
+
+**Gambling Integration:**
+- Multi-platform wager tracking (Shuffle, Stake, Stake.us, etc.)
+- Wager amounts and conversion to tickets
+- Account verification status
+- Campaign code tracking (multiple codes per user)
+
+**Other:**
+- Gifted subscription records and ticket awards
+- Game participation history (GTB, giveaways)
+- Provably fair draw seeds and verification data
+- Custom command usage statistics
 
 ## 3. How We Use Your Information
 
-**Primary Functions:**
-- Link your Discord account to your Kick.com account
-- Track your watchtime based on Kick.com chat activity
-- Assign Discord roles based on watchtime milestones
-- Display leaderboards and statistics
-- Process slot requests and determine rewards
-- Manage raffle entries and draw winners
-- Process giveaway entries and select winners
-- Manage point shop transactions
-- Send notifications about important events
+**Core Bot Functionality:**
+- Link your Discord and Kick.com accounts via secure OAuth
+- Track your watchtime based on chat participation
+- Calculate raffle tickets from multiple sources (watchtime, gifted subs, wagers)
+- Assign Discord roles based on configurable watchtime thresholds
+- Display public leaderboards and personal statistics
+- Process and route slot requests to Discord
+- Manage raffle periods and draw winners
+- Track gifted subscription events and award tickets
+- Monitor gambling platform wagers and verify accounts
+- Run interactive games (Guess The Balance)
+- Execute custom commands and send timed messages
 
-**Administrative Functions:**
-- Prevent abuse and fraud (anti-farming measures)
-- Maintain security of the Service
-- Debug and improve Service functionality
-- Provide provably fair verification data
-- Comply with server administrator requests
+**Dashboard Functions:**
+- Provide administrators with analytics and monitoring tools
+- Enable management of bot settings and configurations
+- Display real-time statistics and user activity
+- Generate reports and export data
+- Track administrative actions for audit purposes
+- Manage role thresholds and feature configurations
+- Control slot request management and blacklists
+- Configure raffle periods and settings
+- Verify gambling platform accounts
+- Monitor bot health and status
+
+**Security & Compliance:**
+- Prevent abuse, farming, and fraud through anti-farming measures
+- Maintain service security and integrity
+- Verify account ownership and prevent unauthorized access
+- Provide audit trails and accountability
+- Comply with administrator and server policies
+- Implement rate limiting and abuse detection
+
+**System Improvement:**
+- Debug issues and improve functionality
+- Analyze feature usage patterns
+- Optimize performance and reliability
+- Develop new features based on usage data
+- Provide transparency and provably fair verification
 
 **We DO NOT:**
-- Sell your personal information to third parties
-- Use your information for advertising or marketing
-- Share your data with unauthorized parties
-- Read or store the content of your chat messages
-- Track your activity outside the Service
+- Sell personal information to third parties
+- Share data for advertising or marketing
+- Store chat message content (only usernames and timestamps)
+- Track activity outside the Bot and Dashboard
+- Use information for purposes unrelated to Bot/Dashboard operation
+- Share information with unauthorized parties
 
 ## 4. Data Storage and Security
 
 ### 4.1 Data Storage
 
-- Data is stored in a secure PostgreSQL database
-- Database is hosted on Railway.app with encrypted connections
-- Access to the database is restricted and authenticated
-- OAuth tokens are stored securely and refreshed as needed
-- Provably fair seeds are stored for verification purposes
+**Bot Data:**
+- Stored in secure PostgreSQL database with SSL/TLS encryption
+- Database connections fully encrypted in transit
+- Access restricted to authenticated services only
+- OAuth tokens encrypted at rest
+- Automated backup systems with redundancy
+
+**Dashboard Data:**
+- Separate secure data store for administrative information
+- Login credentials hashed with strong algorithms
+- Session tokens encrypted and time-limited
+- All dashboard actions logged and auditable
+- Configuration changes encrypted and versioned
 
 ### 4.2 Data Retention
 
-We retain your data:
-- **Linked Accounts:** Until you request unlinking or account deletion
-- **Watchtime Data:** Indefinitely, unless you request deletion
-- **OAuth Tokens:** Until they expire or are revoked
-- **Temporary Data:** OAuth states deleted within 30 minutes
-- **Provably Fair Data:** Retained indefinitely for verification
-- **Slot Picks/Winners:** Retained indefinitely for transparency
-- **Point Balances:** Until account deletion or admin reset
+**Linked Accounts:**
+- Retained until you unlink via `!unlink` or dashboard
+- Can be deleted via account deletion request
+
+**Watchtime Data:**
+- Retained indefinitely unless deletion requested
+- Kept for historical leaderboards and statistics
+
+**OAuth Tokens:**
+- Temporary tokens retained until expiration (1 hour for OAuth links)
+- Refresh tokens retained until revoked
+- Automatically cleared when accounts unlinked
+
+**Raffle Data:**
+- Retained indefinitely for transparency and auditability
+- Draw records kept for provably fair verification
+- Winner history maintained for statistics
+
+**Gambling Platform Data:**
+- Wager records retained indefinitely for platform compliance
+- Verification status retained until account unlinked
+- Campaign code tracking maintained for affiliate purposes
+
+**Dashboard Data:**
+- Administrative action logs retained for 90 days minimum
+- Configuration history retained indefinitely
+- Login records retained for security purposes
 
 ### 4.3 Security Measures
 
-We implement security measures including:
-- Encrypted database connections (SSL/TLS)
+**Encryption & Authentication:**
+- All database connections use SSL/TLS encryption
+- OAuth tokens encrypted with AES-256
 - HMAC-SHA256 signature verification for OAuth links
-- Timestamp expiration for OAuth links (1-hour validity)
-- PKCE (Proof Key for Code Exchange) for OAuth flow
-- RSA signature verification for webhook events
-- Authentication required for administrative functions
-- Rate limiting on sensitive endpoints
-- Regular security audits and updates
+- PKCE (Proof Key for Code Exchange) for OAuth security
+- Time-limited token expiration (1-10 minutes)
+- Multi-factor authentication available for dashboard
 
-## 5. Provably Fair Data
+**Access Control:**
+- Environment-based credential management (no hardcoded secrets)
+- Role-based access control (RBAC) for dashboard
+- Authentication required for all sensitive operations
+- Admin actions logged with timestamp and user ID
+- IP-based rate limiting on authentication endpoints
 
-### 5.1 What We Store
+**Operational Security:**
+- Regular security audits and penetration testing
+- Automated dependency updates and patching
+- Monitoring for suspicious activity patterns
+- Intrusion detection systems
+- Regular backup testing and disaster recovery drills
+- Security incident response procedures
 
-For transparency in raffles, giveaways, and slot rewards, we store:
-- Server seeds (cryptographically random)
-- Client seeds (derived from public data)
-- Nonces (unique identifiers)
-- Proof hashes (SHA-256 verification hashes)
-- Random values (outcome determinants)
+## 5. Data Sharing and Disclosure
 
-### 5.2 Public Verification
+### 5.1 When We Share Data
 
-- All provably fair data is publicly viewable at `/provably-fair/winners`
-- Verification tools allow independent verification of all outcomes
-- This data is intentionally public for transparency
+**With Your Consent (Public Data):**
+- Leaderboard displays (Kick username and watchtime/tickets)
+- Raffle/giveaway winner announcements
+- Role assignments visible to Discord server members
+- Raffle draw transparency and verification data
+- Game participation announcements
+- Public statistics and rankings
 
-## 6. Data Sharing and Disclosure
-
-### 6.1 When We Share Data
-
-We may share your information only in the following circumstances:
-
-**With Your Consent:**
-- Publicly displayed leaderboards (Kick username and watchtime)
-- Publicly displayed raffle/giveaway winners
-- Role assignments visible to server members
-- Provably fair verification data (public)
+**Dashboard Access:**
+- Server administrators can view all user data for their server
+- Data is restricted to the specific server where it was generated
+- Admins see complete audit trails of their own actions
+- Multi-server setups keep data isolated per server
 
 **Legal Requirements:**
 - When required by law or legal process
-- To protect the rights, property, or safety of users
-- To enforce our Terms of Service
+- To protect rights, property, or safety of users
+- To enforce Terms of Service
+- To comply with valid court orders
 
 **Service Providers:**
-- Discord (for bot functionality)
-- Kick.com (for OAuth and chat monitoring)
-- Pusher (for real-time updates)
-- Railway.app (for hosting and database)
+- **Discord** - For bot functionality and message handling
+- **Kick.com** - For OAuth authentication and chat monitoring
+- **Railway.app** - For hosting and infrastructure
+- **PostgreSQL** - For data storage and backup
+- **Amazon Web Services** (if applicable) - For storage infrastructure
 
-### 6.2 When We DO NOT Share Data
+### 5.2 What We DO NOT Share
 
-We do not:
-- Sell your data to third parties
-- Share your data for marketing purposes
-- Provide your data to unauthorized parties
-- Share OAuth tokens or private account details
+We strictly do not:
+- Sell your personal data to third parties
+- Share data for marketing or advertising purposes
+- Provide data to unauthorized parties
+- Share OAuth tokens or refresh tokens
+- Share gambling platform account credentials
+- Share private account information
+- Share Discord IDs or sensitive identifiers without authorization
+- Share dashboard access credentials
+- Share email addresses or contact information
+- Use data for any purpose beyond stated functionality
 
-## 7. Your Rights and Choices
+## 6. Your Rights and Choices
 
-### 7.1 Access and Control
+### 6.1 Access and Control
 
 You have the right to:
-- **Access:** View your account information via commands or dashboard
-- **Unlink:** Request to unlink your accounts via `/unlink` command
+- **Access:** View your account information via Bot commands
+- **Unlink:** Request to unlink your accounts via `!unlink` command
 - **Delete:** Request deletion of your data
-- **Correct:** Update incorrect information by relinking
-- **Opt-Out:** Stop using the Service at any time
+- **Correct:** Update information by relinking
+- **Opt-Out:** Stop using the Bot at any time
 
-### 7.2 How to Exercise Your Rights
+### 6.2 How to Exercise Your Rights
 
 To exercise your rights:
-- **Unlink Account:** Use `/unlink` command or contact a server administrator
-- **Delete Data:** Contact a server administrator to request full data deletion
-- **View Data:** Use `/watchtime`, `/points`, or `/tickets` commands
-- **Questions:** Contact server administrators in the Discord server
+- **Unlink Account:** Use `!unlink` command
+- **Delete Data:** Contact a server administrator
+- **View Data:** Use `!watchtime`, `!tickets`, `!raffleboard` commands
+- **Questions:** Contact server administrators
 
-### 7.3 Data Deletion
+### 6.3 Data Deletion
 
 If you request data deletion, we will remove:
 - Your Discord-Kick account link
 - Your watchtime statistics
-- Your point balances
 - Your raffle ticket allocations
 - Your OAuth tokens
 
-Note: Provably fair records (winners, draws) may be retained for transparency.
+Note: Raffle draw records may be retained for transparency.
 
-## 8. Third-Party Services
-
-The Service integrates with third-party services:
+## 7. Third-Party Services & Integrations
 
 **Discord:**
 - Privacy Policy: https://discord.com/privacy
-- We use Discord's API in accordance with their Terms of Service
+- Used for: Bot API, message handling, user authentication, role management
+- Compliance: We adhere to Discord's Terms of Service and Developer Policy
 
 **Kick.com:**
 - Privacy Policy: https://kick.com/privacy
-- We use Kick.com's OAuth and public APIs
-- We monitor public chat messages for watchtime tracking
+- Used for: OAuth authentication, chat monitoring, stream information
+- Monitoring: We track public chat messages for watchtime; no private messages stored
 
-**Pusher:**
-- Privacy Policy: https://pusher.com/legal/privacy-policy
-- Used for real-time event delivery
+**Gambling Platforms** (Shuffle, Stake, Stake.us, etc.):
+- Used for: Wager tracking and verification via public APIs
+- Data shared: Only your public account information and wager history
+- Compliance: We follow each platform's API terms and privacy policies
 
-**Railway.app:**
-- Privacy Policy: https://railway.app/legal/privacy
-- Provides secure database and hosting infrastructure
+**Hosting & Infrastructure:**
+- **Railway.app** - Privacy Policy: https://railway.app/legal/privacy
+- **PostgreSQL** - Open source database with community security practices
+- **Amazon Web Services** (if applicable) - Privacy Policy: https://aws.amazon.com/privacy/
 
-We are not responsible for the privacy practices of these third-party services.
+**Optional Services:**
+- Real-time messaging (Redis/Pusher) for live updates
+- Analytics and monitoring tools
 
-## 9. Children's Privacy
+**Disclaimer:** We are not responsible for the privacy practices of third-party services. Please review their privacy policies separately. When using integrations, you consent to sharing data with those platforms as required for functionality.
 
-The Service is not intended for users under the age of 13 (or the minimum age required in your jurisdiction). We do not knowingly collect personal information from children. If we become aware that a child has provided us with personal information, we will take steps to delete such information.
+## 8. Children's Privacy
 
-## 10. International Data Transfers
+The Bot is not intended for users under the age of 13 (or the minimum age required in your jurisdiction). We do not knowingly collect personal information from children. If we become aware that a child has provided us with personal information, we will take steps to delete such information.
 
-Your data may be transferred to and stored in countries outside your country of residence. By using the Service, you consent to such transfers. We ensure appropriate safeguards are in place to protect your data.
+## 9. International Data Transfers
 
-## 11. Cookies and Tracking
+Your data may be transferred to and stored in countries outside your country of residence. By using the Bot, you consent to such transfers. We ensure appropriate safeguards are in place to protect your data.
 
-- The Service uses session cookies for authentication on the dashboard
-- OAuth flow uses temporary state tokens for security
+## 10. Cookies and Tracking
+
+- The Bot uses session management for authentication
 - We do not use tracking cookies or third-party analytics
+- OAuth flow uses temporary state tokens for security
 
-## 12. Changes to This Privacy Policy
+## 11. Changes to This Privacy Policy
 
-We may update this Privacy Policy from time to time. Changes will be posted with an updated "Last Updated" date. Your continued use of the Service after changes constitutes acceptance of the updated Privacy Policy.
+We may update this Privacy Policy from time to time. Changes will be posted with an updated "Last Updated" date. Your continued use of the Bot after changes constitutes acceptance of the updated Privacy Policy.
 
-## 13. Data Breach Notification
+## 12. Data Breach Notification
 
 In the unlikely event of a data breach affecting your personal information, we will:
 - Investigate the breach promptly
@@ -235,7 +332,7 @@ In the unlikely event of a data breach affecting your personal information, we w
 - Take steps to mitigate harm
 - Report to relevant authorities if required by law
 
-## 14. Compliance
+## 13. Compliance
 
 We strive to comply with applicable data protection laws, including:
 
@@ -255,31 +352,32 @@ If you are in the European Union, you have additional rights:
 If you are a California resident, you have the right to:
 - Know what personal information is collected
 - Request deletion of your personal information
-- Opt-out of the sale of personal information (we do not sell data)
 - Non-discrimination for exercising your rights
 
-## 15. Data Minimization
+## 14. Data Minimization
 
 We practice data minimization by:
-- Collecting only necessary information for Service functionality
+- Collecting only necessary information for Bot functionality
 - Not storing chat message content (only usernames and timestamps)
 - Automatically deleting expired OAuth states
-- Limiting data retention to what is necessary for transparency
+- Limiting data retention to what is necessary
 
-## 16. Automated Decision Making
+## 15. Automated Decision Making
 
-The Service uses automated processing for:
+The Bot uses automated processing for:
 - Watchtime calculation based on chat activity
 - Automatic role assignment based on thresholds
-- Provably fair random selection for raffles, giveaways, and slot rewards
+- Raffle ticket allocation
+- Winner selection for raffles
 - Anti-farming detection
-- Point calculations
 
-These automated decisions do not have legal or significant effects on you beyond Discord server role assignments and optional reward systems.
+These automated decisions do not have legal effects beyond Discord server role assignments and optional reward systems.
 
-## 17. Contact Information
+## 16. Contact Information
 
 For privacy-related questions, concerns, or requests:
+- Contact server administrators in the Discord server where the bot is deployed
+- Open an issue on the GitHub repository
 - Contact server administrators in the Discord server where the bot is deployed
 - For data deletion requests, contact an administrator with "Manage Server" permissions
 - Visit the Admin Dashboard for server-specific support
