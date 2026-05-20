@@ -11,6 +11,7 @@ from sqlalchemy import text
 
 from .database import create_new_period, get_current_period
 from .draw import RaffleDraw
+from .reward_settings import get_ticket_reward_settings
 
 logger = logging.getLogger(__name__)
 
@@ -44,18 +45,20 @@ class RaffleScheduler:
         try:
             with self.engine.begin() as conn:
                 result = conn.execute(
-                    text("""
-                        SELECT value FROM bot_settings 
+                    text(
+                        """
+                        SELECT value FROM bot_settings
                         WHERE key = 'raffle_auto_draw' AND discord_server_id = :server_id
-                    """),
-                    {"server_id": self.discord_server_id}
+                    """
+                    ),
+                    {"server_id": self.discord_server_id},
                 )
                 row = result.fetchone()
                 if row:
                     value = row[0]
                     # Handle string 'true'/'false' or boolean
                     if isinstance(value, str):
-                        return value.lower() == 'true'
+                        return value.lower() == "true"
                     return bool(value)
         except Exception as e:
             logger.warning(f"Failed to get raffle_auto_draw setting from DB: {e}")
@@ -95,7 +98,9 @@ class RaffleScheduler:
             # Check if it's 10 minutes before period ends and winner not drawn yet
             # ONLY draw if auto_draw is enabled!
             time_until_end = (end_date - now).total_seconds()
-            if self.auto_draw and 0 < time_until_end <= 600 and not current_period.get("winner_discord_id"):  # 600 seconds = 10 minutes
+            if (
+                self.auto_draw and 0 < time_until_end <= 600 and not current_period.get("winner_discord_id")
+            ):  # 600 seconds = 10 minutes
                 logger.info(f"⏰ 10 minutes until period end - auto_draw enabled, drawing winner now!")
                 self._draw_winner_for_period(current_period)
             elif 0 < time_until_end <= 600 and not current_period.get("winner_discord_id"):
@@ -336,6 +341,10 @@ Please contact an admin to claim your prize! 🎊
             if not channel:
                 return
 
+            watchtime_tickets, gifted_sub_tickets, wager_tickets = get_ticket_reward_settings(
+                self.engine, self.discord_server_id, logger
+            )
+
             message = f"""
 🎰 **NEW RAFFLE PERIOD STARTED!** 🎰
 
@@ -343,9 +352,9 @@ Please contact an admin to claim your prize! 🎊
 **Duration**: {start_date.strftime('%B %d')} - {end_date.strftime('%B %d, %Y')}
 
 **How to Earn Tickets**:
-• Watch streams: 10 tickets per hour
-• Gift subs: 15 tickets per sub
-• Wager on Shuffle.com (code 'lele'): 20 tickets per $1000
+• Watch streams: {watchtime_tickets} tickets per hour
+• Gift subs: {gifted_sub_tickets} tickets per sub
+• Wager on Shuffle.com (code 'lele'): {wager_tickets} tickets per $1000
 
 Use `!tickets` to check your balance!
 Good luck! 🍀

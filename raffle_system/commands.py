@@ -11,6 +11,7 @@ from discord.ext import commands
 from sqlalchemy import text
 
 from .draw import RaffleDraw
+from .reward_settings import get_ticket_reward_settings
 from .shuffle_tracker import ShuffleWagerTracker
 from .tickets import TicketManager
 
@@ -57,14 +58,17 @@ class RaffleCommands(commands.Cog):
 
             logger.info(f"[TICKETS] Getting tickets for user {discord_id}")
             tickets = ticket_manager.get_user_tickets(discord_id)
+            watchtime_tickets, gifted_sub_tickets, wager_tickets = get_ticket_reward_settings(
+                self.engine, ctx.guild.id if ctx.guild else None, logger
+            )
 
             if not tickets or tickets["total_tickets"] == 0:
                 await ctx.send(
                     f"❌ {ctx.author.mention} You don't have any raffle tickets yet!\n"
                     f"Earn tickets by:\n"
-                    f"• Watching streams (10 tickets per hour)\n"
-                    f"• Gifting subs (15 tickets per sub)\n"
-                    f"• Wagering on Shuffle.com with code 'lele' (20 tickets per $1000)"
+                    f"• Watching streams ({watchtime_tickets} tickets per hour)\n"
+                    f"• Gifting subs ({gifted_sub_tickets} tickets per sub)\n"
+                    f"• Wagering on Shuffle.com with code 'lele' ({wager_tickets} tickets per $1000)"
                 )
                 return
 
@@ -166,6 +170,9 @@ Use `!leaderboard` to see top participants!
             raffle_draw = managers["raffle_draw"]
 
             stats = ticket_manager.get_period_stats()
+            watchtime_tickets, gifted_sub_tickets, wager_tickets = get_ticket_reward_settings(
+                self.engine, ctx.guild.id if ctx.guild else None, logger
+            )
 
             # Debug logging
             logger.info(f"[raffleinfo] guild_id={ctx.guild.id}, server_id={managers['ticket_manager'].server_id}")
@@ -197,9 +204,9 @@ Use `!leaderboard` to see top participants!
 ⏳ **The raffle period has not started yet.**
 
 **How to Earn Tickets** (once period starts):
-⏱️ **Watch Streams** - 10 tickets per hour
-🎁 **Gift Subs** - 15 tickets per sub
-🎲 **Shuffle Wagers** - 20 tickets per $1000 wagered (code 'lele')
+⏱️ **Watch Streams** - {watchtime_tickets} tickets per hour
+🎁 **Gift Subs** - {gifted_sub_tickets} tickets per sub
+🎲 **Shuffle Wagers** - {wager_tickets} tickets per $1000 wagered (code 'lele')
 ⭐ **Bonus** - Admin awarded for events
 
 **Commands**:
@@ -243,9 +250,9 @@ Get ready to participate when the period starts!
 • Total Participants: {stats['total_participants']}{leaderboard_note}
 
 **How to Earn Tickets**:
-⏱️ **Watch Streams** - 10 tickets per hour
-🎁 **Gift Subs** - 15 tickets per sub
-🎲 **Shuffle Wagers** - 20 tickets per $1000 wagered (code 'lele')
+⏱️ **Watch Streams** - {watchtime_tickets} tickets per hour
+🎁 **Gift Subs** - {gifted_sub_tickets} tickets per sub
+🎲 **Shuffle Wagers** - {wager_tickets} tickets per $1000 wagered (code 'lele')
 ⭐ **Bonus** - Admin awarded for events
 
 **Commands**:
@@ -279,15 +286,17 @@ Get ready to participate when the period starts!
         Usage: !linkshuffle <shuffle_username>
         Example: !linkshuffle CryptoKing420
 
-        Earn 20 tickets per $1000 wagered when using affiliate code 'lele'
+        Earn configurable tickets per $1000 wagered when using affiliate code 'lele'
         """
         try:
+            _, _, wager_tickets = get_ticket_reward_settings(self.engine, ctx.guild.id if ctx.guild else None, logger)
+
             if not shuffle_username:
                 await ctx.send(
                     f"❌ {ctx.author.mention} Please provide your Shuffle username!\n\n"
                     f"**Usage**: `!linkshuffle <your_shuffle_username>`\n"
                     f"**Example**: `!linkshuffle CryptoKing420`\n\n"
-                    f"💡 **Tip**: Use code **'lele'** on Shuffle to earn 20 tickets per $1000 wagered!"
+                    f"💡 **Tip**: Use code **'lele'** on Shuffle to earn {wager_tickets} tickets per $1000 wagered!"
                 )
                 return
 
@@ -333,7 +342,7 @@ Get ready to participate when the period starts!
                     f"**Kick**: `{kick_name}`\n\n"
                     f"⏳ **Pending Admin Verification**\n"
                     f"An admin will review your request. Once verified:\n"
-                    f"• Your Shuffle wagers under code **'lele'** will earn **20 tickets per $1000**\n"
+                    f"• Your Shuffle wagers under code **'lele'** will earn **{wager_tickets} tickets per $1000**\n"
                     f"• Tickets are awarded automatically for future wagers\n"
                     f"• Use `!tickets` to check your balance!"
                 )
