@@ -317,35 +317,60 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
 
                 import asyncio
 
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
-                        f"https://discord.com/api/v10/channels/{notification_channel_id}/messages",
-                        headers={"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"},
-                        json={"content": message_content, "components": components},
-                        timeout=aiohttp.ClientTimeout(total=10),
-                    ) as resp:
-                        if resp.status in [200, 201]:
-                            print(f"[Webhook] ✅ Stream notification sent to channel {notification_channel_id}")
+                # Discord's message-create endpoint can be slow during
+                # their bad windows; 10s was tight enough that the response
+                # read timed out *after* Discord had already created the
+                # message, which made us skip the footer follow-up. Bump to
+                # 30s and post the footer independently of the main POST's
+                # outcome — the two messages are unrelated Discord objects,
+                # the footer doesn't need the main message's ID.
+                headers = {"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"}
+                channel_url = f"https://discord.com/api/v10/channels/{notification_channel_id}/messages"
+                timeout = aiohttp.ClientTimeout(total=30)
 
-                            # Send footer as follow-up message if set
-                            if footer_text:
-                                await asyncio.sleep(0.5)
-                                async with session.post(
-                                    f"https://discord.com/api/v10/channels/{notification_channel_id}/messages",
-                                    headers={"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"},
-                                    json={"content": f"-# {footer_text}"},
-                                    timeout=aiohttp.ClientTimeout(total=10),
-                                ) as footer_resp:
-                                    if footer_resp.status in [200, 201]:
-                                        print(f"[Webhook] ✅ Footer sent")
-                                    else:
-                                        print(f"[Webhook] ⚠️ Failed to send footer: {footer_resp.status}")
-                        else:
-                            error_text = await resp.text()
-                            print(f"[Webhook] ❌ Discord API error {resp.status}: {error_text[:200]}")
+                async with aiohttp.ClientSession() as session:
+                    try:
+                        async with session.post(
+                            channel_url,
+                            headers=headers,
+                            json={"content": message_content, "components": components},
+                            timeout=timeout,
+                        ) as resp:
+                            if resp.status in (200, 201):
+                                print(f"[Webhook] ✅ Stream notification sent to channel {notification_channel_id}")
+                            else:
+                                error_text = await resp.text()
+                                print(f"[Webhook] ❌ Discord API error {resp.status}: {error_text[:200]}")
+                    except asyncio.TimeoutError:
+                        # Discord likely accepted the POST but the response
+                        # read timed out — proceed to the footer anyway so
+                        # we don't drop it on the floor when the embed is
+                        # actually visible in the channel.
+                        print(
+                            f"[Webhook] ⚠️ Timed out reading Discord response for main embed (message may have posted)"
+                        )
+
+                    if footer_text:
+                        await asyncio.sleep(0.5)
+                        try:
+                            async with session.post(
+                                channel_url,
+                                headers=headers,
+                                json={"content": f"-# {footer_text}"},
+                                timeout=timeout,
+                            ) as footer_resp:
+                                if footer_resp.status in (200, 201):
+                                    print(f"[Webhook] ✅ Footer sent")
+                                else:
+                                    error_text = await footer_resp.text()
+                                    print(f"[Webhook] ⚠️ Failed to send footer: {footer_resp.status} {error_text[:200]}")
+                        except asyncio.TimeoutError:
+                            print(
+                                f"[Webhook] ⚠️ Timed out reading Discord response for footer (message may have posted)"
+                            )
 
         except Exception as e:
-            print(f"[Webhook] ❌ Error handling livestream status: {e}")
+            print(f"[Webhook] ❌ Error handling livestream status: {type(e).__name__}: {e}")
             import traceback
 
             traceback.print_exc()
