@@ -75,6 +75,38 @@ class ShuffleWagerTracker:
         codes_str = f"{len(codes)} codes" if len(codes) > 1 else self.campaign_code
         print(f"[Shuffle Tracker] 🔄 Settings refreshed - URL: {bool(self.affiliate_url)}, Codes: {codes_str}")
 
+    def _record_wager_history(self, conn, shuffle_username, total_wager_usd):
+        """Append a row to shuffle_wager_history for the dashboard leaderboard.
+
+        Called from inside an existing transaction (`conn`) at every site
+        that mutates `raffle_shuffle_wagers.total_wager_usd`. Silently noops
+        if the history table doesn't exist yet (e.g. migration not yet run on
+        this deploy) — the bot's primary job is awarding tickets, not feeding
+        history, so a missing table must not break that.
+        """
+        if not self.server_id:
+            return
+        try:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO shuffle_wager_history
+                        (discord_server_id, shuffle_username, total_wager_usd)
+                    VALUES
+                        (:server_id, :username, :total)
+                    """
+                ),
+                {
+                    "server_id": self.server_id,
+                    "username": shuffle_username,
+                    "total": total_wager_usd,
+                },
+            )
+        except Exception as e:
+            # UndefinedTable, permission errors, etc. — log once per call but
+            # never abort the surrounding wager transaction.
+            logger.debug(f"shuffle_wager_history append skipped: {e}")
+
     async def update_shuffle_wagers(self):
         """
         Poll gambling platform affiliate API and update wager tracking
@@ -174,6 +206,7 @@ class ShuffleWagerTracker:
                                 ),
                                 {"period_id": period_id, "username": shuffle_username, "current_wager": current_wager},
                             )
+                            self._record_wager_history(conn, shuffle_username, current_wager)
                             continue
 
                         # Award tickets if user is linked
@@ -213,6 +246,7 @@ class ShuffleWagerTracker:
                                     "new_tickets": new_tickets,
                                 },
                             )
+                            self._record_wager_history(conn, shuffle_username, current_wager)
                         else:
                             # User exists but not linked - just update wager
                             conn.execute(
@@ -229,6 +263,7 @@ class ShuffleWagerTracker:
                                 ),
                                 {"period_id": period_id, "username": shuffle_username, "current_wager": current_wager},
                             )
+                            self._record_wager_history(conn, shuffle_username, current_wager)
                     else:
                         # New user - check if they're linked
                         link_result = conn.execute(
@@ -267,6 +302,7 @@ class ShuffleWagerTracker:
                                 "platform": self.platform_name,
                             },
                         )
+                        self._record_wager_history(conn, shuffle_username, current_wager)
 
                         # No tickets awarded for initial/existing wagers
                         logger.info(
