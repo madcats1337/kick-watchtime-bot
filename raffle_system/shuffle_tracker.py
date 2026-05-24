@@ -75,27 +75,30 @@ class ShuffleWagerTracker:
         codes_str = f"{len(codes)} codes" if len(codes) > 1 else self.campaign_code
         print(f"[Shuffle Tracker] 🔄 Settings refreshed - URL: {bool(self.affiliate_url)}, Codes: {codes_str}")
 
-    # Process-wide flag: once we know the history table is missing we stop
-    # trying to insert into it for the rest of this bot run. This avoids the
-    # Postgres "current transaction is aborted" cascade — even with a
-    # SAVEPOINT each attempt still costs a round-trip and a log line per row.
-    _history_disabled = False
+    # Skip the history insert for ONE poll cycle after a missing-table
+    # error — checked again on the next poll, so a freshly-run dashboard
+    # migration takes effect without restarting the bot.
+    _history_skip_until = 0.0  # epoch seconds
+    _history_logged_first_success = False
 
     def _record_wager_history(self, conn, shuffle_username, total_wager_usd):
         """Append a row to shuffle_wager_history for the dashboard leaderboard.
 
         Called from inside an existing transaction (`conn`) at every site
         that mutates `raffle_shuffle_wagers.total_wager_usd`. Wrapped in a
-        nested transaction (SAVEPOINT) so a missing table — e.g. when the
-        bot deploys before the dashboard runs the migration — does NOT
-        abort the surrounding wager-update transaction.
-
-        Without the SAVEPOINT, any error here would put the outer
-        transaction into Postgres's "aborted" state, and every subsequent
-        SELECT/UPDATE in the loop would fail with InFailedSqlTransaction.
+        nested transaction (SAVEPOINT) so an error here — missing table,
+        permissions issue, schema mismatch — does NOT poison the
+        surrounding wager-update transaction (Postgres would otherwise
+        abort every subsequent statement with InFailedSqlTransaction).
         """
-        if not self.server_id or ShuffleWagerTracker._history_disabled:
+        if not self.server_id:
             return
+
+        import time
+
+        if time.time() < ShuffleWagerTracker._history_skip_until:
+            return
+
         try:
             with conn.begin_nested():  # SAVEPOINT
                 conn.execute(
@@ -113,14 +116,21 @@ class ShuffleWagerTracker:
                         "total": total_wager_usd,
                     },
                 )
+            if not ShuffleWagerTracker._history_logged_first_success:
+                ShuffleWagerTracker._history_logged_first_success = True
+                logger.info(
+                    f"shuffle_wager_history: first row written " f"(server={self.server_id}, user={shuffle_username})"
+                )
         except Exception as e:
-            # SAVEPOINT was rolled back — the outer transaction is still
-            # live. Disable further attempts for this process so we don't
-            # log this once per user per poll.
-            ShuffleWagerTracker._history_disabled = True
+            # SAVEPOINT was rolled back — outer transaction still live.
+            # Skip for the next 15 minutes (one poll cycle); the helper
+            # will retry automatically after that so a freshly-applied
+            # dashboard migration is picked up without a bot restart.
+            ShuffleWagerTracker._history_skip_until = time.time() + 15 * 60
             logger.warning(
-                f"shuffle_wager_history append disabled for this process: {e}. "
-                "Run the dashboard migration to create the table."
+                f"shuffle_wager_history append failed for "
+                f"server={self.server_id}, user={shuffle_username}: "
+                f"{type(e).__name__}: {e}. Will retry on the next poll."
             )
 
     async def update_shuffle_wagers(self):
