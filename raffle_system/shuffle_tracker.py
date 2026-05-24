@@ -75,22 +75,25 @@ class ShuffleWagerTracker:
         codes_str = f"{len(codes)} codes" if len(codes) > 1 else self.campaign_code
         print(f"[Shuffle Tracker] 🔄 Settings refreshed - URL: {bool(self.affiliate_url)}, Codes: {codes_str}")
 
-    def _record_wager_history(self, conn, shuffle_username, total_wager_usd):
+    def _record_wager_history(self, conn, shuffle_username, total_wager_usd, wager_delta):
         """Append a row to shuffle_wager_history for the dashboard leaderboard.
 
-        Called from inside an existing transaction (`conn`) at every site
-        that mutates `raffle_shuffle_wagers.total_wager_usd`. Wrapped in a
-        nested transaction (SAVEPOINT) so an error here — missing table,
-        permissions issue, schema mismatch — does NOT poison the
-        surrounding wager-update transaction (Postgres would otherwise
-        abort every subsequent statement with InFailedSqlTransaction).
+        Only called when the tracker has detected a positive wager increase
+        for a *known* user. The new-user onboarding path does NOT write
+        history (those users haven't actually wagered anything on our watch
+        yet — they came in already at some lifetime total).
 
-        Every detected wager change must land here as a new row. No
-        skipping, no rate-limiting, no circuit breaker — if it fails for
-        one user we log it and move on, but the next user still gets a
-        fresh attempt. Each user's INSERT is independent.
+        Each row stores:
+          - total_wager_usd : the user's running cumulative total after this
+                              update (useful for debugging / future audits)
+          - wager_delta     : how much they wagered since the previous
+                              observation. The leaderboard sums this column
+                              across rows in [start, end) for each user.
+
+        Wrapped in a nested transaction (SAVEPOINT) so an error here doesn't
+        poison the surrounding wager-update transaction.
         """
-        if not self.server_id:
+        if not self.server_id or wager_delta <= 0:
             return
 
         try:
@@ -99,15 +102,16 @@ class ShuffleWagerTracker:
                     text(
                         """
                         INSERT INTO shuffle_wager_history
-                            (discord_server_id, shuffle_username, total_wager_usd)
+                            (discord_server_id, shuffle_username, total_wager_usd, wager_delta)
                         VALUES
-                            (:server_id, :username, :total)
+                            (:server_id, :username, :total, :delta)
                         """
                     ),
                     {
                         "server_id": self.server_id,
                         "username": shuffle_username,
                         "total": total_wager_usd,
+                        "delta": wager_delta,
                     },
                 )
         except Exception as e:
@@ -217,7 +221,7 @@ class ShuffleWagerTracker:
                                 ),
                                 {"period_id": period_id, "username": shuffle_username, "current_wager": current_wager},
                             )
-                            self._record_wager_history(conn, shuffle_username, current_wager)
+                            self._record_wager_history(conn, shuffle_username, current_wager, wager_delta)
                             continue
 
                         # Award tickets if user is linked
@@ -257,7 +261,7 @@ class ShuffleWagerTracker:
                                     "new_tickets": new_tickets,
                                 },
                             )
-                            self._record_wager_history(conn, shuffle_username, current_wager)
+                            self._record_wager_history(conn, shuffle_username, current_wager, wager_delta)
                         else:
                             # User exists but not linked - just update wager
                             conn.execute(
@@ -274,7 +278,7 @@ class ShuffleWagerTracker:
                                 ),
                                 {"period_id": period_id, "username": shuffle_username, "current_wager": current_wager},
                             )
-                            self._record_wager_history(conn, shuffle_username, current_wager)
+                            self._record_wager_history(conn, shuffle_username, current_wager, wager_delta)
                     else:
                         # New user - check if they're linked
                         link_result = conn.execute(
@@ -313,7 +317,10 @@ class ShuffleWagerTracker:
                                 "platform": self.platform_name,
                             },
                         )
-                        self._record_wager_history(conn, shuffle_username, current_wager)
+                        # No history row for new-user onboarding: this user
+                        # came in already at $current_wager from before we
+                        # were tracking them. Their next observed change is
+                        # what counts toward the leaderboard.
 
                         # No tickets awarded for initial/existing wagers
                         logger.info(
