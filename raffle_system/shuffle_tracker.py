@@ -75,13 +75,6 @@ class ShuffleWagerTracker:
         codes_str = f"{len(codes)} codes" if len(codes) > 1 else self.campaign_code
         print(f"[Shuffle Tracker] 🔄 Settings refreshed - URL: {bool(self.affiliate_url)}, Codes: {codes_str}")
 
-    # Skip the history insert for ONE poll cycle after a missing-table
-    # error — checked again on the next poll, so a freshly-run dashboard
-    # migration takes effect without restarting the bot.
-    _history_skip_until = 0.0  # epoch seconds
-    _history_logged_first_success = False
-    _history_logged_first_call = False
-
     def _record_wager_history(self, conn, shuffle_username, total_wager_usd):
         """Append a row to shuffle_wager_history for the dashboard leaderboard.
 
@@ -91,33 +84,17 @@ class ShuffleWagerTracker:
         permissions issue, schema mismatch — does NOT poison the
         surrounding wager-update transaction (Postgres would otherwise
         abort every subsequent statement with InFailedSqlTransaction).
+
+        Every detected wager change must land here as a new row. No
+        skipping, no rate-limiting, no circuit breaker — if it fails for
+        one user we log it and move on, but the next user still gets a
+        fresh attempt. Each user's INSERT is independent.
         """
-        # One-time print to confirm the helper is even being reached and to
-        # show the server_id state. Uses print() rather than logger so it
-        # survives any logging-level config the host may impose.
-        if not ShuffleWagerTracker._history_logged_first_call:
-            ShuffleWagerTracker._history_logged_first_call = True
-            print(
-                f"[Shuffle Tracker] 📝 _record_wager_history first call "
-                f"(server_id={self.server_id!r}, user={shuffle_username})",
-                flush=True,
-            )
-
         if not self.server_id:
-            print(
-                f"[Shuffle Tracker] ⚠️ history insert skipped: server_id is "
-                f"{self.server_id!r} (must be set for history to record)",
-                flush=True,
-            )
-            return
-
-        import time
-
-        if time.time() < ShuffleWagerTracker._history_skip_until:
             return
 
         try:
-            with conn.begin_nested():  # SAVEPOINT
+            with conn.begin_nested():  # per-user SAVEPOINT
                 conn.execute(
                     text(
                         """
@@ -133,23 +110,11 @@ class ShuffleWagerTracker:
                         "total": total_wager_usd,
                     },
                 )
-            if not ShuffleWagerTracker._history_logged_first_success:
-                ShuffleWagerTracker._history_logged_first_success = True
-                print(
-                    f"[Shuffle Tracker] ✅ shuffle_wager_history: first row "
-                    f"written (server={self.server_id}, user={shuffle_username})",
-                    flush=True,
-                )
         except Exception as e:
-            # SAVEPOINT was rolled back — outer transaction still live.
-            # Skip for the next 15 minutes (one poll cycle); the helper
-            # will retry automatically after that so a freshly-applied
-            # dashboard migration is picked up without a bot restart.
-            ShuffleWagerTracker._history_skip_until = time.time() + 15 * 60
             print(
                 f"[Shuffle Tracker] ❌ shuffle_wager_history append failed "
                 f"for server={self.server_id}, user={shuffle_username}: "
-                f"{type(e).__name__}: {e}. Will retry on the next poll.",
+                f"{type(e).__name__}: {e}",
                 flush=True,
             )
 
