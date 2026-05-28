@@ -2,11 +2,11 @@
 
 **Last Updated:** May 2026
 
-**Service:** LeleBot - Discord Bot & Admin Dashboard
+**Service:** LeleBot - Discord Bot, Admin Dashboard & Browser Extension
 
 ## 1. Introduction
 
-This Privacy Policy explains how we collect, use, store, and protect your personal information when you use the Kick Community Bot (the "Bot") and related services. By using the Bot, you agree to the collection and use of information in accordance with this policy.
+This Privacy Policy explains how we collect, use, store, and protect your personal information when you use the Kick Community Bot (the "Bot"), the Admin Dashboard, and the LeleBot Browser Extension (the "Extension") (collectively, the "Service"). By using the Service, you agree to the collection and use of information in accordance with this policy.
 
 ## 2. Information We Collect
 
@@ -81,6 +81,21 @@ This Privacy Policy explains how we collect, use, store, and protect your person
 - Provably fair draw seeds and verification data
 - Custom command usage statistics
 
+### 2.4 Browser Extension
+
+The LeleBot Browser Extension is an optional companion to your Admin Dashboard. It is installed in your own browser and works only with your own dashboard.
+
+**What the Extension accesses:**
+- **Dashboard session cookie:** the Extension reuses your existing lelebot.xyz login session to make authenticated requests to your dashboard's API. It does not read, store, or transmit cookies for any site other than your lelebot.xyz dashboard.
+- **Local cache (in your browser only):** which dashboard server you are connected to, your extension preferences, and a short-lived copy of your active bonus hunt and bot status so the popup and overlay render instantly. This stays in the browser's local extension storage and is not sent to third parties.
+- **Slot titles on casino pages:** on supported casino sites (Stake, Shuffle), the Extension reads the slot/game title from the page you are viewing so you can add that slot to your bonus hunt. It reads only the slot title and only on those sites; it does not read other page content, form fields, or your account details on those sites.
+
+**What the Extension does NOT do:**
+- It does not track your browsing history or activity across the web.
+- It does not collect personal, financial, or payment information.
+- It does not execute remote code; all of its code is contained in the published package.
+- It only communicates with your own LeleBot dashboard — never with third-party servers.
+
 ## 3. How We Use Your Information
 
 **Core Bot Functionality:**
@@ -107,6 +122,12 @@ This Privacy Policy explains how we collect, use, store, and protect your person
 - Configure raffle periods and settings
 - Verify gambling platform accounts
 - Monitor bot health and status
+
+**Browser Extension Functions:**
+- Authenticate to your own dashboard using your existing login session
+- Show your active bonus hunt, slot calls, Guess-the-Balance status, and raffle info
+- Let you add slots to your hunt and trigger dashboard actions (pick random slot, open/close GTB, toggle slot requests) from supported sites
+- Cache the above locally so the popup and in-page panel render instantly
 
 **Security & Compliance:**
 - Prevent abuse, farming, and fraud through anti-farming measures
@@ -319,6 +340,7 @@ Your data may be transferred to and stored in countries outside your country of 
 - The Bot uses session management for authentication
 - We do not use tracking cookies or third-party analytics
 - OAuth flow uses temporary state tokens for security
+- The Browser Extension reuses your existing dashboard session cookie to authenticate API requests to your own dashboard; it does not set tracking cookies and does not read cookies for any other site
 
 ## 11. Changes to This Privacy Policy
 

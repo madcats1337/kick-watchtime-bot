@@ -4,7 +4,7 @@
 
 ## 1. Acceptance of Terms
 
-By using the LeleBot Discord bot and associated Admin Dashboard (collectively, the "Service"), you agree to be bound by these Terms of Service ("Terms"). If you do not agree to these Terms, please do not use the Service.
+By using the LeleBot Discord bot, the associated Admin Dashboard, and the LeleBot Browser Extension (collectively, the "Service"), you agree to be bound by these Terms of Service ("Terms"). If you do not agree to these Terms, please do not use the Service.
 
 ## 2. Description of Service
 
@@ -34,6 +34,14 @@ LeleBot is a comprehensive Discord-Kick integration platform providing automatio
 - **Custom Commands:** Create and edit custom commands with variables
 - **Settings & Configuration:** Manage bot behavior, feature toggles, intervals
 - **Audit Trail:** View activity logs and manage security
+
+**Browser Extension Features (Optional):**
+- **Dashboard Companion:** Connects to your own Admin Dashboard using your existing login session
+- **Bonus Hunt Tracking:** View your active hunt's stats and add slots to it from supported casino sites (Stake, Shuffle)
+- **Next-Bonus Highlighter:** Highlights the next slot to open during a hunt on the casino page
+- **Kick Chat Panel:** Shows live slot calls, Guess-the-Balance status, and raffle info in your Kick chat, with controls to pick a random slot, open/close GTB, and toggle slot requests
+
+The Extension is installed in your own browser, works only with your own dashboard, and only interacts with supported casino and Kick pages to provide the features above. It is not affiliated with or endorsed by Kick, Stake, Shuffle, or any other third-party platform.
 
 ## 3. User Responsibilities
 
