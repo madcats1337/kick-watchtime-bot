@@ -59,6 +59,19 @@ def get_engine():
     return _engine
 
 
+def build_raffle_kick_message(winner: dict, prize_description: str) -> str:
+    """Build the Kick-chat announcement line for a raffle winner.
+
+    Shared by the post-animation reveal (handle_raffle_event → animation_complete)
+    and the on-demand re-announce (handle_raffle_event → announce_winner) so both
+    paths produce identical chat output.
+    """
+    name = winner.get("winner_kick_name", "Unknown")
+    ticket = winner.get("winning_ticket", "?")
+    prize = prize_description or "Monthly Raffle Prize"
+    return f"🎉 Raffle Winner: {name} won {prize}! Ticket #{ticket}. Congratulations! 🎊"
+
+
 class RedisSubscriber:
     def __init__(self, bot, send_message_callback=None):
         self.bot = bot
@@ -748,6 +761,12 @@ class RedisSubscriber:
                                 [winner_to_announce], prize_description, guild_id=queue_server_id
                             )
 
+                            # Also announce in Kick chat. announce_in_chat swallows
+                            # its own errors, so a Kick failure never blocks the
+                            # Discord announce above.
+                            kick_msg = build_raffle_kick_message(winner_to_announce, prize_description)
+                            await self.announce_in_chat(kick_msg, guild_id=queue_server_id)
+
                             # Update queue in Redis
                             if winners_queue:
                                 # More winners remaining
@@ -763,6 +782,24 @@ class RedisSubscriber:
 
             except Exception as e:
                 print(f"❌ Error handling animation_complete: {e}")
+                import traceback
+
+                traceback.print_exc()
+
+        elif action == "announce_winner":
+            # On-demand re-announce of a single historic winner (from the
+            # Previous Winners table). No queue involved — announce directly to
+            # both Discord and Kick chat.
+            winner = data.get("winner") or {}
+            prize_description = data.get("prize_description", "")
+            server_id = data.get("server_id")
+            print(f"📢 [RAFFLE] Re-announce winner: {winner.get('winner_kick_name')} (server_id={server_id})")
+            try:
+                await self.announce_raffle_winners([winner], prize_description, guild_id=server_id)
+                kick_msg = build_raffle_kick_message(winner, prize_description)
+                await self.announce_in_chat(kick_msg, guild_id=server_id)
+            except Exception as e:
+                print(f"❌ Error handling announce_winner: {e}")
                 import traceback
 
                 traceback.print_exc()
