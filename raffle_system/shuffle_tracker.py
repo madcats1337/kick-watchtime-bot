@@ -93,7 +93,11 @@ class ShuffleWagerTracker:
         Wrapped in a nested transaction (SAVEPOINT) so an error here doesn't
         poison the surrounding wager-update transaction.
         """
-        if not self.server_id or wager_delta <= 0:
+        # Guard on the cent-rounded delta: a sub-cent residue (from comparing a
+        # full-precision API value against the DECIMAL(15,2) stored wager) is > 0
+        # but rounds to 0.00 in the wager_delta column, which would write a
+        # meaningless $0.00 history row. Only record a genuine cent-or-more change.
+        if not self.server_id or round(wager_delta, 2) <= 0:
             return
 
         try:
@@ -194,11 +198,23 @@ class ShuffleWagerTracker:
                         discord_id = prev_row[2]
                         kick_name = prev_row[3]
 
-                        # Calculate new wager since last check
-                        wager_delta = current_wager - last_known_wager
+                        # Calculate new wager since last check.
+                        #
+                        # The Shuffle API returns wagerAmount as a high-precision
+                        # float (e.g. 116301.04286432), but raffle_shuffle_wagers
+                        # stores last_known_wager as DECIMAL(15,2), so it reads back
+                        # rounded to cents (116301.04). Subtracting the rounded stored
+                        # value from the full-precision API value yields a tiny
+                        # positive residue (~0.0028) on EVERY poll even when the user
+                        # has not wagered. That residue is > 0 (so it slips past a
+                        # naive guard) but rounds to 0.00 in the NUMERIC(15,2)
+                        # wager_delta column — producing one phantom $0.00 history row
+                        # per user per poll. Round the delta to cents and require a
+                        # real change so only genuine wagering is recorded.
+                        wager_delta = round(current_wager - last_known_wager, 2)
 
                         if wager_delta <= 0:
-                            # No increase (or decrease, which we ignore)
+                            # No increase (or a sub-cent/decrease change, which we ignore)
                             continue
 
                         # Calculate tickets for the new wager amount
