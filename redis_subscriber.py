@@ -1294,6 +1294,76 @@ class RedisSubscriber:
             print(f"✅ Reload request for guild: {guild_id}")
             # Settings will be reloaded automatically on next access
 
+        elif action == "post_panel":
+            # Dashboard chose a channel for a link/verify panel → post (or move) it there.
+            await self._post_panel(data)
+
+    async def _post_panel(self, data):
+        """Post or move a link/verify panel into the channel chosen on the dashboard.
+
+        data: {panel_type: 'kick_link' | 'shuffle_verify', channel_id, discord_server_id}
+        Reuses the panel's existing create_panel(channel) (which rewrites the
+        link_panels DB row); we additionally delete the previous Discord message
+        so the panel "moves" rather than leaving a stale copy behind.
+        """
+        panel_type = data.get("panel_type")
+        channel_id = data.get("channel_id")
+        guild_id = data.get("discord_server_id")
+
+        if not panel_type or not channel_id or not guild_id:
+            print(f"⚠️ post_panel missing fields: {data}")
+            return
+
+        try:
+            guild_id = int(guild_id)
+            channel_id = int(channel_id)
+        except (TypeError, ValueError):
+            print(f"⚠️ post_panel bad ids: guild={guild_id!r} channel={channel_id!r}")
+            return
+
+        # Resolve the right per-guild panel registry
+        registry_attr = {"kick_link": "link_panels", "shuffle_verify": "shuffle_panels"}.get(panel_type)
+        if not registry_attr:
+            print(f"⚠️ post_panel unknown panel_type: {panel_type}")
+            return
+
+        panels = getattr(self.bot, registry_attr, None) or {}
+        panel = panels.get(guild_id)
+        if panel is None:
+            print(f"⚠️ No {panel_type} panel instance for guild {guild_id}")
+            return
+
+        new_channel = self.bot.get_channel(channel_id)
+        if new_channel is None:
+            print(f"⚠️ post_panel channel {channel_id} not found / not visible to bot")
+            return
+
+        # If the panel already exists somewhere, delete the old message (move semantics)
+        old_channel_id = getattr(panel, "panel_channel_id", None)
+        old_message_id = getattr(panel, "panel_message_id", None)
+        if old_message_id and old_channel_id:
+            try:
+                old_channel = self.bot.get_channel(int(old_channel_id))
+                if old_channel:
+                    old_message = await old_channel.fetch_message(int(old_message_id))
+                    await old_message.delete()
+                    print(f"🗑️ Removed old {panel_type} panel message in channel {old_channel_id}")
+            except Exception as e:
+                # Non-fatal: old message may already be gone
+                print(f"ℹ️ Could not delete old {panel_type} panel message: {e}")
+
+        try:
+            success = await panel.create_panel(new_channel)
+            if success:
+                print(f"✅ Posted {panel_type} panel in channel {channel_id} (guild {guild_id})")
+            else:
+                print(f"⚠️ Failed to post {panel_type} panel in channel {channel_id}")
+        except Exception as e:
+            print(f"⚠️ Error posting {panel_type} panel: {e}")
+            import traceback
+
+            traceback.print_exc()
+
     async def handle_giveaway_event(self, action, data):
         """Handle giveaway events from dashboard"""
         print(f"🎁 Giveaway event: {action}")

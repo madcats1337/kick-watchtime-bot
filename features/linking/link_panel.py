@@ -114,7 +114,7 @@ class LinkPanel:
                         """
                     SELECT guild_id, channel_id, message_id
                     FROM link_panels
-                    WHERE guild_id = :guild_id
+                    WHERE guild_id = :guild_id AND panel_type = 'kick_link'
                     ORDER BY created_at DESC
                     LIMIT 1
                 """
@@ -138,11 +138,12 @@ class LinkPanel:
 
         try:
             with self.engine.begin() as conn:
-                # Delete old panels for this guild
+                # Delete old Kick link panels for this guild (leave other panel
+                # types — e.g. the Shuffle verify panel — untouched)
                 conn.execute(
                     text(
                         """
-                    DELETE FROM link_panels WHERE guild_id = :guild_id
+                    DELETE FROM link_panels WHERE guild_id = :guild_id AND panel_type = 'kick_link'
                 """
                     ),
                     {"guild_id": guild_id},
@@ -152,8 +153,8 @@ class LinkPanel:
                 conn.execute(
                     text(
                         """
-                    INSERT INTO link_panels (guild_id, channel_id, message_id, emoji, created_at)
-                    VALUES (:guild_id, :channel_id, :message_id, '🔗', CURRENT_TIMESTAMP)
+                    INSERT INTO link_panels (guild_id, channel_id, message_id, emoji, panel_type, created_at)
+                    VALUES (:guild_id, :channel_id, :message_id, '🔗', 'kick_link', CURRENT_TIMESTAMP)
                 """
                     ),
                     {"guild_id": guild_id, "channel_id": channel_id, "message_id": message_id},
