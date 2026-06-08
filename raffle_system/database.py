@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS raffle_shuffle_wagers (
 CREATE TABLE IF NOT EXISTS raffle_shuffle_links (
     id SERIAL PRIMARY KEY,
     shuffle_username TEXT NOT NULL UNIQUE,
-    kick_name TEXT NOT NULL,
+    kick_name TEXT,  -- Nullable: self-verify via affiliate panel may have no Kick link yet
     discord_id BIGINT NOT NULL UNIQUE,  -- One Shuffle account per Discord user
     linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     verified BOOLEAN DEFAULT FALSE,  -- Admin verification
@@ -640,6 +640,60 @@ def migrate_add_platform_to_wager_tables(engine):
 
     except Exception as e:
         logger.error(f"Migration failed: {e}")
+        return False
+
+
+def migrate_make_shuffle_links_kick_name_nullable(engine):
+    """
+    Migration: Drop the NOT NULL constraint on raffle_shuffle_links.kick_name.
+
+    The Shuffle affiliate self-verify panel can verify a user before they've
+    linked a Kick account, so kick_name may be NULL. All existing readers of
+    this column already tolerate NULL (see shuffle_tracker / draw / startup sync).
+    """
+    try:
+        with engine.begin() as conn:
+            is_nullable = conn.execute(
+                text(
+                    """
+                SELECT is_nullable
+                FROM information_schema.columns
+                WHERE table_name = 'raffle_shuffle_links'
+                AND column_name = 'kick_name'
+            """
+                )
+            ).scalar()
+
+            if is_nullable == "NO":
+                conn.execute(text("ALTER TABLE raffle_shuffle_links ALTER COLUMN kick_name DROP NOT NULL"))
+                logger.info("✅ Dropped NOT NULL on raffle_shuffle_links.kick_name")
+            else:
+                logger.info("✓ raffle_shuffle_links.kick_name already nullable")
+
+        return True
+
+    except Exception as e:
+        logger.error(f"Migration failed (kick_name nullable): {e}")
+        return False
+
+
+def migrate_add_panel_type_to_link_panels(engine):
+    """
+    Migration: Add a panel_type column to link_panels so the Shuffle verify
+    panel can reuse this table alongside the Kick link panel without colliding.
+    Existing Kick panels default to 'kick_link'; Shuffle panels use 'shuffle_verify'.
+    """
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE link_panels ADD COLUMN IF NOT EXISTS panel_type text NOT NULL DEFAULT 'kick_link'")
+            )
+            logger.info("✓ Ensured link_panels.panel_type column exists")
+
+        return True
+
+    except Exception as e:
+        logger.error(f"Migration failed (link_panels.panel_type): {e}")
         return False
 
 

@@ -320,6 +320,11 @@ class BotSettingsManager:
         )
 
     @property
+    def shuffle_verified_role_id(self) -> Optional[int]:
+        """Discord role ID granted when a user verifies their Shuffle affiliate account."""
+        return self.get_int("shuffle_verified_role_id")
+
+    @property
     def shuffle_tickets_per_1000(self) -> int:
         """Tickets to award per $1000 wagered"""
         # Priority: wager_tickets_per_1000 (DB) -> shuffle_tickets_per_1000 (DB) -> env vars

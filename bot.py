@@ -47,6 +47,9 @@ from features.giveaway.giveaway_manager import GiveawayManager, setup_giveaway_m
 # Link panel import
 from features.linking.link_panel import setup_link_panel_system
 
+# Shuffle verify panel import
+from features.linking.shuffle_panel import setup_shuffle_panel_system
+
 # Timed messages import
 from features.messaging.timed_messages import setup_timed_messages
 
@@ -61,7 +64,9 @@ from raffle_system.database import (
     create_new_period,
     get_current_period,
     migrate_add_created_at_to_shuffle_wagers,
+    migrate_add_panel_type_to_link_panels,
     migrate_add_platform_to_wager_tables,
+    migrate_make_shuffle_links_kick_name_nullable,
     setup_raffle_database,
 )
 from raffle_system.gifted_sub_tracker import setup_gifted_sub_handler
@@ -512,6 +517,7 @@ class KickWebSocketManager:
 
             # Fallback: legacy servers that only have bot_settings tokens
             import os
+
             import aiohttp
 
             with engine.connect() as conn:
@@ -6240,8 +6246,7 @@ async def command_list(ctx):
     embed.add_field(
         name="⏱️ Watchtime & Stats",
         value=(
-            "`!watchtime [user]` - Check your or someone's watchtime\n"
-            "`!leaderboard` - View watchtime leaderboard"
+            "`!watchtime [user]` - Check your or someone's watchtime\n" "`!leaderboard` - View watchtime leaderboard"
         ),
         inline=False,
     )
@@ -6249,10 +6254,7 @@ async def command_list(ctx):
     # Points & Shop
     embed.add_field(
         name="💰 Points",
-        value=(
-            "`!points` / `!balance` - Check your points balance\n"
-            "`!pointslb` - View points leaderboard"
-        ),
+        value=("`!points` / `!balance` - Check your points balance\n" "`!pointslb` - View points leaderboard"),
         inline=False,
     )
 
@@ -7074,6 +7076,8 @@ async def on_ready():
             migrate_add_created_at_to_shuffle_wagers(engine)
             migrate_add_platform_to_wager_tables(engine)
             migrate_add_provably_fair_to_draws(engine)
+            migrate_make_shuffle_links_kick_name_nullable(engine)
+            migrate_add_panel_type_to_link_panels(engine)
 
             # Initialize per-guild trackers and managers (without adding cogs yet)
             for guild in bot.guilds:
@@ -7288,6 +7292,10 @@ async def on_ready():
                 bot.link_panel = next(iter(link_panels.values()))
 
             print(f"✅ Link panel system initialized ({len(link_panels)} guilds)")
+
+            # Setup Shuffle verify panel with per-guild instances
+            bot.shuffle_panels = await setup_shuffle_panel_system(bot, engine, get_guild_settings)
+            print(f"✅ Shuffle verify panel system initialized ({len(bot.shuffle_panels)} guilds)")
 
             # Setup timed messages system with per-guild instances
             timed_messages_managers = await setup_timed_messages(
@@ -8286,7 +8294,17 @@ class PointShopConfirmView(discord.ui.View):
                     await interaction.response.edit_message(content="❌ This item no longer exists.", view=None)
                     return
 
-                item_id, item_name, price, stock, is_active, requirement_title, requirement_footer, item_type, raffle_ticket_amount = item
+                (
+                    item_id,
+                    item_name,
+                    price,
+                    stock,
+                    is_active,
+                    requirement_title,
+                    requirement_footer,
+                    item_type,
+                    raffle_ticket_amount,
+                ) = item
 
                 if not is_active:
                     await interaction.response.edit_message(content="❌ This item is no longer available.", view=None)
@@ -8353,7 +8371,7 @@ class PointShopConfirmView(discord.ui.View):
                     )
 
                 # Determine sale status: auto-complete for raffle ticket items
-                sale_status = 'completed' if item_type == 'raffle_tickets' else 'pending'
+                sale_status = "completed" if item_type == "raffle_tickets" else "pending"
 
                 # Create sale record and capture order ID
                 sale_id_row = conn.execute(
@@ -8416,22 +8434,25 @@ class PointShopConfirmView(discord.ui.View):
 
                 # Auto-award raffle tickets if applicable (use savepoint so failure doesn't abort main transaction)
                 raffle_tickets_awarded = False
-                if item_type == 'raffle_tickets' and raffle_ticket_amount > 0:
+                if item_type == "raffle_tickets" and raffle_ticket_amount > 0:
                     try:
                         savepoint = conn.begin_nested()
                         period_row = conn.execute(
-                            text("""
+                            text(
+                                """
                                 SELECT id FROM raffle_periods
                                 WHERE discord_server_id = :server_id AND status = 'active'
                                 ORDER BY created_at DESC LIMIT 1
-                            """),
+                            """
+                            ),
                             {"server_id": self.server_id},
                         ).fetchone()
 
                         if period_row:
                             period_id = period_row[0]
                             conn.execute(
-                                text("""
+                                text(
+                                    """
                                     INSERT INTO raffle_tickets
                                         (period_id, discord_server_id, discord_id, kick_name, bonus_tickets, total_tickets, last_updated)
                                     VALUES (:period_id, :server_id, :discord_id, :kick_name, :amount, :amount, CURRENT_TIMESTAMP)
@@ -8440,7 +8461,8 @@ class PointShopConfirmView(discord.ui.View):
                                         bonus_tickets = raffle_tickets.bonus_tickets + :amount,
                                         total_tickets = raffle_tickets.total_tickets + :amount,
                                         last_updated = CURRENT_TIMESTAMP
-                                """),
+                                """
+                                ),
                                 {
                                     "period_id": period_id,
                                     "server_id": self.server_id,
@@ -8450,11 +8472,13 @@ class PointShopConfirmView(discord.ui.View):
                                 },
                             )
                             conn.execute(
-                                text("""
+                                text(
+                                    """
                                     INSERT INTO raffle_ticket_log
                                         (period_id, discord_id, kick_name, ticket_change, source, description)
                                     VALUES (:period_id, :discord_id, :kick_name, :amount, 'bonus', :desc)
-                                """),
+                                """
+                                ),
                                 {
                                     "period_id": period_id,
                                     "discord_id": self.discord_id,
@@ -8465,10 +8489,14 @@ class PointShopConfirmView(discord.ui.View):
                             )
                             savepoint.commit()
                             raffle_tickets_awarded = True
-                            print(f"[Point Shop] ✅ Auto-awarded {raffle_ticket_amount} raffle tickets to {self.kick_username} (Order #{sale_id})")
+                            print(
+                                f"[Point Shop] ✅ Auto-awarded {raffle_ticket_amount} raffle tickets to {self.kick_username} (Order #{sale_id})"
+                            )
                         else:
                             savepoint.rollback()
-                            print(f"[Point Shop] ⚠️ No active raffle period for server {self.server_id} - tickets NOT awarded for Order #{sale_id}")
+                            print(
+                                f"[Point Shop] ⚠️ No active raffle period for server {self.server_id} - tickets NOT awarded for Order #{sale_id}"
+                            )
                     except Exception as ticket_err:
                         try:
                             savepoint.rollback()
@@ -8476,6 +8504,7 @@ class PointShopConfirmView(discord.ui.View):
                             pass
                         print(f"[Point Shop] ⚠️ Failed to auto-award raffle tickets for Order #{sale_id}: {ticket_err}")
                         import traceback
+
                         traceback.print_exc()
 
                 # Get updated balance
@@ -8689,9 +8718,31 @@ class PointShopItemSelect(discord.ui.Select):
         for item in items[:25]:  # Discord limit
             # Support both old (9-col) and new (11-col) query results
             if len(item) >= 11:
-                item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer, item_type, raffle_ticket_amount = item[:11]
+                (
+                    item_id,
+                    name,
+                    description,
+                    price,
+                    stock,
+                    image_url,
+                    is_active,
+                    requirement_title,
+                    requirement_footer,
+                    item_type,
+                    raffle_ticket_amount,
+                ) = item[:11]
             else:
-                item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer = item[:9]
+                (
+                    item_id,
+                    name,
+                    description,
+                    price,
+                    stock,
+                    image_url,
+                    is_active,
+                    requirement_title,
+                    requirement_footer,
+                ) = item[:9]
                 item_type, raffle_ticket_amount = "custom", 0
             if is_active:
                 # Stock display
@@ -8953,7 +9004,9 @@ async def create_shop_mosaic_image(items, max_width=2400):
     downloaded_images = []
     async with aiohttp.ClientSession() as session:
         for item_idx, item in items_with_images:
-            item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer = item[:9]
+            item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer = (
+                item[:9]
+            )
 
             try:
                 async with session.get(image_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
@@ -9016,7 +9069,9 @@ async def create_shop_mosaic_image(items, max_width=2400):
         row_height = row_heights[row_idx]
 
         for col_idx, (item_idx, item, img) in enumerate(row):
-            item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer = item[:9]
+            item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer = (
+                item[:9]
+            )
 
             x = PADDING + col_idx * (cell_width + PADDING)
 
@@ -9413,7 +9468,9 @@ async def post_point_shop_to_discord(
             embed.set_image(url="attachment://shop_items.png")
 
         for idx, item in enumerate(items):
-            item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer = item[:9]
+            item_id, name, description, price, stock, image_url, is_active, requirement_title, requirement_footer = (
+                item[:9]
+            )
             stock_text = "∞" if stock < 0 else f"{stock}" if stock > 0 else "SOLD OUT"
 
             field_value = f"$: **{price:,}** pts | In stock: {stock_text}"
