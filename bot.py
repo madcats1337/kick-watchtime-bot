@@ -4337,6 +4337,8 @@ async def clip_buffer_management_task():
             kick_channel = None
             dashboard_url = None
             bot_api_key = None
+            # Default True: only the explicit string 'false' disables auto-start.
+            auto_start_buffer = True
 
             with engine.connect() as conn:
                 settings = conn.execute(
@@ -4344,7 +4346,7 @@ async def clip_buffer_management_task():
                         """
                     SELECT key, value FROM bot_settings
                     WHERE discord_server_id = :guild_id
-                    AND key IN ('kick_channel', 'dashboard_url', 'bot_api_key')
+                    AND key IN ('kick_channel', 'dashboard_url', 'bot_api_key', 'clips_auto_start_on_live')
                 """
                     ),
                     {"guild_id": guild_id},
@@ -4357,6 +4359,8 @@ async def clip_buffer_management_task():
                         dashboard_url = value
                     elif key == "bot_api_key":
                         bot_api_key = value
+                    elif key == "clips_auto_start_on_live":
+                        auto_start_buffer = str(value).lower() != "false"
 
             # Skip guilds without required configuration
             if not kick_channel:
@@ -4446,7 +4450,15 @@ async def clip_buffer_management_task():
                     print(f"[Clip Buffer][{guild_name}] ⚠️ Error verifying buffer status: {e}")
 
             # Handle transition: OFFLINE -> LIVE (or first run while live)
-            if (is_live and not last_stream_live_state) or should_start_buffer:
+            if ((is_live and not last_stream_live_state) or should_start_buffer) and not auto_start_buffer:
+                # Auto-start disabled for this guild — note the live state below
+                # but don't start the buffer. Manual Start from the dashboard
+                # still works.
+                if not should_start_buffer:
+                    print(
+                        f"[Clip Buffer][{guild_name}] ⏸️ Auto-start disabled (clips_auto_start_on_live=false) — skipping buffer start"
+                    )
+            elif (is_live and not last_stream_live_state) or should_start_buffer:
                 if not should_start_buffer:
                     print(f"[Clip Buffer][{guild_name}] 🟢 Stream went LIVE! Starting clip buffer...")
 
@@ -7115,11 +7127,16 @@ async def on_ready():
                 await setup_watchtime_converter(bot, engine, server_id=guild.id)
                 print(f"✅ [Guild {guild.name}] Watchtime converter initialized")
 
-                # Setup Shuffle wager tracker for this guild
+                # Setup wager tracker for this guild. The tracker self-selects the
+                # active platform (shuffle/howl) from wager_platform_name on every
+                # refresh, so a platform switch hot-swaps this same instance.
                 shuffle_trackers[guild.id] = await setup_shuffle_tracker(
                     bot, engine, server_id=guild.id, bot_settings=guild_settings
                 )
-                print(f"✅ [Guild {guild.name}] Shuffle tracker initialized")
+                # Expose per-guild wager trackers so the Redis settings-sync handler
+                # can call refresh_settings() for an instant platform hot-swap.
+                bot.shuffle_trackers_by_guild = shuffle_trackers
+                print(f"✅ [Guild {guild.name}] Wager tracker initialized")
 
                 # Setup auto-updating leaderboard for this guild
                 leaderboard_channel_id = guild_settings.raffle_leaderboard_channel_id

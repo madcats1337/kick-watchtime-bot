@@ -1275,6 +1275,19 @@ class RedisSubscriber:
                             f"⚠️ [Guild {guild_id}] Bad slot_calls_channel_id " f"value '{new_channel_id}': {cast_err}"
                         )
 
+                # Hot-swap the wager tracker's platform (shuffle/howl). The tracker
+                # re-resolves wager_platform_name + the matching affiliate config in
+                # refresh_settings(), so a dashboard platform switch takes effect
+                # within seconds instead of waiting for the next 15-min poll.
+                wager_trackers = getattr(self.bot, "shuffle_trackers_by_guild", {}) or {}
+                wager_tracker = wager_trackers.get(guild_id)
+                if wager_tracker is not None:
+                    try:
+                        wager_tracker.refresh_settings()
+                        print(f"   ✓ [Guild {guild_id}] wager platform = {wager_tracker.platform_name}")
+                    except Exception as wager_err:
+                        print(f"⚠️ [Guild {guild_id}] wager tracker refresh failed: {wager_err}")
+
         elif action == "update":
             key = data.get("key")
             value = data.get("value")

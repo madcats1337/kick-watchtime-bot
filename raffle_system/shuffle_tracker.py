@@ -51,22 +51,48 @@ class ShuffleWagerTracker:
         else:
             print(f"[Shuffle Tracker] ⚠️ No affiliate URL configured!")
 
+    # Default howl affiliate leaderboard endpoint (overridable per-server).
+    HOWL_DEFAULT_LB_URL = "https://howl.gg/api/user/affiliate/lb"
+
     def _load_settings(self):
-        """Load wager settings from bot_settings (database) or environment variables"""
+        """Load wager settings from bot_settings (database) or environment variables.
+
+        The active affiliate is the server's `wager_platform_name` (single-select
+        in Profile Settings). Because this runs before EVERY poll (refresh_settings)
+        and on every dashboard settings save, switching the platform hot-swaps the
+        SAME tracker object to the other API — no restart, no second tracker.
+        """
         if self.bot_settings:
             # Refresh to get latest values
             self.bot_settings.refresh()
 
-            self.affiliate_url = self.bot_settings.shuffle_affiliate_url or ""
-            self.campaign_code = self.bot_settings.shuffle_campaign_code or "lele"
-            self.tickets_per_1000 = self.bot_settings.shuffle_tickets_per_1000 or 20
-            self.platform_name = self.bot_settings.get("wager_platform_name") or "shuffle"
+            platform = (self.bot_settings.get("wager_platform_name") or "shuffle").strip().lower()
+            self.platform_name = platform
+
+            if platform == "howl":
+                self.howl_api_key = self.bot_settings.get("howl_api_key") or ""
+                self.affiliate_url = self.bot_settings.get("howl_affiliate_url") or self.HOWL_DEFAULT_LB_URL
+                self.campaign_code = self.bot_settings.get("howl_campaign_code") or ""
+                # Reuse the shared ticket rate (no separate howl rate setting yet).
+                self.tickets_per_1000 = self.bot_settings.shuffle_tickets_per_1000 or 20
+            else:
+                self.howl_api_key = ""
+                self.affiliate_url = self.bot_settings.shuffle_affiliate_url or ""
+                self.campaign_code = self.bot_settings.shuffle_campaign_code or "lele"
+                self.tickets_per_1000 = self.bot_settings.shuffle_tickets_per_1000 or 20
         else:
             # Fallback to environment variables
-            self.affiliate_url = os.getenv("WAGER_AFFILIATE_URL") or os.getenv("SHUFFLE_AFFILIATE_URL", "")
-            self.campaign_code = os.getenv("WAGER_CAMPAIGN_CODE") or os.getenv("SHUFFLE_CAMPAIGN_CODE", "lele")
-            self.tickets_per_1000 = int(os.getenv("WAGER_TICKETS_PER_1000_USD", "20"))
             self.platform_name = os.getenv("WAGER_PLATFORM_NAME", "shuffle").lower()
+            if self.platform_name == "howl":
+                self.howl_api_key = os.getenv("HOWL_API_KEY", "")
+                self.affiliate_url = os.getenv("HOWL_AFFILIATE_URL") or self.HOWL_DEFAULT_LB_URL
+                self.campaign_code = os.getenv("HOWL_CAMPAIGN_CODE", "")
+                self.tickets_per_1000 = int(os.getenv("WAGER_TICKETS_PER_1000_USD", "20"))
+            else:
+                self.howl_api_key = ""
+                self.affiliate_url = os.getenv("WAGER_AFFILIATE_URL") or os.getenv("SHUFFLE_AFFILIATE_URL", "")
+                self.campaign_code = os.getenv("WAGER_CAMPAIGN_CODE") or os.getenv("SHUFFLE_CAMPAIGN_CODE", "lele")
+                self.tickets_per_1000 = int(os.getenv("WAGER_TICKETS_PER_1000_USD", "20"))
 
     def refresh_settings(self):
         """Reload settings from database"""
@@ -125,6 +151,24 @@ class ShuffleWagerTracker:
                 f"{type(e).__name__}: {e}",
                 flush=True,
             )
+            return
+
+        # Publish to the dashboard's live "recent wagers" feed. This is the single
+        # chokepoint for a real (cent-or-more) committed wager delta, so it covers
+        # every update branch. Best-effort: a publish failure never affects ingestion.
+        try:
+            from utils.redis_publisher import bot_redis_publisher
+
+            bot_redis_publisher.publish_wager(
+                discord_server_id=str(self.server_id),
+                shuffle_username=shuffle_username,
+                kick_name=None,
+                platform=self.platform_name,
+                wager_delta=round(wager_delta, 2),
+                total_wager_usd=round(total_wager_usd, 2) if total_wager_usd is not None else None,
+            )
+        except Exception as pub_err:
+            print(f"[Shuffle Tracker] wager publish failed: {pub_err}")
 
     async def update_shuffle_wagers(self):
         """
@@ -419,28 +463,80 @@ class ShuffleWagerTracker:
             logger.error(f"Failed to get active period: {e}")
             return None
 
+    def _normalize_rows(self, raw):
+        """Normalize a platform's raw affiliate response into the row shape the
+        update loop consumes: dicts with `username`, `wagerAmount`, `campaignCode`.
+
+        - Shuffle: a bare JSON list already in that shape — passed through.
+        - Howl: `{success, data:[{name, wageredUSD, userId, ...}]}` (see
+          leaderboard-howl-data.md). `name`→username, `wageredUSD`→wagerAmount.
+          Howl rows carry no per-row campaign code, so we stamp the configured
+          one (or "*") so the existing campaign-code filter passes — howl scopes
+          by API params/account, not per-row matching.
+        """
+        if self.platform_name == "howl":
+            if not isinstance(raw, dict) or not raw.get("success"):
+                logger.error(f"Unexpected howl API response: {str(raw)[:200]}")
+                return None
+            rows = raw.get("data") or []
+            stamp = self.campaign_code.split(",")[0].strip().lower() if self.campaign_code else "*"
+            normalized = []
+            for r in rows:
+                name = r.get("name")
+                if not name:
+                    continue
+                normalized.append(
+                    {
+                        "username": name,
+                        "wagerAmount": r.get("wageredUSD", 0),
+                        "campaignCode": stamp,
+                    }
+                )
+            return normalized
+
+        # Shuffle (and other bare-list platforms)
+        if not isinstance(raw, list):
+            logger.error(f"Unexpected {self.platform_name} API response format: {type(raw)}")
+            return None
+        return raw
+
     async def _fetch_shuffle_data(self):
         """
-        Fetch wager data from gambling platform affiliate page
+        Fetch wager data from the active platform's affiliate API and normalize it.
 
         Returns:
-            list: Array of user wager objects or None on failure
+            list: Array of normalized user wager objects, or None on failure.
         """
+        headers = {}
+        params = None
+        if self.platform_name == "howl":
+            if not self.howl_api_key:
+                logger.error("Howl selected but no howl_api_key configured")
+                return None
+            # Howl requires an Authorization header (raw key) and a date window.
+            # We query the current calendar month: howl returns a *period total*
+            # for [from, to). Within a month this grows monotonically, so the
+            # tracker's `current - last_known` delta works exactly like Shuffle's
+            # lifetime total. At a month rollover the period total drops, making
+            # the delta <= 0 → the row is skipped (no negative tickets) — safe.
+            headers["Authorization"] = self.howl_api_key
+            now = datetime.utcnow()
+            month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            params = {
+                "from": month_start.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                "to": now.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                "limit": "1000",
+            }
+
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(self.affiliate_url, timeout=30) as response:
+                async with session.get(self.affiliate_url, headers=headers, params=params, timeout=30) as response:
                     if response.status != 200:
                         logger.error(f"{self.platform_name.capitalize()} API returned status {response.status}")
                         return None
 
-                    # The page returns JSON array directly
                     data = await response.json()
-
-                    if not isinstance(data, list):
-                        logger.error(f"Unexpected {self.platform_name} API response format: {type(data)}")
-                        return None
-
-                    return data
+                    return self._normalize_rows(data)
 
         except asyncio.TimeoutError:
             logger.error(f"Timeout fetching {self.platform_name} affiliate data")

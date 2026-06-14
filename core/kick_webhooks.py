@@ -1184,7 +1184,7 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                 """
                             SELECT key, value FROM bot_settings
                             WHERE discord_server_id = :guild_id
-                            AND key IN ('kick_channel', 'dashboard_url', 'bot_api_key')
+                            AND key IN ('kick_channel', 'dashboard_url', 'bot_api_key', 'clips_auto_start_on_live')
                         """
                             ),
                             {"guild_id": discord_server_id},
@@ -1194,24 +1194,33 @@ def create_discord_notifier(discord_bot, channel_id: int):
                         kick_channel = settings.get("kick_channel")
                         dashboard_url = settings.get("dashboard_url")
                         api_key = settings.get("bot_api_key")
+                        # Default True: only the explicit string 'false' disables auto-start.
+                        auto_start_buffer = str(settings.get("clips_auto_start_on_live", "true")).lower() != "false"
 
                         if dashboard_url and api_key and kick_channel:
                             async with aiohttp.ClientSession() as session:
                                 if is_live:
-                                    # Start clip buffer
-                                    async with session.post(
-                                        f"{dashboard_url}/api/clips/buffer/start",
-                                        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
-                                        json={"channel": kick_channel, "buffer_minutes": 4},
-                                        timeout=30,
-                                    ) as resp:
-                                        if resp.status == 200:
-                                            print(f"[Webhook] ✅ Clip buffer started for {broadcaster}")
-                                        else:
-                                            error_text = await resp.text()
-                                            print(
-                                                f"[Webhook] ⚠️ Failed to start clip buffer: {resp.status} - {error_text[:200]}"
-                                            )
+                                    if not auto_start_buffer:
+                                        # Auto-start disabled for this guild — skip starting
+                                        # the buffer (manual Start from the dashboard still works).
+                                        print(
+                                            f"[Webhook] ⏸️ Auto-start disabled (clips_auto_start_on_live=false) — skipping clip buffer for {broadcaster}"
+                                        )
+                                    else:
+                                        # Start clip buffer
+                                        async with session.post(
+                                            f"{dashboard_url}/api/clips/buffer/start",
+                                            headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+                                            json={"channel": kick_channel, "buffer_minutes": 4},
+                                            timeout=30,
+                                        ) as resp:
+                                            if resp.status == 200:
+                                                print(f"[Webhook] ✅ Clip buffer started for {broadcaster}")
+                                            else:
+                                                error_text = await resp.text()
+                                                print(
+                                                    f"[Webhook] ⚠️ Failed to start clip buffer: {resp.status} - {error_text[:200]}"
+                                                )
                                 else:
                                     # Stop clip buffer
                                     async with session.post(

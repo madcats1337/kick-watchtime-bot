@@ -90,6 +90,25 @@ class BotRedisPublisher:
             "bot:stream_status", "stream_offline", {"discord_server_id": discord_server_id, "streamer": streamer}
         )
 
+    def publish_wager(self, discord_server_id, shuffle_username, kick_name, platform, wager_delta, total_wager_usd):
+        """Publish a recorded wager to the dashboard live feed.
+
+        Consumed by the dashboard's /api/events/wager SSE stream, which filters
+        by discord_server_id — so it MUST be present in the payload.
+        """
+        return self.publish(
+            "dashboard:wager",
+            "wager_recorded",
+            {
+                "discord_server_id": discord_server_id,
+                "shuffle_username": shuffle_username,
+                "kick_name": kick_name,
+                "platform": platform,
+                "wager_delta": wager_delta,
+                "total_wager_usd": total_wager_usd,
+            },
+        )
+
 
 # Global instance
 bot_redis_publisher = BotRedisPublisher()
