@@ -44,10 +44,11 @@ from features.games.guess_the_balance import GuessTheBalanceManager, parse_amoun
 # Giveaway system import
 from features.giveaway.giveaway_manager import GiveawayManager, setup_giveaway_managers
 
+# Shuffle verify panel import
+from features.linking.howl_panel import setup_howl_panel_system
+
 # Link panel import
 from features.linking.link_panel import setup_link_panel_system
-
-# Shuffle verify panel import
 from features.linking.shuffle_panel import setup_shuffle_panel_system
 
 # Timed messages import
@@ -67,10 +68,12 @@ from raffle_system.database import (
     migrate_add_panel_type_to_link_panels,
     migrate_add_platform_to_wager_tables,
     migrate_make_shuffle_links_kick_name_nullable,
+    migrate_one_active_period_per_server,
     setup_raffle_database,
 )
 from raffle_system.gifted_sub_tracker import setup_gifted_sub_handler
 from raffle_system.migrations.add_provably_fair_to_draws import migrate_add_provably_fair_to_draws
+from raffle_system.migrations.platform_scope_raffle_constraints import migrate_platform_scope_raffle_constraints
 from raffle_system.scheduler import setup_raffle_scheduler
 from raffle_system.shuffle_tracker import setup_shuffle_tracker
 from raffle_system.watchtime_converter import setup_watchtime_converter
@@ -7087,9 +7090,14 @@ async def on_ready():
             # Run migrations
             migrate_add_created_at_to_shuffle_wagers(engine)
             migrate_add_platform_to_wager_tables(engine)
+            # Must run AFTER migrate_add_platform_to_wager_tables (needs the platform column)
+            migrate_platform_scope_raffle_constraints(engine)
             migrate_add_provably_fair_to_draws(engine)
             migrate_make_shuffle_links_kick_name_nullable(engine)
             migrate_add_panel_type_to_link_panels(engine)
+            # Enforce one active raffle period per server (safety net behind the
+            # transient-DB-error fix). Must run before the per-guild loop below.
+            migrate_one_active_period_per_server(engine)
 
             # Initialize per-guild trackers and managers (without adding cogs yet)
             for guild in bot.guilds:
@@ -7102,9 +7110,27 @@ async def on_ready():
                 print(f"  - slot_calls_channel_id: {guild_settings.slot_calls_channel_id}")
                 print(f"  - raffle_announcement_channel_id: {guild_settings.raffle_announcement_channel_id}")
 
-                # Ensure this guild has an active raffle period
-                current_period = get_current_period(engine, discord_server_id=guild.id)
-                if not current_period:
+                # Ensure this guild has an active raffle period.
+                # IMPORTANT: only create a period when the lookup SUCCEEDS and
+                # genuinely returns nothing. A DB error (get_current_period now
+                # re-raises) must NOT fall through to create_new_period — that
+                # would end the real active period and start a bogus new one
+                # (exactly the bug a transient DB drop caused on the pg upgrade).
+                # On error, skip creation; the per-minute scheduler reconciles
+                # once the DB is healthy again.
+                try:
+                    current_period = get_current_period(engine, discord_server_id=guild.id)
+                except Exception as e:
+                    current_period = None
+                    print(
+                        f"⚠️ [Guild {guild.name}] Could not check raffle period "
+                        f"(DB error: {e}); skipping period creation this startup"
+                    )
+                    create_period = False
+                else:
+                    create_period = current_period is None
+
+                if create_period:
                     # Create initial raffle period for this month for this guild
                     start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
                     if start.month == 12:
@@ -7114,7 +7140,7 @@ async def on_ready():
 
                     period_id = create_new_period(engine, start, end, discord_server_id=guild.id)
                     print(f"✅ [Guild {guild.name}] Created initial raffle period #{period_id}")
-                else:
+                elif current_period:
                     print(f"✅ [Guild {guild.name}] Active raffle period found (#{current_period['id']})")
 
                 # Setup gifted sub tracker for this guild
@@ -7313,6 +7339,10 @@ async def on_ready():
             # Setup Shuffle verify panel with per-guild instances
             bot.shuffle_panels = await setup_shuffle_panel_system(bot, engine, get_guild_settings)
             print(f"✅ Shuffle verify panel system initialized ({len(bot.shuffle_panels)} guilds)")
+
+            # Setup Howl verify panel with per-guild instances
+            bot.howl_panels = await setup_howl_panel_system(bot, engine, get_guild_settings)
+            print(f"✅ Howl verify panel system initialized ({len(bot.howl_panels)} guilds)")
 
             # Setup timed messages system with per-guild instances
             timed_messages_managers = await setup_timed_messages(

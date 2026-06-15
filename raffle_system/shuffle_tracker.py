@@ -194,9 +194,16 @@ class ShuffleWagerTracker:
                 logger.error(f"Failed to fetch {self.platform_name} affiliate data")
                 return {"status": "fetch_failed", "updates": 0}
 
-            # Filter for campaign code(s) - supports multiple codes separated by comma
-            campaign_codes = [code.strip().lower() for code in self.campaign_code.split(",")]
-            filtered_data = [user for user in wager_data if user.get("campaignCode", "").lower() in campaign_codes]
+            # Filter for campaign code(s) - supports multiple codes separated by comma.
+            # Howl's affiliate API already returns ONLY your affiliates and has no
+            # per-row campaign code to match on, so the campaign filter is both
+            # meaningless and (with an empty howl_campaign_code) would drop every
+            # row. Bypass it for howl; shuffle keeps the existing filter.
+            if self.platform_name == "howl":
+                filtered_data = wager_data
+            else:
+                campaign_codes = [code.strip().lower() for code in self.campaign_code.split(",")]
+                filtered_data = [user for user in wager_data if user.get("campaignCode", "").lower() in campaign_codes]
 
             if not filtered_data:
                 logger.warning(f"No users found with campaign codes '{self.campaign_code}' on {self.platform_name}")
@@ -228,9 +235,10 @@ class ShuffleWagerTracker:
                             kick_name
                         FROM raffle_shuffle_wagers
                         WHERE period_id = :period_id AND shuffle_username = :username
+                          AND platform = :platform
                     """
                         ),
-                        {"period_id": period_id, "username": shuffle_username},
+                        {"period_id": period_id, "username": shuffle_username, "platform": self.platform_name},
                     )
 
                     prev_row = prev_result.fetchone()
@@ -277,9 +285,15 @@ class ShuffleWagerTracker:
                                     last_checked = CURRENT_TIMESTAMP,
                                     last_updated = CURRENT_TIMESTAMP
                                 WHERE period_id = :period_id AND shuffle_username = :username
+                                  AND platform = :platform
                             """
                                 ),
-                                {"period_id": period_id, "username": shuffle_username, "current_wager": current_wager},
+                                {
+                                    "period_id": period_id,
+                                    "username": shuffle_username,
+                                    "current_wager": current_wager,
+                                    "platform": self.platform_name,
+                                },
                             )
                             self._record_wager_history(conn, shuffle_username, current_wager, wager_delta)
                             continue
@@ -312,6 +326,7 @@ class ShuffleWagerTracker:
                                     last_checked = CURRENT_TIMESTAMP,
                                     last_updated = CURRENT_TIMESTAMP
                                 WHERE period_id = :period_id AND shuffle_username = :username
+                                  AND platform = :platform
                             """
                                 ),
                                 {
@@ -319,6 +334,7 @@ class ShuffleWagerTracker:
                                     "username": shuffle_username,
                                     "current_wager": current_wager,
                                     "new_tickets": new_tickets,
+                                    "platform": self.platform_name,
                                 },
                             )
                             self._record_wager_history(conn, shuffle_username, current_wager, wager_delta)
@@ -334,21 +350,29 @@ class ShuffleWagerTracker:
                                     last_checked = CURRENT_TIMESTAMP,
                                     last_updated = CURRENT_TIMESTAMP
                                 WHERE period_id = :period_id AND shuffle_username = :username
+                                  AND platform = :platform
                             """
                                 ),
-                                {"period_id": period_id, "username": shuffle_username, "current_wager": current_wager},
+                                {
+                                    "period_id": period_id,
+                                    "username": shuffle_username,
+                                    "current_wager": current_wager,
+                                    "platform": self.platform_name,
+                                },
                             )
                             self._record_wager_history(conn, shuffle_username, current_wager, wager_delta)
                     else:
-                        # New user - check if they're linked
+                        # New user - check if they're linked (scoped to THIS platform
+                        # so a shuffle link can't match a howl wager username or vice-versa)
                         link_result = conn.execute(
                             text(
                                 """
                             SELECT discord_id, kick_name FROM raffle_shuffle_links
                             WHERE shuffle_username = :username AND verified = TRUE
+                              AND platform = :platform
                         """
                             ),
-                            {"username": shuffle_username},
+                            {"username": shuffle_username, "platform": self.platform_name},
                         )
 
                         link_row = link_result.fetchone()
@@ -561,12 +585,15 @@ class ShuffleWagerTracker:
         """
         try:
             with self.engine.begin() as conn:
-                # Check if shuffle username already linked
+                # Check if shuffle username already linked.
+                # Scoped to platform='shuffle' so a user's howl link (now allowed
+                # to coexist via UNIQUE(shuffle_username, platform)) doesn't make
+                # this report a false "already linked".
                 existing = conn.execute(
                     text(
                         """
                     SELECT discord_id, kick_name FROM raffle_shuffle_links
-                    WHERE shuffle_username = :username
+                    WHERE shuffle_username = :username AND platform = 'shuffle'
                 """
                     ),
                     {"username": shuffle_username},
@@ -581,12 +608,14 @@ class ShuffleWagerTracker:
                         "existing_kick_name": existing_row[1],
                     }
 
-                # Check if discord_id already has a shuffle link
+                # Check if discord_id already has a shuffle link (scoped to
+                # platform='shuffle' — a user may also hold a howl link under
+                # UNIQUE(discord_id, platform); that must not block this).
                 discord_check = conn.execute(
                     text(
                         """
                     SELECT shuffle_username FROM raffle_shuffle_links
-                    WHERE discord_id = :discord_id
+                    WHERE discord_id = :discord_id AND platform = 'shuffle'
                 """
                     ),
                     {"discord_id": discord_id},
@@ -597,14 +626,15 @@ class ShuffleWagerTracker:
                 if discord_row:
                     return {"status": "discord_already_linked", "existing_shuffle_username": discord_row[0]}
 
-                # Create the link
+                # Create the link (platform explicit for clarity, though the
+                # column also defaults to 'shuffle')
                 conn.execute(
                     text(
                         """
                     INSERT INTO raffle_shuffle_links
-                        (shuffle_username, kick_name, discord_id, verified, verified_by_discord_id, verified_at)
+                        (shuffle_username, kick_name, discord_id, platform, verified, verified_by_discord_id, verified_at)
                     VALUES
-                        (:shuffle_username, :kick_name, :discord_id, :verified, :verified_by,
+                        (:shuffle_username, :kick_name, :discord_id, 'shuffle', :verified, :verified_by,
                          CASE WHEN :verified THEN CURRENT_TIMESTAMP ELSE NULL END)
                 """
                     ),

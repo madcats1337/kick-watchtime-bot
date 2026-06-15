@@ -344,8 +344,13 @@ def get_current_period(engine, discord_server_id=None):
             return None
 
     except Exception as e:
+        # IMPORTANT: re-raise on error. A query failure (e.g. a transient
+        # connection/SSL drop) must NOT be collapsed into None — callers treat
+        # None as "no active period exists" and respond by creating a new one,
+        # which closes the real active period. Let the error propagate so
+        # callers can skip the cycle instead of destroying the period.
         logger.error(f"Failed to get current period: {e}")
-        return None
+        raise
 
 
 def create_new_period(engine, start_date, end_date, clear_tickets=True, discord_server_id=None):
@@ -497,6 +502,47 @@ def create_new_period(engine, start_date, end_date, clear_tickets=True, discord_
     except Exception as e:
         logger.error(f"Failed to create new period: {e}")
         return None
+
+
+def migrate_one_active_period_per_server(engine):
+    """
+    Migration: Enforce at most one active raffle period per Discord server.
+
+    Adds a partial unique index so a second status='active' row for the same
+    discord_server_id is rejected at the DB level. This is the safety net behind
+    create_new_period(): a spurious "create" (e.g. triggered by a transient DB
+    error being misread as "no period") can no longer silently duplicate the
+    active period — the INSERT fails loudly instead.
+
+    Idempotent (IF NOT EXISTS). If the index cannot be created because duplicate
+    active rows already exist, we log a clear error and return False WITHOUT
+    deleting/merging anything — the duplicates must be cleaned up manually, after
+    which this migration applies on the next startup.
+    """
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_one_active_period_per_server
+                ON raffle_periods (discord_server_id)
+                WHERE status = 'active'
+            """
+                )
+            )
+        logger.info("✓ Ensured unique index uq_one_active_period_per_server (one active period per server)")
+        return True
+
+    except Exception as e:
+        # Most likely cause: existing duplicate active periods violate the index.
+        logger.error(
+            f"❌ Could not create uq_one_active_period_per_server: {e}. "
+            "This usually means there are already TWO OR MORE active periods for the "
+            "same discord_server_id. Resolve the duplicates manually "
+            "(end the bogus period via the dashboard / SQL), then restart so this "
+            "index can apply. No rows were modified."
+        )
+        return False
 
 
 def migrate_add_created_at_to_shuffle_wagers(engine):

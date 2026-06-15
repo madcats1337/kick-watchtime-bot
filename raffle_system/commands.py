@@ -431,9 +431,9 @@ Get ready to participate when the period starts!
                         text(
                             """
                         INSERT INTO raffle_shuffle_links
-                        (shuffle_username, kick_name, discord_id, verified, verified_by_discord_id, verified_at)
-                        VALUES (:username, :kick_name, :discord_id, TRUE, :admin_id, CURRENT_TIMESTAMP)
-                        ON CONFLICT (shuffle_username)
+                        (shuffle_username, kick_name, discord_id, platform, verified, verified_by_discord_id, verified_at)
+                        VALUES (:username, :kick_name, :discord_id, 'shuffle', TRUE, :admin_id, CURRENT_TIMESTAMP)
+                        ON CONFLICT (shuffle_username, platform)
                         DO UPDATE SET
                             kick_name = EXCLUDED.kick_name,
                             discord_id = EXCLUDED.discord_id,

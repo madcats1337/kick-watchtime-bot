@@ -1314,7 +1314,7 @@ class RedisSubscriber:
     async def _post_panel(self, data):
         """Post or move a link/verify panel into the channel chosen on the dashboard.
 
-        data: {panel_type: 'kick_link' | 'shuffle_verify', channel_id, discord_server_id}
+        data: {panel_type: 'kick_link' | 'shuffle_verify' | 'howl_verify', channel_id, discord_server_id}
         Reuses the panel's existing create_panel(channel) (which rewrites the
         link_panels DB row); we additionally delete the previous Discord message
         so the panel "moves" rather than leaving a stale copy behind.
@@ -1335,7 +1335,11 @@ class RedisSubscriber:
             return
 
         # Resolve the right per-guild panel registry
-        registry_attr = {"kick_link": "link_panels", "shuffle_verify": "shuffle_panels"}.get(panel_type)
+        registry_attr = {
+            "kick_link": "link_panels",
+            "shuffle_verify": "shuffle_panels",
+            "howl_verify": "howl_panels",
+        }.get(panel_type)
         if not registry_attr:
             print(f"⚠️ post_panel unknown panel_type: {panel_type}")
             return
