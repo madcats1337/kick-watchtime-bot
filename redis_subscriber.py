@@ -1684,6 +1684,7 @@ class RedisSubscriber:
         """
         try:
             channel_id = None
+            dashboard_url = None
 
             # Multi-server: Get channel from guild-specific settings
             if guild_id:
@@ -1694,11 +1695,29 @@ class RedisSubscriber:
                     guild_settings = get_guild_settings(int(guild_id))
                     if guild_settings:
                         channel_id = guild_settings.get_int("raffle_announcement_channel_id")
+                        # Same dashboard_url bot_setting the clip-buffer calls reuse —
+                        # used to build the "Verify this draw" link below.
+                        dashboard_url = (guild_settings.dashboard_url or "").rstrip("/") or None
                         print(f"[Raffle] Got channel_id {channel_id} from guild settings for guild {guild_id}")
                 except ImportError as ie:
                     print(f"[Raffle] Could not import get_guild_settings: {ie}")
                 except Exception as e:
                     print(f"[Raffle] Error getting guild settings: {e}")
+
+            def build_verify_block(w):
+                """Per-winner proof hash + 'Verify this draw' deep link.
+
+                Returns '' when we lack a proof hash or a dashboard_url, so the
+                announcement degrades gracefully (no broken/empty link).
+                """
+                proof_hash = w.get("proof_hash")
+                draw_id = w.get("draw_id")
+                lines = []
+                if proof_hash:
+                    lines.append(f"**Proof**: `{proof_hash[:16]}…`")
+                if dashboard_url and draw_id:
+                    lines.append(f"🔍 [Verify this draw]({dashboard_url}/provably-fair/winners?draw={draw_id})")
+                return ("\n" + "\n".join(lines)) if lines else ""
 
             # Fallback to global settings manager
             if not channel_id and hasattr(self.bot, "settings_manager"):
@@ -1746,7 +1765,7 @@ class RedisSubscriber:
 **Winner**: {winner_kick_name} ({mention})
 **Winning Ticket**: #{winning_ticket} out of {total_tickets:,}
 **Win Probability**: {win_probability:.2f}%
-**Prize**: {prize_description or 'Monthly Raffle Prize'}
+**Prize**: {prize_description or 'Monthly Raffle Prize'}{build_verify_block(winner)}
 
 Congratulations! Please contact an admin to claim your prize! 🎊
                 """.strip()
@@ -1777,7 +1796,9 @@ Congratulations! Please contact an admin to claim your prize! 🎊
                         mention = "Unknown User"
 
                     message += f"**{i}. {winner_kick_name}** ({mention})\n"
-                    message += f"   • Ticket #{winning_ticket}/{total_tickets:,} ({win_probability:.2f}%)\n\n"
+                    message += f"   • Ticket #{winning_ticket}/{total_tickets:,} ({win_probability:.2f}%)"
+                    message += build_verify_block(winner).replace("\n", "\n   • ")
+                    message += "\n\n"
 
                 message += "Congratulations to all winners! Please contact an admin to claim your prizes! 🎊"
 

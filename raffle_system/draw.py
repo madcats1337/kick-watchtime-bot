@@ -51,11 +51,12 @@ class RaffleDraw:
             excluded_discord_ids = excluded_discord_ids or []
 
             with self.engine.begin() as conn:
-                # Get server_id from the period
+                # Get server_id + the committed seed/commitment from the period.
                 period_result = conn.execute(
                     text(
                         """
-                    SELECT discord_server_id FROM raffle_periods WHERE id = :period_id
+                    SELECT discord_server_id, server_seed, server_seed_commitment
+                    FROM raffle_periods WHERE id = :period_id
                 """
                     ),
                     {"period_id": period_id},
@@ -65,6 +66,8 @@ class RaffleDraw:
                     logger.error(f"Period {period_id} not found")
                     return None
                 server_id = period_row[0]
+                committed_seed = period_row[1]
+                committed_commitment = period_row[2]
 
                 # Get all participants with tickets (excluding those in raffle_exclusions and excluded_discord_ids)
                 query = """
@@ -120,9 +123,20 @@ class RaffleDraw:
                 total_tickets = current_ticket - 1
                 total_participants = len(participants)
 
-                # Draw winning ticket using provably fair SHA-256 hashing
-                # Generate server seed
-                server_seed = secrets.token_hex(32)  # 64 character hex string
+                # Draw winning ticket using provably fair SHA-256 hashing.
+                # Commit-reveal: use the seed COMMITTED when the period was
+                # created (create_new_period). Revealing the pre-committed seed
+                # is the whole point — the operator could not have changed it
+                # after the ticket pool was known. Fallback for periods created
+                # before the commit-reveal migration (no committed seed): keep
+                # the legacy at-draw generation so old/in-flight periods still
+                # draw without crashing.
+                if committed_seed:
+                    server_seed = committed_seed
+                    server_seed_commitment = committed_commitment or hashlib.sha256(server_seed.encode()).hexdigest()
+                else:
+                    server_seed = secrets.token_hex(32)  # 64 character hex string
+                    server_seed_commitment = hashlib.sha256(server_seed.encode()).hexdigest()
 
                 # Client seed: period_id:total_tickets:total_participants
                 client_seed = f"{period_id}:{total_tickets}:{total_participants}"
@@ -175,19 +189,20 @@ class RaffleDraw:
                 shuffle_username = shuffle_row[0] if shuffle_row else None
 
                 # Record the draw
-                conn.execute(
+                draw_insert = conn.execute(
                     text(
                         """
                     INSERT INTO raffle_draws
                         (period_id, discord_server_id, total_tickets, total_participants, winner_discord_id,
                          winner_kick_name, winner_shuffle_name, winning_ticket,
                          prize_description, drawn_by_discord_id,
-                         server_seed, client_seed, nonce, proof_hash)
+                         server_seed, client_seed, nonce, proof_hash, server_seed_commitment)
                     VALUES
                         (:period_id, :server_id, :total_tickets, :total_participants, :winner_discord_id,
                          :winner_kick_name, :winner_shuffle_name, :winning_ticket,
                          :prize_description, :drawn_by_discord_id,
-                         :server_seed, :client_seed, :nonce, :proof_hash)
+                         :server_seed, :client_seed, :nonce, :proof_hash, :server_seed_commitment)
+                    RETURNING id
                 """
                     ),
                     {
@@ -205,8 +220,10 @@ class RaffleDraw:
                         "client_seed": client_seed,
                         "nonce": nonce,
                         "proof_hash": proof_hash,
+                        "server_seed_commitment": server_seed_commitment,
                     },
                 )
+                draw_id = draw_insert.scalar()
 
                 # Mark the raffle period as ended (only once for first winner)
                 if update_period:
@@ -237,6 +254,7 @@ class RaffleDraw:
                     logger.error(f"Failed to publish raffle draw notification: {e}")
 
             result = {
+                "draw_id": draw_id,
                 "winner_discord_id": winner["discord_id"],
                 "winner_kick_name": winner["kick_name"],
                 "winner_shuffle_name": shuffle_username,
@@ -249,6 +267,7 @@ class RaffleDraw:
                 "client_seed": client_seed,
                 "nonce": nonce,
                 "proof_hash": proof_hash,
+                "server_seed_commitment": server_seed_commitment,
             }
 
             # NOTE: Draw events are NO LONGER published automatically here.

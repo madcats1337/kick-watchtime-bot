@@ -72,6 +72,7 @@ from raffle_system.database import (
     setup_raffle_database,
 )
 from raffle_system.gifted_sub_tracker import setup_gifted_sub_handler
+from raffle_system.migrations.add_commit_reveal_to_periods import migrate_add_commit_reveal_to_periods
 from raffle_system.migrations.add_provably_fair_to_draws import migrate_add_provably_fair_to_draws
 from raffle_system.migrations.platform_scope_raffle_constraints import migrate_platform_scope_raffle_constraints
 from raffle_system.scheduler import setup_raffle_scheduler
@@ -7093,6 +7094,9 @@ async def on_ready():
             # Must run AFTER migrate_add_platform_to_wager_tables (needs the platform column)
             migrate_platform_scope_raffle_constraints(engine)
             migrate_add_provably_fair_to_draws(engine)
+            # Commit-reveal columns (raffle_periods seed/commitment + draw commitment).
+            # After add_provably_fair_to_draws so raffle_draws already has its base PF columns.
+            migrate_add_commit_reveal_to_periods(engine)
             migrate_make_shuffle_links_kick_name_nullable(engine)
             migrate_add_panel_type_to_link_panels(engine)
             # Enforce one active raffle period per server (safety net behind the

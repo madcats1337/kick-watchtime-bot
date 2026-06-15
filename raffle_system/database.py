@@ -3,7 +3,9 @@ Database Schema Setup for Raffle System
 Creates all tables, indices, and views needed for the monthly raffle
 """
 
+import hashlib
 import logging
+import secrets
 
 from sqlalchemy import text
 
@@ -421,6 +423,26 @@ def create_new_period(engine, start_date, end_date, clear_tickets=True, discord_
                 {"start": start_date, "end": end_date, "server_id": discord_server_id or 0},
             )
             period_id = result.scalar()
+
+            # Commit-reveal: generate the server seed and its commitment NOW,
+            # the moment the period opens. The commitment (SHA256 of the seed)
+            # is published immediately so viewers can record it up front; the
+            # seed itself stays hidden until the draw reveals it. This closes
+            # the seed-grinding gap (the operator can't pick a seed after the
+            # ticket pool / client_seed are known). See draw.py reveal logic.
+            server_seed = secrets.token_hex(32)
+            commitment = hashlib.sha256(server_seed.encode()).hexdigest()
+            conn.execute(
+                text(
+                    """
+                UPDATE raffle_periods
+                SET server_seed = :seed, server_seed_commitment = :commitment
+                WHERE id = :period_id
+            """
+                ),
+                {"seed": server_seed, "commitment": commitment, "period_id": period_id},
+            )
+            logger.info(f"🔒 Committed server seed for period #{period_id} (commitment {commitment[:16]}…)")
 
             # NEVER delete tickets - preserve all historical data!
             # Tickets are tied to period_id so they don't interfere with new periods
