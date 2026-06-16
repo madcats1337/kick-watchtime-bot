@@ -4,10 +4,13 @@ Handles dynamic custom commands loaded from database
 """
 
 import asyncio
+import logging
 import os
 from datetime import datetime, timedelta
 
 import psycopg2
+
+logger = logging.getLogger(__name__)
 
 
 class CustomCommandsManager:
@@ -27,12 +30,12 @@ class CustomCommandsManager:
         self.last_used = {}  # {command_name: last_used_timestamp}
         self.database_url = os.getenv("DATABASE_URL")
 
-        print(f"🔧 Custom Commands Manager initialized for server {discord_server_id}")
+        logger.info(f"🔧 Custom Commands Manager initialized for server {discord_server_id}")
 
     async def load_commands(self):
         """Load all custom commands from database"""
         if not self.database_url:
-            print("⚠️ DATABASE_URL not set, custom commands disabled")
+            logger.warning("⚠️ DATABASE_URL not set, custom commands disabled")
             return
 
         try:
@@ -50,10 +53,10 @@ class CustomCommandsManager:
                 }
 
             enabled_count = sum(1 for cmd in self.commands.values() if cmd["enabled"])
-            print(f"✅ Loaded {len(self.commands)} custom commands ({enabled_count} enabled)")
+            logger.info(f"✅ Loaded {len(self.commands)} custom commands ({enabled_count} enabled)")
 
         except Exception as e:
-            print(f"❌ Error loading custom commands: {e}")
+            logger.error(f"❌ Error loading custom commands: {e}")
 
     def _fetch_commands_from_db(self):
         """Fetch commands from database (blocking - run in thread pool)"""
@@ -100,7 +103,7 @@ class CustomCommandsManager:
 
     async def reload_commands(self):
         """Reload commands from database (called when dashboard updates)"""
-        print("🔄 Reloading custom commands from database...")
+        logger.info("🔄 Reloading custom commands from database...")
         await self.load_commands()
 
     async def handle_message(self, message_content, username):
@@ -141,7 +144,7 @@ class CustomCommandsManager:
 
             if time_since_last < cooldown:
                 remaining = int(cooldown - time_since_last)
-                print(f"⏱️  Command !{command} on cooldown ({remaining}s remaining)")
+                logger.info(f"⏱️  Command !{command} on cooldown ({remaining}s remaining)")
                 return True  # Still handled, just on cooldown
 
         # Send response with variable replacements
@@ -153,7 +156,7 @@ class CustomCommandsManager:
                 response = await self._replace_variables(response, username, command)
 
                 await self.send_message_callback(response)
-                print(f"✅ Custom command !{command} executed by {username}")
+                logger.info(f"✅ Custom command !{command} executed by {username}")
 
                 # Update last used
                 self.last_used[command] = datetime.now()
@@ -163,11 +166,11 @@ class CustomCommandsManager:
 
                 return True
             else:
-                print(f"⚠️ No send callback available for command !{command}")
+                logger.warning(f"⚠️ No send callback available for command !{command}")
                 return False
 
         except Exception as e:
-            print(f"❌ Error executing custom command !{command}: {e}")
+            logger.error(f"❌ Error executing custom command !{command}: {e}")
             return False
 
     async def _replace_variables(self, text: str, username: str, command: str) -> str:
@@ -254,20 +257,20 @@ class CustomCommandsManager:
                         minutes = result[0] if result and result[0] else 0
                         hours = minutes / 60
                         text = text.replace("{watchtime}", f"{hours:.1f}")
-                        print(f"✅ Replaced {{watchtime}} for {username}: {hours:.1f} hours ({minutes} minutes)")
+                        logger.info(f"✅ Replaced {{watchtime}} for {username}: {hours:.1f} hours ({minutes} minutes)")
 
                     cursor.close()
                     conn.close()
 
                 except Exception as e:
-                    print(f"⚠️ Error fetching variable data for {username}: {e}")
+                    logger.error(f"⚠️ Error fetching variable data for {username}: {e}")
                     import traceback
 
                     traceback.print_exc()
 
             return text
         except Exception as e:
-            print(f"❌ Error replacing variables: {e}")
+            logger.error(f"❌ Error replacing variables: {e}")
             return text  # Return original text if error
 
     async def _increment_use_count(self, command_id):
@@ -275,7 +278,7 @@ class CustomCommandsManager:
         try:
             await asyncio.to_thread(self._increment_use_count_db, command_id)
         except Exception as e:
-            print(f"⚠️ Failed to increment use count: {e}")
+            logger.warning(f"⚠️ Failed to increment use count: {e}")
 
     def _increment_use_count_db(self, command_id):
         """Increment use count in database (blocking)"""
@@ -302,4 +305,4 @@ class CustomCommandsManager:
     async def start(self):
         """Start the custom commands manager"""
         await self.load_commands()
-        print("🎮 Custom Commands Manager started")
+        logger.info("🎮 Custom Commands Manager started")

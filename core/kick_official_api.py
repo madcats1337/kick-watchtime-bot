@@ -33,6 +33,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import os
 import secrets
 from dataclasses import dataclass
@@ -40,6 +41,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import aiohttp
+
+logger = logging.getLogger(__name__)
 
 # -------------------------
 # Configuration
@@ -538,24 +541,24 @@ class KickOfficialAPI:
         if reply_to_message_id:
             payload["reply_to_original_message"] = {"original_message_id": reply_to_message_id}
 
-        print(f"[Kick API] 📤 Sending chat message:")
-        print(f"[Kick API]   URL: {url}")
-        print(f"[Kick API]   Payload: {payload}")
-        print(f"[Kick API]   Content length: {len(content)}")
-        print(f"[Kick API]   Chatroom ID: {chatroom_id}")
+        logger.info(f"[Kick API] 📤 Sending chat message:")
+        logger.info(f"[Kick API]   URL: {url}")
+        logger.info(f"[Kick API]   Payload: {payload}")
+        logger.info(f"[Kick API]   Content length: {len(content)}")
+        logger.info(f"[Kick API]   Chatroom ID: {chatroom_id}")
 
         headers = {"Content-Type": "application/json"}
         try:
             result = await self._post(url, json=payload, headers=headers)
-            print(f"[Kick API] ✅ Chat message sent successfully")
+            logger.info(f"[Kick API] ✅ Chat message sent successfully")
             return result
         except Exception as e:
-            print(f"[Kick API] ❌ Error sending chat message: {e}")
-            print(f"[Kick API]   Error type: {type(e).__name__}")
+            logger.info(f"[Kick API] ❌ Error sending chat message: {e}")
+            logger.info(f"[Kick API]   Error type: {type(e).__name__}")
             if hasattr(e, "status"):
-                print(f"[Kick API]   Status: {e.status}")
+                logger.info(f"[Kick API]   Status: {e.status}")
             if hasattr(e, "message"):
-                print(f"[Kick API]   Message: {e.message}")
+                logger.info(f"[Kick API]   Message: {e.message}")
             raise
 
     # -------------------------
@@ -665,8 +668,8 @@ class KickOfficialAPI:
                 # Pass all fields Kick returns - WebhookSubscription accepts them all
                 subscriptions.append(WebhookSubscription(**sub))
             except Exception as e:
-                print(f"[API] Error creating WebhookSubscription: {e}")
-                print(f"[API] Raw subscription data: {sub}")
+                logger.error(f"[API] Error creating WebhookSubscription: {e}")
+                logger.info(f"[API] Raw subscription data: {sub}")
                 # Return raw dict if dataclass fails
                 subscriptions.append(sub)
 
@@ -729,8 +732,8 @@ class KickOfficialAPI:
         # ALL are SUCCESS - we don't fail on empty responses
         # HTTP status code determines success, not response body
 
-        print(f"[API] Webhook creation response type: {type(response)}")
-        print(f"[API] Webhook creation response: {response}")
+        logger.info(f"[API] Webhook creation response type: {type(response)}")
+        logger.info(f"[API] Webhook creation response: {response}")
 
         # Return response as-is (may be empty, list, or dict)
         # Caller doesn't need WebhookSubscription object for creation

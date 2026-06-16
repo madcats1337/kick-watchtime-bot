@@ -11,11 +11,14 @@ For official API access, see core/kick_official_api.py
 
 import asyncio
 import json
+import logging
 import os
 import random
 from typing import Any, Dict, List, Optional
 
 import aiohttp
+
+logger = logging.getLogger(__name__)
 
 # Import official API client for authenticated requests
 try:
@@ -90,7 +93,7 @@ class KickAPI:
         # Strategy 1: HTTP v2 API with retries
         for attempt in range(max_retries):
             try:
-                print(f"[Kick] Attempt {attempt + 1}/{max_retries}: Fetching chatroom ID for {channel_name}")
+                logger.info(f"[Kick] Attempt {attempt + 1}/{max_retries}: Fetching chatroom ID for {channel_name}")
 
                 async with aiohttp.ClientSession() as session:
                     headers = {
@@ -107,24 +110,24 @@ class KickAPI:
                             data = await response.json()
                             chatroom_id = data.get("chatroom", {}).get("id")
                             if chatroom_id:
-                                print(f"[Kick] ✅ Found chatroom ID: {chatroom_id}")
+                                logger.info(f"[Kick] ✅ Found chatroom ID: {chatroom_id}")
                                 return str(chatroom_id)
                         elif response.status == 403:
-                            print(
+                            logger.info(
                                 f"[Kick] ⚠️ Cloudflare blocked request. Set KICK_CHATROOM_ID environment variable to bypass."
                             )
                         else:
-                            print(f"[Kick] HTTP request returned status: {response.status}")
+                            logger.info(f"[Kick] HTTP request returned status: {response.status}")
             except Exception as e:
-                print(f"[Kick] Error: {type(e).__name__}: {str(e)}")
+                logger.error(f"[Kick] Error: {type(e).__name__}: {str(e)}")
 
             if attempt < max_retries - 1:
                 delay = 2 * (attempt + 1) + random.uniform(1, 3)
-                print(f"[Kick] Waiting {delay:.1f} seconds before next attempt...")
+                logger.info(f"[Kick] Waiting {delay:.1f} seconds before next attempt...")
                 await asyncio.sleep(delay)
 
-        print(f"[Kick] ❌ Failed to fetch chatroom ID after {max_retries} attempts")
-        print(f"[Kick] 💡 TIP: Set KICK_CHATROOM_ID environment variable to bypass Cloudflare")
+        logger.info(f"[Kick] ❌ Failed to fetch chatroom ID after {max_retries} attempts")
+        logger.info(f"[Kick] 💡 TIP: Set KICK_CHATROOM_ID environment variable to bypass Cloudflare")
         return None
 
     async def _fetch_chatroom_id_with_kickpython(self, channel_name: str, timeout_seconds: int = 10) -> Optional[str]:
@@ -162,7 +165,7 @@ class KickAPI:
                     await asyncio.sleep(0.2)
                     if getattr(api, "chatroom_id", None):
                         chat_id = str(api.chatroom_id)
-                        print(f"[Kick] ✅ kickpython resolved chatroom_id: {chat_id}")
+                        logger.info(f"[Kick] ✅ kickpython resolved chatroom_id: {chat_id}")
                         return chat_id
             finally:
                 task.cancel()
@@ -171,7 +174,7 @@ class KickAPI:
                 except asyncio.CancelledError:
                     pass
         except Exception as e:
-            print(f"[Kick] ⚠️ kickpython resolver failed: {type(e).__name__}: {str(e)}")
+            logger.info(f"[Kick] ⚠️ kickpython resolver failed: {type(e).__name__}: {str(e)}")
         return None
 
 
@@ -199,7 +202,7 @@ async def fetch_chatroom_id(channel_name: str, max_retries: int = 5) -> Optional
     try:
         return await _api.fetch_chatroom_id(channel_name, max_retries)
     except Exception as e:
-        print(f"[Kick] Error in fetch_chatroom_id: {type(e).__name__}: {str(e)}")
+        logger.error(f"[Kick] Error in fetch_chatroom_id: {type(e).__name__}: {str(e)}")
         # Reset API instance on error
         if _api:
             await _api.close()
@@ -281,10 +284,10 @@ async def get_channel_info(channel_name: str) -> Optional[Dict[str, Any]]:
                 if response.status == 200:
                     return await response.json()
                 else:
-                    print(f"[Kick] Failed to get channel info: HTTP {response.status}")
+                    logger.info(f"[Kick] Failed to get channel info: HTTP {response.status}")
                     return None
     except Exception as e:
-        print(f"[Kick] Error getting channel info: {type(e).__name__}: {str(e)}")
+        logger.error(f"[Kick] Error getting channel info: {type(e).__name__}: {str(e)}")
         return None
 
 
@@ -314,7 +317,7 @@ async def create_clip(
         access_token = os.getenv("KICK_BOT_USER_TOKEN", "")
 
     if not access_token:
-        print("[Kick] ❌ No access token provided for clip creation")
+        logger.info("[Kick] ❌ No access token provided for clip creation")
         return {"error": "authentication_required", "message": "No OAuth token available for clip creation"}
 
     try:
@@ -335,12 +338,12 @@ async def create_clip(
 
                 # Check if we got HTML instead of JSON (Cloudflare block)
                 if "text/html" in content_type:
-                    print(f"[Kick] ❌ Clip API blocked by Cloudflare (got HTML response)")
+                    logger.info(f"[Kick] ❌ Clip API blocked by Cloudflare (got HTML response)")
                     return {"error": "cloudflare_blocked", "message": "Clip API blocked - use Kick website to clip"}
 
                 if response.status == 200:
                     init_data = await response.json()
-                    print(f"[Kick] Clip init response: {init_data}")
+                    logger.info(f"[Kick] Clip init response: {init_data}")
 
                     # Step 2: Finalize the clip with duration
                     finalize_url = f"https://kick.com/api/v2/channels/{channel_name}/clips/finalize"
@@ -358,32 +361,34 @@ async def create_clip(
                     ) as finalize_response:
                         if finalize_response.status == 200:
                             clip_data = await finalize_response.json()
-                            print(f"[Kick] ✅ Clip created successfully: {clip_data}")
+                            logger.info(f"[Kick] ✅ Clip created successfully: {clip_data}")
                             return clip_data
                         else:
                             error_text = await finalize_response.text()
-                            print(f"[Kick] ❌ Clip finalize failed: HTTP {finalize_response.status} - {error_text}")
+                            logger.info(
+                                f"[Kick] ❌ Clip finalize failed: HTTP {finalize_response.status} - {error_text}"
+                            )
                             return None
 
                 elif response.status == 401:
-                    print(f"[Kick] ❌ Authentication required for clip creation")
+                    logger.info(f"[Kick] ❌ Authentication required for clip creation")
                     return {"error": "authentication_required", "message": "Clip creation requires authentication"}
                 elif response.status == 403:
-                    print(f"[Kick] ❌ Cloudflare blocked clip creation")
+                    logger.info(f"[Kick] ❌ Cloudflare blocked clip creation")
                     return {"error": "cloudflare_blocked", "message": "Request blocked by Cloudflare"}
                 elif response.status == 404:
-                    print(f"[Kick] ❌ Channel not found or not live")
+                    logger.info(f"[Kick] ❌ Channel not found or not live")
                     return {"error": "not_found", "message": "Channel not found or stream not live"}
                 else:
                     error_text = await response.text()
-                    print(f"[Kick] ❌ Clip init failed: HTTP {response.status} - {error_text}")
+                    logger.info(f"[Kick] ❌ Clip init failed: HTTP {response.status} - {error_text}")
                     return None
 
     except asyncio.TimeoutError:
-        print(f"[Kick] ❌ Clip creation timed out")
+        logger.info(f"[Kick] ❌ Clip creation timed out")
         return {"error": "timeout", "message": "Request timed out"}
     except Exception as e:
-        print(f"[Kick] ❌ Error creating clip: {type(e).__name__}: {str(e)}")
+        logger.info(f"[Kick] ❌ Error creating clip: {type(e).__name__}: {str(e)}")
         return None
 
 
@@ -415,10 +420,10 @@ async def get_clips(channel_name: str, limit: int = 10) -> Optional[list]:
                     clips = data.get("clips", [])[:limit]
                     return clips
                 else:
-                    print(f"[Kick] Failed to get clips: HTTP {response.status}")
+                    logger.info(f"[Kick] Failed to get clips: HTTP {response.status}")
                     return None
     except Exception as e:
-        print(f"[Kick] Error getting clips: {type(e).__name__}: {str(e)}")
+        logger.error(f"[Kick] Error getting clips: {type(e).__name__}: {str(e)}")
         return None
 
 
@@ -455,10 +460,10 @@ async def get_playback_url(channel_name: str, force_refresh: bool = False) -> Op
         cached_data = _playback_cache[cache_key]
         age = time.time() - cached_data["timestamp"]
         if age < cache_ttl:
-            print(f"[Kick] 📦 Using cached playback URL (age: {age:.1f}s)")
+            logger.info(f"[Kick] 📦 Using cached playback URL (age: {age:.1f}s)")
             return cached_data["url"]
 
-    print(f"[Kick] 🔍 Fetching playback URL for {channel_name}...")
+    logger.info(f"[Kick] 🔍 Fetching playback URL for {channel_name}...")
 
     try:
         # Try aiohttp first (faster)
@@ -471,7 +476,7 @@ async def get_playback_url(channel_name: str, force_refresh: bool = False) -> Op
                 return playback_url
 
         # If aiohttp failed or returned no URL, try cloudscraper (Cloudflare bypass)
-        print(f"[Kick] 🔄 Trying cloudscraper for Cloudflare bypass...")
+        logger.info(f"[Kick] 🔄 Trying cloudscraper for Cloudflare bypass...")
         playback_url = await _fetch_with_cloudscraper(channel_name)
         if playback_url:
             _cache_playback_url(cache_key, playback_url)
@@ -483,12 +488,12 @@ async def get_playback_url(channel_name: str, force_refresh: bool = False) -> Op
             _cache_playback_url(cache_key, env_url)
             return env_url
 
-        print(f"[Kick] ❌ No valid playback URL found in any source")
-        print(f"[Kick] 💡 TIP: Set KICK_PLAYBACK_URL env var as fallback")
+        logger.info(f"[Kick] ❌ No valid playback URL found in any source")
+        logger.info(f"[Kick] 💡 TIP: Set KICK_PLAYBACK_URL env var as fallback")
         return None
 
     except Exception as e:
-        print(f"[Kick] ❌ Error fetching playback URL: {type(e).__name__}: {str(e)}")
+        logger.info(f"[Kick] ❌ Error fetching playback URL: {type(e).__name__}: {str(e)}")
         return _check_env_override()
 
 
@@ -516,11 +521,11 @@ async def _fetch_with_cloudscraper(channel_name: str) -> Optional[str]:
                 data = response.json()
                 return _extract_playback_url(data)
             else:
-                print(f"[Kick] Cloudscraper returned: HTTP {response.status_code}")
+                logger.info(f"[Kick] Cloudscraper returned: HTTP {response.status_code}")
                 return None
 
         except Exception as e:
-            print(f"[Kick] Cloudscraper error: {type(e).__name__}: {str(e)}")
+            logger.info(f"[Kick] Cloudscraper error: {type(e).__name__}: {str(e)}")
             return None
 
     # Run in thread pool to avoid blocking
@@ -541,7 +546,7 @@ def _extract_playback_url(channel_info: dict) -> Optional[str]:
     # Strategy 1: Check top-level playback_url field (most reliable)
     playback_url = channel_info.get("playback_url")
     if playback_url and _validate_playback_url(playback_url):
-        print(f"[Kick] ✅ Found top-level playback_url")
+        logger.info(f"[Kick] ✅ Found top-level playback_url")
         return playback_url
 
     # Strategy 2: Check nested livestream object
@@ -551,7 +556,7 @@ def _extract_playback_url(channel_info: dict) -> Optional[str]:
         for field in ["playback_url", "hls_url", "source", "video_url"]:
             url = livestream.get(field)
             if url and _validate_playback_url(url):
-                print(f"[Kick] ✅ Found playback URL in livestream.{field}")
+                logger.info(f"[Kick] ✅ Found playback URL in livestream.{field}")
                 return url
 
     return None
@@ -582,7 +587,7 @@ def _validate_playback_url(url: str) -> bool:
 
     # Reject HTML responses (Cloudflare blocks)
     if any(pattern in url_lower for pattern in ["<html", "<!doctype", "<head>"]):
-        print(f"[Kick] ⚠️ Rejected HTML-like URL (likely Cloudflare block)")
+        logger.info(f"[Kick] ⚠️ Rejected HTML-like URL (likely Cloudflare block)")
         return False
 
     return True
@@ -597,7 +602,7 @@ def _check_env_override() -> Optional[str]:
     """
     env_url = os.getenv("KICK_PLAYBACK_URL")
     if env_url and _validate_playback_url(env_url):
-        print(f"[Kick] 📺 Using KICK_PLAYBACK_URL from environment")
+        logger.info(f"[Kick] 📺 Using KICK_PLAYBACK_URL from environment")
         return env_url
     return None
 
@@ -626,10 +631,10 @@ def clear_playback_cache(channel_name: Optional[str] = None) -> None:
     if channel_name:
         cache_key = f"playback:{channel_name}"
         _playback_cache.pop(cache_key, None)
-        print(f"[Kick] 🗑️ Cleared playback cache for {channel_name}")
+        logger.info(f"[Kick] 🗑️ Cleared playback cache for {channel_name}")
     else:
         _playback_cache.clear()
-        print(f"[Kick] 🗑️ Cleared all playback cache")
+        logger.info(f"[Kick] 🗑️ Cleared all playback cache")
 
 
 class KickHybridAPI:
@@ -679,9 +684,9 @@ class KickHybridAPI:
                 access_token=self.access_token,
                 refresh_token=self.refresh_token,
             )
-            print("[KickHybrid] ✅ Official API client initialized with OAuth token")
+            logger.info("[KickHybrid] ✅ Official API client initialized with OAuth token")
         else:
-            print("[KickHybrid] ℹ️  Running in unauthenticated mode (unofficial API only)")
+            logger.info("[KickHybrid] ℹ️  Running in unauthenticated mode (unofficial API only)")
 
     async def close(self):
         """Cleanup resources"""
@@ -719,7 +724,7 @@ class KickHybridAPI:
             API response or None if failed
         """
         if not self.is_authenticated:
-            print("[KickHybrid] ❌ Cannot send message: No OAuth token")
+            logger.info("[KickHybrid] ❌ Cannot send message: No OAuth token")
             return None
 
         try:
@@ -729,7 +734,7 @@ class KickHybridAPI:
                 reply_to_message_id=reply_to_message_id,
             )
         except Exception as e:
-            print(f"[KickHybrid] ❌ Failed to send message: {e}")
+            logger.info(f"[KickHybrid] ❌ Failed to send message: {e}")
             return None
 
     # -------------------------
@@ -805,7 +810,7 @@ class KickHybridAPI:
             List of subscription results
         """
         if not self.is_authenticated:
-            print("[KickHybrid] ❌ Cannot subscribe to webhooks: No OAuth token")
+            logger.info("[KickHybrid] ❌ Cannot subscribe to webhooks: No OAuth token")
             return []
 
         if events is None:
@@ -827,10 +832,10 @@ class KickHybridAPI:
                     broadcaster_user_id=broadcaster_user_id,
                 )
                 results.append({"event": event, "success": True, "subscription": sub})
-                print(f"[KickHybrid] ✅ Subscribed to {event}")
+                logger.info(f"[KickHybrid] ✅ Subscribed to {event}")
             except Exception as e:
                 results.append({"event": event, "success": False, "error": str(e)})
-                print(f"[KickHybrid] ❌ Failed to subscribe to {event}: {e}")
+                logger.info(f"[KickHybrid] ❌ Failed to subscribe to {event}: {e}")
 
         return results
 
@@ -847,7 +852,7 @@ class KickHybridAPI:
         try:
             return await self._official_api.get_webhook_subscriptions()
         except Exception as e:
-            print(f"[KickHybrid] ❌ Failed to get webhooks: {e}")
+            logger.info(f"[KickHybrid] ❌ Failed to get webhooks: {e}")
             return []
 
     # -------------------------
@@ -874,7 +879,7 @@ class KickHybridAPI:
             True if successful
         """
         if not self.is_authenticated:
-            print("[KickHybrid] ❌ Cannot ban user: No OAuth token")
+            logger.info("[KickHybrid] ❌ Cannot ban user: No OAuth token")
             return False
 
         try:
@@ -886,7 +891,7 @@ class KickHybridAPI:
             )
             return True
         except Exception as e:
-            print(f"[KickHybrid] ❌ Failed to ban user: {e}")
+            logger.info(f"[KickHybrid] ❌ Failed to ban user: {e}")
             return False
 
     async def unban_user(
@@ -905,7 +910,7 @@ class KickHybridAPI:
             True if successful
         """
         if not self.is_authenticated:
-            print("[KickHybrid] ❌ Cannot unban user: No OAuth token")
+            logger.info("[KickHybrid] ❌ Cannot unban user: No OAuth token")
             return False
 
         try:
@@ -915,7 +920,7 @@ class KickHybridAPI:
             )
             return True
         except Exception as e:
-            print(f"[KickHybrid] ❌ Failed to unban user: {e}")
+            logger.info(f"[KickHybrid] ❌ Failed to unban user: {e}")
             return False
 
     # -------------------------
@@ -938,7 +943,7 @@ class KickHybridAPI:
             Leaderboard data or None
         """
         if not self.is_authenticated:
-            print("[KickHybrid] ❌ Cannot get kicks leaderboard: No OAuth token")
+            logger.info("[KickHybrid] ❌ Cannot get kicks leaderboard: No OAuth token")
             return None
 
         try:
@@ -947,7 +952,7 @@ class KickHybridAPI:
                 range_type=range_type,
             )
         except Exception as e:
-            print(f"[KickHybrid] ❌ Failed to get kicks leaderboard: {e}")
+            logger.info(f"[KickHybrid] ❌ Failed to get kicks leaderboard: {e}")
             return None
 
 

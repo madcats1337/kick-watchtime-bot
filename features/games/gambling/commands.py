@@ -4,6 +4,7 @@ Provides !bj, !roll, !double commands with provably fair outcomes.
 """
 
 import json
+import logging
 import traceback
 
 import discord
@@ -15,6 +16,8 @@ from .double import WIN_CHANCE, calculate_double_payout
 from .provably_fair_gambling import generate_deck_shuffle, generate_gambling_seeds
 from .roll import calculate_roll_payout, format_roll_bar, random_value_to_roll
 from .views import BlackjackView
+
+logger = logging.getLogger(__name__)
 
 
 class GamblingCog(commands.Cog, name="Gambling"):
@@ -549,6 +552,6 @@ class GamblingCog(commands.Cog, name="Gambling"):
         if isinstance(error, commands.NoPrivateMessage):
             await ctx.reply("❌ Gambling commands can only be used in a server.", delete_after=10)
         else:
-            print(f"❌ Gambling command error: {error}")
+            logger.error(f"❌ Gambling command error: {error}")
             traceback.print_exc()
             await ctx.reply("❌ An error occurred. Please try again.", delete_after=10)

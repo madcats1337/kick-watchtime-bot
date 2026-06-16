@@ -4,9 +4,12 @@ Publishes events to Redis channels for dashboard notifications
 """
 
 import json
+import logging
 import os
 
 import redis
+
+logger = logging.getLogger(__name__)
 
 
 class BotRedisPublisher:
@@ -19,7 +22,7 @@ class BotRedisPublisher:
                 self.redis_url = f"redis://{self.redis_url}"
             self._connect()
         else:
-            print("⚠️ REDIS_URL not set, bot events will not be published")
+            logger.warning("⚠️ REDIS_URL not set, bot events will not be published")
 
     def _connect(self):
         """Attempt to connect/reconnect to Redis"""
@@ -32,9 +35,9 @@ class BotRedisPublisher:
             )
             self.client.ping()
             self.enabled = True
-            print("✅ Bot Redis publisher connected")
+            logger.info("✅ Bot Redis publisher connected")
         except Exception as e:
-            print(f"⚠️ Redis unavailable for bot publisher: {e}")
+            logger.warning(f"⚠️ Redis unavailable for bot publisher: {e}")
             self.client = None
             self.enabled = False
 
@@ -52,10 +55,10 @@ class BotRedisPublisher:
         try:
             message = json.dumps({"action": action, "data": data or {}})
             self.client.publish(channel, message)
-            print(f"📤 Bot published to {channel}: {action}")
+            logger.info(f"📤 Bot published to {channel}: {action}")
             return True
         except Exception as e:
-            print(f"❌ Failed to publish to {channel}: {e}")
+            logger.error(f"❌ Failed to publish to {channel}: {e}")
             # Mark as disconnected so next call will reconnect
             self.enabled = False
             return False

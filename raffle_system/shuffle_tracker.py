@@ -38,18 +38,18 @@ class ShuffleWagerTracker:
         # Load settings from bot_settings (database) or fall back to env vars
         self._load_settings()
 
-        print(f"[Shuffle Tracker] 🎰 Initialized for platform: {self.platform_name}")
+        logger.info(f"[Shuffle Tracker] 🎰 Initialized for platform: {self.platform_name}")
         # Show campaign codes (supports comma-separated multiple codes)
         codes = [c.strip() for c in self.campaign_code.split(",")]
         if len(codes) > 1:
-            print(f"[Shuffle Tracker] 📊 Campaign codes ({len(codes)}): {', '.join(codes)}")
+            logger.info(f"[Shuffle Tracker] 📊 Campaign codes ({len(codes)}): {', '.join(codes)}")
         else:
-            print(f"[Shuffle Tracker] 📊 Campaign code: {self.campaign_code}")
-        print(f"[Shuffle Tracker] 🎫 Rate: {self.tickets_per_1000} tickets per $1000 wagered")
+            logger.info(f"[Shuffle Tracker] 📊 Campaign code: {self.campaign_code}")
+        logger.info(f"[Shuffle Tracker] 🎫 Rate: {self.tickets_per_1000} tickets per $1000 wagered")
         if self.affiliate_url:
-            print(f"[Shuffle Tracker] 🔗 Affiliate URL configured: {self.affiliate_url[:50]}...")
+            logger.info(f"[Shuffle Tracker] 🔗 Affiliate URL configured: {self.affiliate_url[:50]}...")
         else:
-            print(f"[Shuffle Tracker] ⚠️ No affiliate URL configured!")
+            logger.info(f"[Shuffle Tracker] ⚠️ No affiliate URL configured!")
 
     # Default howl affiliate leaderboard endpoint (overridable per-server).
     HOWL_DEFAULT_LB_URL = "https://howl.gg/api/user/affiliate/lb"
@@ -99,7 +99,7 @@ class ShuffleWagerTracker:
         self._load_settings()
         codes = [c.strip() for c in self.campaign_code.split(",")]
         codes_str = f"{len(codes)} codes" if len(codes) > 1 else self.campaign_code
-        print(f"[Shuffle Tracker] 🔄 Settings refreshed - URL: {bool(self.affiliate_url)}, Codes: {codes_str}")
+        logger.info(f"[Shuffle Tracker] 🔄 Settings refreshed - URL: {bool(self.affiliate_url)}, Codes: {codes_str}")
 
     def _record_wager_history(self, conn, shuffle_username, total_wager_usd, wager_delta):
         """Append a row to shuffle_wager_history for the dashboard leaderboard.
@@ -145,11 +145,10 @@ class ShuffleWagerTracker:
                     },
                 )
         except Exception as e:
-            print(
+            logger.info(
                 f"[Shuffle Tracker] ❌ shuffle_wager_history append failed "
                 f"for server={self.server_id}, user={shuffle_username}: "
-                f"{type(e).__name__}: {e}",
-                flush=True,
+                f"{type(e).__name__}: {e}"
             )
             return
 
@@ -168,7 +167,7 @@ class ShuffleWagerTracker:
                 total_wager_usd=round(total_wager_usd, 2) if total_wager_usd is not None else None,
             )
         except Exception as pub_err:
-            print(f"[Shuffle Tracker] wager publish failed: {pub_err}")
+            logger.info(f"[Shuffle Tracker] wager publish failed: {pub_err}")
 
     async def update_shuffle_wagers(self):
         """
@@ -719,32 +718,32 @@ async def setup_shuffle_tracker(bot, engine, server_id=None, bot_settings=None):
             tracker.refresh_settings()
 
             if not tracker.affiliate_url:
-                print("[Shuffle Tracker] ⚠️ No affiliate URL configured - skipping update")
+                logger.info("[Shuffle Tracker] ⚠️ No affiliate URL configured - skipping update")
                 return
 
-            print("[Shuffle Tracker] 🔄 Checking wagers...")
+            logger.info("[Shuffle Tracker] 🔄 Checking wagers...")
             result = await tracker.update_shuffle_wagers()
 
             if result["status"] == "success" and result["updates"] > 0:
-                print(f"[Shuffle Tracker] ✅ Updated {result['updates']} wager(s)")
+                logger.info(f"[Shuffle Tracker] ✅ Updated {result['updates']} wager(s)")
                 # Print details of each update
                 for detail in result.get("details", []):
-                    print(
+                    logger.info(
                         f"  💰 {detail['kick_name']} ({detail['shuffle_username']}): "
                         f"${detail['wager_delta']:.2f} → +{detail['tickets_awarded']} tickets"
                     )
             elif result["status"] == "success":
-                print(f"[Shuffle Tracker] ℹ️ No new wagers found")
+                logger.info(f"[Shuffle Tracker] ℹ️ No new wagers found")
             elif result["status"] == "no_active_period":
-                print("[Shuffle Tracker] ⏸️ No active raffle period")
+                logger.info("[Shuffle Tracker] ⏸️ No active raffle period")
             elif result["status"] == "no_users":
-                print(f"[Shuffle Tracker] ℹ️ No users found with campaign code(s): {tracker.campaign_code}")
+                logger.info(f"[Shuffle Tracker] ℹ️ No users found with campaign code(s): {tracker.campaign_code}")
             elif result["status"] == "fetch_failed":
-                print(f"[Shuffle Tracker] ❌ Failed to fetch data from affiliate URL")
+                logger.info(f"[Shuffle Tracker] ❌ Failed to fetch data from affiliate URL")
             elif result["status"] == "error":
-                print(f"[Shuffle Tracker] ❌ Update failed: {result.get('error')}")
+                logger.info(f"[Shuffle Tracker] ❌ Update failed: {result.get('error')}")
         except Exception as e:
-            print(f"[Shuffle Tracker] ❌ Task error: {e}")
+            logger.info(f"[Shuffle Tracker] ❌ Task error: {e}")
             import traceback
 
             traceback.print_exc()
@@ -753,7 +752,7 @@ async def setup_shuffle_tracker(bot, engine, server_id=None, bot_settings=None):
     async def before_shuffle_task():
         """Wait for bot to be ready before starting the task"""
         await bot.wait_until_ready()
-        print("[Shuffle Tracker] ✅ Started (runs every 15 minutes)")
+        logger.info("[Shuffle Tracker] ✅ Started (runs every 15 minutes)")
 
     # Start the task
     update_shuffle_task.start()

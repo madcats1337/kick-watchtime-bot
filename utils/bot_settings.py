@@ -4,12 +4,15 @@ Loads configuration from database with fallback to environment variables.
 Supports real-time updates via Redis pub/sub.
 """
 
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Union
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+
+logger = logging.getLogger(__name__)
 
 
 class BotSettingsManager:
@@ -74,7 +77,7 @@ class BotSettingsManager:
             True if successful, False otherwise
         """
         if not self._engine:
-            print("[Settings] No database engine, using env vars only")
+            logger.info("[Settings] No database engine, using env vars only")
             return False
 
         # Use provided guild_id or instance's guild_id
@@ -114,10 +117,10 @@ class BotSettingsManager:
                 self._last_loaded = datetime.now(timezone.utc)
 
                 guild_info = f" for guild {active_guild_id}" if active_guild_id else ""
-                print(f"[Settings] Loaded {len(self._cache)} settings from database{guild_info}")
+                logger.info(f"[Settings] Loaded {len(self._cache)} settings from database{guild_info}")
                 return True
         except Exception as e:
-            print(f"[Settings] Error loading settings: {e}")
+            logger.info(f"[Settings] Error loading settings: {e}")
             return False
 
     # Alias for backwards compatibility
@@ -223,7 +226,7 @@ class BotSettingsManager:
             self._cache[key] = str_value
             return True
         except Exception as e:
-            print(f"[Settings] Error setting {key}: {e}")
+            logger.info(f"[Settings] Error setting {key}: {e}")
             return False
 
     @property

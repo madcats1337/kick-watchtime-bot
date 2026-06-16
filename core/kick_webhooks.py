@@ -23,6 +23,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 from dataclasses import dataclass
@@ -31,6 +32,8 @@ from functools import wraps
 from typing import Any, Callable, Dict, Optional
 
 from flask import Blueprint, abort, jsonify, request
+
+logger = logging.getLogger(__name__)
 
 # RSA verification imports
 try:
@@ -41,7 +44,7 @@ try:
     CRYPTO_AVAILABLE = True
 except ImportError:
     CRYPTO_AVAILABLE = False
-    print("[Webhook] ⚠️ cryptography library not installed - signature verification disabled")
+    logger.info("[Webhook] ⚠️ cryptography library not installed - signature verification disabled")
 
 # Import webhook payload classes
 try:
@@ -124,10 +127,10 @@ def ensure_webhook_tables(engine):
             """
                 )
             )
-            print("[Webhook] ✅ Webhook tables initialized")
+            logger.info("[Webhook] ✅ Webhook tables initialized")
         _tables_initialized = True
     except Exception as e:
-        print(f"[Webhook] ⚠️ Could not initialize tables: {e}")
+        logger.info(f"[Webhook] ⚠️ Could not initialize tables: {e}")
 
 
 # -------------------------
@@ -154,29 +157,29 @@ def verify_kick_signature(
         True if signature is valid, False otherwise
     """
     if not CRYPTO_AVAILABLE:
-        print("[Webhook] ❌ CRITICAL: Crypto library not available - rejecting webhook for security")
+        logger.info("[Webhook] ❌ CRITICAL: Crypto library not available - rejecting webhook for security")
         return False  # SECURITY: Fail-closed - reject if we can't verify
 
     if not signature_header:
-        print("[Webhook] ❌ No signature header provided")
+        logger.info("[Webhook] ❌ No signature header provided")
         return False
 
     if not message_id or not timestamp:
-        print("[Webhook] ❌ Missing message_id or timestamp for signature verification")
+        logger.info("[Webhook] ❌ Missing message_id or timestamp for signature verification")
         return False
 
     try:
         # Get Kick's public key
         public_key = get_kick_public_key()
         if not public_key:
-            print("[Webhook] ❌ Could not load Kick public key")
+            logger.info("[Webhook] ❌ Could not load Kick public key")
             return False
 
         # Decode the base64 signature
         try:
             signature_bytes = base64.b64decode(signature_header)
         except Exception as e:
-            print(f"[Webhook] ❌ Failed to decode signature: {e}")
+            logger.info(f"[Webhook] ❌ Failed to decode signature: {e}")
             return False
 
         # Create the message that was signed: message_id.timestamp.body
@@ -186,26 +189,26 @@ def verify_kick_signature(
 
         # Debug output
         if os.getenv("DEBUG_WEBHOOKS") == "true":
-            print(f"[Webhook] 🔐 Message to verify (first 100 chars): {message_to_verify[:100]}")
-            print(f"[Webhook] 🔐 Signature length: {len(signature_bytes)}")
+            logger.info(f"[Webhook] 🔐 Message to verify (first 100 chars): {message_to_verify[:100]}")
+            logger.info(f"[Webhook] 🔐 Signature length: {len(signature_bytes)}")
 
         # Verify using RSA PKCS1v15 with SHA256
         try:
             public_key.verify(signature_bytes, message_to_verify, padding.PKCS1v15(), hashes.SHA256())
-            print(f"[Webhook] ✅ RSA signature verification successful")
+            logger.info(f"[Webhook] ✅ RSA signature verification successful")
             return True
         except Exception as verify_err:
-            print(f"[Webhook] ❌ RSA verification failed: {verify_err}")
+            logger.info(f"[Webhook] ❌ RSA verification failed: {verify_err}")
             # Additional debug info
             if os.getenv("DEBUG_WEBHOOKS") == "true":
                 import hashlib
 
                 msg_hash = hashlib.sha256(message_to_verify).hexdigest()
-                print(f"[Webhook] 🔐 Message SHA256 hash: {msg_hash}")
+                logger.info(f"[Webhook] 🔐 Message SHA256 hash: {msg_hash}")
             return False
 
     except Exception as e:
-        print(f"[Webhook] ❌ Signature verification error: {e}")
+        logger.info(f"[Webhook] ❌ Signature verification error: {e}")
         return False
 
 
@@ -283,7 +286,7 @@ class WebhookEventHandler:
         handler = self._handlers.get(event_type, self._default_handler)
 
         if handler is None:
-            print(f"[Webhook] ⚠️ No handler for event type: {event_type}")
+            logger.info(f"[Webhook] ⚠️ No handler for event type: {event_type}")
             return False
 
         try:
@@ -296,7 +299,7 @@ class WebhookEventHandler:
                 handler(event_data)
             return True
         except Exception as e:
-            print(f"[Webhook] ❌ Error in handler for {event_type}: {e}")
+            logger.info(f"[Webhook] ❌ Error in handler for {event_type}: {e}")
             import traceback
 
             traceback.print_exc()
@@ -351,7 +354,7 @@ def handle_kick_webhook():
     # 🚫 ARCHITECTURAL DECISION: Ignore chat.message.sent (handled by kickpython WebSockets)
     # EARLY EXIT before verification, database lookup, or ANY processing
     if event_type == "chat.message.sent":
-        print(f"[Webhook] ⚠️  Ignoring chat.message.sent — chat handled via WebSockets")
+        logger.info(f"[Webhook] ⚠️  Ignoring chat.message.sent — chat handled via WebSockets")
         return jsonify({"status": "ok", "message": "chat handled by websockets"}), 200
 
     # Look for Kick-Event-Signature header (case-insensitive)
@@ -367,18 +370,18 @@ def handle_kick_webhook():
     # DEBUG: Only log when signature is missing (temporary diagnostic)
     if not signature_header:
         if os.getenv("DEBUG_WEBHOOKS") == "true":
-            print(f"[Webhook] 🔍 DEBUG: method={request.method}, content-length={request.content_length}")
-            print(f"[Webhook] 🔍 DEBUG: Available headers: {list(request.headers.keys())}")
-        print("[Webhook] ❌ Missing signature header (looking for Kick-Event-Signature)")
+            logger.info(f"[Webhook] 🔍 DEBUG: method={request.method}, content-length={request.content_length}")
+            logger.info(f"[Webhook] 🔍 DEBUG: Available headers: {list(request.headers.keys())}")
+        logger.info("[Webhook] ❌ Missing signature header (looking for Kick-Event-Signature)")
         return jsonify({"error": "Missing signature"}), 401
 
     # DEBUG: Log which header was found (temporary diagnostic)
     if os.getenv("DEBUG_WEBHOOKS") == "true":
-        print(f"[Webhook] ✅ Found signature in header: {signature_header_name}")
-        print(f"[Webhook] ℹ️  Event: {event_type}, Message ID: {message_id}, Timestamp: {message_timestamp}")
+        logger.info(f"[Webhook] ✅ Found signature in header: {signature_header_name}")
+        logger.info(f"[Webhook] ℹ️  Event: {event_type}, Message ID: {message_id}, Timestamp: {message_timestamp}")
 
     if not subscription_id:
-        print("[Webhook] ❌ Missing subscription ID")
+        logger.info("[Webhook] ❌ Missing subscription ID")
         return jsonify({"error": "Missing subscription ID"}), 400
 
     try:
@@ -413,30 +416,32 @@ def handle_kick_webhook():
                         webhook_secret = result[2]
 
                         if os.getenv("DEBUG_WEBHOOKS") == "true":
-                            print(
+                            logger.info(
                                 f"[Webhook] ✅ Resolved subscription: server={discord_server_id}, broadcaster={broadcaster_user_id}"
                             )
                     else:
                         # Unknown subscription (legacy/old webhook still firing)
                         # Return 200 OK to prevent Kick retry storms, but do NOT process
-                        print(f"[Webhook] ⚠️  Unknown subscription ID: {subscription_id} (legacy webhook, ignoring)")
+                        logger.info(
+                            f"[Webhook] ⚠️  Unknown subscription ID: {subscription_id} (legacy webhook, ignoring)"
+                        )
                         return jsonify({"status": "ok", "message": "unknown subscription"}), 200
         except Exception as db_err:
-            print(f"[Webhook] ❌ Database error: {db_err}")
+            logger.info(f"[Webhook] ❌ Database error: {db_err}")
             return jsonify({"error": "Database error"}), 500
 
         # 4️⃣ VERIFY SIGNATURE (using Kick's RSA public key)
-        print(f"[Webhook] 🔐 Verifying RSA signature...")
-        print(f"[Webhook] 🔐 Message ID: {message_id}")
-        print(f"[Webhook] 🔐 Timestamp: {message_timestamp}")
-        print(f"[Webhook] 🔐 Signature header present: {bool(signature_header)}")
-        print(f"[Webhook] 🔐 Raw body length: {len(raw_body)} bytes")
+        logger.info(f"[Webhook] 🔐 Verifying RSA signature...")
+        logger.info(f"[Webhook] 🔐 Message ID: {message_id}")
+        logger.info(f"[Webhook] 🔐 Timestamp: {message_timestamp}")
+        logger.info(f"[Webhook] 🔐 Signature header present: {bool(signature_header)}")
+        logger.info(f"[Webhook] 🔐 Raw body length: {len(raw_body)} bytes")
 
         if not verify_kick_signature(raw_body, signature_header, message_id, message_timestamp):
-            print(f"[Webhook] ❌ Invalid signature for subscription {subscription_id}")
+            logger.info(f"[Webhook] ❌ Invalid signature for subscription {subscription_id}")
             return jsonify({"error": "Invalid signature"}), 401
 
-        print(f"[Webhook] ✅ Signature verified for subscription {subscription_id}")
+        logger.info(f"[Webhook] ✅ Signature verified for subscription {subscription_id}")
 
         # 5️⃣ PARSE JSON AFTER SIGNATURE VERIFICATION
         try:
@@ -448,7 +453,7 @@ def handle_kick_webhook():
         event_data["_server_id"] = discord_server_id
         event_data["_broadcaster_user_id"] = broadcaster_user_id
 
-        print(f"[Webhook] 📥 Event for server {discord_server_id}, broadcaster {broadcaster_user_id}")
+        logger.info(f"[Webhook] 📥 Event for server {discord_server_id}, broadcaster {broadcaster_user_id}")
 
         # 6️⃣ IDEMPOTENCY CHECK (Kick retries webhooks on failure)
         # Check if we've already processed this message_id
@@ -470,7 +475,7 @@ def handle_kick_webhook():
                     ).fetchone()
 
                     if existing:
-                        print(f"[Webhook] ℹ️ Duplicate message {message_id}, already processed")
+                        logger.info(f"[Webhook] ℹ️ Duplicate message {message_id}, already processed")
                         # Return 200 OK to prevent Kick from retrying
                         return jsonify({"status": "ok", "message": "already processed"}), 200
 
@@ -488,7 +493,7 @@ def handle_kick_webhook():
                     )
             except Exception as dedup_err:
                 # If deduplication fails, continue anyway (better to process twice than not at all)
-                print(f"[Webhook] ⚠️ Deduplication check failed: {dedup_err}")
+                logger.info(f"[Webhook] ⚠️ Deduplication check failed: {dedup_err}")
 
         # 8️⃣ HANDLE EVENT
         if _event_handler:
@@ -506,7 +511,7 @@ def handle_kick_webhook():
         return jsonify({"status": "ok", "message_id": message_id}), 200
 
     except Exception as e:
-        print(f"[Webhook] ❌ Error processing webhook: {e}")
+        logger.info(f"[Webhook] ❌ Error processing webhook: {e}")
         import traceback
 
         traceback.print_exc()
@@ -572,7 +577,7 @@ def simulate_webhook_event():
     test_token = os.getenv("WEBHOOK_TEST_TOKEN", "")
 
     if not test_token:
-        print(f"[Webhook Simulate] ❌ WEBHOOK_TEST_TOKEN not configured")
+        logger.info(f"[Webhook Simulate] ❌ WEBHOOK_TEST_TOKEN not configured")
         return jsonify({"error": "WEBHOOK_TEST_TOKEN not configured on bot"}), 500
 
     try:
@@ -582,7 +587,7 @@ def simulate_webhook_event():
 
     provided_token = body.get("test_token", "")
     if not provided_token or not hmac.compare_digest(provided_token, test_token):
-        print(
+        logger.info(
             f"[Webhook Simulate] ❌ Invalid test token (provided: {provided_token[:8]}... expected: {test_token[:8]}...)"
         )
         return jsonify({"error": "Invalid test token"}), 401
@@ -624,7 +629,7 @@ def simulate_webhook_event():
             "_simulated": True,
         }
 
-    print(f"[Webhook Simulate] 🧪 Simulating {event_type} for server {discord_server_id}")
+    logger.info(f"[Webhook Simulate] 🧪 Simulating {event_type} for server {discord_server_id}")
 
     # Handle the event
     if _event_handler:
@@ -646,13 +651,13 @@ def simulate_webhook_event():
                 200,
             )
         except Exception as e:
-            print(f"[Webhook Simulate] ❌ Error: {e}")
+            logger.info(f"[Webhook Simulate] ❌ Error: {e}")
             import traceback
 
             traceback.print_exc()
             return jsonify({"error": str(e)}), 500
     else:
-        print(f"[Webhook Simulate] ⚠️ No event handler registered")
+        logger.info(f"[Webhook Simulate] ⚠️ No event handler registered")
         return jsonify({"error": "No event handler registered"}), 500
 
 
@@ -795,13 +800,13 @@ def simulate_real_webhook_event():
 
     headers = {"Content-Type": "application/json"}
 
-    print(f"[Webhook Real Test] 🔬 Testing webhook event handling:")
-    print(f"  Webhook URL: {webhook_url}")
-    print(f"  Subscription ID: {subscription_id}")
-    print(f"  Event Type: {event_type}")
-    print(f"  Server ID: {discord_server_id}")
-    print(f"  Broadcaster: {broadcaster_user_id}")
-    print(f"  Note: Using /simulate endpoint (RSA signatures can only be generated by Kick)")
+    logger.info(f"[Webhook Real Test] 🔬 Testing webhook event handling:")
+    logger.info(f"  Webhook URL: {webhook_url}")
+    logger.info(f"  Subscription ID: {subscription_id}")
+    logger.info(f"  Event Type: {event_type}")
+    logger.info(f"  Server ID: {discord_server_id}")
+    logger.info(f"  Broadcaster: {broadcaster_user_id}")
+    logger.info(f"  Note: Using /simulate endpoint (RSA signatures can only be generated by Kick)")
 
     try:
         # Don't follow redirects - POST can become GET on redirect
@@ -843,8 +848,8 @@ def simulate_real_webhook_event():
 
 def _log_event(event_type: str, event_data: Dict[str, Any]):
     """Log webhook event for debugging (used when no handler registered)"""
-    print(f"[Webhook] Event Data:")
-    print(json.dumps(event_data, indent=2, default=str))
+    logger.info(f"[Webhook] Event Data:")
+    logger.info(json.dumps(event_data, indent=2, default=str))
 
 
 # -------------------------
@@ -864,7 +869,7 @@ def register_webhook_routes(app, event_handler: WebhookEventHandler = None):
     _event_handler = event_handler
 
     app.register_blueprint(kick_webhooks_bp)
-    print("[Webhook] ✅ Registered Kick webhook routes at /webhooks/kick")
+    logger.info("[Webhook] ✅ Registered Kick webhook routes at /webhooks/kick")
 
 
 # -------------------------
@@ -943,9 +948,9 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                         kick_username=giftee_username, guild_id=discord_server_id, period_id=period_id
                                     )
 
-                            print(f"[Webhook] ✅ Tracked {count} gifted subs for raffle")
+                            logger.info(f"[Webhook] ✅ Tracked {count} gifted subs for raffle")
             except Exception as e:
-                print(f"[Webhook] ⚠️ Failed to track gifted subs in raffle: {e}")
+                logger.info(f"[Webhook] ⚠️ Failed to track gifted subs in raffle: {e}")
 
         channel = discord_bot.get_channel(channel_id)
         if channel:
@@ -967,7 +972,7 @@ def create_discord_notifier(discord_bot, channel_id: int):
         broadcaster = data.get("broadcaster", {}).get("username", "")
         discord_server_id = data.get("_server_id")
 
-        print(f"[Webhook] 🔄 Sub renewal: {subscriber} renewed for {duration} month(s)")
+        logger.info(f"[Webhook] 🔄 Sub renewal: {subscriber} renewed for {duration} month(s)")
 
         # Renewals could grant bonus tickets or other rewards in the future
         # For now, just log it
@@ -1003,7 +1008,9 @@ def create_discord_notifier(discord_bot, channel_id: int):
         category = data.get("livestream", {}).get("category", {}).get("name", "Just Chatting")
         discord_server_id = data.get("_server_id")
 
-        print(f"[Webhook] 📺 Stream status update: {broadcaster} is_live={is_live}, server_id={discord_server_id}")
+        logger.info(
+            f"[Webhook] 📺 Stream status update: {broadcaster} is_live={is_live}, server_id={discord_server_id}"
+        )
 
         # Send Discord embed notification if enabled
         if discord_server_id and is_live:
@@ -1120,20 +1127,20 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                                     timeout=aiohttp.ClientTimeout(total=10),
                                                 ) as footer_resp:
                                                     if footer_resp.status not in [200, 201]:
-                                                        print(
+                                                        logger.info(
                                                             f"[Webhook] ⚠️ Failed to send footer: {footer_resp.status}"
                                                         )
 
-                                            print(
+                                            logger.info(
                                                 f"[Webhook] ✅ Discord stream notification sent to channel {notification_channel_id}"
                                             )
                                         else:
                                             error_text = await resp.text()
-                                            print(
+                                            logger.info(
                                                 f"[Webhook] ⚠️ Failed to send Discord notification: {resp.status} - {error_text[:200]}"
                                             )
             except Exception as e:
-                print(f"[Webhook] ⚠️ Failed to send Discord stream notification: {e}")
+                logger.info(f"[Webhook] ⚠️ Failed to send Discord stream notification: {e}")
 
         # Send basic Discord notification (legacy - to the handler's configured channel)
         channel = discord_bot.get_channel(channel_id)
@@ -1159,14 +1166,14 @@ def create_discord_notifier(discord_bot, channel_id: int):
                         streamer=broadcaster,
                         stream_url=f"https://kick.com/{broadcaster}",
                     )
-                    print(f"[Webhook] 📤 Published stream_live to Redis for server {discord_server_id}")
+                    logger.info(f"[Webhook] 📤 Published stream_live to Redis for server {discord_server_id}")
                 else:
                     bot_redis_publisher.publish_stream_offline(
                         discord_server_id=str(discord_server_id), streamer=broadcaster
                     )
-                    print(f"[Webhook] 📤 Published stream_offline to Redis for server {discord_server_id}")
+                    logger.info(f"[Webhook] 📤 Published stream_offline to Redis for server {discord_server_id}")
             except Exception as e:
-                print(f"[Webhook] ⚠️ Failed to publish stream status to Redis: {e}")
+                logger.info(f"[Webhook] ⚠️ Failed to publish stream status to Redis: {e}")
 
         # Trigger clip buffer start/stop via dashboard API
         if discord_server_id:
@@ -1203,7 +1210,7 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                     if not auto_start_buffer:
                                         # Auto-start disabled for this guild — skip starting
                                         # the buffer (manual Start from the dashboard still works).
-                                        print(
+                                        logger.info(
                                             f"[Webhook] ⏸️ Auto-start disabled (clips_auto_start_on_live=false) — skipping clip buffer for {broadcaster}"
                                         )
                                     else:
@@ -1215,10 +1222,10 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                             timeout=30,
                                         ) as resp:
                                             if resp.status == 200:
-                                                print(f"[Webhook] ✅ Clip buffer started for {broadcaster}")
+                                                logger.info(f"[Webhook] ✅ Clip buffer started for {broadcaster}")
                                             else:
                                                 error_text = await resp.text()
-                                                print(
+                                                logger.info(
                                                     f"[Webhook] ⚠️ Failed to start clip buffer: {resp.status} - {error_text[:200]}"
                                                 )
                                 else:
@@ -1230,14 +1237,14 @@ def create_discord_notifier(discord_bot, channel_id: int):
                                         timeout=10,
                                     ) as resp:
                                         if resp.status == 200:
-                                            print(f"[Webhook] ✅ Clip buffer stopped for {broadcaster}")
+                                            logger.info(f"[Webhook] ✅ Clip buffer stopped for {broadcaster}")
                                         else:
                                             error_text = await resp.text()
-                                            print(
+                                            logger.info(
                                                 f"[Webhook] ⚠️ Failed to stop clip buffer: {resp.status} - {error_text[:200]}"
                                             )
             except Exception as e:
-                print(f"[Webhook] ⚠️ Failed to control clip buffer: {e}")
+                logger.info(f"[Webhook] ⚠️ Failed to control clip buffer: {e}")
 
     @handler.on("channel.followed")
     async def on_follow(data):

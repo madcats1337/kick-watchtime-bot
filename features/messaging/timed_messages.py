@@ -374,13 +374,17 @@ class TimedMessagesManager:
         # Log active chatters count for debugging
         enabled_count = sum(1 for msg in self.messages.values() if msg.enabled)
         if enabled_count > 0:
-            print(f"[Timed Messages] Check: {active_chatters_count} active chatters, {enabled_count} enabled messages")
+            logger.info(
+                f"[Timed Messages] Check: {active_chatters_count} active chatters, {enabled_count} enabled messages"
+            )
 
         # Don't send timed messages if there are less than 2 active chatters
         # This prevents spam when stream is offline
         if active_chatters_count < 2:
             if enabled_count > 0:
-                print(f"[Timed Messages] Skipping - need 2+ active chatters, currently have {active_chatters_count}")
+                logger.info(
+                    f"[Timed Messages] Skipping - need 2+ active chatters, currently have {active_chatters_count}"
+                )
             return
 
         now = datetime.utcnow()

@@ -33,6 +33,13 @@ logging.getLogger("discord").setLevel(logging.ERROR)
 logging.getLogger("discord.http").setLevel(logging.ERROR)
 logging.getLogger("discord.gateway").setLevel(logging.ERROR)
 
+# Centralized logging: installs the root handler + per-server context filter so
+# every log line (and converted print) is tagged "[BOT] [<server name>]".
+from utils.log_context import server_context, set_server  # noqa: E402
+from utils.logging_config import setup_logging  # noqa: E402
+
+setup_logging("kick_bot", log_level=os.getenv("LOG_LEVEL", "INFO"), source_tag="BOT")
+
 # Custom commands import
 from features.custom_commands import CustomCommandsManager
 from features.games.gambling import setup_gambling
@@ -82,6 +89,8 @@ from raffle_system.watchtime_converter import setup_watchtime_converter
 # Bot settings manager - loads settings from database with env var fallbacks
 from utils.bot_settings import BotSettingsManager
 
+logger = logging.getLogger(__name__)
+
 
 # -------------------------
 # Command checks and utils
@@ -127,7 +136,7 @@ KICK_CHATROOM_ID = os.getenv("KICK_CHATROOM_ID")  # Set this on Railway to skip 
 
 # Multiserver support: Settings are loaded per-guild dynamically
 # No need for DISCORD_GUILD_ID - each guild has its own configuration in the database
-print("✅ Multiserver mode: Settings loaded per-guild dynamically")
+logger.info("✅ Multiserver mode: Settings loaded per-guild dynamically")
 
 # Database configuration with cloud PostgreSQL support
 DATABASE_URL = os.getenv("DATABASE_URL", "")
@@ -145,12 +154,12 @@ if REDIS_URL:
             socket_timeout=5,
         )
         redis_client.ping()
-        print("✅ Redis client connected for event publishing")
+        logger.info("✅ Redis client connected for event publishing")
     except Exception as e:
-        print(f"⚠️  Redis unavailable: {e}")
+        logger.warning(f"⚠️  Redis unavailable: {e}")
         redis_client = None
 else:
-    print("⚠️  REDIS_URL not set, events will not be published")
+    logger.warning("⚠️  REDIS_URL not set, events will not be published")
 
 
 def publish_redis_event(channel: str, action: str, data: dict = None):
@@ -162,22 +171,22 @@ def publish_redis_event(channel: str, action: str, data: dict = None):
         redis_client.publish(channel, json.dumps(payload))
         return True
     except Exception as e:
-        print(f"Failed to publish Redis event: {e}")
+        logger.info(f"Failed to publish Redis event: {e}")
         return False
 
 
 if not DATABASE_URL:
-    print("⚠️ WARNING: DATABASE_URL not set! Using in-memory SQLite database.")
-    print("⚠️ This is fine for testing but data will be lost on restart.")
-    print("⚠️ For production, set DATABASE_URL environment variable.")
+    logger.warning("⚠️ WARNING: DATABASE_URL not set! Using in-memory SQLite database.")
+    logger.warning("⚠️ This is fine for testing but data will be lost on restart.")
+    logger.warning("⚠️ For production, set DATABASE_URL environment variable.")
     DATABASE_URL = "sqlite:///watchtime.db"
 
 # Convert postgres:// to postgresql:// for SQLAlchemy compatibility (Heroku uses postgres://)
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-    print("📊 Converted database URL to use postgresql:// scheme")
+    logger.info("📊 Converted database URL to use postgresql:// scheme")
 
-print(f"📊 Using database: {DATABASE_URL.split('@')[1] if '@' in DATABASE_URL else 'SQLite (local)'}")
+logger.info(f"📊 Using database: {DATABASE_URL.split('@')[1] if '@' in DATABASE_URL else 'SQLite (local)'}")
 
 WATCH_INTERVAL_SECONDS = int(os.getenv("WATCH_INTERVAL_SECONDS", "60"))
 ROLE_UPDATE_INTERVAL_SECONDS = int(os.getenv("ROLE_UPDATE_INTERVAL_SECONDS", "600"))
@@ -205,13 +214,13 @@ KICK_USE_KICKPYTHON_WS = os.getenv("KICK_USE_KICKPYTHON_WS", "false").lower() ==
 
 # CRITICAL: If FLASK_SECRET_KEY is not set, OAuth will not work!
 if not OAUTH_SECRET_KEY:
-    print("=" * 80, flush=True)
-    print("⚠️  CRITICAL: FLASK_SECRET_KEY environment variable is NOT SET!", flush=True)
-    print("⚠️  OAuth linking will NOT WORK without this key!", flush=True)
-    print("⚠️  Please set FLASK_SECRET_KEY in Railway environment variables.", flush=True)
-    print("=" * 80, flush=True)
+    logger.info("=" * 80)
+    logger.warning("⚠️  CRITICAL: FLASK_SECRET_KEY environment variable is NOT SET!")
+    logger.warning("⚠️  OAuth linking will NOT WORK without this key!")
+    logger.warning("⚠️  Please set FLASK_SECRET_KEY in Railway environment variables.")
+    logger.info("=" * 80)
 else:
-    print(f"[Bot] FLASK_SECRET_KEY configured: YES", flush=True)
+    logger.info(f"[Bot] FLASK_SECRET_KEY configured: YES")
 
 
 # -------------------------
@@ -341,7 +350,7 @@ class KickWebSocketManager:
             bot_token = KICK_BOT_USER_TOKEN
 
             if not bot_token:
-                print(f"[{guild_name}] ⚠️ KICK_BOT_USER_TOKEN not set")
+                logger.info(f"[{guild_name}] ⚠️ KICK_BOT_USER_TOKEN not set")
                 return False
 
             # Get channel username for websocket connection
@@ -364,8 +373,8 @@ class KickWebSocketManager:
                     kick_username = result[0]
 
             if not kick_username:
-                print(f"[{guild_name}] ⚠️ Kick channel username not configured in dashboard")
-                print(f"[{guild_name}] 💡 Please set the Kick channel name in the dashboard Settings page")
+                logger.info(f"[{guild_name}] ⚠️ Kick channel username not configured in dashboard")
+                logger.info(f"[{guild_name}] 💡 Please set the Kick channel name in the dashboard Settings page")
                 return False
 
             # Initialize kickpython API WITHOUT any credentials for chatroom_id fetch
@@ -382,7 +391,7 @@ class KickWebSocketManager:
                 try:
                     await self._handle_incoming_message(guild_id, guild_name, msg)
                 except Exception as e:
-                    print(f"[{guild_name}] ❌ Error in message handler: {e}")
+                    logger.info(f"[{guild_name}] ❌ Error in message handler: {e}")
 
             api.add_message_handler(_on_message)
 
@@ -390,7 +399,7 @@ class KickWebSocketManager:
             self.message_queues[guild_id] = asyncio.Queue()
 
             # Connect to chatroom via websocket
-            print(
+            logger.info(
                 f"[{guild_name}] 🔌 Connecting to Kick websocket for channel: {kick_username} with BOT token from env..."
             )
 
@@ -401,11 +410,11 @@ class KickWebSocketManager:
             self.connection_tasks[guild_id] = task
             self.connected_channels[guild_id] = kick_username
 
-            print(f"[{guild_name}] ✅ Kick websocket connection task started")
+            logger.info(f"[{guild_name}] ✅ Kick websocket connection task started")
             return True
 
         except Exception as e:
-            print(f"[{guild_name}] ❌ Failed to connect websocket: {e}")
+            logger.info(f"[{guild_name}] ❌ Failed to connect websocket: {e}")
             import traceback
 
             traceback.print_exc()
@@ -414,7 +423,7 @@ class KickWebSocketManager:
     async def _maintain_connection(self, guild_id: int, guild_name: str, api, kick_username: str):
         """Maintain websocket connection and process message queue"""
         try:
-            print(f"[{guild_name}] 🔌 Starting message sender task in background...")
+            logger.info(f"[{guild_name}] 🔌 Starting message sender task in background...")
 
             # Start the message sender as a separate task
             sender_task = asyncio.create_task(self._message_sender(guild_id, guild_name, api))
@@ -430,7 +439,7 @@ class KickWebSocketManager:
             while True:
                 try:
                     # Now connect to chatroom (this will block until disconnected)
-                    print(f"[{guild_name}] 🔌 Connecting to websocket...")
+                    logger.info(f"[{guild_name}] 🔌 Connecting to websocket...")
                     await api.connect_to_chatroom(kick_username)
 
                     # Save chatroom_id to database after successful connection
@@ -449,27 +458,27 @@ class KickWebSocketManager:
                                     {"chatroom_id": str(api.chatroom_id), "guild_id": guild_id},
                                 )
                                 conn.commit()
-                            print(f"[{guild_name}] 💾 Saved chatroom_id {api.chatroom_id} to database")
+                            logger.info(f"[{guild_name}] 💾 Saved chatroom_id {api.chatroom_id} to database")
                         except Exception as e:
-                            print(f"[{guild_name}] ⚠️ Failed to save chatroom_id: {e}")
+                            logger.info(f"[{guild_name}] ⚠️ Failed to save chatroom_id: {e}")
 
                     # If we get here, connection was closed - try to reconnect
-                    print(f"[{guild_name}] ⚠️ WebSocket disconnected, reconnecting in {reconnect_delay}s...")
+                    logger.info(f"[{guild_name}] ⚠️ WebSocket disconnected, reconnecting in {reconnect_delay}s...")
                     await asyncio.sleep(reconnect_delay)
                     reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
 
                 except asyncio.CancelledError:
-                    print(f"[{guild_name}] 🛑 Connection task cancelled")
+                    logger.info(f"[{guild_name}] 🛑 Connection task cancelled")
                     break
                 except Exception as e:
-                    print(f"[{guild_name}] ❌ WebSocket error: {e}, reconnecting in {reconnect_delay}s...")
+                    logger.info(f"[{guild_name}] ❌ WebSocket error: {e}, reconnecting in {reconnect_delay}s...")
                     await asyncio.sleep(reconnect_delay)
                     reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
 
             sender_task.cancel()
 
         except Exception as e:
-            print(f"[{guild_name}] ❌ Websocket connection lost: {e}")
+            logger.info(f"[{guild_name}] ❌ Websocket connection lost: {e}")
             import traceback
 
             traceback.print_exc()
@@ -505,7 +514,7 @@ class KickWebSocketManager:
 
                 if mapped and mapped[0] and mapped[2]:
                     user_id, kick_username, refresh_token = mapped
-                    print(f"[{guild_name}] 🔄 Refreshing via kick_oauth_tokens for {kick_username}...")
+                    logger.info(f"[{guild_name}] 🔄 Refreshing via kick_oauth_tokens for {kick_username}...")
 
                     if await refresh_kick_oauth_token_for_user(user_id, kick_username, refresh_token):
                         latest = conn.execute(
@@ -513,10 +522,10 @@ class KickWebSocketManager:
                             {"uid": user_id},
                         ).fetchone()
                         if latest and latest[0]:
-                            print(f"[{guild_name}] ✅ OAuth token refreshed successfully")
+                            logger.info(f"[{guild_name}] ✅ OAuth token refreshed successfully")
                             return latest[0]
 
-                    print(f"[{guild_name}] ❌ Token refresh failed via kick_oauth_tokens")
+                    logger.info(f"[{guild_name}] ❌ Token refresh failed via kick_oauth_tokens")
                     return None
 
             # Fallback: legacy servers that only have bot_settings tokens
@@ -538,7 +547,7 @@ class KickWebSocketManager:
                 ).fetchone()
 
                 if not result or not result[0]:
-                    print(f"[{guild_name}] ❌ No refresh_token found for this guild")
+                    logger.info(f"[{guild_name}] ❌ No refresh_token found for this guild")
                     return None
 
                 refresh_token = result[0]
@@ -554,7 +563,7 @@ class KickWebSocketManager:
                 "refresh_token": refresh_token,
             }
 
-            print(f"[{guild_name}] 🔄 Refreshing OAuth 2.1 token...")
+            logger.info(f"[{guild_name}] 🔄 Refreshing OAuth 2.1 token...")
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     "https://id.kick.com/oauth/token",
@@ -591,14 +600,14 @@ class KickWebSocketManager:
                                 {"guild_id": guild_id, "token": new_refresh_token},
                             )
 
-                        print(f"[{guild_name}] ✅ OAuth token refreshed successfully")
+                        logger.info(f"[{guild_name}] ✅ OAuth token refreshed successfully")
                         return new_access_token
                     else:
                         error_text = await resp.text()
-                        print(f"[{guild_name}] ❌ Token refresh failed: HTTP {resp.status} - {error_text}")
+                        logger.info(f"[{guild_name}] ❌ Token refresh failed: HTTP {resp.status} - {error_text}")
                         return None
         except Exception as e:
-            print(f"[{guild_name}] ❌ Error refreshing token: {e}")
+            logger.info(f"[{guild_name}] ❌ Error refreshing token: {e}")
             import traceback
 
             traceback.print_exc()
@@ -606,13 +615,13 @@ class KickWebSocketManager:
 
     async def _message_sender(self, guild_id: int, guild_name: str, api):
         """Process message queue and send via kickpython (multiserver support)"""
-        print(f"[{guild_name}] 📨 Message sender task started!")
+        logger.info(f"[{guild_name}] 📨 Message sender task started!")
 
         try:
             # Load OAuth 2.1 token ONCE at startup for performance
             oauth_token = None
             try:
-                print(f"[{guild_name}] 🔍 Loading kick_oauth_token from database...")
+                logger.info(f"[{guild_name}] 🔍 Loading kick_oauth_token from database...")
                 with engine.connect() as conn:
                     result = conn.execute(
                         text(
@@ -647,9 +656,9 @@ class KickWebSocketManager:
                     if result and result[0]:
                         oauth_token = result[0]
                         api.access_token = oauth_token
-                        print(f"[{guild_name}] ✅ OAuth token loaded successfully")
+                        logger.info(f"[{guild_name}] ✅ OAuth token loaded successfully")
                     else:
-                        print(f"[{guild_name}] ⚠️ No kick_oauth_token found - messages will fail!")
+                        logger.info(f"[{guild_name}] ⚠️ No kick_oauth_token found - messages will fail!")
                         # Debug: Check what keys exist
                         all_keys = conn.execute(
                             text(
@@ -659,14 +668,14 @@ class KickWebSocketManager:
                             ),
                             {"guild_id": guild_id},
                         ).fetchall()
-                        print(f"[{guild_name}] 🔍 Available keys: {[row[0] for row in all_keys]}")
+                        logger.info(f"[{guild_name}] 🔍 Available keys: {[row[0] for row in all_keys]}")
             except Exception as e:
-                print(f"[{guild_name}] ❌ Error loading OAuth token: {e}")
+                logger.info(f"[{guild_name}] ❌ Error loading OAuth token: {e}")
                 import traceback
 
                 traceback.print_exc()
 
-            print(f"[{guild_name}] 🔄 Starting message processing loop...")
+            logger.info(f"[{guild_name}] 🔄 Starting message processing loop...")
 
             while True:
                 try:
@@ -712,13 +721,13 @@ class KickWebSocketManager:
                             if result and result[0]:
                                 api.access_token = result[0]
                     except Exception as e:
-                        print(f"[{guild_name}] ⚠️ Error reloading token: {e}")
+                        logger.info(f"[{guild_name}] ⚠️ Error reloading token: {e}")
 
                     # Debug: Log what we're about to send
-                    print(f"[{guild_name}] 📤 Preparing to send message:")
-                    print(f"[{guild_name}]    Message: {message[:100]}...")
-                    print(f"[{guild_name}]    Channel ID: {channel_id}")
-                    print(f"[{guild_name}]    Token loaded: {'YES' if api.access_token else 'NO'}")
+                    logger.info(f"[{guild_name}] 📤 Preparing to send message:")
+                    logger.info(f"[{guild_name}]    Message: {message[:100]}...")
+                    logger.info(f"[{guild_name}]    Channel ID: {channel_id}")
+                    logger.info(f"[{guild_name}]    Token loaded: {'YES' if api.access_token else 'NO'}")
 
                     # Send via direct HTTP request to Kick API
                     import aiohttp
@@ -738,30 +747,30 @@ class KickWebSocketManager:
                     async with aiohttp.ClientSession() as session:
                         async with session.post(url, headers=headers, json=payload, timeout=10) as resp:
                             response_text = await resp.text()
-                            print(f"[{guild_name}] 📡 Kick API Response: HTTP {resp.status}")
-                            print(f"[{guild_name}] 📡 Response body: {response_text[:500]}")
+                            logger.info(f"[{guild_name}] 📡 Kick API Response: HTTP {resp.status}")
+                            logger.info(f"[{guild_name}] 📡 Response body: {response_text[:500]}")
 
                             if resp.status in [200, 201]:
-                                print(f"[{guild_name}] ✅ Message sent successfully!")
+                                logger.info(f"[{guild_name}] ✅ Message sent successfully!")
                             elif resp.status == 401:
                                 raise Exception(f"HTTP 401 Unauthorized - token may have expired")
                             else:
                                 raise Exception(f"HTTP {resp.status}: {response_text}")
 
                 except asyncio.CancelledError:
-                    print(f"[{guild_name}] 🛑 Message sender cancelled")
+                    logger.info(f"[{guild_name}] 🛑 Message sender cancelled")
                     break
                 except Exception as send_error:
                     error_str = str(send_error)
-                    print(f"[{guild_name}] ⚠️ Send failed: {error_str}")
+                    logger.info(f"[{guild_name}] ⚠️ Send failed: {error_str}")
 
                     # If sending fails with 401, try refreshing token
                     if "401" in error_str or "Unauthorized" in error_str:
-                        print(f"[{guild_name}] 🔄 Token expired, attempting refresh...")
+                        logger.info(f"[{guild_name}] 🔄 Token expired, attempting refresh...")
                         refreshed = await self._refresh_oauth_token(guild_id, guild_name)
                         if refreshed:
                             api.access_token = refreshed
-                            print(f"[{guild_name}] 🔄 Retrying with refreshed token...")
+                            logger.info(f"[{guild_name}] 🔄 Retrying with refreshed token...")
 
                             # Retry with refreshed token
                             import aiohttp
@@ -778,12 +787,12 @@ class KickWebSocketManager:
                             async with aiohttp.ClientSession() as session:
                                 async with session.post(url, headers=headers, json=payload, timeout=10) as resp:
                                     response_text = await resp.text()
-                                    print(
+                                    logger.info(
                                         f"[{guild_name}] 📡 Retry response: HTTP {resp.status} - {response_text[:200]}"
                                     )
                                     if resp.status not in [200, 201]:
                                         # Try streamer OAuth as final fallback
-                                        print(f"[{guild_name}] ⚠️ Trying streamer OAuth as fallback...")
+                                        logger.info(f"[{guild_name}] ⚠️ Trying streamer OAuth as fallback...")
                                         from utils.kick_oauth import get_kick_token_for_server
 
                                         token_data = get_kick_token_for_server(engine, guild_id)
@@ -794,20 +803,20 @@ class KickWebSocketManager:
                                                 url, headers=headers, json=payload, timeout=10
                                             ) as fallback_resp:
                                                 fallback_text = await fallback_resp.text()
-                                                print(
+                                                logger.info(
                                                     f"[{guild_name}] 📡 Streamer OAuth: HTTP {fallback_resp.status} - {fallback_text[:200]}"
                                                 )
                         else:
-                            print(f"[{guild_name}] ❌ Token refresh failed")
+                            logger.info(f"[{guild_name}] ❌ Token refresh failed")
                     else:
                         import traceback
 
                         traceback.print_exc()
 
         except asyncio.CancelledError:
-            print(f"[{guild_name}] 🛑 Message sender task cancelled")
+            logger.info(f"[{guild_name}] 🛑 Message sender task cancelled")
         except Exception as e:
-            print(f"[{guild_name}] ❌ FATAL: Message sender crashed: {e}")
+            logger.info(f"[{guild_name}] ❌ FATAL: Message sender crashed: {e}")
             import traceback
 
             traceback.print_exc()
@@ -822,7 +831,7 @@ class KickWebSocketManager:
             # Get API instance
             api = self.connections.get(guild_id)
             if not api:
-                print(f"[{guild_name}] ⚠️ No API instance found")
+                logger.info(f"[{guild_name}] ⚠️ No API instance found")
                 return False
 
             # Get chatroom ID - prioritize in-memory value from kickpython
@@ -831,7 +840,7 @@ class KickWebSocketManager:
             # PRIORITY 1: Get from kickpython's in-memory chatroom_id (most reliable)
             if hasattr(api, "chatroom_id") and api.chatroom_id:
                 chatroom_id = int(api.chatroom_id)
-                print(f"[{guild_name}] 📋 Using chatroom_id from kickpython: {chatroom_id}")
+                logger.info(f"[{guild_name}] 📋 Using chatroom_id from kickpython: {chatroom_id}")
 
             # PRIORITY 2: Fall back to database (for reconnections)
             if not chatroom_id:
@@ -851,29 +860,29 @@ class KickWebSocketManager:
                     if result and result[0]:
                         try:
                             chatroom_id = int(result[0])
-                            print(f"[{guild_name}] 📋 Using chatroom_id from database: {chatroom_id}")
+                            logger.info(f"[{guild_name}] 📋 Using chatroom_id from database: {chatroom_id}")
 
                             # HOTFIX: 152837 is broadcaster_user_id, not chatroom_id!
                             if chatroom_id == 152837:
-                                print(
+                                logger.info(
                                     f"[{guild_name}] ⚠️ Invalid chatroom_id (152837 is broadcaster_user_id, not chatroom_id)"
                                 )
                                 chatroom_id = None
                         except (ValueError, TypeError):
-                            print(f"[{guild_name}] ⚠️ Invalid chatroom_id format")
+                            logger.info(f"[{guild_name}] ⚠️ Invalid chatroom_id format")
                             chatroom_id = None
 
             if not chatroom_id:
-                print(f"[{guild_name}] ⚠️ Chatroom ID not configured")
+                logger.info(f"[{guild_name}] ⚠️ Chatroom ID not configured")
                 return False
 
             # Add to queue
             await self.message_queues[guild_id].put((message, chatroom_id))
-            print(f"[{guild_name}] 📤 Queued message for websocket (chatroom: {chatroom_id})")
+            logger.info(f"[{guild_name}] 📤 Queued message for websocket (chatroom: {chatroom_id})")
             return True
 
         except Exception as e:
-            print(f"[{guild_name}] ❌ Failed to queue message: {e}")
+            logger.info(f"[{guild_name}] ❌ Failed to queue message: {e}")
             return False
 
     async def _handle_incoming_message(self, guild_id: int, guild_name: str, msg: dict):
@@ -884,7 +893,7 @@ class KickWebSocketManager:
             chat_id = msg.get("chat_id") or msg.get("id")
 
             # Debug: Log every incoming message
-            print(f"[{guild_name}] 💬 Received Kick message: {username}: {content[:100]}")
+            logger.info(f"[{guild_name}] 💬 Received Kick message: {username}: {content[:100]}")
 
             # Update watchtime tracking (per-guild)
             now = datetime.now(timezone.utc)
@@ -937,17 +946,17 @@ class KickWebSocketManager:
                             keyword = giveaway_manager.active_giveaway.get("keyword", "").lower()
                             if keyword and content.strip().lower() == keyword:
                                 await giveaway_manager.add_entry(username, entry_method="keyword")
-                                print(f"[{guild_name}] 🎁 Giveaway entry added: {username} (keyword: {keyword})")
+                                logger.info(f"[{guild_name}] 🎁 Giveaway entry added: {username} (keyword: {keyword})")
 
                         # Active chatter tracking
                         elif entry_method == "active_chatter":
                             await giveaway_manager.track_message(username, content)
                     except Exception as e:
-                        print(f"[{guild_name}] ⚠️ Giveaway tracking error: {e}")
+                        logger.info(f"[{guild_name}] ⚠️ Giveaway tracking error: {e}")
 
             # Process commands from Kick chat
             content_stripped = content.strip()
-            print(f"[{guild_name}] 🔍 Processing message: '{content_stripped[:50]}...'")
+            logger.info(f"[{guild_name}] 🔍 Processing message: '{content_stripped[:50]}...'")
 
             # Custom commands (from dashboard)
             if hasattr(bot, "custom_commands_managers") and guild_id in bot.custom_commands_managers:
@@ -961,14 +970,14 @@ class KickWebSocketManager:
 
                     commands_manager.discord_server_id = original_guild_id
                     if handled:
-                        print(f"[{guild_name}] ✅ Custom command handled")
+                        logger.info(f"[{guild_name}] ✅ Custom command handled")
                         return  # Command was handled, don't process further
                 except Exception as e:
-                    print(f"[{guild_name}] ⚠️ Custom command error: {e}")
+                    logger.info(f"[{guild_name}] ⚠️ Custom command error: {e}")
 
             # !points command
             if content_stripped.lower() == "!points":
-                print(f"[{guild_name}] 💰 Processing !points command from {username}")
+                logger.info(f"[{guild_name}] 💰 Processing !points command from {username}")
                 try:
                     with engine.connect() as conn:
                         result = conn.execute(
@@ -992,41 +1001,41 @@ class KickWebSocketManager:
                                 guild_id=guild_id,
                             )
                 except Exception as e:
-                    print(f"[{guild_name}] ❌ Error fetching points for {username}: {e}")
+                    logger.info(f"[{guild_name}] ❌ Error fetching points for {username}: {e}")
                     await send_kick_message(
                         f"@{username}, Unable to retrieve points balance at this time.", guild_id=guild_id
                     )
 
             # !call / !sr commands (slot requests)
             elif content_stripped.startswith(("!call", "!sr")):
-                print(f"[{guild_name}] 🎰 Detected slot command: {content_stripped[:50]}")
-                print(f"[{guild_name}] 🔍 Has slot_trackers: {hasattr(bot, 'slot_trackers')}")
+                logger.info(f"[{guild_name}] 🎰 Detected slot command: {content_stripped[:50]}")
+                logger.info(f"[{guild_name}] 🔍 Has slot_trackers: {hasattr(bot, 'slot_trackers')}")
 
                 # Use guild-specific tracker (check both naming conventions)
                 tracker = None
                 if hasattr(bot, "slot_call_trackers_by_guild") and guild_id in bot.slot_call_trackers_by_guild:
                     tracker = bot.slot_call_trackers_by_guild[guild_id]
-                    print(f"[{guild_name}] ✅ Found guild-specific tracker (slot_call_trackers_by_guild)")
+                    logger.info(f"[{guild_name}] ✅ Found guild-specific tracker (slot_call_trackers_by_guild)")
                 elif hasattr(bot, "slot_trackers") and guild_id in bot.slot_trackers:
                     tracker = bot.slot_trackers[guild_id]
-                    print(f"[{guild_name}] ✅ Found guild-specific tracker (slot_trackers)")
+                    logger.info(f"[{guild_name}] ✅ Found guild-specific tracker (slot_trackers)")
                 elif hasattr(bot, "slot_call_tracker"):
                     tracker = bot.slot_call_tracker
-                    print(f"[{guild_name}] ⚠️ Using fallback global tracker")
+                    logger.info(f"[{guild_name}] ⚠️ Using fallback global tracker")
 
                 if tracker:
-                    print(f"[{guild_name}] 🔍 Slot tracker enabled: {tracker.enabled}")
-                    print(
+                    logger.info(f"[{guild_name}] 🔍 Slot tracker enabled: {tracker.enabled}")
+                    logger.info(
                         f"[{guild_name}] 🔍 Slot tracker guild_id: {getattr(tracker, 'discord_server_id', 'NOT SET')}"
                     )
                     # Check if slot requests are enabled first
                     if not tracker.enabled:
-                        print(f"[{guild_name}] ❌ Slot requests disabled, sending rejection message")
+                        logger.info(f"[{guild_name}] ❌ Slot requests disabled, sending rejection message")
                         await send_kick_message(
                             f"@{username} Slot requests are not open at the moment.", guild_id=guild_id
                         )
                     else:
-                        print(f"[{guild_name}] ✅ Slot requests enabled, processing command")
+                        logger.info(f"[{guild_name}] ✅ Slot requests enabled, processing command")
                         slot_call = (
                             content_stripped[5:].strip()[:200]
                             if content_stripped.startswith("!call")
@@ -1042,30 +1051,30 @@ class KickWebSocketManager:
                                 if channel_data and "user" in channel_data:
                                     avatar_url = channel_data["user"].get("profile_pic")
                                     if avatar_url:
-                                        print(f"✅ Fetched avatar from Kick API for {username}: {avatar_url}")
+                                        logger.info(f"✅ Fetched avatar from Kick API for {username}: {avatar_url}")
                                     else:
-                                        print(f"⚠️ No profile_pic in Kick API response for {username}")
+                                        logger.warning(f"⚠️ No profile_pic in Kick API response for {username}")
                                 else:
-                                    print(f"⚠️ No user data in Kick API response for {username}")
+                                    logger.warning(f"⚠️ No user data in Kick API response for {username}")
                             except Exception as e:
-                                print(f"❌ Failed to fetch avatar for {username}: {e}")
+                                logger.error(f"❌ Failed to fetch avatar for {username}: {e}")
 
                             original_guild_id = getattr(tracker, "discord_server_id", None)
                             tracker.discord_server_id = guild_id
                             try:
                                 await tracker.handle_slot_call(username, slot_call, avatar_url=avatar_url)
-                                print(f"[{guild_name}] ✅ Slot call processed: {username} - {slot_call}")
+                                logger.info(f"[{guild_name}] ✅ Slot call processed: {username} - {slot_call}")
                             finally:
                                 if original_guild_id:
                                     tracker.discord_server_id = original_guild_id
                         else:
                             await send_kick_message(f"@{username} Please specify a slot!", guild_id=guild_id)
                 else:
-                    print(f"[{guild_name}] ❌ No slot tracker found for this guild")
+                    logger.info(f"[{guild_name}] ❌ No slot tracker found for this guild")
 
             # !gtb command
             elif content_stripped.lower().startswith("!gtb"):
-                print(f"[{guild_name}] 🎲 Processing !gtb command from {username}")
+                logger.info(f"[{guild_name}] 🎲 Processing !gtb command from {username}")
                 parts = content_stripped.split(maxsplit=1)
                 if len(parts) == 2:
                     amount = parse_amount(parts[1])
@@ -1078,10 +1087,10 @@ class KickWebSocketManager:
                             success, message = gtb_mgr.add_guess(username, amount)
                             response = f"@{username} {message}" + (" Good luck! 🎰" if success else "")
                             await send_kick_message(response, guild_id=guild_id)
-                            print(f"[{guild_name}] ✅ GTB guess processed: {username} - ${amount}")
+                            logger.info(f"[{guild_name}] ✅ GTB guess processed: {username} - ${amount}")
                         else:
                             await send_kick_message(f"@{username} GTB system not initialized", guild_id=guild_id)
-                            print(f"[{guild_name}] ❌ GTB system not initialized")
+                            logger.info(f"[{guild_name}] ❌ GTB system not initialized")
                     else:
                         await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount>", guild_id=guild_id)
                 else:
@@ -1095,7 +1104,7 @@ class KickWebSocketManager:
                     timestamp = datetime.now().strftime("%b %d, %Y %H:%M")
                     clip_title = f"Clip by {username} - {timestamp}"
 
-                print(f"[{guild_name}] 🎬 {username} requested clip: {clip_title}")
+                logger.info(f"[{guild_name}] 🎬 {username} requested clip: {clip_title}")
 
                 # Create clip via Dashboard API (background task)
                 async def create_clip_background(user: str, title: str):
@@ -1103,20 +1112,20 @@ class KickWebSocketManager:
                         # Get kick channel
                         kick_channel = self.connected_channels.get(guild_id)
                         if not kick_channel:
-                            print(f"[Clip] ❌ No channel configured")
+                            logger.info(f"[Clip] ❌ No channel configured")
                             return
 
                         # Check if stream is live FIRST (async function returning bool)
                         try:
                             is_live = await check_stream_live(kick_channel)
                             if not is_live:
-                                print(f"[Clip] ❌ Stream is offline")
+                                logger.info(f"[Clip] ❌ Stream is offline")
                                 await send_kick_message(
                                     f"@{user} Stream is not live! Can't create clip when offline.", guild_id=guild_id
                                 )
                                 return
                         except Exception as live_check_err:
-                            print(f"[Clip] ⚠️ Could not verify stream status: {live_check_err}")
+                            logger.info(f"[Clip] ⚠️ Could not verify stream status: {live_check_err}")
                             # Continue anyway - dashboard will verify
 
                         # Get settings from bot_settings
@@ -1145,7 +1154,7 @@ class KickWebSocketManager:
                                     clip_duration = int(value) if value else 30
 
                         if not dashboard_url or not api_key:
-                            print(f"[Clip] ❌ Dashboard URL or API key not configured")
+                            logger.info(f"[Clip] ❌ Dashboard URL or API key not configured")
                             await send_kick_message(f"@{user} Clip service not configured!", guild_id=guild_id)
                             return
 
@@ -1167,13 +1176,13 @@ class KickWebSocketManager:
                             ) as resp:
                                 if resp.status == 200:
                                     result = await resp.json()
-                                    print(f"[Clip] ✅ Clip created for {user}")
+                                    logger.info(f"[Clip] ✅ Clip created for {user}")
                                     clip_url = result.get("clip_url", "")
                                     await send_kick_message(f"@{user} Clip created! 🎬 {clip_url}", guild_id=guild_id)
                                 else:
                                     error_data = await resp.json()
                                     error_msg = error_data.get("message", "Unknown error")
-                                    print(f"[Clip] ❌ Failed: HTTP {resp.status} - {error_msg}")
+                                    logger.info(f"[Clip] ❌ Failed: HTTP {resp.status} - {error_msg}")
 
                                     # Provide helpful error messages
                                     if "no_buffer" in error_msg or "not_recording" in error_msg:
@@ -1189,14 +1198,14 @@ class KickWebSocketManager:
                                     else:
                                         await send_kick_message(f"@{user} Clip failed: {error_msg}", guild_id=guild_id)
                     except Exception as e:
-                        print(f"[Clip] ❌ Error: {e}")
+                        logger.info(f"[Clip] ❌ Error: {e}")
                         await send_kick_message(f"@{user} Clip error: {str(e)}", guild_id=guild_id)
 
                 asyncio.create_task(create_clip_background(username, clip_title))
 
             # !tickets command
             elif content_stripped.lower() == "!tickets":
-                print(f"[{guild_name}] 🎟️ Processing !tickets command from {username}")
+                logger.info(f"[{guild_name}] 🎟️ Processing !tickets command from {username}")
                 try:
                     with engine.connect() as conn:
                         # Check if user is linked
@@ -1288,15 +1297,15 @@ class KickWebSocketManager:
                                         f"Win chance: {win_prob:.2f}% 🎟️",
                                         guild_id=guild_id,
                                     )
-                                    print(f"[{guild_name}] ✅ Sent ticket balance to {username}")
+                                    logger.info(f"[{guild_name}] ✅ Sent ticket balance to {username}")
                 except Exception as e:
-                    print(f"[{guild_name}] ❌ Error fetching tickets for {username}: {e}")
+                    logger.info(f"[{guild_name}] ❌ Error fetching tickets for {username}: {e}")
                     await send_kick_message(
                         f"@{username}, Unable to retrieve ticket balance at this time.", guild_id=guild_id
                     )
 
         except Exception as e:
-            print(f"[{guild_name}] ❌ Error handling incoming message: {e}")
+            logger.info(f"[{guild_name}] ❌ Error handling incoming message: {e}")
 
 
 # Global websocket manager instance
@@ -1323,13 +1332,13 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
     try:
         # Check if kickpython connection exists for this guild, auto-connect if not
         if guild_id not in kick_ws_manager.message_queues:
-            print(f"[{guild_name}] 🔌 No kickpython connection - attempting auto-connect...")
-            print(f"[{guild_name}] 🔍 guild_id={guild_id}")
+            logger.info(f"[{guild_name}] 🔌 No kickpython connection - attempting auto-connect...")
+            logger.info(f"[{guild_name}] 🔍 guild_id={guild_id}")
             success = await kick_ws_manager.ensure_connection(guild_id, guild_name)
             if not success:
-                print(f"[{guild_name}] ❌ Failed to auto-connect kickpython")
+                logger.info(f"[{guild_name}] ❌ Failed to auto-connect kickpython")
                 return False
-            print(f"[{guild_name}] ✅ Auto-connected kickpython successfully")
+            logger.info(f"[{guild_name}] ✅ Auto-connected kickpython successfully")
 
         # Get broadcaster_user_id (channel_id for kickpython)
         with engine.connect() as conn:
@@ -1346,19 +1355,19 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
             ).fetchone()
 
             if not result or not result[0]:
-                print(f"[{guild_name}] ⚠️ broadcaster_user_id not configured - use Sync button in dashboard")
+                logger.info(f"[{guild_name}] ⚠️ broadcaster_user_id not configured - use Sync button in dashboard")
                 return False
 
             channel_id = int(result[0])
 
         # Queue message for kickpython to send
-        print(f"[{guild_name}] 📨 Queueing message via kickpython: {message[:50]}...")
+        logger.info(f"[{guild_name}] 📨 Queueing message via kickpython: {message[:50]}...")
         await kick_ws_manager.message_queues[guild_id].put((message, channel_id))
-        print(f"[{guild_name}] ✅ Message queued")
+        logger.info(f"[{guild_name}] ✅ Message queued")
         return True
 
     except Exception as e:
-        print(f"[{guild_name}] ❌ Failed to queue message: {e}")
+        logger.info(f"[{guild_name}] ❌ Failed to queue message: {e}")
         import traceback
 
         traceback.print_exc()
@@ -1572,7 +1581,7 @@ try:
         # Insert default roles if table is empty
         role_count = conn.execute(text("SELECT COUNT(*) FROM watchtime_roles")).fetchone()[0]
         if role_count == 0:
-            print("📝 Initializing default watchtime roles...")
+            logger.info("📝 Initializing default watchtime roles...")
             for idx, role in enumerate(WATCHTIME_ROLES, 1):
                 conn.execute(
                     text(
@@ -1583,7 +1592,7 @@ try:
                     ),
                     {"name": role["name"], "minutes": role["minutes"], "order": idx},
                 )
-            print("✅ Default watchtime roles created")
+            logger.info("✅ Default watchtime roles created")
 
         # Create Guess the Balance tables
         conn.execute(
@@ -1793,9 +1802,9 @@ try:
             )
         )
 
-    print("✅ Database tables initialized successfully")
+    logger.info("✅ Database tables initialized successfully")
 except Exception as e:
-    print(f"⚠️ Database initialization error: {e}")
+    logger.warning(f"⚠️ Database initialization error: {e}")
     raise
 
 # -------------------------
@@ -1805,8 +1814,8 @@ except Exception as e:
 # MULTISERVER: Initialize settings manager without guild-specific configuration
 # Guild settings are loaded dynamically via get_guild_settings(guild_id)
 bot_settings = BotSettingsManager(engine)
-print("✅ Multiserver bot initialized")
-print("   Each Discord server configures via Dashboard → Profile Settings")
+logger.info("✅ Multiserver bot initialized")
+logger.info("   Each Discord server configures via Dashboard → Profile Settings")
 
 # Dictionary to store per-guild settings managers
 guild_settings_managers = {}
@@ -1826,14 +1835,14 @@ def get_guild_settings(guild_id: int) -> BotSettingsManager:
     # Get or create guild-specific settings
     if guild_id not in guild_settings_managers:
         guild_settings_managers[guild_id] = BotSettingsManager(engine, guild_id=guild_id)
-        print(f"✅ Loaded settings for guild {guild_id}")
+        logger.info(f"✅ Loaded settings for guild {guild_id}")
 
     return guild_settings_managers[guild_id]
 
 
 # Multiserver: No global KICK_CHANNEL or SLOT_CALLS_CHANNEL_ID
 # All features must use get_guild_settings(guild.id) to access per-guild configuration
-print("✅ Multiserver bot ready - configure each guild in Dashboard → Profile Settings")
+logger.info("✅ Multiserver bot ready - configure each guild in Dashboard → Profile Settings")
 
 
 async def ensure_chatroom_id(guild_id: int, guild_name: str) -> None:
@@ -1852,7 +1861,7 @@ async def ensure_chatroom_id(guild_id: int, guild_name: str) -> None:
                 {"gid": guild_id},
             ).fetchone()
             if row and row[0]:
-                print(f"[{guild_name}] 📦 chatroom_id already set: {row[0]}")
+                logger.info(f"[{guild_name}] 📦 chatroom_id already set: {row[0]}")
                 return
 
         # Need to resolve: get channel username
@@ -1872,15 +1881,15 @@ async def ensure_chatroom_id(guild_id: int, guild_name: str) -> None:
                 kick_username = str(row[0]).strip()
 
         if not kick_username:
-            print(f"[{guild_name}] ⚠️ Cannot resolve chatroom_id: no kick_channel configured")
+            logger.info(f"[{guild_name}] ⚠️ Cannot resolve chatroom_id: no kick_channel configured")
             return
 
-        print(f"[{guild_name}] 🔎 Resolving chatroom_id for {kick_username} via core.fetch_chatroom_id()...")
+        logger.info(f"[{guild_name}] 🔎 Resolving chatroom_id for {kick_username} via core.fetch_chatroom_id()...")
         from core.kick_api import fetch_chatroom_id as core_fetch_chatroom_id
 
         chatroom_id = await core_fetch_chatroom_id(kick_username)
         if not chatroom_id:
-            print(f"[{guild_name}] ❌ Failed to resolve chatroom_id for {kick_username}")
+            logger.info(f"[{guild_name}] ❌ Failed to resolve chatroom_id for {kick_username}")
             return
 
         # Save to DB
@@ -1896,9 +1905,9 @@ async def ensure_chatroom_id(guild_id: int, guild_name: str) -> None:
                 ),
                 {"val": str(chatroom_id), "gid": guild_id},
             )
-        print(f"[{guild_name}] ✅ Stored chatroom_id: {chatroom_id}")
+        logger.info(f"[{guild_name}] ✅ Stored chatroom_id: {chatroom_id}")
     except Exception as e:
-        print(f"[{guild_name}] ⚠️ ensure_chatroom_id error: {e}")
+        logger.info(f"[{guild_name}] ⚠️ ensure_chatroom_id error: {e}")
 
 
 # -------------------------
@@ -1930,13 +1939,13 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
             ).fetchone()
             if result and result[0]:
                 chatroom_id = int(result[0])
-                print(f"[{guild_name}] 📦 Loaded chatroom_id from database: {chatroom_id}")
+                logger.info(f"[{guild_name}] 📦 Loaded chatroom_id from database: {chatroom_id}")
 
                 # HOTFIX: 152837 is broadcaster_user_id, not chatroom_id!
                 # Clear it and refetch the correct one
                 if chatroom_id == 152837:
-                    print(f"[{guild_name}] ⚠️ Invalid chatroom_id detected (152837 is broadcaster_user_id)")
-                    print(f"[{guild_name}] 🔄 Clearing and refetching correct chatroom_id...")
+                    logger.info(f"[{guild_name}] ⚠️ Invalid chatroom_id detected (152837 is broadcaster_user_id)")
+                    logger.info(f"[{guild_name}] 🔄 Clearing and refetching correct chatroom_id...")
                     conn.execute(
                         text(
                             """
@@ -1949,14 +1958,14 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                     conn.commit()
                     chatroom_id = None
     except Exception as e:
-        print(f"[{guild_name}] ⚠️ Error loading chatroom_id from database: {e}")
+        logger.info(f"[{guild_name}] ⚠️ Error loading chatroom_id from database: {e}")
         import traceback
 
         traceback.print_exc()
 
     # Fetch chatroom_id if not in database using kickpython
     if not chatroom_id:
-        print(f"[{guild_name}] 🔍 No chatroom_id in database, fetching for channel: {channel_slug}")
+        logger.info(f"[{guild_name}] 🔍 No chatroom_id in database, fetching for channel: {channel_slug}")
         try:
             # Use kickpython to fetch chatroom_id
             from kickpython import KickAPI as KickPyAPI
@@ -1977,7 +1986,7 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
             if access_token:
                 api.access_token = access_token
 
-            print(f"[{guild_name}] 🔌 Resolving chatroom_id via kickpython...")
+            logger.info(f"[{guild_name}] 🔌 Resolving chatroom_id via kickpython...")
 
             # Create task to connect
             connect_task = asyncio.create_task(api.connect_to_chatroom(channel_slug))
@@ -1992,7 +2001,7 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                 # Check if chatroom_id was discovered
                 if hasattr(api, "chatroom_id") and api.chatroom_id:
                     chatroom_id = int(api.chatroom_id)
-                    print(f"[{guild_name}] ✅ kickpython found chatroom_id: {chatroom_id}")
+                    logger.info(f"[{guild_name}] ✅ kickpython found chatroom_id: {chatroom_id}")
 
                     # Cancel the connection task since we only needed the ID
                     connect_task.cancel()
@@ -2014,13 +2023,13 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                             ),
                             {"cid": str(chatroom_id), "guild_id": guild_id},
                         )
-                    print(f"[{guild_name}] 💾 Saved chatroom_id to database")
+                    logger.info(f"[{guild_name}] 💾 Saved chatroom_id to database")
                     break
 
                 # Log progress every 3 seconds
                 elapsed = asyncio.get_event_loop().time() - start_time
                 if int(elapsed) % 3 == 0 and int(elapsed) > 0:
-                    print(f"[{guild_name}] ⏳ Waiting for chatroom_id... ({int(elapsed)}s)")
+                    logger.info(f"[{guild_name}] ⏳ Waiting for chatroom_id... ({int(elapsed)}s)")
 
             # Cleanup
             if not chatroom_id:
@@ -2030,30 +2039,30 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                 except asyncio.CancelledError:
                     pass
 
-                print(f"[{guild_name}] ❌ Timeout after {timeout}s - kickpython couldn't resolve chatroom_id")
-                print(f"[{guild_name}] 💡 Verify channel name: '{channel_slug}'")
+                logger.info(f"[{guild_name}] ❌ Timeout after {timeout}s - kickpython couldn't resolve chatroom_id")
+                logger.info(f"[{guild_name}] 💡 Verify channel name: '{channel_slug}'")
                 return
 
         except ImportError as e:
-            print(f"[{guild_name}] ❌ kickpython not installed: {e}")
-            print(f"[{guild_name}] 💡 Install with: pip install kickpython")
+            logger.info(f"[{guild_name}] ❌ kickpython not installed: {e}")
+            logger.info(f"[{guild_name}] 💡 Install with: pip install kickpython")
             return
         except Exception as e:
-            print(f"[{guild_name}] ❌ Error fetching chatroom_id: {type(e).__name__}: {e}")
+            logger.info(f"[{guild_name}] ❌ Error fetching chatroom_id: {type(e).__name__}: {e}")
             import traceback
 
             traceback.print_exc()
             return
 
     if not chatroom_id:
-        print(f"[{guild_name}] ❌ No chatroom_id available - cannot start WebSocket")
+        logger.info(f"[{guild_name}] ❌ No chatroom_id available - cannot start WebSocket")
         return
 
     channel_name = f"chatrooms.{chatroom_id}.v2"
-    print(f"[{guild_name}] 🔌 Connecting to Pusher WebSocket...")
-    print(f"[{guild_name}]    Kick Channel: {channel_slug}")
-    print(f"[{guild_name}]    Chatroom ID: {chatroom_id}")
-    print(f"[{guild_name}]    Pusher Channel: {channel_name}")
+    logger.info(f"[{guild_name}] 🔌 Connecting to Pusher WebSocket...")
+    logger.info(f"[{guild_name}]    Kick Channel: {channel_slug}")
+    logger.info(f"[{guild_name}]    Chatroom ID: {chatroom_id}")
+    logger.info(f"[{guild_name}]    Pusher Channel: {channel_name}")
 
     while True:
         try:
@@ -2061,7 +2070,7 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                 # Subscribe to chatroom
                 subscribe_msg = json.dumps({"event": "pusher:subscribe", "data": {"channel": channel_name}})
                 await ws.send(subscribe_msg)
-                print(f"[{guild_name}] ✅ Connected to Pusher WebSocket")
+                logger.info(f"[{guild_name}] ✅ Connected to Pusher WebSocket")
 
                 async for message in ws:
                     try:
@@ -2079,7 +2088,7 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                             username = payload.get("sender", {}).get("username", "Unknown")
                             content = payload.get("content", "")
 
-                            print(f"[{guild_name}] 💬 {username}: {content}")
+                            logger.info(f"[{guild_name}] 💬 {username}: {content}")
 
                             # Update watchtime tracking
                             now = datetime.now(timezone.utc)
@@ -2106,7 +2115,7 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                                             keyword = giveaway_manager.active_giveaway.get("keyword", "").lower()
                                             if keyword and content_stripped.lower() == keyword:
                                                 await giveaway_manager.add_entry(username, entry_method="keyword")
-                                                print(
+                                                logger.info(
                                                     f"[{guild_name}] 🎁 Giveaway entry added: {username} (keyword: {keyword})"
                                                 )
 
@@ -2114,7 +2123,7 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                                         elif entry_method == "active_chatter":
                                             await giveaway_manager.track_message(username, content)
                                     except Exception as e:
-                                        print(f"[{guild_name}] ⚠️ Giveaway tracking error: {e}")
+                                        logger.info(f"[{guild_name}] ⚠️ Giveaway tracking error: {e}")
 
                             # Process commands
                             content_stripped = content.strip()
@@ -2134,7 +2143,7 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                                     if handled:
                                         continue
                                 except Exception as e:
-                                    print(f"[{guild_name}] ⚠️ Custom command error: {e}")
+                                    logger.info(f"[{guild_name}] ⚠️ Custom command error: {e}")
 
                             # !raffle command
                             if content_stripped.lower() == "!raffle":
@@ -2185,17 +2194,17 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
 
                         # Connection health
                         elif event_type == "pusher:connection_established":
-                            print(f"[{guild_name}] ✅ Pusher connection established")
+                            logger.info(f"[{guild_name}] ✅ Pusher connection established")
                         elif event_type == "pusher_internal:subscription_succeeded":
-                            print(f"[{guild_name}] ✅ Subscribed to channel: {channel_name}")
+                            logger.info(f"[{guild_name}] ✅ Subscribed to channel: {channel_name}")
 
                     except json.JSONDecodeError:
                         pass  # Ignore non-JSON messages
                     except Exception as e:
-                        print(f"[{guild_name}] ⚠️ Error processing message: {e}")
+                        logger.info(f"[{guild_name}] ⚠️ Error processing message: {e}")
 
         except Exception as e:
-            print(f"[{guild_name}] ❌ WebSocket error: {e}, reconnecting in 5s...")
+            logger.info(f"[{guild_name}] ❌ WebSocket error: {e}, reconnecting in 5s...")
             await asyncio.sleep(5)
 
 
@@ -2219,6 +2228,13 @@ async def deduplicate_command(ctx):
     Discord message ID in Redis with a 10-second TTL; the first instance to claim it
     proceeds, the second raises CheckFailure and is silently ignored.
     """
+    # Tag all logging for this command with its guild. discord.py allows only one
+    # global before_invoke, so this single hook covers every @bot.command and cog
+    # command. It runs inside the command's asyncio Task, so the context is scoped
+    # to this invocation and discarded when the Task ends (no manual clear needed).
+    if ctx.guild:
+        set_server(ctx.guild.id, ctx.guild.name)
+
     if not redis_client:
         return  # Redis unavailable — allow command through
     key = f"cmd_dedup:{ctx.message.id}"
@@ -2332,13 +2348,13 @@ def load_watchtime_roles():
 
             if roles:
                 role_list = [{"name": r[0], "minutes": r[1]} for r in roles]
-                print(f"🎯 Loaded {len(role_list)} watchtime roles from database")
+                logger.info(f"🎯 Loaded {len(role_list)} watchtime roles from database")
                 return role_list
             else:
-                print("⚠️ No roles found in database, using hardcoded defaults")
+                logger.warning("⚠️ No roles found in database, using hardcoded defaults")
                 return WATCHTIME_ROLES
     except Exception as e:
-        print(f"⚠️ Could not load roles from database: {e}")
+        logger.warning(f"⚠️ Could not load roles from database: {e}")
         return WATCHTIME_ROLES
 
 
@@ -2350,7 +2366,7 @@ async def log_link_attempt(
 ):
     """Log account linking attempts to configured Discord channel."""
     if not guild_id:
-        print("⚠️ log_link_attempt: No guild_id provided, skipping log")
+        logger.warning("⚠️ log_link_attempt: No guild_id provided, skipping log")
         return
 
     try:
@@ -2373,7 +2389,7 @@ async def log_link_attempt(
         # Get the channel
         channel = bot.get_channel(int(channel_id))
         if not channel:
-            print(f"⚠️ Link logs channel {channel_id} not found")
+            logger.warning(f"⚠️ Link logs channel {channel_id} not found")
             return
 
         # Create embed
@@ -2393,10 +2409,10 @@ async def log_link_attempt(
         embed.set_footer(text=f"Discord ID: {discord_user.id}")
 
         await channel.send(embed=embed)
-        print(f"✅ Logged link attempt to channel {channel_id}", flush=True)
+        logger.info(f"✅ Logged link attempt to channel {channel_id}")
 
     except Exception as e:
-        print(f"⚠️ Failed to log link attempt: {e}")
+        logger.warning(f"⚠️ Failed to log link attempt: {e}")
 
 
 # -------------------------
@@ -2412,7 +2428,7 @@ async def get_kick_bot_token() -> Optional[str]:
     global KICK_BOT_TOKEN
 
     if not KICK_CLIENT_ID or not KICK_CLIENT_SECRET:
-        print("[Kick Bot] ⚠️ Client credentials not configured")
+        logger.info("[Kick Bot] ⚠️ Client credentials not configured")
         return None
 
     try:
@@ -2430,15 +2446,15 @@ async def get_kick_bot_token() -> Optional[str]:
                     data = await response.json()
                     KICK_BOT_TOKEN = data.get("access_token")
                     expires_in = data.get("expires_in", 3600)
-                    print(f"[Kick Bot] ✅ Got access token (expires in {expires_in}s)")
+                    logger.info(f"[Kick Bot] ✅ Got access token (expires in {expires_in}s)")
                     return KICK_BOT_TOKEN
                 else:
                     error_text = await response.text()
-                    print(f"[Kick Bot] ❌ Failed to get token (HTTP {response.status}): {error_text}")
+                    logger.info(f"[Kick Bot] ❌ Failed to get token (HTTP {response.status}): {error_text}")
                     return None
 
     except Exception as e:
-        print(f"[Kick Bot] ❌ Error getting token: {e}")
+        logger.info(f"[Kick Bot] ❌ Error getting token: {e}")
         return None
 
 
@@ -2455,7 +2471,7 @@ async def refresh_kick_oauth_token() -> bool:
         True if token was refreshed successfully, False otherwise
     """
     if not engine:
-        print("[Kick] ❌ No database connection for token refresh")
+        logger.info("[Kick] ❌ No database connection for token refresh")
         return False
 
     try:
@@ -2471,13 +2487,13 @@ async def refresh_kick_oauth_token() -> bool:
             ).fetchone()
 
             if not result or not result[0]:
-                print("[Kick] ❌ No refresh token available in kick_oauth_tokens table")
+                logger.info("[Kick] ❌ No refresh token available in kick_oauth_tokens table")
                 return False
 
             refresh_token = result[0]
             kick_username = result[1]
 
-        print(f"[Kick] 🔄 Attempting to refresh OAuth token for {kick_username}...")
+        logger.info(f"[Kick] 🔄 Attempting to refresh OAuth token for {kick_username}...")
 
         # Call Kick's token endpoint to refresh
         token_url = "https://id.kick.com/oauth/token"
@@ -2497,11 +2513,11 @@ async def refresh_kick_oauth_token() -> bool:
                     expires_in = token_response.get("expires_in", 3600)  # Default to 1 hour
 
                     if not new_access_token:
-                        print("[Kick] ❌ No access_token in refresh response")
+                        logger.info("[Kick] ❌ No access_token in refresh response")
                         return False
 
-                    print(f"[Kick] ✅ Access token refreshed (expires in {expires_in//3600}h)")
-                    print(f"[Kick] ℹ️  Refresh token is permanent per Kick API - will not be refreshed")
+                    logger.info(f"[Kick] ✅ Access token refreshed (expires in {expires_in//3600}h)")
+                    logger.info(f"[Kick] ℹ️  Refresh token is permanent per Kick API - will not be refreshed")
 
                     # Calculate when this ACCESS TOKEN will expire
                     # (Refresh token is permanent and never expires)
@@ -2528,15 +2544,15 @@ async def refresh_kick_oauth_token() -> bool:
                             },
                         )
 
-                    print(f"[Kick] ✅ OAuth token refreshed successfully for {kick_username}!")
+                    logger.info(f"[Kick] ✅ OAuth token refreshed successfully for {kick_username}!")
                     return True
                 else:
                     error_text = await response.text()
-                    print(f"[Kick] ❌ Token refresh failed (HTTP {response.status}): {error_text}")
+                    logger.info(f"[Kick] ❌ Token refresh failed (HTTP {response.status}): {error_text}")
                     return False
 
     except Exception as e:
-        print(f"[Kick] ❌ Error refreshing token: {e}")
+        logger.info(f"[Kick] ❌ Error refreshing token: {e}")
         import traceback
 
         traceback.print_exc()
@@ -2591,7 +2607,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
             # Check if channel has been updated in settings (allow hot-reload on reconnect)
             new_channel = guild_settings.kick_channel
             if new_channel and new_channel != current_channel:
-                print(f"[{guild_name}] 🔄 Pusher: Channel changed from '{current_channel}' to '{new_channel}'")
+                logger.info(f"[{guild_name}] 🔄 Pusher: Channel changed from '{current_channel}' to '{new_channel}'")
                 current_channel = new_channel
 
             # Use current_channel instead of the original channel_name
@@ -2608,7 +2624,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
             if KICK_CHATROOM_ID or chatroom_id_from_settings:
                 chatroom_id = KICK_CHATROOM_ID or chatroom_id_from_settings
                 kick_chatroom_ids[guild_id] = chatroom_id  # Store per-guild
-                print(f"[{guild_name}] Pusher: Using configured chatroom ID: {chatroom_id}")
+                logger.info(f"[{guild_name}] Pusher: Using configured chatroom ID: {chatroom_id}")
 
                 # Still try to fetch channel_id for subscription events
                 try:
@@ -2620,9 +2636,9 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                         token_data = get_kick_token_for_server(engine, guild_id)
                         if token_data:
                             access_token = token_data.get("access_token")
-                            print(f"[Kick] Using OAuth token for API request")
+                            logger.info(f"[Kick] Using OAuth token for API request")
                     except Exception as e:
-                        print(f"[Kick] Could not get OAuth token: {e}")
+                        logger.info(f"[Kick] Could not get OAuth token: {e}")
 
                     async with aiohttp.ClientSession() as session:
                         headers = {
@@ -2647,15 +2663,15 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                         # Try to get chatroom from official API
                                         if "chatroom" in channel_data:
                                             chatroom_id = str(channel_data["chatroom"].get("id", ""))
-                                            print(
+                                            logger.info(
                                                 f"[Kick] ✅ Official API - chatroom ID: {chatroom_id}, channel ID: {channel_id}"
                                             )
                                         else:
-                                            print(
+                                            logger.info(
                                                 f"[Kick] ✅ Official API - channel ID: {channel_id} (no chatroom in response)"
                                             )
                                 else:
-                                    print(f"[Kick] ⚠️ Official API error: HTTP {response.status}")
+                                    logger.info(f"[Kick] ⚠️ Official API error: HTTP {response.status}")
                         else:
                             # Fallback to unofficial API without auth (may be blocked)
                             headers["Referer"] = "https://kick.com/"
@@ -2666,11 +2682,11 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                 if response.status == 200:
                                     data = await response.json()
                                     channel_id = str(data.get("id"))
-                                    print(f"[Kick] ✅ Fetched channel ID: {channel_id}")
+                                    logger.info(f"[Kick] ✅ Fetched channel ID: {channel_id}")
                                 else:
-                                    print(f"[Kick] ⚠️ Could not fetch channel ID (HTTP {response.status})")
+                                    logger.info(f"[Kick] ⚠️ Could not fetch channel ID (HTTP {response.status})")
                 except Exception as e:
-                    print(f"[Kick] ⚠️ Error fetching channel ID: {e}")
+                    logger.info(f"[Kick] ⚠️ Error fetching channel ID: {e}")
             else:
                 # Fetch full channel data to get both chatroom_id and channel_id
                 chatroom_id = None
@@ -2684,7 +2700,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                     # Try Client Credentials flow (KICK_CLIENT_ID + KICK_CLIENT_SECRET)
                     if KICK_CLIENT_ID and KICK_CLIENT_SECRET:
                         try:
-                            print(f"[Kick] 🔐 Fetching token via Client Credentials for channel lookup...")
+                            logger.info(f"[Kick] 🔐 Fetching token via Client Credentials for channel lookup...")
                             async with aiohttp.ClientSession() as session:
                                 payload = {
                                     "grant_type": "client_credentials",
@@ -2700,11 +2716,11 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                     if resp.status == 200:
                                         token_data = await resp.json()
                                         access_token = token_data.get("access_token")
-                                        print(f"[Kick] ✅ Got Client Credentials token for channel lookup")
+                                        logger.info(f"[Kick] ✅ Got Client Credentials token for channel lookup")
                                     else:
-                                        print(f"[Kick] ⚠️ Client Credentials failed: HTTP {resp.status}")
+                                        logger.info(f"[Kick] ⚠️ Client Credentials failed: HTTP {resp.status}")
                         except Exception as e:
-                            print(f"[Kick] ⚠️ Could not get Client Credentials token: {e}")
+                            logger.info(f"[Kick] ⚠️ Could not get Client Credentials token: {e}")
 
                     # Fallback: Try getting streamer's OAuth token from database
                     if not access_token:
@@ -2714,9 +2730,9 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                             token_data = get_kick_token_for_server(engine, guild_id)
                             if token_data:
                                 access_token = token_data.get("access_token")
-                                print(f"[Kick] Using streamer OAuth token for channel lookup")
+                                logger.info(f"[Kick] Using streamer OAuth token for channel lookup")
                         except Exception as e:
-                            print(f"[Kick] Could not get streamer OAuth token: {e}")
+                            logger.info(f"[Kick] Could not get streamer OAuth token: {e}")
 
                     async with aiohttp.ClientSession() as session:
                         headers = {
@@ -2744,23 +2760,23 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
 
                                         if chatroom_id:
                                             kick_chatroom_ids[guild_id] = chatroom_id
-                                            print(
+                                            logger.info(
                                                 f"[Kick] ✅ Authenticated API - chatroom: {chatroom_id}, channel: {channel_id}"
                                             )
                                         else:
-                                            print(f"[Kick] ⚠️ Got channel ID {channel_id} but no chatroom ID")
+                                            logger.info(f"[Kick] ⚠️ Got channel ID {channel_id} but no chatroom ID")
                                     else:
-                                        print(f"[Kick] ⚠️ No channels found in API response")
+                                        logger.info(f"[Kick] ⚠️ No channels found in API response")
                                 elif response.status == 401:
-                                    print(f"[Kick] ⚠️ OAuth token expired (401), falling back to public API")
+                                    logger.info(f"[Kick] ⚠️ OAuth token expired (401), falling back to public API")
                                     # Fall through to public API below
                                     access_token = None
                                 else:
-                                    print(f"[Kick] ⚠️ Authenticated API failed: HTTP {response.status}")
+                                    logger.info(f"[Kick] ⚠️ Authenticated API failed: HTTP {response.status}")
 
                         # Fallback to public API if no auth or auth failed
                         if not access_token or not chatroom_id:
-                            print(f"[Kick] 🔍 Falling back to public API (subscription events may not work)")
+                            logger.info(f"[Kick] 🔍 Falling back to public API (subscription events may not work)")
                             headers = {
                                 "User-Agent": random.choice(USER_AGENTS),
                                 "Accept": "application/json",
@@ -2775,35 +2791,39 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                     chatroom_id = str(data.get("chatroom", {}).get("id"))
                                     channel_id = str(data.get("id"))
                                     kick_chatroom_ids[guild_id] = chatroom_id
-                                    print(f"[Kick] ✅ Public API - chatroom: {chatroom_id}, channel: {channel_id}")
-                                    print(f"[Kick] ⚠️ Note: Subscription events may not work without authentication")
+                                    logger.info(
+                                        f"[Kick] ✅ Public API - chatroom: {chatroom_id}, channel: {channel_id}"
+                                    )
+                                    logger.info(
+                                        f"[Kick] ⚠️ Note: Subscription events may not work without authentication"
+                                    )
                                 elif response.status == 403:
-                                    print(f"[Kick] ❌ Cloudflare blocked request (403). SOLUTION:")
-                                    print(f"[Kick]    1. Link Kick account in dashboard (provides OAuth token)")
-                                    print(f"[Kick]    2. Or set KICK_CHATROOM_ID environment variable")
+                                    logger.info(f"[Kick] ❌ Cloudflare blocked request (403). SOLUTION:")
+                                    logger.info(f"[Kick]    1. Link Kick account in dashboard (provides OAuth token)")
+                                    logger.info(f"[Kick]    2. Or set KICK_CHATROOM_ID environment variable")
                                 else:
-                                    print(f"[Kick] Failed to fetch channel data: HTTP {response.status}")
+                                    logger.info(f"[Kick] Failed to fetch channel data: HTTP {response.status}")
                 except Exception as e:
-                    print(f"[Kick] Error fetching channel data: {e}")
+                    logger.error(f"[Kick] Error fetching channel data: {e}")
                     import traceback
 
                     traceback.print_exc()
 
                 if not chatroom_id:
-                    print(f"[Kick] Could not obtain chatroom id for {channel_to_use}. Retrying in 30s.")
+                    logger.info(f"[Kick] Could not obtain chatroom id for {channel_to_use}. Retrying in 30s.")
                     await asyncio.sleep(30)
                     continue
 
             # Check if chatroom_id has changed (hot-reload support)
             if current_chatroom_id and chatroom_id != current_chatroom_id:
-                print(
+                logger.info(
                     f"[{guild_name}] 🔄 Pusher: Chatroom ID changed from {current_chatroom_id} to {chatroom_id} - reconnecting..."
                 )
 
             # Store current chatroom_id for change detection
             current_chatroom_id = chatroom_id
 
-            print(f"[{guild_name}] Pusher: Connecting to chatroom {chatroom_id} for channel {channel_to_use}...")
+            logger.info(f"[{guild_name}] Pusher: Connecting to chatroom {chatroom_id} for channel {channel_to_use}...")
 
             # Build WebSocket URL matching successful connection pattern
             ws_url = (
@@ -2814,7 +2834,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                 f"&flash=false"
                 f"&cluster={PUSHER_CONFIG['cluster']}"
             )
-            print(f"[Kick] Connecting to WebSocket: {ws_url}")
+            logger.info(f"[Kick] Connecting to WebSocket: {ws_url}")
 
             # Prepare SSL context
             ssl_context = ssl.create_default_context()
@@ -2832,11 +2852,11 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                     "Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits",
                 },
             ) as ws:
-                print("[Kick] WebSocket connected, waiting for server response...")
+                logger.info("[Kick] WebSocket connected, waiting for server response...")
 
                 # Wait for connection established
                 response = await ws.recv()
-                print(f"[Kick] Initial response: {response}")
+                logger.info(f"[Kick] Initial response: {response}")
                 response_data = json.loads(response)
 
                 # Handle connection errors
@@ -2850,14 +2870,14 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                 if response_data.get("event") == "pusher:connection_established":
                     socket_details = json.loads(response_data["data"])
                     socket_id = socket_details["socket_id"]
-                    print(f"[Kick] Got socket_id: {socket_id}")
+                    logger.info(f"[Kick] Got socket_id: {socket_id}")
 
                     # Subscribe to the chatroom channel (for chat messages)
                     subscribe_msg = json.dumps(
                         {"event": "pusher:subscribe", "data": {"auth": "", "channel": f"chatrooms.{chatroom_id}.v2"}}
                     )
                 await ws.send(subscribe_msg)
-                print(f"[Kick] ✅ Subscribed to chatrooms.{chatroom_id}.v2")
+                logger.info(f"[Kick] ✅ Subscribed to chatrooms.{chatroom_id}.v2")
 
                 # Subscribe to channel events (for subscriptions, raids, follows, etc.)
                 if channel_id:
@@ -2865,13 +2885,13 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                         {"event": "pusher:subscribe", "data": {"auth": "", "channel": f"channel.{channel_id}"}}
                     )
                     await ws.send(channel_events_msg)
-                    print(f"[Kick] ✅ Subscribed to channel.{channel_id} (for subscription events)")
+                    logger.info(f"[Kick] ✅ Subscribed to channel.{channel_id} (for subscription events)")
                 else:
-                    print(f"[Kick] ⚠️ Channel ID not available - subscription events may not be received")
+                    logger.info(f"[Kick] ⚠️ Channel ID not available - subscription events may not be received")
 
                     # Initialize last_chat_activity to assume stream is live when we connect
                 last_chat_activity_by_guild[guild_id] = datetime.now(timezone.utc)
-                print(f"[{guild_name}] Pusher: Initialized chat activity tracking")
+                logger.info(f"[{guild_name}] Pusher: Initialized chat activity tracking")
 
                 # Listen for messages
                 last_settings_check = datetime.now(timezone.utc)
@@ -2887,10 +2907,10 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                             guild_settings.refresh()
                             new_chatroom_id = guild_settings.kick_chatroom_id or KICK_CHATROOM_ID
                             if new_chatroom_id and new_chatroom_id != current_chatroom_id:
-                                print(
+                                logger.info(
                                     f"[Kick][Guild {guild_id}] 🔄 Detected chatroom ID change for THIS GUILD: {current_chatroom_id} → {new_chatroom_id}"
                                 )
-                                print(
+                                logger.info(
                                     f"[Kick][Guild {guild_id}] Breaking connection to reconnect with new chatroom (other guilds unaffected)..."
                                 )
                                 break  # Break inner loop to reconnect with new chatroom_id
@@ -2906,15 +2926,17 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
 
                             # DEBUG: Log ALL events to see what's coming through
                             if event_type not in ["pusher:ping", "pusher:pong"]:
-                                print(f"[KICK EVENT DEBUG] Type: {event_type}, Channel: {data.get('channel', 'N/A')}")
+                                logger.info(
+                                    f"[KICK EVENT DEBUG] Type: {event_type}, Channel: {data.get('channel', 'N/A')}"
+                                )
                                 if data.get("data"):
                                     try:
                                         event_data = json.loads(data.get("data", "{}"))
-                                        print(
+                                        logger.info(
                                             f"[KICK EVENT DEBUG] Data keys: {list(event_data.keys())[:5]}"
                                         )  # Show first 5 keys
                                     except:
-                                        print(
+                                        logger.info(
                                             f"[KICK EVENT DEBUG] Raw data (first 100 chars): {str(data.get('data'))[:100]}"
                                         )
 
@@ -2924,8 +2946,8 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                 "pusher:pong",
                                 "App\\Events\\ChatMessageEvent",
                             ]:
-                                print(f"[KICK EVENT] Type: {event_type}")
-                                print(
+                                logger.info(f"[KICK EVENT] Type: {event_type}")
+                                logger.info(
                                     f"[KICK EVENT] Data keys: {list(json.loads(data.get('data', '{}')).keys()) if data.get('data') else 'No data'}"
                                 )
 
@@ -2974,7 +2996,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                     guild_recent_chatters[username_lower] = now
                                     recent_chatters_by_guild[guild_id] = guild_recent_chatters
 
-                                    print(f"[{guild_name}] 💬 {username}: {content_text}")
+                                    logger.info(f"[{guild_name}] 💬 {username}: {content_text}")
 
                                     # Check for custom commands first (they get priority)
                                     if hasattr(bot, "custom_commands_manager") and bot.custom_commands_manager:
@@ -2991,7 +3013,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                             if handled:
                                                 continue  # Command was handled, skip other processing
                                         except Exception as e:
-                                            print(f"⚠️ Error handling custom command: {e}")
+                                            logger.error(f"⚠️ Error handling custom command: {e}")
 
                                     # Handle slot call commands (!call or !sr)
                                     content_stripped = content_text.strip()
@@ -3036,10 +3058,10 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                     ).fetchone()
                                                     is_blacklisted = blacklist_check is not None
                                         except Exception as e:
-                                            print(f"Error checking slot call blacklist: {e}")
+                                            logger.error(f"Error checking slot call blacklist: {e}")
 
                                         if is_blacklisted:
-                                            print(f"[Slot Call] Blocked blacklisted user: {username}")
+                                            logger.info(f"[Slot Call] Blocked blacklisted user: {username}")
                                             # No response sent to blacklisted users
                                         else:
                                             # Extract the slot call (everything after "!call " or "!sr ")
@@ -3057,9 +3079,9 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                     await send_kick_message(
                                                         f"@{username} Please specify a slot!", guild_id=guild_id
                                                     )
-                                                    print(f"[Slot Call] Sent usage instructions to {username}")
+                                                    logger.info(f"[Slot Call] Sent usage instructions to {username}")
                                                 except Exception as e:
-                                                    print(f"Failed to send usage message to {username}: {e}")
+                                                    logger.info(f"Failed to send usage message to {username}: {e}")
 
                                     # Handle !raffle command
                                     if content_stripped.lower() == "!raffle":
@@ -3073,7 +3095,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
 
                                     # Handle !gtb (Guess the Balance) command
                                     elif content_stripped.lower().startswith("!gtb"):
-                                        print(f"[GTB] {username} issued !gtb command")
+                                        logger.info(f"[GTB] {username} issued !gtb command")
                                         # Use per-guild GTB manager
                                         gtb_mgr = (
                                             bot.gtb_managers_by_guild.get(guild_id)
@@ -3092,13 +3114,13 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                         # Send confirmation to Kick chat
                                                         response = f"@{username} {message} Good luck! 🎰"
                                                         await send_kick_message(response, guild_id=guild_id)
-                                                        print(f"[GTB] {username} guessed ${amount:,.2f}")
+                                                        logger.info(f"[GTB] {username} guessed ${amount:,.2f}")
                                                     else:
                                                         # Send error message to Kick chat
                                                         await send_kick_message(
                                                             f"@{username} {message}", guild_id=guild_id
                                                         )
-                                                        print(f"[GTB] Failed guess from {username}: {message}")
+                                                        logger.info(f"[GTB] Failed guess from {username}: {message}")
                                                 else:
                                                     await send_kick_message(
                                                         f"@{username} Invalid amount. Use: !gtb <amount> (e.g., !gtb 1234.56)",
@@ -3110,7 +3132,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                     guild_id=guild_id,
                                                 )
                                         else:
-                                            print(f"[GTB] GTB manager not found for guild {guild_id}")
+                                            logger.info(f"[GTB] GTB manager not found for guild {guild_id}")
                                             await send_kick_message(
                                                 f"@{username} GTB system not initialized", guild_id=guild_id
                                             )
@@ -3132,7 +3154,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                 if result:
                                                     clip_duration = int(result[0])
                                         except Exception as e:
-                                            print(f"[Clip] Using default duration, couldn't load from DB: {e}")
+                                            logger.info(f"[Clip] Using default duration, couldn't load from DB: {e}")
 
                                         # Everything after !clip is the title
                                         clip_title = content_stripped[5:].strip()  # Remove "!clip" and trim
@@ -3143,7 +3165,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                             clip_title = f"Clip by {username} - {timestamp}"
 
                                         # Use background task for clip creation (non-blocking)
-                                        print(
+                                        logger.info(
                                             f"[Clip] {username} requested a clip ({clip_duration}s) - Title: {clip_title}"
                                         )
 
@@ -3157,11 +3179,11 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                 dashboard_url = bot_settings.dashboard_url
                                                 api_key = bot_settings.bot_api_key
 
-                                                print(f"[Clip] DEBUG - dashboard_url from DB: '{dashboard_url}'")
-                                                print(f"[Clip] DEBUG - bot_api_key exists: {bool(api_key)}")
+                                                logger.info(f"[Clip] DEBUG - dashboard_url from DB: '{dashboard_url}'")
+                                                logger.info(f"[Clip] DEBUG - bot_api_key exists: {bool(api_key)}")
 
                                                 if not dashboard_url:
-                                                    print(
+                                                    logger.info(
                                                         f"[Clip] ❌ Dashboard URL not configured in bot_settings table"
                                                     )
                                                     await send_kick_message(
@@ -3187,7 +3209,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                     ) as response:
                                                         clip_result = await response.json()
 
-                                                        print(f"[Clip] Dashboard API response: {clip_result}")
+                                                        logger.info(f"[Clip] Dashboard API response: {clip_result}")
 
                                                         if response.status == 200 and clip_result.get("success"):
                                                             # Success - extract clip URL
@@ -3202,7 +3224,9 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                             await send_kick_message(
                                                                 f"@{user} Your clip is ready! ({actual_duration}s, {file_size_mb:.1f}MB) {clip_url}"
                                                             )
-                                                            print(f"[Clip] ✅ Clip created for {user}: {clip_filename}")
+                                                            logger.info(
+                                                                f"[Clip] ✅ Clip created for {user}: {clip_filename}"
+                                                            )
 
                                                             # Save clip data to database
                                                             try:
@@ -3225,9 +3249,11 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                                         },
                                                                     )
                                                                     conn.commit()
-                                                                print(f"[Clip] 💾 Saved clip data for {user}")
+                                                                logger.info(f"[Clip] 💾 Saved clip data for {user}")
                                                             except Exception as db_err:
-                                                                print(f"[Clip] ⚠️ Failed to save clip to DB: {db_err}")
+                                                                logger.info(
+                                                                    f"[Clip] ⚠️ Failed to save clip to DB: {db_err}"
+                                                                )
 
                                                             # Post clip embed to Discord channel if configured
                                                             try:
@@ -3285,11 +3311,11 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                                             text=f"Kick Channel: {KICK_CHANNEL}"
                                                                         )
                                                                         await discord_channel.send(embed=clip_embed)
-                                                                        print(
+                                                                        logger.info(
                                                                             f"[Clip] 📢 Posted clip to Discord channel {clip_channel_id}"
                                                                         )
                                                             except Exception as discord_err:
-                                                                print(
+                                                                logger.info(
                                                                     f"[Clip] ⚠️ Failed to post clip to Discord: {discord_err}"
                                                                 )
                                                         else:
@@ -3315,12 +3341,12 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                                     f"@{user} Couldn't create clip - {error_msg}"
                                                                 )
 
-                                                            print(
+                                                            logger.info(
                                                                 f"[Clip] ❌ Clip creation failed for {user}: {error_type}"
                                                             )
 
                                             except Exception as e:
-                                                print(f"[Clip] ❌ Background clip error: {e}")
+                                                logger.info(f"[Clip] ❌ Background clip error: {e}")
                                                 await send_kick_message(f"@{user} Clip failed - try again later!")
 
                                         # Start background task (non-blocking)
@@ -3337,32 +3363,34 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
 
                             # DEBUG: Check if event type should match
                             if event_type and "Subscription" in event_type:
-                                print(f"[SUB CHECK] Event type: {event_type}")
-                                print(f"[SUB CHECK] Event type repr: {repr(event_type)}")
-                                print(f"[SUB CHECK] In list: {event_type in subscription_event_types}")
-                                print(f"[SUB CHECK] Expected: {subscription_event_types[1]}")
-                                print(f"[SUB CHECK] Expected repr: {repr(subscription_event_types[1])}")
-                                print(f"[SUB CHECK] Match: {event_type == subscription_event_types[1]}")
+                                logger.info(f"[SUB CHECK] Event type: {event_type}")
+                                logger.info(f"[SUB CHECK] Event type repr: {repr(event_type)}")
+                                logger.info(f"[SUB CHECK] In list: {event_type in subscription_event_types}")
+                                logger.info(f"[SUB CHECK] Expected: {subscription_event_types[1]}")
+                                logger.info(f"[SUB CHECK] Expected repr: {repr(subscription_event_types[1])}")
+                                logger.info(f"[SUB CHECK] Match: {event_type == subscription_event_types[1]}")
 
                             if event_type in subscription_event_types:
-                                print(f"[SUB HANDLER] Entering subscription handler for event type: {event_type}")
-                                print(f"[SUB HANDLER] gifted_sub_tracker initialized: {gifted_sub_tracker is not None}")
+                                logger.info(f"[SUB HANDLER] Entering subscription handler for event type: {event_type}")
+                                logger.info(
+                                    f"[SUB HANDLER] gifted_sub_tracker initialized: {gifted_sub_tracker is not None}"
+                                )
 
                                 event_data = json.loads(data.get("data", "{}"))
 
                                 # DEBUG: Log subscription events
                                 if event_type == "App\\Events\\LuckyUsersWhoGotGiftSubscriptionsEvent":
-                                    print(f"[SUB DEBUG] LuckyUsersWhoGotGiftSubscriptionsEvent detected!")
-                                    print(f"[SUB DEBUG] Gifter: {event_data.get('gifter_username')}")
-                                    print(f"[SUB DEBUG] Recipients: {event_data.get('usernames')}")
-                                    print(f"[SUB DEBUG] Full event data: {json.dumps(event_data, indent=2)}")
+                                    logger.info(f"[SUB DEBUG] LuckyUsersWhoGotGiftSubscriptionsEvent detected!")
+                                    logger.info(f"[SUB DEBUG] Gifter: {event_data.get('gifter_username')}")
+                                    logger.info(f"[SUB DEBUG] Recipients: {event_data.get('usernames')}")
+                                    logger.info(f"[SUB DEBUG] Full event data: {json.dumps(event_data, indent=2)}")
 
                                 # DEBUG: Check what ChatMessageEvent contains
                                 if event_type == "App\\Events\\ChatMessageEvent":
                                     msg_type = event_data.get("type")
                                     if msg_type and msg_type != "message":
-                                        print(f"[SUB DEBUG] ChatMessageEvent type: {msg_type}")
-                                        print(f"[SUB DEBUG] Event data: {json.dumps(event_data, indent=2)[:500]}")
+                                        logger.info(f"[SUB DEBUG] ChatMessageEvent type: {msg_type}")
+                                        logger.info(f"[SUB DEBUG] Event data: {json.dumps(event_data, indent=2)[:500]}")
 
                                 # Check if this is any type of subscription
                                 message_type = event_data.get("type")
@@ -3382,48 +3410,52 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                 )
 
                                 if is_subscription:
-                                    print(f"[{guild_name}] 🎁 Pusher: Subscription detected! Type: {message_type}")
-                                    print(f"[{guild_name}] Event data: {json.dumps(event_data, indent=2)[:800]}")
+                                    logger.info(
+                                        f"[{guild_name}] 🎁 Pusher: Subscription detected! Type: {message_type}"
+                                    )
+                                    logger.info(f"[{guild_name}] Event data: {json.dumps(event_data, indent=2)[:800]}")
                                 else:
-                                    print(f"[{guild_name}] Pusher: NOT a subscription. message_type: {message_type}")
+                                    logger.info(
+                                        f"[{guild_name}] Pusher: NOT a subscription. message_type: {message_type}"
+                                    )
 
                                 if is_subscription and gifted_sub_tracker:
-                                    print(f"[{guild_name}] 🎁 Processing subscription with raffle tracker")
+                                    logger.info(f"[{guild_name}] 🎁 Processing subscription with raffle tracker")
                                     # Handle any subscription event (gifted or regular)
                                     result = await gifted_sub_tracker.handle_gifted_sub_event(event_data)
-                                    print(f"[{guild_name}] Raffle result: {result}")
+                                    logger.info(f"[{guild_name}] Raffle result: {result}")
 
                                     if result["status"] == "success":
                                         sub_type = "gifted" if result.get("gift_count", 1) > 1 else "subscribed"
-                                        print(
+                                        logger.info(
                                             f"[{guild_name}] 🎁 {result['gifter']} {sub_type} → +{result['tickets_awarded']} tickets"
                                         )
                                     elif result["status"] == "not_linked":
-                                        print(
+                                        logger.info(
                                             f"[{guild_name}] 🎁 {result['kick_name']} subscribed but account not linked"
                                         )
                                     elif result["status"] == "duplicate":
                                         # Already processed, silent skip
                                         pass
                                     else:
-                                        print(f"[{guild_name}] ⚠️ Failed to process gifted sub: {result}")
+                                        logger.info(f"[{guild_name}] ⚠️ Failed to process gifted sub: {result}")
                                 elif is_subscription and not gifted_sub_tracker:
-                                    print(f"[{guild_name}] ⚠️ Subscription detected but raffle tracker is None!")
+                                    logger.info(f"[{guild_name}] ⚠️ Subscription detected but raffle tracker is None!")
 
                         except json.JSONDecodeError:
                             pass
                         except Exception as e:
-                            print(f"[Kick] Error parsing message: {e}")
+                            logger.error(f"[Kick] Error parsing message: {e}")
 
                     except asyncio.TimeoutError:
                         # Check for settings changes on timeout
                         guild_settings.refresh()
                         new_chatroom_id = guild_settings.kick_chatroom_id or KICK_CHATROOM_ID
                         if new_chatroom_id and new_chatroom_id != current_chatroom_id:
-                            print(
+                            logger.info(
                                 f"[Kick][Guild {guild_id}] 🔄 Detected chatroom ID change during timeout for THIS GUILD: {current_chatroom_id} → {new_chatroom_id}"
                             )
-                            print(
+                            logger.info(
                                 f"[Kick][Guild {guild_id}] Breaking connection to reconnect with new chatroom (other guilds unaffected)..."
                             )
                             break  # Break inner loop to reconnect
@@ -3435,10 +3467,10 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                             break
 
         except websockets.exceptions.WebSocketException as e:
-            print(f"[Kick] WebSocket error: {e}. Reconnecting in 10s.")
+            logger.info(f"[Kick] WebSocket error: {e}. Reconnecting in 10s.")
             await asyncio.sleep(10)
         except Exception as e:
-            print(f"[Kick] Connection error: {e}. Reconnecting in 10s.")
+            logger.info(f"[Kick] Connection error: {e}. Reconnecting in 10s.")
             await asyncio.sleep(10)
 
 
@@ -3458,7 +3490,7 @@ async def award_points_for_watchtime(active_usernames: list, guild_id: Optional[
     try:
         # Multiserver: Require guild_id parameter
         if not guild_id:
-            print("[Points] ⚠️ No guild_id provided for award_points")
+            logger.info("[Points] ⚠️ No guild_id provided for award_points")
             return
         server_id = guild_id
 
@@ -3598,16 +3630,16 @@ async def award_points_for_watchtime(active_usernames: list, guild_id: Optional[
                                 )
 
                             if watchtime_debug_enabled:
-                                print(
+                                logger.info(
                                     f"[Points] ✅ {username}: +{points_to_award} points ({minutes_to_convert} min converted)"
                                 )
 
                 except Exception as e:
-                    print(f"[Points] ⚠️ Error awarding points to {username}: {e}")
+                    logger.info(f"[Points] ⚠️ Error awarding points to {username}: {e}")
                     continue
 
     except Exception as e:
-        print(f"[Points] ⚠️ Error in points award task: {e}")
+        logger.info(f"[Points] ⚠️ Error in points award task: {e}")
 
 
 # -------------------------
@@ -3636,14 +3668,14 @@ async def update_watchtime_task():
                 guild_last_activity = last_chat_activity_by_guild.get(server_id)
                 if guild_last_activity is None:
                     if watchtime_debug_enabled:
-                        print(f"[Security][Guild {guild.name}] No chat activity detected yet - skipping")
+                        logger.info(f"[Security][Guild {guild.name}] No chat activity detected yet - skipping")
                     continue
 
                 # Check 1: Recent chat activity (within last 10 minutes)
                 time_since_last_chat = (now - guild_last_activity).total_seconds() / 60
                 if time_since_last_chat > CHAT_ACTIVITY_WINDOW_MINUTES:
                     if watchtime_debug_enabled:
-                        print(
+                        logger.info(
                             f"[Security][Guild {guild.name}] No chat activity for {time_since_last_chat:.1f} minutes - stream likely offline"
                         )
                     continue
@@ -3661,24 +3693,24 @@ async def update_watchtime_task():
 
                 if unique_chatter_count < MIN_UNIQUE_CHATTERS:
                     if watchtime_debug_enabled:
-                        print(
+                        logger.info(
                             f"[Security][Guild {guild.name}] Only {unique_chatter_count} unique chatter(s) in last {CHAT_ACTIVITY_WINDOW_MINUTES} min (need {MIN_UNIQUE_CHATTERS})"
                         )
-                        print(
+                        logger.info(
                             f"[Security][Guild {guild.name}] Stream might be offline or being farmed - skipping watchtime update"
                         )
-                        print(
+                        logger.info(
                             f"[Security][Guild {guild.name}] Tip: Use '!tracking force on' to override if stream has low chat activity"
                         )
                     continue
 
                 if watchtime_debug_enabled:
-                    print(
+                    logger.info(
                         f"[Security][Guild {guild.name}] ✅ Stream appears live: {unique_chatter_count} unique chatters in last {CHAT_ACTIVITY_WINDOW_MINUTES} min"
                     )
             else:
                 if watchtime_debug_enabled:
-                    print(
+                    logger.info(
                         f"[Security][Guild {guild.name}] Force override enabled - skipping multi-factor live detection"
                     )
 
@@ -3712,14 +3744,14 @@ async def update_watchtime_task():
                             {"u": user, "m": minutes_to_add, "t": last_seen.isoformat(), "sid": server_id},
                         )
                     except Exception as e:
-                        print(f"⚠️ Error updating watchtime for {user}: {e}")
+                        logger.error(f"⚠️ Error updating watchtime for {user}: {e}")
                         continue  # Skip this user but continue with others
 
             # Award points for new watchtime (runs after watchtime update)
             await award_points_for_watchtime(list(active_users.keys()), guild_id=server_id)
 
     except Exception as e:
-        print(f"⚠️ Error in watchtime update task: {e}")
+        logger.error(f"⚠️ Error in watchtime update task: {e}")
         import traceback
 
         traceback.print_exc()
@@ -3734,7 +3766,7 @@ async def before_watchtime_task():
 @update_watchtime_task.error
 async def update_watchtime_task_error(error):
     """Handle errors in the watchtime task loop."""
-    print(f"❌ Watchtime task encountered an error: {error}")
+    logger.error(f"❌ Watchtime task encountered an error: {error}")
     import traceback
 
     traceback.print_exc()
@@ -3752,7 +3784,7 @@ async def update_roles_task():
             try:
                 # Validate bot permissions
                 if not guild.me.guild_permissions.manage_roles:
-                    print(f"⚠️ [Guild {guild.name}] Bot lacks manage_roles permission!")
+                    logger.warning(f"⚠️ [Guild {guild.name}] Bot lacks manage_roles permission!")
                     continue
 
                 # Load current role configuration from database
@@ -3763,7 +3795,7 @@ async def update_roles_task():
                 for role_info in current_roles:
                     role = discord.utils.get(guild.roles, name=role_info["name"])
                     if not role:
-                        print(f"⚠️ [Guild {guild.name}] Role {role_info['name']} not found in server!")
+                        logger.warning(f"⚠️ [Guild {guild.name}] Role {role_info['name']} not found in server!")
                         continue
                     role_cache[role_info["name"]] = role
 
@@ -3793,7 +3825,7 @@ async def update_roles_task():
                         if role and minutes >= role_info["minutes"] and role not in member.roles:
                             try:
                                 await member.add_roles(role, reason=f"Reached {role_info['minutes']} min watchtime")
-                                print(
+                                logger.info(
                                     f"[Guild {guild.name}] Assigned {role.name} to {member.display_name} ({kick_name})"
                                 )
 
@@ -3818,22 +3850,24 @@ async def update_roles_task():
                                     embed.set_footer(text=f"Kick: {kick_name}")
 
                                     await member.send(embed=embed)
-                                    print(f"[Guild {guild.name}] Sent role notification DM to {member.display_name}")
+                                    logger.info(
+                                        f"[Guild {guild.name}] Sent role notification DM to {member.display_name}"
+                                    )
                                 except discord.Forbidden:
                                     pass  # User has DMs disabled
                                 except Exception as dm_error:
-                                    print(f"[Guild {guild.name}] Error sending DM: {dm_error}")
+                                    logger.info(f"[Guild {guild.name}] Error sending DM: {dm_error}")
 
                             except discord.Forbidden:
-                                print(f"[Guild {guild.name}] Missing permission to assign {role.name}")
+                                logger.info(f"[Guild {guild.name}] Missing permission to assign {role.name}")
                             except Exception as e:
-                                print(f"[Guild {guild.name}] Error assigning role: {e}")
+                                logger.info(f"[Guild {guild.name}] Error assigning role: {e}")
 
             except Exception as guild_error:
-                print(f"⚠️ [Guild {guild.name}] Role update error: {guild_error}")
+                logger.warning(f"⚠️ [Guild {guild.name}] Role update error: {guild_error}")
 
     except Exception as e:
-        print(f"⚠️ Error in role update task: {e}")
+        logger.error(f"⚠️ Error in role update task: {e}")
         import traceback
 
         traceback.print_exc()
@@ -3888,11 +3922,11 @@ async def check_oauth_notifications_task():
                                 try:
                                     original_message = await channel.fetch_message(int(message_id))
                                     await original_message.delete()
-                                    print(f"🗑️ Deleted original OAuth message", flush=True)
+                                    logger.info(f"🗑️ Deleted original OAuth message")
                                 except (discord.NotFound, discord.Forbidden):
                                     pass
                         except Exception as e:
-                            print(f"⚠️ Could not delete original message: {e}", flush=True)
+                            logger.warning(f"⚠️ Could not delete original message: {e}")
 
                     # Get the user
                     user = await bot.fetch_user(int(discord_id))
@@ -3954,17 +3988,16 @@ async def check_oauth_notifications_task():
                             # Grant linked role if configured
                             if guild_id:
                                 try:
-                                    print(
-                                        f"🔍 Attempting to grant linked role for guild_id={guild_id}, discord_id={discord_id}",
-                                        flush=True,
+                                    logger.info(
+                                        f"🔍 Attempting to grant linked role for guild_id={guild_id}, discord_id={discord_id}"
                                     )
                                     guild = bot.get_guild(int(guild_id))
                                     if not guild:
-                                        print(f"⚠️ Guild {guild_id} not found in bot", flush=True)
+                                        logger.warning(f"⚠️ Guild {guild_id} not found in bot")
                                     else:
                                         member = guild.get_member(int(discord_id))
                                         if not member:
-                                            print(f"⚠️ Member {discord_id} not found in guild {guild.name}", flush=True)
+                                            logger.warning(f"⚠️ Member {discord_id} not found in guild {guild.name}")
                                         else:
                                             # Get linked role ID from bot_settings
                                             try:
@@ -3977,40 +4010,37 @@ async def check_oauth_notifications_task():
                                                     ),
                                                     {"guild_id": guild_id},
                                                 ).scalar()
-                                                print(f"📋 Linked role ID from DB: {linked_role_id!r}", flush=True)
+                                                logger.info(f"📋 Linked role ID from DB: {linked_role_id!r}")
                                             except Exception as query_err:
-                                                print(f"❌ Failed to query linked role ID: {query_err}", flush=True)
+                                                logger.error(f"❌ Failed to query linked role ID: {query_err}")
                                                 linked_role_id = None
 
                                             if linked_role_id and linked_role_id.strip():
                                                 try:
                                                     role = guild.get_role(int(linked_role_id))
                                                     if not role:
-                                                        print(
-                                                            f"⚠️ Linked role ID {linked_role_id} not found in guild {guild.name}",
-                                                            flush=True,
+                                                        logger.warning(
+                                                            f"⚠️ Linked role ID {linked_role_id} not found in guild {guild.name}"
                                                         )
                                                     elif role in member.roles:
-                                                        print(
-                                                            f"ℹ️ Member {member.display_name} already has role '{role.name}'",
-                                                            flush=True,
+                                                        logger.info(
+                                                            f"ℹ️ Member {member.display_name} already has role '{role.name}'"
                                                         )
                                                     else:
                                                         await member.add_roles(
                                                             role, reason=f"Linked Kick account: {actual_kick_username}"
                                                         )
-                                                        print(
-                                                            f"✅ Granted role '{role.name}' to {member.display_name} for Kick link",
-                                                            flush=True,
+                                                        logger.info(
+                                                            f"✅ Granted role '{role.name}' to {member.display_name} for Kick link"
                                                         )
                                                 except ValueError as val_err:
-                                                    print(f"❌ Invalid role ID {linked_role_id}: {val_err}", flush=True)
+                                                    logger.error(f"❌ Invalid role ID {linked_role_id}: {val_err}")
                                             else:
-                                                print(f"⚠️ No linked role configured for guild {guild_id}", flush=True)
+                                                logger.warning(f"⚠️ No linked role configured for guild {guild_id}")
                                 except Exception as role_error:
                                     import traceback
 
-                                    print(f"❌ Error granting linked role: {role_error}", flush=True)
+                                    logger.error(f"❌ Error granting linked role: {role_error}")
                                     traceback.print_exc()
 
                     # Mark as processed
@@ -4025,10 +4055,10 @@ async def check_oauth_notifications_task():
                         {"id": notification_id},
                     )
 
-                    print(f"✅ Sent OAuth notification to Discord {discord_id}", flush=True)
+                    logger.info(f"✅ Sent OAuth notification to Discord {discord_id}")
 
                 except Exception as e:
-                    print(f"⚠️ Error sending OAuth notification to {discord_id}: {e}", flush=True)
+                    logger.error(f"⚠️ Error sending OAuth notification to {discord_id}: {e}")
                     # Mark as processed anyway to avoid retry loops
                     conn.execute(
                         text(
@@ -4042,7 +4072,7 @@ async def check_oauth_notifications_task():
                     )
 
     except Exception as e:
-        print(f"⚠️ Error in OAuth notifications task: {e}", flush=True)
+        logger.error(f"⚠️ Error in OAuth notifications task: {e}")
 
 
 @tasks.loop(minutes=30)  # Check every 30 minutes
@@ -4062,7 +4092,7 @@ async def proactive_token_refresh_task():
         return
 
     try:
-        print("[Kick] 🔄 Checking for access tokens that need refresh...")
+        logger.info("[Kick] 🔄 Checking for access tokens that need refresh...")
 
         with engine.connect() as conn:
             results = conn.execute(
@@ -4077,7 +4107,7 @@ async def proactive_token_refresh_task():
             ).fetchall()
 
             if not results:
-                print("[Kick] ℹ️  No OAuth tokens in database")
+                logger.info("[Kick] ℹ️  No OAuth tokens in database")
                 return
 
             now = datetime.now(timezone.utc)
@@ -4090,7 +4120,7 @@ async def proactive_token_refresh_task():
 
                 if expires_at is None:
                     # Legacy token without expiration info - treat as expired to trigger refresh
-                    print(
+                    logger.info(
                         f"[Kick] ⏱️  Token for {kick_username} has no expiration (legacy) - treating as expired, will refresh"
                     )
                     from datetime import timedelta
@@ -4107,26 +4137,30 @@ async def proactive_token_refresh_task():
                 if minutes_until_expiry < 30:
                     # Token expired or expiring soon - refresh it now
                     if minutes_until_expiry < 0:
-                        print(f"[Kick] ⏱️  Token for {kick_username} has EXPIRED - refreshing using refresh_token...")
+                        logger.info(
+                            f"[Kick] ⏱️  Token for {kick_username} has EXPIRED - refreshing using refresh_token..."
+                        )
                     else:
-                        print(
+                        logger.info(
                             f"[Kick] ⏱️  Token for {kick_username} expires in {minutes_until_expiry:.0f}m - refreshing now..."
                         )
                     if await refresh_kick_oauth_token_for_user(user_id, kick_username, refresh_token):
                         refreshed += 1
-                        print(f"[Kick] ✅ Token refreshed for {kick_username}")
+                        logger.info(f"[Kick] ✅ Token refreshed for {kick_username}")
                     else:
                         failed += 1
-                        print(f"[Kick] ❌ Failed to refresh token for {kick_username}")
+                        logger.info(f"[Kick] ❌ Failed to refresh token for {kick_username}")
                 else:
                     # Plenty of time left
                     hours = minutes_until_expiry / 60
-                    print(f"[Kick] ✓ {kick_username} token valid for {hours:.1f} more hours")
+                    logger.info(f"[Kick] ✓ {kick_username} token valid for {hours:.1f} more hours")
 
-            print(f"[Kick] Token refresh check complete: {refreshed} refreshed, {failed} failed, {checked} checked")
+            logger.info(
+                f"[Kick] Token refresh check complete: {refreshed} refreshed, {failed} failed, {checked} checked"
+            )
 
     except Exception as e:
-        print(f"[Kick] ❌ Error in token refresh task: {e}")
+        logger.info(f"[Kick] ❌ Error in token refresh task: {e}")
         import traceback
 
         traceback.print_exc()
@@ -4146,7 +4180,7 @@ async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, re
         with engine.connect() as conn:
             got_lock = conn.execute(text("SELECT pg_try_advisory_lock(:key)"), {"key": lock_key}).scalar()
             if not got_lock:
-                print(f"[Kick] ⏳ Token for {kick_username} is being refreshed by another process, skipping")
+                logger.info(f"[Kick] ⏳ Token for {kick_username} is being refreshed by another process, skipping")
                 return True  # Not a failure — someone else is handling it
 
             # Re-check: token may have been refreshed by another process already
@@ -4155,7 +4189,7 @@ async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, re
                 {"uid": user_id},
             ).fetchone()
             if current and current[0] != refresh_token:
-                print(f"[Kick] ✅ Token for {kick_username} was already refreshed by another process")
+                logger.info(f"[Kick] ✅ Token for {kick_username} was already refreshed by another process")
                 conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": lock_key})
                 conn.commit()
                 return True
@@ -4251,7 +4285,9 @@ async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, re
                     return True
                 else:
                     error_text = await response.text()
-                    print(f"[Kick] ❌ Refresh failed for {kick_username} (HTTP {response.status}): {error_text[:100]}")
+                    logger.info(
+                        f"[Kick] ❌ Refresh failed for {kick_username} (HTTP {response.status}): {error_text[:100]}"
+                    )
 
                     # Kick refresh tokens never expire, so do NOT clear the refresh
                     # token on failure — it remains valid and the caller will retry.
@@ -4263,7 +4299,7 @@ async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, re
                     return False
 
     except Exception as e:
-        print(f"[Kick] ❌ Error refreshing token for {kick_username}: {e}")
+        logger.info(f"[Kick] ❌ Error refreshing token for {kick_username}: {e}")
         try:
             with engine.connect() as conn:
                 conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": abs(user_id) % (2**31)})
@@ -4336,6 +4372,11 @@ async def clip_buffer_management_task():
         guild_id = guild.id
         guild_name = guild.name
 
+        # Tag every log line in this guild's iteration with the server name. The
+        # loop is sequential and each iteration re-sets the context, so the next
+        # guild overwrites it; no per-iteration clear is needed.
+        set_server(guild_id, guild_name)
+
         try:
             # Get per-guild settings from database
             kick_channel = None
@@ -4371,7 +4412,7 @@ async def clip_buffer_management_task():
                 continue
             if not dashboard_url or not bot_api_key:
                 if guild_id not in clip_buffer_active_by_guild:  # Only log once
-                    print(f"[Clip Buffer][{guild_name}] ⚠️ Missing dashboard_url or bot_api_key")
+                    logger.info(f"[Clip Buffer][{guild_name}] ⚠️ Missing dashboard_url or bot_api_key")
                 continue
 
             # Get per-guild state
@@ -4382,13 +4423,13 @@ async def clip_buffer_management_task():
             try:
                 is_live = await check_stream_live(kick_channel)
                 if last_stream_live_state != is_live:  # Only log state changes
-                    print(
+                    logger.info(
                         f"[Clip Buffer][{guild_name}] Stream live check for '{kick_channel}': {is_live} | Last state: {last_stream_live_state} | Buffer active: {clip_buffer_active}"
                     )
             except Exception as e:
                 # Cloudflare block or other error - skip this guild
                 if "403" not in str(e) and "Cloudflare" not in str(e):
-                    print(f"[Clip Buffer][{guild_name}] ⚠️ Error checking stream status: {e}")
+                    logger.info(f"[Clip Buffer][{guild_name}] ⚠️ Error checking stream status: {e}")
                 continue
 
             # Detect state transitions
@@ -4398,10 +4439,10 @@ async def clip_buffer_management_task():
                 last_stream_live_state_by_guild[guild_id] = is_live
                 last_stream_live_state = is_live
                 if is_live:
-                    print(f"[Clip Buffer][{guild_name}] 🎬 Stream is already live on startup, starting buffer...")
+                    logger.info(f"[Clip Buffer][{guild_name}] 🎬 Stream is already live on startup, starting buffer...")
                     should_start_buffer = True
                 else:
-                    print(f"[Clip Buffer][{guild_name}] 📴 Stream is offline on startup")
+                    logger.info(f"[Clip Buffer][{guild_name}] 📴 Stream is offline on startup")
 
             # If stream is live but buffer is not active, check if we need to start it
             if is_live and not clip_buffer_active and not should_start_buffer:
@@ -4414,7 +4455,7 @@ async def clip_buffer_management_task():
                         ) as response:
                             if response.status == 404:
                                 # No buffer exists, need to start it
-                                print(
+                                logger.info(
                                     f"[Clip Buffer][{guild_name}] 🔄 Stream is live but no buffer running, starting..."
                                 )
                                 should_start_buffer = True
@@ -4422,14 +4463,14 @@ async def clip_buffer_management_task():
                                 status = await response.json()
                                 if status.get("is_recording"):
                                     clip_buffer_active_by_guild[guild_id] = True
-                                    print(f"[Clip Buffer][{guild_name}] ℹ️ Buffer already running")
+                                    logger.info(f"[Clip Buffer][{guild_name}] ℹ️ Buffer already running")
                                 else:
-                                    print(
+                                    logger.info(
                                         f"[Clip Buffer][{guild_name}] ⚠️ Buffer exists but not recording, restarting..."
                                     )
                                     should_start_buffer = True
                 except Exception as e:
-                    print(f"[Clip Buffer][{guild_name}] ⚠️ Error checking buffer status: {e}")
+                    logger.info(f"[Clip Buffer][{guild_name}] ⚠️ Error checking buffer status: {e}")
 
             # Periodic verification: Even if we think buffer is active, verify with dashboard
             elif is_live and clip_buffer_active:
@@ -4441,17 +4482,19 @@ async def clip_buffer_management_task():
                         ) as response:
                             if response.status == 404:
                                 # Buffer disappeared (dashboard restarted?)
-                                print(f"[Clip Buffer][{guild_name}] ⚠️ Buffer disappeared! Restarting...")
+                                logger.info(f"[Clip Buffer][{guild_name}] ⚠️ Buffer disappeared! Restarting...")
                                 clip_buffer_active_by_guild[guild_id] = False
                                 should_start_buffer = True
                             elif response.status == 200:
                                 status = await response.json()
                                 if not status.get("is_recording"):
-                                    print(f"[Clip Buffer][{guild_name}] ⚠️ Buffer stopped recording! Restarting...")
+                                    logger.info(
+                                        f"[Clip Buffer][{guild_name}] ⚠️ Buffer stopped recording! Restarting..."
+                                    )
                                     clip_buffer_active_by_guild[guild_id] = False
                                     should_start_buffer = True
                 except Exception as e:
-                    print(f"[Clip Buffer][{guild_name}] ⚠️ Error verifying buffer status: {e}")
+                    logger.info(f"[Clip Buffer][{guild_name}] ⚠️ Error verifying buffer status: {e}")
 
             # Handle transition: OFFLINE -> LIVE (or first run while live)
             if ((is_live and not last_stream_live_state) or should_start_buffer) and not auto_start_buffer:
@@ -4459,12 +4502,12 @@ async def clip_buffer_management_task():
                 # but don't start the buffer. Manual Start from the dashboard
                 # still works.
                 if not should_start_buffer:
-                    print(
+                    logger.info(
                         f"[Clip Buffer][{guild_name}] ⏸️ Auto-start disabled (clips_auto_start_on_live=false) — skipping buffer start"
                     )
             elif (is_live and not last_stream_live_state) or should_start_buffer:
                 if not should_start_buffer:
-                    print(f"[Clip Buffer][{guild_name}] 🟢 Stream went LIVE! Starting clip buffer...")
+                    logger.info(f"[Clip Buffer][{guild_name}] 🟢 Stream went LIVE! Starting clip buffer...")
 
                 # Use the robust playback URL fetcher with caching and validation
                 playback_url: Optional[str] = None
@@ -4476,11 +4519,11 @@ async def clip_buffer_management_task():
                     playback_url = await get_playback_url(kick_channel, force_refresh=force_refresh)
 
                     if playback_url:
-                        print(f"[Clip Buffer][{guild_name}] 📺 Obtained playback URL: {playback_url[:80]}...")
+                        logger.info(f"[Clip Buffer][{guild_name}] 📺 Obtained playback URL: {playback_url[:80]}...")
                     else:
-                        print(f"[Clip Buffer][{guild_name}] ⚠️ No playback URL available")
+                        logger.info(f"[Clip Buffer][{guild_name}] ⚠️ No playback URL available")
                 except Exception as e:
-                    print(f"[Clip Buffer][{guild_name}] ⚠️ Error fetching playback URL: {e}")
+                    logger.info(f"[Clip Buffer][{guild_name}] ⚠️ Error fetching playback URL: {e}")
 
                 try:
                     async with aiohttp.ClientSession() as session:
@@ -4498,18 +4541,20 @@ async def clip_buffer_management_task():
                             if response.status == 200:
                                 result = await response.json()
                                 clip_buffer_active_by_guild[guild_id] = True
-                                print(f"[Clip Buffer][{guild_name}] ✅ Buffer started: {result.get('message', 'OK')}")
+                                logger.info(
+                                    f"[Clip Buffer][{guild_name}] ✅ Buffer started: {result.get('message', 'OK')}"
+                                )
                             else:
                                 response_text = await response.text()
-                                print(
+                                logger.info(
                                     f"[Clip Buffer][{guild_name}] ❌ Failed to start buffer: HTTP {response.status} - {response_text}"
                                 )
                 except Exception as e:
-                    print(f"[Clip Buffer][{guild_name}] ❌ Error starting buffer: {e}")
+                    logger.info(f"[Clip Buffer][{guild_name}] ❌ Error starting buffer: {e}")
 
             # Handle transition: LIVE -> OFFLINE
             elif not is_live and last_stream_live_state:
-                print(f"[Clip Buffer][{guild_name}] 🔴 Stream went OFFLINE! Stopping clip buffer...")
+                logger.info(f"[Clip Buffer][{guild_name}] 🔴 Stream went OFFLINE! Stopping clip buffer...")
                 try:
                     async with aiohttp.ClientSession() as session:
                         headers = {"X-API-Key": bot_api_key, "Content-Type": "application/json"}
@@ -4522,20 +4567,22 @@ async def clip_buffer_management_task():
                             if response.status == 200:
                                 result = await response.json()
                                 clip_buffer_active_by_guild[guild_id] = False
-                                print(f"[Clip Buffer][{guild_name}] ✅ Buffer stopped: {result.get('message', 'OK')}")
+                                logger.info(
+                                    f"[Clip Buffer][{guild_name}] ✅ Buffer stopped: {result.get('message', 'OK')}"
+                                )
                             else:
                                 error = await response.text()
-                                print(
+                                logger.info(
                                     f"[Clip Buffer][{guild_name}] ⚠️ Failed to stop buffer: HTTP {response.status} - {error}"
                                 )
                 except Exception as e:
-                    print(f"[Clip Buffer][{guild_name}] ⚠️ Error stopping buffer: {e}")
+                    logger.info(f"[Clip Buffer][{guild_name}] ⚠️ Error stopping buffer: {e}")
 
             # Update last known state
             last_stream_live_state_by_guild[guild_id] = is_live
 
         except Exception as e:
-            print(f"[Clip Buffer][{guild_name}] ❌ Error in buffer management task: {e}")
+            logger.info(f"[Clip Buffer][{guild_name}] ❌ Error in buffer management task: {e}")
 
 
 @clip_buffer_management_task.before_loop
@@ -4544,15 +4591,15 @@ async def before_clip_buffer_task():
     await bot.wait_until_ready()
     # Initial delay to allow settings to load
     await asyncio.sleep(10)
-    print("[Clip Buffer] 🎬 Starting clip buffer management task...")
-    print(
+    logger.info("[Clip Buffer] 🎬 Starting clip buffer management task...")
+    logger.info(
         f"[Clip Buffer] Settings manager initialized: {hasattr(bot, 'settings_manager') and bot.settings_manager is not None}"
     )
     if hasattr(bot, "settings_manager") and bot.settings_manager:
         bot.settings_manager.refresh()
-        print(f"[Clip Buffer] dashboard_url: {bool(bot.settings_manager.dashboard_url)}")
-        print(f"[Clip Buffer] bot_api_key: {bool(bot.settings_manager.bot_api_key)}")
-        print(f"[Clip Buffer] kick_channel: {bot.settings_manager.kick_channel}")
+        logger.info(f"[Clip Buffer] dashboard_url: {bool(bot.settings_manager.dashboard_url)}")
+        logger.info(f"[Clip Buffer] bot_api_key: {bool(bot.settings_manager.bot_api_key)}")
+        logger.info(f"[Clip Buffer] kick_channel: {bot.settings_manager.kick_channel}")
 
 
 # -------------------------
@@ -5045,9 +5092,8 @@ async def cmd_update_kick(ctx, member: discord.Member, new_kick_username: str):
         f"**{old_kick_name}** → **{new_kick_username}**\n\n"
         f"📦 Data migrated: {', '.join(tables_updated)}"
     )
-    print(
-        f"[Admin] {ctx.author} updated {member}'s Kick: {old_kick_name} → {new_kick_username} | Tables: {tables_updated}",
-        flush=True,
+    logger.info(
+        f"[Admin] {ctx.author} updated {member}'s Kick: {old_kick_name} → {new_kick_username} | Tables: {tables_updated}"
     )
 
 
@@ -5161,7 +5207,7 @@ async def cmd_grant_link_role(ctx, member: discord.Member = None):
                 granted += 1
             except Exception as e:
                 errors += 1
-                print(f"⚠️ Error granting role to {discord_id}: {e}", flush=True)
+                logger.error(f"⚠️ Error granting role to {discord_id}: {e}")
 
         await status_msg.edit(
             content=f"✅ **Link Role Sync Complete**\n\n"
@@ -5171,9 +5217,8 @@ async def cmd_grant_link_role(ctx, member: discord.Member = None):
             f"• ⚠️ Not in server: **{not_in_server}** users\n"
             f"• ❌ Errors: **{errors}**"
         )
-        print(
-            f"[Admin] {ctx.author} synced linked roles: {granted} granted, {already_had} already had, {not_in_server} not in server",
-            flush=True,
+        logger.info(
+            f"[Admin] {ctx.author} synced linked roles: {granted} granted, {already_had} already had, {not_in_server} not in server"
         )
 
 
@@ -6862,7 +6907,7 @@ async def sync_shuffle_role_on_startup(bot, engine):
                         await member.remove_roles(shuffle_role, reason="Startup sync: No verified Shuffle link")
                         removed += 1
                     except Exception as e:
-                        print(f"⚠️ Could not remove Shuffle role from {member}: {e}")
+                        logger.warning(f"⚠️ Could not remove Shuffle role from {member}: {e}")
 
             # Add role to verified users who don't have it
             for discord_id in verified_discord_ids:
@@ -6872,13 +6917,13 @@ async def sync_shuffle_role_on_startup(bot, engine):
                         await member.add_roles(shuffle_role, reason="Startup sync: Has verified Shuffle link")
                         added += 1
                     except Exception as e:
-                        print(f"⚠️ Could not add Shuffle role to {member}: {e}")
+                        logger.warning(f"⚠️ Could not add Shuffle role to {member}: {e}")
 
             if added > 0 or removed > 0:
-                print(f"✅ Shuffle role sync for {guild.name}: +{added}, -{removed}")
+                logger.info(f"✅ Shuffle role sync for {guild.name}: +{added}, -{removed}")
 
     except Exception as e:
-        print(f"⚠️ Error syncing Shuffle roles on startup: {e}")
+        logger.error(f"⚠️ Error syncing Shuffle roles on startup: {e}")
 
 
 # -------------------------
@@ -6890,8 +6935,8 @@ async def on_ready():
     if not hasattr(bot, "uptime_start"):
         bot.uptime_start = datetime.now()
 
-    print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
-    print(f"📺 Monitoring Kick channel: {KICK_CHANNEL}")
+    logger.info(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+    logger.info(f"📺 Monitoring Kick channel: {KICK_CHANNEL}")
 
     # Guard against running full initialization on Discord gateway reconnects.
     # on_ready fires every time the bot reconnects (not just on first login).
@@ -6901,8 +6946,8 @@ async def on_ready():
     # START KICKPYTHON WEBSOCKET (for chat messages)
     # NOTE: Subscription events are now handled via Kick webhooks (channel.subscription.*)
     if KICK_USE_KICKPYTHON_WS:
-        print("🔌 Starting kickpython WebSocket for chat messages...")
-        print("ℹ️  Subscription events handled via Kick webhooks (not Pusher)")
+        logger.info("🔌 Starting kickpython WebSocket for chat messages...")
+        logger.info("ℹ️  Subscription events handled via Kick webhooks (not Pusher)")
         for guild in bot.guilds:
             kick_channel = None
             try:
@@ -6920,16 +6965,16 @@ async def on_ready():
                     if row and row[0]:
                         kick_channel = row[0]
             except Exception as e:
-                print(f"[{guild.name}] ⚠️ Error loading kick_channel: {e}")
+                logger.info(f"[{guild.name}] ⚠️ Error loading kick_channel: {e}")
 
             if kick_channel:
                 await kick_ws_manager.ensure_connection(guild.id, guild.name)
-                print(f"[{guild.name}] ✅ kickpython WebSocket started: {kick_channel}")
+                logger.info(f"[{guild.name}] ✅ kickpython WebSocket started: {kick_channel}")
             else:
-                print(f"[{guild.name}] ⚠️ No kick_channel configured - skipping WebSocket")
+                logger.info(f"[{guild.name}] ⚠️ No kick_channel configured - skipping WebSocket")
     else:
         # LEGACY: Using Pusher only (handles both chat and subscriptions)
-        print("🔌 Starting Pusher WebSocket (LEGACY MODE - handles chat + subscriptions)...")
+        logger.info("🔌 Starting Pusher WebSocket (LEGACY MODE - handles chat + subscriptions)...")
         for guild in bot.guilds:
             kick_channel = None
             try:
@@ -6947,23 +6992,23 @@ async def on_ready():
                     if row and row[0]:
                         kick_channel = row[0]
             except Exception as e:
-                print(f"[{guild.name}] ⚠️ Error loading kick_channel: {e}")
+                logger.info(f"[{guild.name}] ⚠️ Error loading kick_channel: {e}")
 
             if kick_channel:
                 asyncio.create_task(kick_chat_loop(kick_channel, guild.id))
-                print(f"[{guild.name}] ✅ Pusher WebSocket started: {kick_channel}")
+                logger.info(f"[{guild.name}] ✅ Pusher WebSocket started: {kick_channel}")
             else:
-                print(f"[{guild.name}] ⚠️ No kick_channel configured - skipping WebSocket")
+                logger.info(f"[{guild.name}] ⚠️ No kick_channel configured - skipping WebSocket")
 
     # Attach helper function to bot so other cogs can access it
     bot.get_active_chatters_count = get_active_chatters_count
 
     # 🎁 Setup giveaway managers for all guilds
-    print("🎁 Setting up giveaway managers...")
+    logger.info("🎁 Setting up giveaway managers...")
     global giveaway_managers
     giveaway_managers = await setup_giveaway_managers(bot, engine)
     bot.giveaway_managers = giveaway_managers
-    print(f"✅ Giveaway managers initialized for {len(giveaway_managers)} guilds")
+    logger.info(f"✅ Giveaway managers initialized for {len(giveaway_managers)} guilds")
 
     # Start Redis subscriber with Kick message callback
     # Guard against creating duplicate subscriber tasks on Discord gateway reconnects
@@ -6974,16 +7019,16 @@ async def on_ready():
         asyncio.create_task(start_redis_subscriber(bot, kick_callback))
 
     if kick_callback:
-        print("✅ Redis subscriber will send messages to Kick chat")
+        logger.info("✅ Redis subscriber will send messages to Kick chat")
     else:
-        print("ℹ️  Redis subscriber started (messages logged only - set KICK_BOT_USER_TOKEN to enable Kick chat)")
+        logger.info("ℹ️  Redis subscriber started (messages logged only - set KICK_BOT_USER_TOKEN to enable Kick chat)")
 
     # Auto-migrate database tables
     if engine:
         try:
             with engine.begin() as conn:
                 # Create slot_call_blacklist table if missing
-                print("🔄 Checking slot_call_blacklist table...")
+                logger.info("🔄 Checking slot_call_blacklist table...")
                 conn.execute(
                     text(
                         """
@@ -6998,10 +7043,10 @@ async def on_ready():
                 """
                     )
                 )
-                print("✅ slot_call_blacklist table ready")
+                logger.info("✅ slot_call_blacklist table ready")
 
                 # Add provably fair columns to giveaways table
-                print("🔄 Checking provably fair columns in giveaways table...")
+                logger.info("🔄 Checking provably fair columns in giveaways table...")
                 conn.execute(
                     text(
                         """
@@ -7014,10 +7059,10 @@ async def on_ready():
                 """
                     )
                 )
-                print("✅ Provably fair columns added to giveaways table")
+                logger.info("✅ Provably fair columns added to giveaways table")
 
                 # Add provably fair columns to slot_requests table
-                print("🔄 Checking provably fair columns in slot_requests table...")
+                logger.info("🔄 Checking provably fair columns in slot_requests table...")
                 conn.execute(
                     text(
                         """
@@ -7030,54 +7075,54 @@ async def on_ready():
                 """
                     )
                 )
-                print("✅ Provably fair columns added to slot_requests table")
+                logger.info("✅ Provably fair columns added to slot_requests table")
         except Exception as e:
-            print(f"⚠️ Database migration check failed: {e}")
+            logger.warning(f"⚠️ Database migration check failed: {e}")
 
     try:
         # Multiserver: Validate bot permissions for ALL guilds
         for guild in bot.guilds:
             me = guild.me
             if not me.guild_permissions.manage_roles:
-                print(f"⚠️ [Guild {guild.name}] Bot lacks manage_roles permission!")
+                logger.warning(f"⚠️ [Guild {guild.name}] Bot lacks manage_roles permission!")
 
             # Validate roles exist
             current_roles = load_watchtime_roles()
             existing_roles = {role.name for role in guild.roles}
             for role_config in current_roles:
                 if role_config["name"] not in existing_roles:
-                    print(f"⚠️ [Guild {guild.name}] Role {role_config['name']} does not exist in the server!")
+                    logger.warning(f"⚠️ [Guild {guild.name}] Role {role_config['name']} does not exist in the server!")
 
         # Start background tasks (guarded: tasks already check is_running())
         if not update_watchtime_task.is_running():
             update_watchtime_task.start()
-            print("✅ Watchtime updater started")
+            logger.info("✅ Watchtime updater started")
 
         if not update_roles_task.is_running():
             update_roles_task.start()
-            print("✅ Role updater started")
+            logger.info("✅ Role updater started")
 
         if not cleanup_pending_links_task.is_running():
             cleanup_pending_links_task.start()
-            print("✅ Cleanup task started")
+            logger.info("✅ Cleanup task started")
 
         if not proactive_token_refresh_task.is_running() and engine:
             proactive_token_refresh_task.start()
-            print("✅ Proactive token refresh task started (runs every 30 minutes)")
+            logger.info("✅ Proactive token refresh task started (runs every 30 minutes)")
 
         if not check_oauth_notifications_task.is_running():
             check_oauth_notifications_task.start()
-            print("✅ OAuth notifications task started")
+            logger.info("✅ OAuth notifications task started")
 
         # Start clip buffer management task
         if not clip_buffer_management_task.is_running():
             clip_buffer_management_task.start()
-            print("✅ Clip buffer management task started (monitors stream status)")
+            logger.info("✅ Clip buffer management task started (monitors stream status)")
 
         # Initialize raffle system — skip cog/command registration on gateway reconnects.
         # (on_ready fires on every reconnect; cog/command re-registration would raise errors.)
         if not _first_ready:
-            print("♻️  Gateway reconnect — background tasks checked, initialization skipped")
+            logger.info("♻️  Gateway reconnect — background tasks checked, initialization skipped")
             return
         bot._bot_initialized = True
 
@@ -7105,14 +7150,14 @@ async def on_ready():
 
             # Initialize per-guild trackers and managers (without adding cogs yet)
             for guild in bot.guilds:
-                print(f"[Init] Loading settings for guild {guild.name} ({guild.id})...")
+                logger.info(f"[Init] Loading settings for guild {guild.name} ({guild.id})...")
                 guild_settings = get_guild_settings(guild.id)
 
                 # Debug: Print loaded settings
-                print(f"[Init] Guild {guild.name} loaded {len(guild_settings._cache)} settings:")
-                print(f"  - kick_channel: '{guild_settings.kick_channel}'")
-                print(f"  - slot_calls_channel_id: {guild_settings.slot_calls_channel_id}")
-                print(f"  - raffle_announcement_channel_id: {guild_settings.raffle_announcement_channel_id}")
+                logger.info(f"[Init] Guild {guild.name} loaded {len(guild_settings._cache)} settings:")
+                logger.info(f"  - kick_channel: '{guild_settings.kick_channel}'")
+                logger.info(f"  - slot_calls_channel_id: {guild_settings.slot_calls_channel_id}")
+                logger.info(f"  - raffle_announcement_channel_id: {guild_settings.raffle_announcement_channel_id}")
 
                 # Ensure this guild has an active raffle period.
                 # IMPORTANT: only create a period when the lookup SUCCEEDS and
@@ -7126,7 +7171,7 @@ async def on_ready():
                     current_period = get_current_period(engine, discord_server_id=guild.id)
                 except Exception as e:
                     current_period = None
-                    print(
+                    logger.warning(
                         f"⚠️ [Guild {guild.name}] Could not check raffle period "
                         f"(DB error: {e}); skipping period creation this startup"
                     )
@@ -7143,19 +7188,19 @@ async def on_ready():
                         end = start.replace(month=start.month + 1, day=1) - timedelta(seconds=1)
 
                     period_id = create_new_period(engine, start, end, discord_server_id=guild.id)
-                    print(f"✅ [Guild {guild.name}] Created initial raffle period #{period_id}")
+                    logger.info(f"✅ [Guild {guild.name}] Created initial raffle period #{period_id}")
                 elif current_period:
-                    print(f"✅ [Guild {guild.name}] Active raffle period found (#{current_period['id']})")
+                    logger.info(f"✅ [Guild {guild.name}] Active raffle period found (#{current_period['id']})")
 
                 # Setup gifted sub tracker for this guild
                 gifted_sub_trackers[guild.id] = setup_gifted_sub_handler(
                     engine, server_id=guild.id, bot_settings=guild_settings
                 )
-                print(f"✅ [Guild {guild.name}] Gifted sub tracker initialized")
+                logger.info(f"✅ [Guild {guild.name}] Gifted sub tracker initialized")
 
                 # Setup watchtime converter for this guild (runs every 10 minutes)
                 await setup_watchtime_converter(bot, engine, server_id=guild.id)
-                print(f"✅ [Guild {guild.name}] Watchtime converter initialized")
+                logger.info(f"✅ [Guild {guild.name}] Watchtime converter initialized")
 
                 # Setup wager tracker for this guild. The tracker self-selects the
                 # active platform (shuffle/howl) from wager_platform_name on every
@@ -7166,7 +7211,7 @@ async def on_ready():
                 # Expose per-guild wager trackers so the Redis settings-sync handler
                 # can call refresh_settings() for an instant platform hot-swap.
                 bot.shuffle_trackers_by_guild = shuffle_trackers
-                print(f"✅ [Guild {guild.name}] Wager tracker initialized")
+                logger.info(f"✅ [Guild {guild.name}] Wager tracker initialized")
 
                 # Setup auto-updating leaderboard for this guild
                 leaderboard_channel_id = guild_settings.raffle_leaderboard_channel_id
@@ -7174,7 +7219,9 @@ async def on_ready():
                 if not hasattr(bot, "auto_leaderboards"):
                     bot.auto_leaderboards = {}
                 bot.auto_leaderboards[guild.id] = auto_leaderboard
-                print(f"📊 [Guild {guild.name}] Leaderboard channel: {leaderboard_channel_id or 'Not configured'}")
+                logger.info(
+                    f"📊 [Guild {guild.name}] Leaderboard channel: {leaderboard_channel_id or 'Not configured'}"
+                )
 
                 # Setup raffle scheduler for this guild
                 raffle_auto_draw = guild_settings.raffle_auto_draw
@@ -7186,7 +7233,7 @@ async def on_ready():
                     announcement_channel_id=raffle_channel_id,
                     discord_server_id=guild.id,
                 )
-                print(f"✅ [Guild {guild.name}] Raffle system initialized (auto-draw: {raffle_auto_draw})")
+                logger.info(f"✅ [Guild {guild.name}] Raffle system initialized (auto-draw: {raffle_auto_draw})")
 
                 # Create slot call tracker for this guild (but don't register cog yet)
                 from features.slot_requests.slot_calls import SlotCallTracker
@@ -7202,7 +7249,7 @@ async def on_ready():
                 if not hasattr(bot, "slot_call_trackers_by_guild"):
                     bot.slot_call_trackers_by_guild = {}
                 bot.slot_call_trackers_by_guild[guild.id] = slot_call_trackers[guild.id]
-                print(
+                logger.info(
                     f"✅ [Guild {guild.name}] Slot call tracker initialized (channel: {slot_calls_channel_id or 'Not configured'})"
                 )
 
@@ -7211,7 +7258,7 @@ async def on_ready():
                 if not hasattr(bot, "gtb_managers_by_guild"):
                     bot.gtb_managers_by_guild = {}
                 bot.gtb_managers_by_guild[guild.id] = gtb_managers[guild.id]
-                print(f"✅ [Guild {guild.name}] GTB system initialized")
+                logger.info(f"✅ [Guild {guild.name}] GTB system initialized")
 
                 # Setup Custom Commands manager for this guild
                 custom_commands_manager = CustomCommandsManager(
@@ -7225,7 +7272,7 @@ async def on_ready():
                 if not hasattr(bot, "custom_commands_managers"):
                     bot.custom_commands_managers = {}
                 bot.custom_commands_managers[guild.id] = custom_commands_manager
-                print(f"✅ [Guild {guild.name}] Custom commands system initialized")
+                logger.info(f"✅ [Guild {guild.name}] Custom commands system initialized")
 
             # Sync Shuffle code user role (run once, not per-guild)
             await sync_shuffle_role_on_startup(bot, engine)
@@ -7237,7 +7284,7 @@ async def on_ready():
 
                 first_tracker = list(slot_call_trackers.values())[0]  # Use first guild's tracker for cog
                 await bot.add_cog(SlotCallCommands(bot, first_tracker))
-                print(f"✅ Slot call commands cog registered")
+                logger.info(f"✅ Slot call commands cog registered")
 
             # Import view classes for persistent registration
             from features.games.gtb_panel import GTBPanel, GTBPanelView
@@ -7246,11 +7293,11 @@ async def on_ready():
             # Register persistent views ONCE globally (they look up panels by guild_id)
             slot_persistent_view = SlotPanelView(bot)
             bot.add_view(slot_persistent_view)
-            print(f"✅ Slot panel persistent view registered (handles all guilds)")
+            logger.info(f"✅ Slot panel persistent view registered (handles all guilds)")
 
             gtb_persistent_view = GTBPanelView(bot)
             bot.add_view(gtb_persistent_view)
-            print(f"✅ GTB panel persistent view registered (handles all guilds)")
+            logger.info(f"✅ GTB panel persistent view registered (handles all guilds)")
 
             # Create slot panels per-guild (but only add cogs once)
             first_guild = True
@@ -7267,7 +7314,7 @@ async def on_ready():
                 if not hasattr(bot, "slot_panels_by_guild"):
                     bot.slot_panels_by_guild = {}
                 bot.slot_panels_by_guild[guild.id] = slot_panel
-                print(f"✅ [Guild {guild.name}] Slot request panel initialized")
+                logger.info(f"✅ [Guild {guild.name}] Slot request panel initialized")
 
                 # Setup GTB panel for this guild (just the instance, no commands)
                 gtb_panel = GTBPanel(
@@ -7280,14 +7327,14 @@ async def on_ready():
                 if not hasattr(bot, "gtb_panels_by_guild"):
                     bot.gtb_panels_by_guild = {}
                 bot.gtb_panels_by_guild[guild.id] = gtb_panel
-                print(f"✅ [Guild {guild.name}] GTB panel initialized")
+                logger.info(f"✅ [Guild {guild.name}] GTB panel initialized")
 
                 # Add cogs only once on first iteration
                 if first_guild:
                     from features.slot_requests.slot_request_panel import SlotRequestPanelCommands
 
                     await bot.add_cog(SlotRequestPanelCommands(bot, slot_panel))
-                    print(f"✅ Slot request panel commands cog registered")
+                    logger.info(f"✅ Slot request panel commands cog registered")
 
                     # Add GTB panel command (only once)
                     @bot.command(name="creategtbpanel")
@@ -7304,17 +7351,17 @@ async def on_ready():
                         else:
                             await ctx.send("❌ Failed to create GTB panel.")
 
-                    print(f"✅ GTB panel commands registered")
+                    logger.info(f"✅ GTB panel commands registered")
                     first_guild = False
 
-            print("📝 About to setup raffle commands...")
+            logger.info("📝 About to setup raffle commands...")
             # Setup raffle commands (global cog)
             await setup_raffle_commands(bot, engine)
-            print("✅ Raffle commands setup complete")
+            logger.info("✅ Raffle commands setup complete")
 
             # Setup gambling commands (!bj, !roll, !double)
             await setup_gambling(bot, engine)
-            print("✅ Gambling commands setup complete")
+            logger.info("✅ Gambling commands setup complete")
 
             # Set legacy global references (use first guild for backward compatibility)
             if bot.guilds:
@@ -7326,9 +7373,9 @@ async def on_ready():
                 bot.slot_call_tracker = slot_call_tracker
                 bot.gtb_manager = gtb_manager
 
-            print("✅ All guilds initialized with multiserver features")
+            logger.info("✅ All guilds initialized with multiserver features")
 
-            print("📝 About to setup link panel...")
+            logger.info("📝 About to setup link panel...")
             # Setup link panel with per-guild instances
             link_panels = await setup_link_panel_system(bot, engine, generate_signed_oauth_url)
             # Store as bot attribute
@@ -7338,15 +7385,15 @@ async def on_ready():
             if link_panels:
                 bot.link_panel = next(iter(link_panels.values()))
 
-            print(f"✅ Link panel system initialized ({len(link_panels)} guilds)")
+            logger.info(f"✅ Link panel system initialized ({len(link_panels)} guilds)")
 
             # Setup Shuffle verify panel with per-guild instances
             bot.shuffle_panels = await setup_shuffle_panel_system(bot, engine, get_guild_settings)
-            print(f"✅ Shuffle verify panel system initialized ({len(bot.shuffle_panels)} guilds)")
+            logger.info(f"✅ Shuffle verify panel system initialized ({len(bot.shuffle_panels)} guilds)")
 
             # Setup Howl verify panel with per-guild instances
             bot.howl_panels = await setup_howl_panel_system(bot, engine, get_guild_settings)
-            print(f"✅ Howl verify panel system initialized ({len(bot.howl_panels)} guilds)")
+            logger.info(f"✅ Howl verify panel system initialized ({len(bot.howl_panels)} guilds)")
 
             # Setup timed messages system with per-guild instances
             timed_messages_managers = await setup_timed_messages(
@@ -7361,11 +7408,11 @@ async def on_ready():
 
             if KICK_BOT_USER_TOKEN:
                 total_messages = sum(len(mgr.messages) for mgr in timed_messages_managers.values())
-                print(
+                logger.info(
                     f"✅ Timed messages system initialized ({len(timed_messages_managers)} guilds, {total_messages} total messages)"
                 )
             else:
-                print("ℹ️  Timed messages disabled (set KICK_BOT_USER_TOKEN to enable)")
+                logger.info("ℹ️  Timed messages disabled (set KICK_BOT_USER_TOKEN to enable)")
 
             # Setup custom commands manager
             if KICK_BOT_USER_TOKEN:
@@ -7373,24 +7420,24 @@ async def on_ready():
                 await custom_commands_manager.start()
                 # Store as bot attribute for Redis subscriber
                 bot.custom_commands_manager = custom_commands_manager
-                print(f"✅ Custom commands system initialized")
+                logger.info(f"✅ Custom commands system initialized")
             else:
-                print("ℹ️  Custom commands disabled (set KICK_BOT_USER_TOKEN to enable)")
+                logger.info("ℹ️  Custom commands disabled (set KICK_BOT_USER_TOKEN to enable)")
 
             # Clip service is now on Dashboard - no local buffer needed
             # Bot calls Dashboard API at /api/clips/create when !clip is used
             # Dashboard URL is configured per-guild in settings
-            print(f"✅ Clip service configured via Dashboard API")
-            print(f"   Configure Dashboard URL in Profile Settings for each guild")
+            logger.info(f"✅ Clip service configured via Dashboard API")
+            logger.info(f"   Configure Dashboard URL in Profile Settings for each guild")
 
         except Exception as e:
-            print(f"⚠️ Failed to initialize raffle system: {e}")
+            logger.warning(f"⚠️ Failed to initialize raffle system: {e}")
             import traceback
 
             traceback.print_exc()
 
     except Exception as e:
-        print(f"⚠️ Error during startup: {e}")
+        logger.error(f"⚠️ Error during startup: {e}")
 
     # Start Kick chat listeners for all guilds with configured Kick channels
     # DUAL MODE: Webhooks for chat + Pusher for subscription events
@@ -7400,14 +7447,14 @@ async def on_ready():
 
     if use_dual_mode:
         if KICK_USE_KICKPYTHON_WS:
-            print(f"✅ Running in DUAL MODE: Webhooks + kickpython WebSocket")
-            print(f"   • Webhooks: chat.message.sent (registered via OAuth)")
-            print(f"   • kickpython: Direct WebSocket for chat messages")
+            logger.info(f"✅ Running in DUAL MODE: Webhooks + kickpython WebSocket")
+            logger.info(f"   • Webhooks: chat.message.sent (registered via OAuth)")
+            logger.info(f"   • kickpython: Direct WebSocket for chat messages")
             # kickpython WebSockets are started in on_ready
         else:
-            print(f"✅ Running in DUAL MODE: Webhooks + Pusher")
-            print(f"   • Webhooks: chat.message.sent (registered via OAuth)")
-            print(f"   • Pusher: subscription events (no webhook support yet)")
+            logger.info(f"✅ Running in DUAL MODE: Webhooks + Pusher")
+            logger.info(f"   • Webhooks: chat.message.sent (registered via OAuth)")
+            logger.info(f"   • Pusher: subscription events (no webhook support yet)")
 
             for guild in bot.guilds:
                 try:
@@ -7416,20 +7463,22 @@ async def on_ready():
 
                     if kick_channel and kick_channel.strip():
                         bot.loop.create_task(kick_chat_loop(kick_channel, guild.id))
-                        print(f"✅ [{guild.name}] Pusher listener started for subscription events → {kick_channel}")
+                        logger.info(
+                            f"✅ [{guild.name}] Pusher listener started for subscription events → {kick_channel}"
+                        )
                     else:
-                        print(f"⚠️ [{guild.name}] No Kick channel configured")
-                        print(f"   Configure it in Dashboard → Profile Settings")
+                        logger.warning(f"⚠️ [{guild.name}] No Kick channel configured")
+                        logger.info(f"   Configure it in Dashboard → Profile Settings")
                 except Exception as e:
-                    print(f"⚠️ [{guild.name}] Failed to start Pusher listener: {e}")
+                    logger.warning(f"⚠️ [{guild.name}] Failed to start Pusher listener: {e}")
     else:
-        print(f"✅ Using webhooks only (Pusher disabled)")
-        print(f"   ⚠️ WARNING: Gifted sub raffle tracking will not work!")
-        print(f"   Set USE_DUAL_MODE=true to enable Pusher for subscription events")
+        logger.info(f"✅ Using webhooks only (Pusher disabled)")
+        logger.warning(f"   ⚠️ WARNING: Gifted sub raffle tracking will not work!")
+        logger.info(f"   Set USE_DUAL_MODE=true to enable Pusher for subscription events")
 
     # ========== MERGED CODE FROM SECOND ON_READY ==========
     # Additional slot tracker initialization with backwards compatibility
-    print("\n⚙️  Ensuring slot tracker backwards compatibility...")
+    logger.info("\n⚙️  Ensuring slot tracker backwards compatibility...")
     if not hasattr(bot, "slot_trackers"):
         bot.slot_trackers = {}
 
@@ -7439,11 +7488,11 @@ async def on_ready():
         if first_guild_id:
             bot.slot_call_tracker = slot_call_trackers[first_guild_id]
             bot.slot_trackers = slot_call_trackers  # Also expose as slot_trackers
-            print(f"✅ Backwards compatibility attributes set")
+            logger.info(f"✅ Backwards compatibility attributes set")
 
-    print(f'\n{"="*60}')
-    print("🎉 Bot initialization complete - ready to receive commands!")
-    print(f'{"="*60}\n')
+    logger.info(f'\n{"="*60}')
+    logger.info("🎉 Bot initialization complete - ready to receive commands!")
+    logger.info(f'{"="*60}\n')
     # ========== END MERGED CODE ==========
 
 
@@ -7745,6 +7794,11 @@ async def on_raw_reaction_add(payload):
     if payload.user_id == bot.user.id:
         return
 
+    # Tag logging for this event with the guild (runs in its own Task, auto-scoped).
+    if payload.guild_id:
+        _g = bot.get_guild(payload.guild_id)
+        set_server(payload.guild_id, _g.name if _g else None)
+
     # Check if this reaction is on a timer panel message
     with engine.connect() as conn:
         timer_panel = conn.execute(
@@ -7817,13 +7871,13 @@ async def on_raw_reaction_add(payload):
                 if channel:
                     message = await channel.fetch_message(payload.message_id)
                     await message.remove_reaction(payload.emoji, member)
-                    print(f"✅ Removed reaction from {member.name} (already linked)")
+                    logger.info(f"✅ Removed reaction from {member.name} (already linked)")
             except discord.Forbidden:
-                print(f"⚠️ Missing permissions to remove reaction for {member.name}")
+                logger.warning(f"⚠️ Missing permissions to remove reaction for {member.name}")
             except discord.NotFound:
-                print(f"⚠️ Message or reaction not found for {member.name}")
+                logger.warning(f"⚠️ Message or reaction not found for {member.name}")
             except Exception as e:
-                print(f"⚠️ Failed to remove reaction for {member.name}: {e}")
+                logger.warning(f"⚠️ Failed to remove reaction for {member.name}: {e}")
 
             return
 
@@ -7863,15 +7917,15 @@ async def on_raw_reaction_add(payload):
             if channel:
                 message = await channel.fetch_message(payload.message_id)
                 await message.remove_reaction(payload.emoji, member)
-                print(f"✅ Removed reaction from {member.name} on link panel")
+                logger.info(f"✅ Removed reaction from {member.name} on link panel")
             else:
-                print(f"⚠️ Could not find channel {payload.channel_id}")
+                logger.warning(f"⚠️ Could not find channel {payload.channel_id}")
         except discord.Forbidden:
-            print(f"⚠️ Missing permissions to remove reaction for {member.name}")
+            logger.warning(f"⚠️ Missing permissions to remove reaction for {member.name}")
         except discord.NotFound:
-            print(f"⚠️ Message or reaction not found for {member.name}")
+            logger.warning(f"⚠️ Message or reaction not found for {member.name}")
         except Exception as e:
-            print(f"⚠️ Failed to remove reaction for {member.name}: {e}")
+            logger.warning(f"⚠️ Failed to remove reaction for {member.name}: {e}")
 
         # Store the DM message info for later deletion
         with engine.begin() as conn:
@@ -7909,13 +7963,13 @@ async def on_raw_reaction_add(payload):
             try:
                 message = await channel.fetch_message(payload.message_id)
                 await message.remove_reaction(payload.emoji, member)
-                print(f"✅ Removed reaction from {member.name} (DMs disabled)")
+                logger.info(f"✅ Removed reaction from {member.name} (DMs disabled)")
             except discord.Forbidden:
-                print(f"⚠️ Missing permissions to remove reaction for {member.name}")
+                logger.warning(f"⚠️ Missing permissions to remove reaction for {member.name}")
             except discord.NotFound:
-                print(f"⚠️ Message or reaction not found for {member.name}")
+                logger.warning(f"⚠️ Message or reaction not found for {member.name}")
             except Exception as e:
-                print(f"⚠️ Failed to remove reaction for {member.name}: {e}")
+                logger.warning(f"⚠️ Failed to remove reaction for {member.name}: {e}")
 
             # Store the channel message info
             with engine.begin() as conn:
@@ -7939,12 +7993,16 @@ async def on_raw_reaction_add(payload):
                 )
 
         except Exception as e:
-            print(f"Failed to send OAuth link to {member}: {e}")
+            logger.info(f"Failed to send OAuth link to {member}: {e}")
 
 
 @bot.event
 async def on_command_error(ctx, error):
     """Handle command errors gracefully."""
+    # Tag error logging with the guild. before_invoke may not have run (e.g. the
+    # command was never found), so set it here too. Runs in its own Task.
+    if ctx.guild:
+        set_server(ctx.guild.id, ctx.guild.name)
     try:
         # If the command has a local error handler, let it handle the error fully.
         # Without this guard, both the local handler AND this global handler fire
@@ -7994,17 +8052,17 @@ async def on_command_error(ctx, error):
                 else:
                     await ctx.send("⚠️ Too many requests. Please try again in a moment.")
             else:
-                print(f"[HTTP Error] {error}")
+                logger.error(f"[HTTP Error] {error}")
                 await ctx.send("❌ A network error occurred. Please try again.")
         else:
-            print(f"[Error] {error}")
+            logger.error(f"[Error] {error}")
             await ctx.send("❌ An error occurred. Please try again.")
     except discord.Forbidden:
         # Bot doesn't have permission to send messages in this channel
-        print(f"[Permission Error] Cannot send error message in channel {ctx.channel.id}: {error}")
+        logger.info(f"[Permission Error] Cannot send error message in channel {ctx.channel.id}: {error}")
     except Exception as e:
         # Catch any other errors to prevent crash
-        print(f"[Critical Error in error handler] {e}")
+        logger.info(f"[Critical Error in error handler] {e}")
 
 
 # -------------------------
@@ -8106,7 +8164,7 @@ async def fixlinks_check(ctx):
 
     except Exception as e:
         await ctx.send(f"❌ Error running diagnostics: {e}")
-        print(f"[fixlinks check] Error: {e}")
+        logger.info(f"[fixlinks check] Error: {e}")
 
 
 @fixlinks.command(name="backfill")
@@ -8150,11 +8208,11 @@ async def fixlinks_backfill(ctx):
             await ctx.send(
                 f"✅ **Backfill Complete**\n" f"Updated {missing_count} rows with server ID `{DISCORD_GUILD_ID}`"
             )
-            print(f"[fixlinks backfill] Updated {missing_count} rows")
+            logger.info(f"[fixlinks backfill] Updated {missing_count} rows")
 
     except Exception as e:
         await ctx.send(f"❌ Error during backfill: {e}")
-        print(f"[fixlinks backfill] Error: {e}")
+        logger.info(f"[fixlinks backfill] Error: {e}")
 
 
 @fixlinks.command(name="duplicates")
@@ -8224,7 +8282,7 @@ async def fixlinks_duplicates(ctx):
 
     except Exception as e:
         await ctx.send(f"❌ Error fetching duplicates: {e}")
-        print(f"[fixlinks duplicates] Error: {e}")
+        logger.info(f"[fixlinks duplicates] Error: {e}")
 
 
 @fixlinks.command(name="resolve")
@@ -8282,11 +8340,13 @@ async def fixlinks_resolve(ctx, kick_name: str, keep_server_id: int):
                 f"Kept: `{kick_name}` on server `{keep_server_id}`\n"
                 f"Removed from: {deleted_info}"
             )
-            print(f"[fixlinks resolve] Kept {kick_name} on server {keep_server_id}, removed {len(deleted)} duplicates")
+            logger.info(
+                f"[fixlinks resolve] Kept {kick_name} on server {keep_server_id}, removed {len(deleted)} duplicates"
+            )
 
     except Exception as e:
         await ctx.send(f"❌ Error resolving duplicate: {e}")
-        print(f"[fixlinks resolve] Error: {e}")
+        logger.info(f"[fixlinks resolve] Error: {e}")
 
 
 # -------------------------
@@ -8540,12 +8600,12 @@ class PointShopConfirmView(discord.ui.View):
                             )
                             savepoint.commit()
                             raffle_tickets_awarded = True
-                            print(
+                            logger.info(
                                 f"[Point Shop] ✅ Auto-awarded {raffle_ticket_amount} raffle tickets to {self.kick_username} (Order #{sale_id})"
                             )
                         else:
                             savepoint.rollback()
-                            print(
+                            logger.info(
                                 f"[Point Shop] ⚠️ No active raffle period for server {self.server_id} - tickets NOT awarded for Order #{sale_id}"
                             )
                     except Exception as ticket_err:
@@ -8553,7 +8613,9 @@ class PointShopConfirmView(discord.ui.View):
                             savepoint.rollback()
                         except Exception:
                             pass
-                        print(f"[Point Shop] ⚠️ Failed to auto-award raffle tickets for Order #{sale_id}: {ticket_err}")
+                        logger.info(
+                            f"[Point Shop] ⚠️ Failed to auto-award raffle tickets for Order #{sale_id}: {ticket_err}"
+                        )
                         import traceback
 
                         traceback.print_exc()
@@ -8612,12 +8674,12 @@ class PointShopConfirmView(discord.ui.View):
                 view=None,
             )
 
-            print(
+            logger.info(
                 f"[Point Shop] {self.kick_username} (Discord ID: {self.discord_id}) purchased {item_name} for {price} points"
             )
 
         except Exception as e:
-            print(f"[Point Shop] Purchase error: {e}")
+            logger.info(f"[Point Shop] Purchase error: {e}")
             import traceback
 
             traceback.print_exc()
@@ -9085,7 +9147,7 @@ async def create_shop_mosaic_image(items, max_width=2400):
                     else:
                         downloaded_images.append((item_idx, item, None))
             except Exception as e:
-                print(f"[Point Shop Mosaic] Failed to load image for {name}: {e}")
+                logger.info(f"[Point Shop Mosaic] Failed to load image for {name}: {e}")
                 downloaded_images.append((item_idx, item, None))
 
     if not downloaded_images:
@@ -9210,7 +9272,7 @@ async def post_point_shop_to_discord(
         if channel_id:
             channel = bot.get_channel(channel_id)
             if not channel:
-                print(f"[Point Shop] Channel {channel_id} not found")
+                logger.info(f"[Point Shop] Channel {channel_id} not found")
                 return False
             # Get guild_id from channel if not provided
             if not guild_id:
@@ -9233,18 +9295,18 @@ async def post_point_shop_to_discord(
                 ).fetchone()
 
                 if not result:
-                    print("[Point Shop] No shop channel configured")
+                    logger.info("[Point Shop] No shop channel configured")
                     return False
 
                 channel_id = int(result[0])
 
             channel = bot.get_channel(channel_id)
             if not channel:
-                print(f"[Point Shop] Channel {channel_id} not found")
+                logger.info(f"[Point Shop] Channel {channel_id} not found")
                 return False
 
         # Get active shop items
-        print(f"[Point Shop] Querying items for guild_id: {guild_id}")
+        logger.info(f"[Point Shop] Querying items for guild_id: {guild_id}")
         with engine.connect() as conn:
             items = conn.execute(
                 text(
@@ -9258,7 +9320,7 @@ async def post_point_shop_to_discord(
                 ),
                 {"guild_id": guild_id},
             ).fetchall()
-            print(f"[Point Shop] Found {len(items)} items")
+            logger.info(f"[Point Shop] Found {len(items)} items")
 
             # Get existing message ID
             existing_msg_result = conn.execute(
@@ -9303,16 +9365,16 @@ async def post_point_shop_to_discord(
                     try:
                         existing_message = await channel.fetch_message(msg_id)
                         await existing_message.delete()
-                        print(f"[Point Shop] Deleted old shop message {msg_id}")
+                        logger.info(f"[Point Shop] Deleted old shop message {msg_id}")
                     except discord.NotFound:
                         pass
                     except Exception as e:
-                        print(f"[Point Shop] Error deleting message {msg_id}: {e}")
+                        logger.info(f"[Point Shop] Error deleting message {msg_id}: {e}")
 
         # Check if Components V2 is supported (discord.py 2.6+)
         has_components_v2 = hasattr(discord.ui, "LayoutView") and hasattr(discord.ui, "MediaGallery")
 
-        print(
+        logger.info(
             f"[Point Shop] Components V2 available: {has_components_v2}, use_components_v2: {use_components_v2}, items count: {len(items)}"
         )
 
@@ -9467,19 +9529,19 @@ async def post_point_shop_to_discord(
                             {"m": str(footer_msg.id), "guild_id": guild_id},
                         )
 
-                print(f"[Point Shop] Posted Components V2 mosaic shop to channel {channel_id}")
+                logger.info(f"[Point Shop] Posted Components V2 mosaic shop to channel {channel_id}")
                 return True
 
             except Exception as v2_error:
                 if not v2_success:
-                    print(f"[Point Shop] Components V2 failed, falling back to legacy: {v2_error}")
+                    logger.info(f"[Point Shop] Components V2 failed, falling back to legacy: {v2_error}")
                     import traceback
 
                     traceback.print_exc()
                     # Fall through to legacy mode
                 else:
                     # Messages were sent successfully, just log the error and return
-                    print(f"[Point Shop] Components V2 posted but error occurred: {v2_error}")
+                    logger.info(f"[Point Shop] Components V2 posted but error occurred: {v2_error}")
                     return True
 
         # ==================== Legacy Mode (Embed + Mosaic) ====================
@@ -9562,11 +9624,11 @@ async def post_point_shop_to_discord(
                 {"guild_id": guild_id},
             )
 
-        print(f"[Point Shop] Posted shop to channel {channel_id}")
+        logger.info(f"[Point Shop] Posted shop to channel {channel_id}")
         return True
 
     except Exception as e:
-        print(f"[Point Shop] Error posting shop: {e}")
+        logger.info(f"[Point Shop] Error posting shop: {e}")
         import traceback
 
         traceback.print_exc()
@@ -9702,10 +9764,10 @@ if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise SystemExit("❌ DISCORD_TOKEN environment variable is required")
 
-    print("✅ Multiserver bot starting")
-    print("   Configure each Discord server in Dashboard → Profile Settings")
-    print("   Set Kick channel name, slot calls channel, raffle settings per-server")
-    print(f"   KICK_USE_KICKPYTHON_WS={KICK_USE_KICKPYTHON_WS}")
-    print("   Bot version: 2025-12-21-v1")  # Trigger redeploy with WebSocket fix
+    logger.info("✅ Multiserver bot starting")
+    logger.info("   Configure each Discord server in Dashboard → Profile Settings")
+    logger.info("   Set Kick channel name, slot calls channel, raffle settings per-server")
+    logger.info(f"   KICK_USE_KICKPYTHON_WS={KICK_USE_KICKPYTHON_WS}")
+    logger.info("   Bot version: 2025-12-21-v1")  # Trigger redeploy with WebSocket fix
 
     bot.run(DISCORD_TOKEN)

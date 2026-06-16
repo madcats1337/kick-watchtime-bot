@@ -33,10 +33,10 @@ class AutoLeaderboard:
             self.channel = self.bot.get_channel(self.channel_id)
 
             if not self.channel:
-                print(f"[Auto-Leaderboard] ❌ Could not find channel with ID {self.channel_id}")
+                logger.info(f"[Auto-Leaderboard] ❌ Could not find channel with ID {self.channel_id}")
                 return False
 
-            print(f"[Auto-Leaderboard] Found channel: #{self.channel.name}")
+            logger.info(f"[Auto-Leaderboard] Found channel: #{self.channel.name}")
 
             # Try to find existing leaderboard message
             async for message in self.channel.history(limit=50):
@@ -44,18 +44,18 @@ class AutoLeaderboard:
                     embed = message.embeds[0]
                     if embed.title and "🎟️ Raffle Ticket Leaderboard" in embed.title:
                         self.message_id = message.id
-                        print(f"[Auto-Leaderboard] Found existing message: {self.message_id}")
+                        logger.info(f"[Auto-Leaderboard] Found existing message: {self.message_id}")
                         break
 
             if not self.message_id:
                 # Post initial leaderboard
-                print("[Auto-Leaderboard] No existing message found, posting new leaderboard...")
+                logger.info("[Auto-Leaderboard] No existing message found, posting new leaderboard...")
                 await self.post_new_leaderboard()
 
             return True
 
         except Exception as e:
-            print(f"[Auto-Leaderboard] ❌ Failed to initialize: {e}")
+            logger.info(f"[Auto-Leaderboard] ❌ Failed to initialize: {e}")
             import traceback
 
             traceback.print_exc()
@@ -67,10 +67,10 @@ class AutoLeaderboard:
             embed = await self.create_leaderboard_embed()
             message = await self.channel.send(embed=embed)
             self.message_id = message.id
-            print(f"[Auto-Leaderboard] Posted new message: {self.message_id}")
+            logger.info(f"[Auto-Leaderboard] Posted new message: {self.message_id}")
 
         except Exception as e:
-            print(f"[Auto-Leaderboard] ❌ Failed to post: {e}")
+            logger.info(f"[Auto-Leaderboard] ❌ Failed to post: {e}")
             import traceback
 
             traceback.print_exc()
@@ -79,7 +79,7 @@ class AutoLeaderboard:
         """Update the existing leaderboard message"""
         try:
             if not self.message_id:
-                print("[Auto-Leaderboard] No message ID, posting new leaderboard...")
+                logger.info("[Auto-Leaderboard] No message ID, posting new leaderboard...")
                 await self.post_new_leaderboard()
                 return
 
@@ -87,7 +87,7 @@ class AutoLeaderboard:
             try:
                 message = await self.channel.fetch_message(self.message_id)
             except discord.NotFound:
-                print("[Auto-Leaderboard] Message not found, posting new one...")
+                logger.info("[Auto-Leaderboard] Message not found, posting new one...")
                 await self.post_new_leaderboard()
                 return
 
@@ -96,10 +96,10 @@ class AutoLeaderboard:
 
             # Edit the message
             await message.edit(embed=embed)
-            print(f"[Auto-Leaderboard] ✅ Updated message: {self.message_id}")
+            logger.info(f"[Auto-Leaderboard] ✅ Updated message: {self.message_id}")
 
         except Exception as e:
-            print(f"[Auto-Leaderboard] ❌ Failed to update: {e}")
+            logger.info(f"[Auto-Leaderboard] ❌ Failed to update: {e}")
             import traceback
 
             traceback.print_exc()
@@ -194,35 +194,46 @@ class AutoLeaderboard:
             watchtime_tickets = "10"
             gifted_sub_tickets = "15"
             wager_tickets = "20"
-            
+
             try:
                 with self.engine.connect() as conn:
                     # Get watchtime tickets per hour
-                    result = conn.execute(text(
-                        "SELECT value FROM bot_settings WHERE key = 'watchtime_tickets_per_hour' "
-                        "AND discord_server_id = :server_id"
-                    ), {"server_id": self.server_id}).fetchone()
+                    result = conn.execute(
+                        text(
+                            "SELECT value FROM bot_settings WHERE key = 'watchtime_tickets_per_hour' "
+                            "AND discord_server_id = :server_id"
+                        ),
+                        {"server_id": self.server_id},
+                    ).fetchone()
                     if result and result[0]:
                         watchtime_tickets = str(result[0])
-                    
+
                     # Get gifted sub tickets
-                    result = conn.execute(text(
-                        "SELECT value FROM bot_settings WHERE key = 'gifted_sub_tickets' "
-                        "AND discord_server_id = :server_id"
-                    ), {"server_id": self.server_id}).fetchone()
+                    result = conn.execute(
+                        text(
+                            "SELECT value FROM bot_settings WHERE key = 'gifted_sub_tickets' "
+                            "AND discord_server_id = :server_id"
+                        ),
+                        {"server_id": self.server_id},
+                    ).fetchone()
                     if result and result[0]:
                         gifted_sub_tickets = str(result[0])
-                    
+
                     # Get wager tickets per $1000
-                    result = conn.execute(text(
-                        "SELECT value FROM bot_settings WHERE key = 'shuffle_tickets_per_1000' "
-                        "AND discord_server_id = :server_id"
-                    ), {"server_id": self.server_id}).fetchone()
+                    result = conn.execute(
+                        text(
+                            "SELECT value FROM bot_settings WHERE key = 'shuffle_tickets_per_1000' "
+                            "AND discord_server_id = :server_id"
+                        ),
+                        {"server_id": self.server_id},
+                    ).fetchone()
                     if result and result[0]:
                         wager_tickets = str(result[0])
             except Exception as e:
-                print(f"[Auto-Leaderboard] ⚠️ Failed to fetch ticket rewards from database: {e}")
-                print(f"[Auto-Leaderboard] Using defaults: {watchtime_tickets}, {gifted_sub_tickets}, {wager_tickets}")
+                logger.info(f"[Auto-Leaderboard] ⚠️ Failed to fetch ticket rewards from database: {e}")
+                logger.info(
+                    f"[Auto-Leaderboard] Using defaults: {watchtime_tickets}, {gifted_sub_tickets}, {wager_tickets}"
+                )
 
             # Add how to earn tickets section with dynamic values from settings
             embed.add_field(
@@ -250,7 +261,7 @@ class AutoLeaderboard:
             return embed
 
         except Exception as e:
-            print(f"[Auto-Leaderboard] ❌ Failed to create embed: {e}")
+            logger.info(f"[Auto-Leaderboard] ❌ Failed to create embed: {e}")
             import traceback
 
             traceback.print_exc()
@@ -284,21 +295,21 @@ async def setup_auto_leaderboard(bot, engine, channel_id=None, server_id=None):
                 try:
                     channel_id = int(channel_id_str)
                 except ValueError:
-                    print(f"[Auto-Leaderboard] ❌ Invalid RAFFLE_LEADERBOARD_CHANNEL_ID: {channel_id_str}")
+                    logger.info(f"[Auto-Leaderboard] ❌ Invalid RAFFLE_LEADERBOARD_CHANNEL_ID: {channel_id_str}")
                     return None
 
     if not channel_id:
-        print("[Auto-Leaderboard] ⚠️ Channel ID not set - auto-leaderboard disabled")
+        logger.info("[Auto-Leaderboard] ⚠️ Channel ID not set - auto-leaderboard disabled")
         return None
 
-    print(f"[Auto-Leaderboard] Setting up for channel ID: {channel_id}")
+    logger.info(f"[Auto-Leaderboard] Setting up for channel ID: {channel_id}")
 
     leaderboard = AutoLeaderboard(bot, engine, channel_id, server_id=server_id)
 
     @tasks.loop(seconds=AUTO_LEADERBOARD_UPDATE_INTERVAL)
     async def update_leaderboard_task():
         """Periodic task to update the leaderboard"""
-        print("🔄 [Auto-Leaderboard] Updating...")
+        logger.info("🔄 [Auto-Leaderboard] Updating...")
         await leaderboard.update_leaderboard()
 
     @update_leaderboard_task.before_loop
@@ -306,24 +317,24 @@ async def setup_auto_leaderboard(bot, engine, channel_id=None, server_id=None):
         """Wait for bot to be ready and initialize"""
         await bot.wait_until_ready()
 
-        print(f"[Auto-Leaderboard] Initializing for channel {channel_id}...")
+        logger.info(f"[Auto-Leaderboard] Initializing for channel {channel_id}...")
 
         # Initialize the leaderboard
         success = await leaderboard.initialize()
 
         if success:
             if AUTO_LEADERBOARD_UPDATE_INTERVAL >= 3600:
-                print(
+                logger.info(
                     f"✅ [Auto-Leaderboard] Started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/3600:.1f} hours)"
                 )
             elif AUTO_LEADERBOARD_UPDATE_INTERVAL >= 60:
-                print(
+                logger.info(
                     f"✅ [Auto-Leaderboard] Started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/60:.0f} minutes)"
                 )
             else:
-                print(f"✅ [Auto-Leaderboard] Started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL} seconds)")
+                logger.info(f"✅ [Auto-Leaderboard] Started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL} seconds)")
         else:
-            print("❌ [Auto-Leaderboard] Failed to initialize - task cancelled")
+            logger.error("❌ [Auto-Leaderboard] Failed to initialize - task cancelled")
             update_leaderboard_task.cancel()
 
     # Start the task

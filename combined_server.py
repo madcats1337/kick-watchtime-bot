@@ -3,16 +3,19 @@ Combined server that runs both Flask OAuth server and Discord bot
 Runs Flask in main process, bot in background subprocess
 """
 
+import logging
 import os
 import subprocess
 import sys
 import threading
 import time
 
+logger = logging.getLogger(__name__)
+
 
 def run_database_migration():
     """Run database migration before starting services"""
-    print("📋 Running database migration...", flush=True)
+    logger.info("📋 Running database migration...")
     try:
         from sqlalchemy import create_engine, text
 
@@ -32,7 +35,7 @@ def run_database_migration():
             ).scalar()
 
             if not table_exists:
-                print("   ℹ️ links table doesn't exist yet, will be created by bot.py", flush=True)
+                logger.info("   ℹ️ links table doesn't exist yet, will be created by bot.py")
                 return
 
             # Check current primary key structure
@@ -48,11 +51,11 @@ def run_database_migration():
                 )
             )
             pk_columns = [row[0] for row in pk_result]
-            print(f"   📊 Current primary key columns: {pk_columns}", flush=True)
+            logger.info(f"   📊 Current primary key columns: {pk_columns}")
 
             # If PK is only discord_id (old schema), we need to recreate it
             if pk_columns == ["discord_id"] or "discord_server_id" not in pk_columns:
-                print("   🔄 Migrating links table to composite primary key...", flush=True)
+                logger.info("   🔄 Migrating links table to composite primary key...")
 
                 # First, handle any NULL discord_server_id values
                 # Set them to 0 as a default server
@@ -64,7 +67,7 @@ def run_database_migration():
                     )
                 ).scalar()
                 if null_count > 0:
-                    print(f"   📝 Setting {null_count} NULL discord_server_id values to 0...", flush=True)
+                    logger.info(f"   📝 Setting {null_count} NULL discord_server_id values to 0...")
                     conn.execute(
                         text(
                             """
@@ -131,7 +134,7 @@ def run_database_migration():
                     )
                 )
 
-                print("   ✅ Primary key migrated to composite (discord_id, discord_server_id)!", flush=True)
+                logger.info("   ✅ Primary key migrated to composite (discord_id, discord_server_id)!")
 
             # Check if kick_name unique constraint exists
             result = conn.execute(
@@ -147,7 +150,7 @@ def run_database_migration():
             )
 
             if not result.fetchone():
-                print("   Adding unique constraint on (kick_name, discord_server_id)...", flush=True)
+                logger.info("   Adding unique constraint on (kick_name, discord_server_id)...")
 
                 # Remove old single-column unique constraint if it exists
                 conn.execute(
@@ -177,20 +180,20 @@ def run_database_migration():
                         )
                     )
                 except Exception as e:
-                    print(f"   ⚠️ Could not add kick_name constraint: {e}", flush=True)
+                    logger.warning(f"   ⚠️ Could not add kick_name constraint: {e}")
 
-                print("   ✅ Unique constraints configured!", flush=True)
+                logger.info("   ✅ Unique constraints configured!")
             else:
-                print("   ✅ Database schema is up to date", flush=True)
+                logger.info("   ✅ Database schema is up to date")
 
     except Exception as e:
-        print(f"   ⚠️ Migration warning: {e}", flush=True)
-        print("   Continuing startup anyway...", flush=True)
+        logger.warning(f"   ⚠️ Migration warning: {e}")
+        logger.info("   Continuing startup anyway...")
 
 
 def run_discord_bot():
     """Start Discord bot as a subprocess, return the process handle"""
-    print("🤖 Starting Discord bot subprocess...", flush=True)
+    logger.info("🤖 Starting Discord bot subprocess...")
     try:
         # Run bot.py with unbuffered output, piped through reader threads
         process = subprocess.Popen(
@@ -200,11 +203,12 @@ def run_discord_bot():
             text=True,
             bufsize=1,  # Line buffered
         )
-        print(f"✅ Bot subprocess started (PID: {process.pid})", flush=True)
+        logger.info(f"✅ Bot subprocess started (PID: {process.pid})")
         return process
     except Exception as e:
-        print(f"❌ Discord bot error: {e}", flush=True)
+        logger.error(f"❌ Discord bot error: {e}")
         import traceback
+
         traceback.print_exc()
         return None
 
@@ -214,18 +218,18 @@ def stream_subprocess_output(process, prefix="[BOT]"):
     try:
         for line in iter(process.stdout.readline, ""):
             if line:
-                print(f"{prefix} {line.rstrip()}", flush=True)
+                logger.info(f"{prefix} {line.rstrip()}")
     except Exception as e:
-        print(f"{prefix} Stream ended: {e}", flush=True)
+        logger.info(f"{prefix} Stream ended: {e}")
     finally:
         if process.stdout:
             process.stdout.close()
 
 
 if __name__ == "__main__":
-    print("🚀 Starting combined OAuth + Discord Bot server...", flush=True)
-    print(f"Python: {sys.version}", flush=True)
-    print(f"Working directory: {os.getcwd()}", flush=True)
+    logger.info("🚀 Starting combined OAuth + Discord Bot server...")
+    logger.info(f"Python: {sys.version}")
+    logger.info(f"Working directory: {os.getcwd()}")
 
     # Run database migration first
     run_database_migration()
@@ -243,14 +247,14 @@ if __name__ == "__main__":
         bot_output_thread.start()
 
     # Give bot a moment to start
-    print("⏳ Waiting for bot to initialize...", flush=True)
+    logger.info("⏳ Waiting for bot to initialize...")
     time.sleep(3)
 
     # Now run Flask OAuth server in main process using Gunicorn
-    print("📡 Starting OAuth web server with Gunicorn...", flush=True)
+    logger.info("📡 Starting OAuth web server with Gunicorn...")
     port = int(os.getenv("PORT", 8000))
-    print(f"🌐 Port: {port}", flush=True)
-    print(f"🌐 OAuth Base URL: {os.getenv('OAUTH_BASE_URL', 'Not set')}", flush=True)
+    logger.info(f"🌐 Port: {port}")
+    logger.info(f"🌐 OAuth Base URL: {os.getenv('OAUTH_BASE_URL', 'Not set')}")
 
     # Use Gunicorn for production
     # IMPORTANT: Use subprocess.Popen (NOT os.execvp) so the bot process stays alive.
@@ -272,15 +276,15 @@ if __name__ == "__main__":
                 "core.oauth_server:app",
             ],
         )
-        print(f"✅ Gunicorn started (PID: {gunicorn_process.pid})", flush=True)
+        logger.info(f"✅ Gunicorn started (PID: {gunicorn_process.pid})")
 
         # Monitor both processes - if either dies, restart or exit
         while True:
             # Check bot process
             if bot_process and bot_process.poll() is not None:
-                print(f"❌ Discord bot exited with code {bot_process.returncode}", flush=True)
+                logger.error(f"❌ Discord bot exited with code {bot_process.returncode}")
                 # Restart bot
-                print("🔄 Restarting Discord bot...", flush=True)
+                logger.info("🔄 Restarting Discord bot...")
                 bot_process = run_discord_bot()
                 if bot_process:
                     bot_output_thread = threading.Thread(
@@ -292,7 +296,7 @@ if __name__ == "__main__":
 
             # Check gunicorn process
             if gunicorn_process.poll() is not None:
-                print(f"❌ Gunicorn exited with code {gunicorn_process.returncode}", flush=True)
+                logger.error(f"❌ Gunicorn exited with code {gunicorn_process.returncode}")
                 # Kill bot and exit so Railway can restart everything
                 if bot_process:
                     bot_process.terminate()
@@ -301,14 +305,15 @@ if __name__ == "__main__":
             time.sleep(5)
 
     except KeyboardInterrupt:
-        print("🛑 Shutting down...", flush=True)
+        logger.info("🛑 Shutting down...")
         if bot_process:
             bot_process.terminate()
         gunicorn_process.terminate()
         sys.exit(0)
     except Exception as e:
-        print(f"❌ Failed to start Gunicorn: {e}", flush=True)
+        logger.error(f"❌ Failed to start Gunicorn: {e}")
         import traceback
+
         traceback.print_exc()
         if bot_process:
             bot_process.terminate()

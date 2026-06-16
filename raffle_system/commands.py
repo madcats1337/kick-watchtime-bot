@@ -10,6 +10,8 @@ import discord
 from discord.ext import commands
 from sqlalchemy import text
 
+from utils.log_context import set_server
+
 from .draw import RaffleDraw
 from .reward_settings import get_ticket_reward_settings
 from .shuffle_tracker import ShuffleWagerTracker
@@ -27,6 +29,12 @@ class RaffleCommands(commands.Cog):
         self.ticket_manager = TicketManager(engine)  # Default manager (backward compat)
         self.raffle_draw = RaffleDraw(engine)  # Default draw (backward compat)
         self.shuffle_tracker = ShuffleWagerTracker(engine)  # Default tracker (backward compat)
+
+    async def cog_before_invoke(self, ctx):
+        """Tag logging for this cog's commands with the guild (belt-and-suspenders;
+        the bot's global before_invoke also does this). Runs in the command's Task."""
+        if ctx.guild:
+            set_server(ctx.guild.id, ctx.guild.name)
 
     def _get_guild_managers(self, ctx):
         """Get guild-specific managers for multiserver support"""

@@ -235,7 +235,7 @@ if __name__ == "__main__":
     data = {"username": "john"}
     is_valid, missing = validate_required_fields(data, ["username", "email", "password"])
     if not is_valid:
-        print(f"Missing: {missing}")
+        logger.info(f"Missing: {missing}")
 
     # Example 3: Safe conversions
     user_id = safe_int(request.args.get("id"), default=0)

@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 from discord.ext import tasks
 from sqlalchemy import text
 
+from utils.log_context import set_server
+
 from .database import create_new_period, get_current_period
 from .draw import RaffleDraw
 from .reward_settings import get_ticket_reward_settings
@@ -409,6 +411,9 @@ async def setup_raffle_scheduler(bot, engine, auto_draw=False, announcement_chan
     @tasks.loop(minutes=1)  # Check every minute
     async def check_raffle_period():
         """Check every minute for: winner drawing (10 min before end) and period transitions"""
+        # Tag this scheduler tick's logging with the server (runs in its own Task).
+        _guild = bot.get_guild(int(discord_server_id)) if discord_server_id else None
+        set_server(discord_server_id, _guild.name if _guild else None)
         try:
             now = datetime.now()
 

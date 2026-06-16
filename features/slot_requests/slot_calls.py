@@ -300,10 +300,12 @@ class SlotCallTracker:
                     if enabled and was_disabled:
                         result = conn.execute(
                             text("DELETE FROM slot_requests WHERE discord_server_id = :server_id"),
-                            {"server_id": self.server_id}
+                            {"server_id": self.server_id},
                         )
                         deleted_count = result.rowcount
-                        logger.info(f"Cleared {deleted_count} old slot requests for server {self.server_id} (slot requests re-enabled)")
+                        logger.info(
+                            f"Cleared {deleted_count} old slot requests for server {self.server_id} (slot requests re-enabled)"
+                        )
 
                 logger.info(f"Persisted slot call state to database")
             except Exception as e:
@@ -419,7 +421,7 @@ class SlotCallTracker:
                         )
                         if self.kick_send_callback:
                             try:
-                                print(f"[SLOT TRACKER DEBUG] discord_server_id = {self.discord_server_id}")
+                                logger.info(f"[SLOT TRACKER DEBUG] discord_server_id = {self.discord_server_id}")
                                 await self.kick_send_callback(
                                     f"@{kick_username} You have reached the maximum of {self.max_requests_per_user} slot request(s). "
                                     f"Please wait for the current hunt to complete.",
