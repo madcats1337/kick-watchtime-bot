@@ -18,7 +18,10 @@ ADD CONSTRAINT IF NOT EXISTS). Must run AFTER migrate_add_platform_to_wager_tabl
 rows already carry a platform and the new constraints cannot conflict on apply.
 """
 
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 # (constraint_name, table, definition) — the rescoped constraints to ensure exist.
 _NEW_CONSTRAINTS = [
@@ -45,7 +48,7 @@ def migrate_platform_scope_raffle_constraints(engine):
         raw_conn = engine.raw_connection()
         cursor = raw_conn.cursor()
 
-        print("🔄 Platform-scoping raffle linking/wager UNIQUE constraints...")
+        logger.debug("🔄 Platform-scoping raffle linking/wager UNIQUE constraints...")
 
         # 1. Add the new platform-scoped constraints first (guarded — no
         #    ADD CONSTRAINT IF NOT EXISTS in Postgres). The new constraints are
@@ -54,24 +57,24 @@ def migrate_platform_scope_raffle_constraints(engine):
         for conname, table, definition in _NEW_CONSTRAINTS:
             cursor.execute("SELECT 1 FROM pg_constraint WHERE conname = %s", (conname,))
             if cursor.fetchone():
-                print(f"   ✓ {conname} already exists")
+                logger.debug(f"   ✓ {conname} already exists")
                 continue
-            print(f"   Adding {conname} on {table}: {definition}")
+            logger.info(f"   Adding {conname} on {table}: {definition}")
             cursor.execute(f"ALTER TABLE {table} ADD CONSTRAINT {conname} {definition}")
 
         # 2. Drop the old non-platform-scoped constraints (safe + idempotent).
         for table, conname in _OLD_CONSTRAINTS:
             cursor.execute(f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {conname}")
-            print(f"   Dropped (if existed): {conname}")
+            logger.debug(f"   Dropped (if existed): {conname}")
 
         raw_conn.commit()
         cursor.close()
         raw_conn.close()
 
-        print("✅ Raffle constraints are platform-scoped")
+        logger.debug("✅ Raffle constraints are platform-scoped")
 
     except Exception as e:
-        print(f"❌ Migration failed (platform_scope_raffle_constraints): {e}")
+        logger.error(f"❌ Migration failed (platform_scope_raffle_constraints): {e}")
         raise
 
 

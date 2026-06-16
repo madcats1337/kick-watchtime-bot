@@ -212,7 +212,7 @@ def setup_raffle_database(engine):
         bool: True if successful, False otherwise
     """
     try:
-        logger.info("Setting up raffle system database schema...")
+        logger.debug("Setting up raffle system database schema...")
 
         with engine.begin() as conn:
             # Split SQL into individual statements and execute one by one
@@ -561,7 +561,7 @@ def migrate_one_active_period_per_server(engine):
             """
                 )
             )
-        logger.info("✓ Ensured unique index uq_one_active_period_per_server (one active period per server)")
+        logger.debug("✓ Ensured unique index uq_one_active_period_per_server (one active period per server)")
         return True
 
     except Exception as e:
@@ -596,7 +596,7 @@ def migrate_add_created_at_to_shuffle_wagers(engine):
             )
 
             if result.fetchone():
-                logger.info("✓ Column 'created_at' already exists in raffle_shuffle_wagers")
+                logger.debug("✓ Column 'created_at' already exists in raffle_shuffle_wagers")
                 return True
 
             # Add the column
@@ -673,7 +673,7 @@ def migrate_add_platform_to_wager_tables(engine):
 
                 logger.info("✅ Added 'platform' column to raffle_shuffle_wagers table")
             else:
-                logger.info("✓ Column 'platform' already exists in raffle_shuffle_wagers")
+                logger.debug("✓ Column 'platform' already exists in raffle_shuffle_wagers")
 
             # Add platform column to raffle_shuffle_links if it doesn't exist
             result2 = conn.execute(
@@ -711,7 +711,7 @@ def migrate_add_platform_to_wager_tables(engine):
 
                 logger.info("✅ Added 'platform' column to raffle_shuffle_links table")
             else:
-                logger.info("✓ Column 'platform' already exists in raffle_shuffle_links")
+                logger.debug("✓ Column 'platform' already exists in raffle_shuffle_links")
 
             return True
 
@@ -745,7 +745,7 @@ def migrate_make_shuffle_links_kick_name_nullable(engine):
                 conn.execute(text("ALTER TABLE raffle_shuffle_links ALTER COLUMN kick_name DROP NOT NULL"))
                 logger.info("✅ Dropped NOT NULL on raffle_shuffle_links.kick_name")
             else:
-                logger.info("✓ raffle_shuffle_links.kick_name already nullable")
+                logger.debug("✓ raffle_shuffle_links.kick_name already nullable")
 
         return True
 
@@ -765,7 +765,7 @@ def migrate_add_panel_type_to_link_panels(engine):
             conn.execute(
                 text("ALTER TABLE link_panels ADD COLUMN IF NOT EXISTS panel_type text NOT NULL DEFAULT 'kick_link'")
             )
-            logger.info("✓ Ensured link_panels.panel_type column exists")
+            logger.debug("✓ Ensured link_panels.panel_type column exists")
 
         return True
 

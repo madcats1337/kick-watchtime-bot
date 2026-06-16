@@ -281,8 +281,12 @@ if __name__ == "__main__":
                 "2",
                 "--timeout",
                 "120",
-                "--access-logfile",
-                "-",
+                # Config re-asserts our single root logging handler per worker so
+                # app logs aren't emitted twice (raw + formatted).
+                "--config",
+                "config/oauth_gunicorn_config.py",
+                # No --access-logfile: per-request access logs are noise; the config
+                # also sets gunicorn's own loglevel to warning.
                 "--error-logfile",
                 "-",
                 "core.oauth_server:app",

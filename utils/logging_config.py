@@ -140,21 +140,39 @@ def setup_logging(app_name="app", log_level=None, log_file=None, source_tag=""):
     # Prevent propagation to root logger (this named logger has its own handlers)
     logger.propagate = False
 
-    # Install a handler on the ROOT logger too, so module loggers created with
-    # logging.getLogger(__name__) (which propagate to root and otherwise fall to
-    # Python's lastResort handler) also get the server-context prefix. Guarded so
-    # repeated setup_logging() calls don't stack duplicate handlers.
+    # Install our single handler on the ROOT logger, so module loggers created with
+    # logging.getLogger(__name__) (which propagate to root) also get the
+    # server-context prefix.
+    #
+    # CRITICAL: clear ALL existing root handlers before adding ours. Gunicorn and
+    # logging.basicConfig() install their own root handler with the default
+    # "LEVEL:name:message" format; if we merely ADD ours, every propagated record
+    # prints TWICE — once raw via their handler, once formatted via ours (exactly the
+    # duplicate "INFO:core.oauth_server:" + "[BOT] ..." seen in production). We always
+    # reconcile so that root ends up with EXACTLY our one handler, self-healing if a
+    # library (e.g. gunicorn) added one after a previous setup_logging() call.
     root = logging.getLogger()
-    if not getattr(root, _ROOT_HANDLER_INSTALLED, False):
-        root.setLevel(numeric_level)
-        root_handler = logging.StreamHandler(sys.stdout)
-        root_handler.setLevel(numeric_level)
-        root_handler.setFormatter(simple_formatter)
-        root_handler.addFilter(context_filter)
-        root.addHandler(root_handler)
-        setattr(root, _ROOT_HANDLER_INSTALLED, True)
+    install_root_handler(root, numeric_level, simple_formatter, context_filter)
 
     return logger
+
+
+def install_root_handler(root, numeric_level, formatter, context_filter):
+    """Make root's handlers exactly one: ours. Idempotent and self-healing."""
+    ours = getattr(root, "_server_ctx_handler_obj", None)
+    # If root already has exactly our handler and nothing else, nothing to do.
+    if ours is not None and root.handlers == [ours]:
+        return
+    for h in root.handlers[:]:
+        root.removeHandler(h)
+    root.setLevel(numeric_level)
+    root_handler = logging.StreamHandler(sys.stdout)
+    root_handler.setLevel(numeric_level)
+    root_handler.setFormatter(formatter)
+    root_handler.addFilter(context_filter)
+    root.addHandler(root_handler)
+    root._server_ctx_handler_obj = root_handler
+    setattr(root, _ROOT_HANDLER_INSTALLED, True)
 
 
 def get_logger(name):

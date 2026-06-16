@@ -3,6 +3,10 @@ Migration: Add provably fair columns to raffle_draws table
 Adds: server_seed, client_seed, nonce, proof_hash
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 import os
 
 import psycopg2
@@ -15,7 +19,7 @@ def migrate_add_provably_fair_to_draws(engine):
         raw_conn = engine.raw_connection()
         cursor = raw_conn.cursor()
 
-        print("🔄 Checking raffle_draws table for provably fair columns...")
+        logger.debug("🔄 Checking raffle_draws table for provably fair columns...")
 
         # Check if columns already exist
         cursor.execute(
@@ -39,24 +43,24 @@ def migrate_add_provably_fair_to_draws(engine):
             columns_to_add.append(("proof_hash", "TEXT"))
 
         if not columns_to_add:
-            print("✅ All provably fair columns already exist")
+            logger.debug("✅ All provably fair columns already exist")
             cursor.close()
             raw_conn.close()
             return
 
         # Add missing columns
         for column_name, column_type in columns_to_add:
-            print(f"   Adding column: {column_name} {column_type}")
+            logger.info(f"   Adding column: {column_name} {column_type}")
             cursor.execute(f"ALTER TABLE raffle_draws ADD COLUMN IF NOT EXISTS {column_name} {column_type}")
 
         raw_conn.commit()
         cursor.close()
         raw_conn.close()
 
-        print(f"✅ Added {len(columns_to_add)} provably fair column(s) to raffle_draws table")
+        logger.info(f"✅ Added {len(columns_to_add)} provably fair column(s) to raffle_draws table")
 
     except Exception as e:
-        print(f"❌ Migration failed: {e}")
+        logger.error(f"❌ Migration failed: {e}")
         raise
 
 

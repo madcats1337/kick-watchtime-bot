@@ -1840,7 +1840,7 @@ def get_guild_settings(guild_id: int) -> BotSettingsManager:
     # Get or create guild-specific settings
     if guild_id not in guild_settings_managers:
         guild_settings_managers[guild_id] = BotSettingsManager(engine, guild_id=guild_id)
-        logger.info(f"✅ Loaded settings for guild {guild_id}")
+        logger.debug(f"✅ Loaded settings for guild {guild_id}")
 
     return guild_settings_managers[guild_id]
 
@@ -7169,14 +7169,14 @@ async def on_ready():
 
             # Initialize per-guild trackers and managers (without adding cogs yet)
             for guild in bot.guilds:
-                logger.info(f"[Init] Loading settings for guild {guild.name} ({guild.id})...")
+                logger.debug(f"[Init] Loading settings for guild {guild.name} ({guild.id})...")
                 guild_settings = get_guild_settings(guild.id)
 
                 # Debug: Print loaded settings
-                logger.info(f"[Init] Guild {guild.name} loaded {len(guild_settings._cache)} settings:")
-                logger.info(f"  - kick_channel: '{guild_settings.kick_channel}'")
-                logger.info(f"  - slot_calls_channel_id: {guild_settings.slot_calls_channel_id}")
-                logger.info(f"  - raffle_announcement_channel_id: {guild_settings.raffle_announcement_channel_id}")
+                logger.debug(f"[Init] Guild {guild.name} loaded {len(guild_settings._cache)} settings:")
+                logger.debug(f"  - kick_channel: '{guild_settings.kick_channel}'")
+                logger.debug(f"  - slot_calls_channel_id: {guild_settings.slot_calls_channel_id}")
+                logger.debug(f"  - raffle_announcement_channel_id: {guild_settings.raffle_announcement_channel_id}")
 
                 # Ensure this guild has an active raffle period.
                 # IMPORTANT: only create a period when the lookup SUCCEEDS and

@@ -13,6 +13,10 @@ Adds to raffle_draws:
                                   self-contained for verifiers)
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 import os
 
 
@@ -22,7 +26,7 @@ def migrate_add_commit_reveal_to_periods(engine):
         raw_conn = engine.raw_connection()
         cursor = raw_conn.cursor()
 
-        print("🔄 Checking commit-reveal columns (raffle_periods / raffle_draws)...")
+        logger.debug("🔄 Checking commit-reveal columns (raffle_periods / raffle_draws)...")
 
         # --- raffle_periods: server_seed + server_seed_commitment ---
         cursor.execute(
@@ -42,7 +46,7 @@ def migrate_add_commit_reveal_to_periods(engine):
             period_to_add.append("server_seed_commitment")
 
         for column_name in period_to_add:
-            print(f"   Adding raffle_periods.{column_name} TEXT")
+            logger.info(f"   Adding raffle_periods.{column_name} TEXT")
             cursor.execute(f"ALTER TABLE raffle_periods ADD COLUMN IF NOT EXISTS {column_name} TEXT")
 
         # --- raffle_draws: server_seed_commitment ---
@@ -57,11 +61,11 @@ def migrate_add_commit_reveal_to_periods(engine):
         draw_has_commitment = cursor.fetchone() is not None
 
         if not draw_has_commitment:
-            print("   Adding raffle_draws.server_seed_commitment TEXT")
+            logger.info("   Adding raffle_draws.server_seed_commitment TEXT")
             cursor.execute("ALTER TABLE raffle_draws ADD COLUMN IF NOT EXISTS server_seed_commitment TEXT")
 
         if not period_to_add and draw_has_commitment:
-            print("✅ Commit-reveal columns already exist")
+            logger.debug("✅ Commit-reveal columns already exist")
             cursor.close()
             raw_conn.close()
             return
@@ -70,10 +74,10 @@ def migrate_add_commit_reveal_to_periods(engine):
         cursor.close()
         raw_conn.close()
 
-        print("✅ Added commit-reveal column(s)")
+        logger.info("✅ Added commit-reveal column(s)")
 
     except Exception as e:
-        print(f"❌ Migration failed: {e}")
+        logger.error(f"❌ Migration failed: {e}")
         raise
 
 
