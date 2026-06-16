@@ -422,6 +422,7 @@ class KickWebSocketManager:
 
     async def _maintain_connection(self, guild_id: int, guild_name: str, api, kick_username: str):
         """Maintain websocket connection and process message queue"""
+        set_server(guild_id, guild_name)  # tag this per-guild task's logging
         try:
             logger.info(f"[{guild_name}] 🔌 Starting message sender task in background...")
 
@@ -615,6 +616,7 @@ class KickWebSocketManager:
 
     async def _message_sender(self, guild_id: int, guild_name: str, api):
         """Process message queue and send via kickpython (multiserver support)"""
+        set_server(guild_id, guild_name)  # tag this per-guild task's logging
         logger.info(f"[{guild_name}] 📨 Message sender task started!")
 
         try:
@@ -887,6 +889,9 @@ class KickWebSocketManager:
 
     async def _handle_incoming_message(self, guild_id: int, guild_name: str, msg: dict):
         """Handle inbound chat messages from kickpython websocket."""
+        # Tag every chat message's logging with the server. This callback may run in
+        # a different asyncio Task than the connection loop, so set context here too.
+        set_server(guild_id, guild_name)
         try:
             username = msg.get("sender_username") or msg.get("username") or "unknown"
             content = msg.get("content") or ""
@@ -1923,6 +1928,9 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
     guild = bot.get_guild(guild_id)
     guild_name = guild.name if guild else str(guild_id)
 
+    # Tag all logging from this per-guild task with the server (own asyncio Task).
+    set_server(guild_id, guild.name if guild else None)
+
     # Get chatroom_id from database or fetch it
     chatroom_id = None
     try:
@@ -2583,6 +2591,10 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
     # Get guild name for logging
     guild = bot.get_guild(guild_id)
     guild_name = guild.name if guild else str(guild_id)
+
+    # Tag ALL logging from this long-running per-guild task with the server. This task
+    # runs in its own asyncio Task (created at startup), so the context is scoped to it.
+    set_server(guild_id, guild.name if guild else None)
 
     # Initialize per-guild tracking dictionaries if they don't exist
     if guild_id not in active_viewers_by_guild:
@@ -3784,6 +3796,7 @@ async def update_roles_task():
     try:
         # Multiserver: Update roles for all guilds
         for guild in bot.guilds:
+            set_server(guild.id, guild.name)  # tag this guild's iteration logging
             try:
                 # Validate bot permissions
                 if not guild.me.guild_permissions.manage_roles:
@@ -3898,6 +3911,9 @@ async def check_oauth_notifications_task():
             ).fetchall()
 
             for notification_id, discord_id, kick_username, channel_id, message_id, guild_id in notifications:
+                # Tag this notification's logging with its server.
+                _g = bot.get_guild(int(guild_id)) if guild_id else None
+                set_server(guild_id, _g.name if _g else None)
                 try:
                     # Check if this is a failed attempt (kick_username starts with "FAILED:")
                     is_failed = kick_username.startswith("FAILED:")
