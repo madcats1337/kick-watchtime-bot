@@ -117,7 +117,7 @@ class RedisSubscriber:
                 )
                 self.pubsub = self.client.pubsub()
                 self.enabled = True
-                logger.info("✅ Redis subscriber initialized")
+                logger.debug("✅ Redis subscriber initialized")
             except Exception as e:
                 logger.warning(f"⚠️  Redis unavailable: {e}")
                 self.enabled = False

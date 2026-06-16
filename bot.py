@@ -154,7 +154,7 @@ if REDIS_URL:
             socket_timeout=5,
         )
         redis_client.ping()
-        logger.info("✅ Redis client connected for event publishing")
+        logger.debug("✅ Redis client connected for event publishing")
     except Exception as e:
         logger.warning(f"⚠️  Redis unavailable: {e}")
         redis_client = None
@@ -184,9 +184,9 @@ if not DATABASE_URL:
 # Convert postgres:// to postgresql:// for SQLAlchemy compatibility (Heroku uses postgres://)
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-    logger.info("📊 Converted database URL to use postgresql:// scheme")
+    logger.debug("📊 Converted database URL to use postgresql:// scheme")
 
-logger.info(f"📊 Using database: {DATABASE_URL.split('@')[1] if '@' in DATABASE_URL else 'SQLite (local)'}")
+logger.debug(f"📊 Using database: {DATABASE_URL.split('@')[1] if '@' in DATABASE_URL else 'SQLite (local)'}")
 
 WATCH_INTERVAL_SECONDS = int(os.getenv("WATCH_INTERVAL_SECONDS", "60"))
 ROLE_UPDATE_INTERVAL_SECONDS = int(os.getenv("ROLE_UPDATE_INTERVAL_SECONDS", "600"))
@@ -220,7 +220,7 @@ if not OAUTH_SECRET_KEY:
     logger.warning("⚠️  Please set FLASK_SECRET_KEY in Railway environment variables.")
     logger.info("=" * 80)
 else:
-    logger.info(f"[Bot] FLASK_SECRET_KEY configured: YES")
+    logger.debug(f"[Bot] FLASK_SECRET_KEY configured: YES")
 
 
 # -------------------------
@@ -422,7 +422,7 @@ class KickWebSocketManager:
         """Maintain websocket connection and process message queue"""
         set_server(guild_id, guild_name)  # tag this per-guild task's logging
         try:
-            logger.info(f"🔌 Starting message sender task in background...")
+            logger.debug(f"🔌 Starting message sender task in background...")
 
             # Start the message sender as a separate task
             sender_task = asyncio.create_task(self._message_sender(guild_id, guild_name, api))
@@ -438,7 +438,7 @@ class KickWebSocketManager:
             while True:
                 try:
                     # Now connect to chatroom (this will block until disconnected)
-                    logger.info(f"🔌 Connecting to websocket...")
+                    logger.debug(f"🔌 Connecting to websocket...")
                     await api.connect_to_chatroom(kick_username)
 
                     # Save chatroom_id to database after successful connection
@@ -1811,7 +1811,7 @@ except Exception as e:
 # MULTISERVER: Initialize settings manager without guild-specific configuration
 # Guild settings are loaded dynamically via get_guild_settings(guild_id)
 bot_settings = BotSettingsManager(engine)
-logger.info("✅ Multiserver bot initialized")
+logger.debug("✅ Multiserver bot initialized")
 logger.debug("   Each Discord server configures via Dashboard → Profile Settings")
 
 # Dictionary to store per-guild settings managers
@@ -3667,7 +3667,7 @@ async def update_watchtime_task():
                 guild_last_activity = last_chat_activity_by_guild.get(server_id)
                 if guild_last_activity is None:
                     if watchtime_debug_enabled:
-                        logger.info(f"[Security] No chat activity detected yet - skipping")
+                        logger.debug(f"[Security] No chat activity detected yet - skipping")
                     continue
 
                 # Check 1: Recent chat activity (within last 10 minutes)
