@@ -115,6 +115,38 @@ async def verify_and_grant(interaction: discord.Interaction, engine, settings_ge
         )
         return
 
+    # Gate mode: if a required role is configured, ONLY members who already have
+    # that role may verify, and NO role is granted on success (the gate replaces
+    # the grant). If blank, fall through to the normal grant flow below.
+    required_role_id = settings.get("howl_required_role_id") if settings else None
+    gate_mode = bool(required_role_id and str(required_role_id).strip())
+    if gate_mode:
+        if not guild or guild_id is None:
+            await interaction.response.send_message("❌ Howl verification must be used in a server.", ephemeral=True)
+            return
+        try:
+            required_role = guild.get_role(int(required_role_id))
+        except (ValueError, TypeError):
+            logger.error(f"Invalid howl_required_role_id {required_role_id!r} for guild {guild_id}")
+            await interaction.response.send_message(
+                "❌ Howl verification is misconfigured for this server. Please contact an admin.",
+                ephemeral=True,
+            )
+            return
+        if not required_role:
+            logger.warning(f"Howl required role {required_role_id} not found in guild {guild.name}")
+            await interaction.response.send_message(
+                "❌ Howl verification is misconfigured for this server. Please contact an admin.",
+                ephemeral=True,
+            )
+            return
+        member = guild.get_member(discord_id)
+        if not member or required_role not in member.roles:
+            await interaction.response.send_message(
+                f"❌ You need the **{required_role.name}** role to verify.", ephemeral=True
+            )
+            return
+
     # Defer: the affiliate fetch can take a few seconds
     await interaction.response.defer(ephemeral=True, thinking=True)
 
@@ -180,8 +212,11 @@ async def verify_and_grant(interaction: discord.Interaction, engine, settings_ge
         await interaction.followup.send("❌ Failed to save your verification. Please try again.", ephemeral=True)
         return
 
-    # 4c. Grant the configured howl verified role
-    role_note = await _grant_role(interaction, engine, guild, discord_id, guild_id, matched_username)
+    # 4c. Grant the configured howl verified role — UNLESS we're in gate mode,
+    # where the required role is the access control and no role is granted.
+    role_note = ""
+    if not gate_mode:
+        role_note = await _grant_role(interaction, engine, guild, discord_id, guild_id, matched_username)
 
     await interaction.followup.send(
         f"🎉 Verified! Your Howl account **{matched_username}** is now linked.{role_note}",
