@@ -10,6 +10,10 @@ import sys
 import threading
 import time
 
+# Configure logging early so this launcher's own logs are formatted/visible.
+from utils.logging_config import setup_logging
+
+setup_logging("kick_start", log_level=os.getenv("LOG_LEVEL", "INFO"), source_tag="BOT")
 logger = logging.getLogger(__name__)
 
 

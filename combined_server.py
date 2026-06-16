@@ -10,6 +10,11 @@ import sys
 import threading
 import time
 
+# Configure logging early so this supervisor's own logs are formatted/visible
+# (it's a separate process from the bot.py and gunicorn subprocesses it launches).
+from utils.logging_config import setup_logging
+
+setup_logging("kick_combined", log_level=os.getenv("LOG_LEVEL", "INFO"), source_tag="BOT")
 logger = logging.getLogger(__name__)
 
 

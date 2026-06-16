@@ -22,23 +22,20 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text  # type: ignore
 
-from core.kick_api import USER_AGENTS, KickAPI, check_stream_live, fetch_chatroom_id  # Consolidated Kick API module
-from redis_subscriber import start_redis_subscriber
-
-# Clip service moved to Dashboard - bot now calls Dashboard API
-
+# Centralized logging FIRST: installs the root handler + per-server context filter so
+# every log line (and converted print) is tagged "[BOT] [<server name>]". Must run
+# before the core/redis_subscriber imports below, which can log at import time.
+from utils.log_context import server_context, set_server  # noqa: E402
+from utils.logging_config import setup_logging  # noqa: E402
 
 # Disable Discord.py's default logging to reduce log spam
 logging.getLogger("discord").setLevel(logging.ERROR)
 logging.getLogger("discord.http").setLevel(logging.ERROR)
 logging.getLogger("discord.gateway").setLevel(logging.ERROR)
 
-# Centralized logging: installs the root handler + per-server context filter so
-# every log line (and converted print) is tagged "[BOT] [<server name>]".
-from utils.log_context import server_context, set_server  # noqa: E402
-from utils.logging_config import setup_logging  # noqa: E402
-
 setup_logging("kick_bot", log_level=os.getenv("LOG_LEVEL", "INFO"), source_tag="BOT")
+
+from core.kick_api import USER_AGENTS, KickAPI, check_stream_live, fetch_chatroom_id  # Consolidated Kick API module
 
 # Custom commands import
 from features.custom_commands import CustomCommandsManager
@@ -85,9 +82,12 @@ from raffle_system.migrations.platform_scope_raffle_constraints import migrate_p
 from raffle_system.scheduler import setup_raffle_scheduler
 from raffle_system.shuffle_tracker import setup_shuffle_tracker
 from raffle_system.watchtime_converter import setup_watchtime_converter
+from redis_subscriber import start_redis_subscriber
 
 # Bot settings manager - loads settings from database with env var fallbacks
 from utils.bot_settings import BotSettingsManager
+
+# Clip service moved to Dashboard - bot now calls Dashboard API
 
 logger = logging.getLogger(__name__)
 

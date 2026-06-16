@@ -22,6 +22,12 @@ from authlib.integrations.requests_client import OAuth2Session
 from flask import Flask, jsonify, redirect, render_template_string, request
 from sqlalchemy import create_engine, text
 
+# Configure logging early. This module is the gunicorn entrypoint (core.oauth_server:app)
+# in combined_server.py, a separate process from bot.py, so it must install the root
+# handler + server-context filter itself or its logs fall to the default lastResort format.
+from utils.logging_config import setup_logging  # noqa: E402
+
+setup_logging("kick_oauth", log_level=os.getenv("LOG_LEVEL", "INFO"), source_tag="BOT")
 logger = logging.getLogger(__name__)
 
 # Import webhook handlers
