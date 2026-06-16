@@ -363,7 +363,7 @@ async def setup_watchtime_converter(bot, engine, server_id=None):
     async def before_convert_watchtime():
         """Wait for bot to be ready before starting the task"""
         await bot.wait_until_ready()
-        logger.info("✅ Watchtime converter task started (runs every 10 minutes)")
+        logger.debug("✅ Watchtime converter task started (runs every 10 minutes)")
 
     # Start the task
     convert_watchtime_task.start()

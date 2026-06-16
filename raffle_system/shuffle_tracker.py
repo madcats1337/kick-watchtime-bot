@@ -750,7 +750,7 @@ async def setup_shuffle_tracker(bot, engine, server_id=None, bot_settings=None):
     async def before_shuffle_task():
         """Wait for bot to be ready before starting the task"""
         await bot.wait_until_ready()
-        logger.info("[Shuffle Tracker] ✅ Started (runs every 15 minutes)")
+        logger.debug("[Shuffle Tracker] ✅ Started (runs every 15 minutes)")
 
     # Start the task
     update_shuffle_task.start()

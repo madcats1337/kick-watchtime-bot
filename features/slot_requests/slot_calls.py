@@ -102,7 +102,7 @@ class SlotCallTracker:
                 """
                     )
                 )
-            logger.info("Slot call tables initialized")
+            logger.debug("Slot call tables initialized")
         except Exception as e:
             logger.error(f"Failed to initialize slot call tables: {e}")
 
@@ -125,7 +125,7 @@ class SlotCallTracker:
 
                 if result:
                     enabled = result[0].lower() == "true"
-                    logger.info(f"Loaded slot call state from database: {'enabled' if enabled else 'disabled'}")
+                    logger.debug(f"Loaded slot call state from database: {'enabled' if enabled else 'disabled'}")
                     return enabled
                 else:
                     # First time - set default to enabled

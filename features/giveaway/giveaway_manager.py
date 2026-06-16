@@ -365,6 +365,6 @@ async def setup_giveaway_managers(bot, engine):
         manager = GiveawayManager(engine, guild_id=guild.id)
         await manager.load_active_giveaway()
         managers[guild.id] = manager
-        logger.info(f"Set up giveaway manager for guild {guild.id}")
+        logger.debug(f"Set up giveaway manager for guild {guild.id}")
 
     return managers

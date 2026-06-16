@@ -45,7 +45,7 @@ class GuessTheBalanceManager:
     def __init__(self, engine: Engine, server_id: int):
         self.engine = engine
         self.server_id = server_id
-        logger.info("GuessTheBalanceManager initialized")
+        logger.debug("GuessTheBalanceManager initialized")
 
     def get_active_session(self) -> Optional[Dict]:
         """Get the currently active (open) session if one exists"""
@@ -208,16 +208,21 @@ class GuessTheBalanceManager:
                 try:
                     rc = _get_guess_redis()
                     if rc:
-                        rc.publish("gtb:guess:events", json.dumps({
-                            "action": "new_guess",
-                            "data": {
-                                "session_id": session_id,
-                                "kick_username": kick_username,
-                                "guess_amount": float(guess_amount),
-                                "discord_server_id": self.server_id,
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
-                            }
-                        }))
+                        rc.publish(
+                            "gtb:guess:events",
+                            json.dumps(
+                                {
+                                    "action": "new_guess",
+                                    "data": {
+                                        "session_id": session_id,
+                                        "kick_username": kick_username,
+                                        "guess_amount": float(guess_amount),
+                                        "discord_server_id": self.server_id,
+                                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                                    },
+                                }
+                            ),
+                        )
                 except Exception as pub_err:
                     logger.debug(f"Failed to publish GTB guess event: {pub_err}")
 

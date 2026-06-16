@@ -1425,7 +1425,7 @@ class RedisSubscriber:
             guild_name = guild.name if guild else str(guild_id)
 
             if action == "giveaway_started":
-                logger.info(f"[{guild_name}] ▶️  Starting giveaway {giveaway_id} for guild {guild_id}")
+                logger.info(f"▶️  Starting giveaway {giveaway_id} for guild {guild_id}")
 
                 # Reload active giveaway from database
                 await giveaway_manager.load_active_giveaway()
@@ -1472,7 +1472,7 @@ class RedisSubscriber:
                                     )
 
                                 await channel.send(embed=embed)
-                                logger.info(f"[{guild_name}] ✅ Announced giveaway start in Discord")
+                                logger.info(f"✅ Announced giveaway start in Discord")
 
                     # Announce in Kick chat
                     if self.send_message_callback:
@@ -1483,16 +1483,16 @@ class RedisSubscriber:
                             message = f"🎁 GIVEAWAY STARTED: {giveaway_title} | Be active in chat to enter!"
 
                         await self.announce_in_chat(message, guild_id=guild_id)
-                        logger.info(f"[{guild_name}] ✅ Announced giveaway start in Kick chat")
+                        logger.info(f"✅ Announced giveaway start in Kick chat")
 
-                    logger.info(f"[{guild_name}] ✅ Giveaway {giveaway_id} started: {giveaway_title}")
+                    logger.info(f"✅ Giveaway {giveaway_id} started: {giveaway_title}")
 
             elif action == "giveaway_stopped":
-                logger.info(f"[{guild_name}] ⏹️  Stopping giveaway {giveaway_id} for guild {guild_id}")
+                logger.info(f"⏹️  Stopping giveaway {giveaway_id} for guild {guild_id}")
 
                 # Clear active giveaway
                 giveaway_manager.active_giveaway = None
-                logger.info(f"[{guild_name}] ✅ Giveaway {giveaway_id} stopped")
+                logger.info(f"✅ Giveaway {giveaway_id} stopped")
 
                 # Announce in Kick chat
                 if self.send_message_callback:
@@ -1507,11 +1507,11 @@ class RedisSubscriber:
                     logger.warning("⚠️ No winner in giveaway_winner event")
                     return
 
-                logger.info(f"[{guild_name}] 🎉 Winner drawn: {winner}")
+                logger.info(f"🎉 Winner drawn: {winner}")
 
                 # If delay requested, wait 7 seconds for OBS animation to complete (6s animation + 1s buffer)
                 if delay_announcement:
-                    logger.info(f"[{guild_name}] ⏳ Waiting 7 seconds for animation to complete...")
+                    logger.info(f"⏳ Waiting 7 seconds for animation to complete...")
                     await asyncio.sleep(7)
 
                 # Announce in Discord
@@ -1529,13 +1529,13 @@ class RedisSubscriber:
                             embed.add_field(name="", value="Congratulations! 🎊", inline=False)
 
                             await channel.send(embed=embed)
-                            logger.info(f"[{guild_name}] ✅ Announced giveaway winner in Discord: {winner}")
+                            logger.info(f"✅ Announced giveaway winner in Discord: {winner}")
 
                 # Announce in Kick chat
                 if self.send_message_callback:
                     message = f"🎉 GIVEAWAY WINNER: @{winner} won {giveaway_title}! Congratulations! 🎊"
                     await self.announce_in_chat(message, guild_id=guild_id)
-                    logger.info(f"[{guild_name}] ✅ Announced giveaway winner in Kick chat: {winner}")
+                    logger.info(f"✅ Announced giveaway winner in Kick chat: {winner}")
 
                 # Clear active giveaway
                 giveaway_manager.active_giveaway = None

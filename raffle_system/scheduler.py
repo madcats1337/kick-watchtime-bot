@@ -39,7 +39,7 @@ class RaffleScheduler:
         self.discord_server_id = discord_server_id
         self.raffle_draw = RaffleDraw(engine)
 
-        logger.info(f"📅 Raffle scheduler initialized (auto_draw: {auto_draw}, server: {discord_server_id})")
+        logger.debug(f"📅 Raffle scheduler initialized (auto_draw: {auto_draw}, server: {discord_server_id})")
 
     @property
     def auto_draw(self):
@@ -468,6 +468,6 @@ async def setup_raffle_scheduler(bot, engine, auto_draw=False, announcement_chan
 
     # Start the task
     check_raffle_period.start()
-    logger.info(f"✅ [Server {discord_server_id}] Raffle scheduler task started (checks every minute)")
+    logger.debug(f"✅ [Server {discord_server_id}] Raffle scheduler task started (checks every minute)")
 
     return scheduler

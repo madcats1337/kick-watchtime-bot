@@ -326,5 +326,5 @@ def setup_gifted_sub_handler(engine, server_id=None, bot_settings=None):
         GiftedSubTracker: Initialized tracker
     """
     tracker = GiftedSubTracker(engine, server_id=server_id, bot_settings=bot_settings)
-    logger.info(f"✅ Gifted sub tracker initialized" + (f" (server {server_id})" if server_id else ""))
+    logger.debug(f"✅ Gifted sub tracker initialized" + (f" (server {server_id})" if server_id else ""))
     return tracker

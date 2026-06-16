@@ -243,7 +243,7 @@ def setup_raffle_database(engine):
                         # Log but continue (some statements might fail on re-run)
                         logger.debug(f"Statement warning: {e}")
 
-        logger.info("✅ Raffle database schema created successfully")
+        logger.debug("✅ Raffle database schema created successfully")
         return True
 
     except Exception as e:
