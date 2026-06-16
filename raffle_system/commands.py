@@ -2144,4 +2144,4 @@ Use `!rafflestats @user` to see individual stats
 async def setup(bot, engine):
     """Add raffle commands to bot"""
     await bot.add_cog(RaffleCommands(bot, engine))
-    logger.info("✅ Raffle commands loaded")
+    logger.debug("✅ Raffle commands loaded")

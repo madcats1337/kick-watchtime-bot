@@ -222,7 +222,7 @@ async def setup_link_panel_system(bot, engine, oauth_url_generator):
     for guild in bot.guilds:
         panel = LinkPanel(bot, engine, oauth_url_generator, guild_id=guild.id)
         panels[guild.id] = panel
-        logger.debug(f"✅ [Guild {guild.name}] Link panel initialized")
+        logger.debug(f"✅ Link panel initialized")
 
     # Add command only once
     @bot.command(name="createlinkpanel")

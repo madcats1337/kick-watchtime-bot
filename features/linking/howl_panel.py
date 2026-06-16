@@ -491,7 +491,7 @@ async def setup_howl_panel_system(bot, engine, settings_getter):
     for guild in bot.guilds:
         panel = HowlPanel(bot, engine, settings_getter, guild_id=guild.id)
         panels[guild.id] = panel
-        logger.debug(f"✅ [Guild {guild.name}] Howl verify panel initialized")
+        logger.debug(f"✅ Howl verify panel initialized")
 
     @bot.command(name="createhowlpanel")
     @commands.has_permissions(administrator=True)

@@ -57,6 +57,16 @@ def get_server() -> Tuple[Optional[str], Optional[str]]:
     return _current_server.get()
 
 
+def reset_server_context() -> None:
+    """Clear the active server back to "no server" (``[-]``).
+
+    Readable alias for ``clear_server()`` with no token. Call this AFTER any loop
+    over multiple guilds, and at the start of any global / non-guild section, so the
+    last iteration's server doesn't bleed into subsequent unrelated log lines.
+    """
+    clear_server()
+
+
 @contextmanager
 def server_context(server_id=None, server_name=None):
     """Scope a block to a server. Sets the context on enter and restores the prior

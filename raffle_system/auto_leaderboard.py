@@ -323,7 +323,9 @@ async def setup_auto_leaderboard(bot, engine, channel_id=None, server_id=None):
                     f"✅ [Auto-Leaderboard] Started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/60:.0f} minutes)"
                 )
             else:
-                logger.info(f"✅ [Auto-Leaderboard] Started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL} seconds)")
+                logger.debug(
+                    f"✅ [Auto-Leaderboard] Started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL} seconds)"
+                )
         else:
             logger.error("❌ [Auto-Leaderboard] Failed to initialize - task cancelled")
             update_leaderboard_task.cancel()

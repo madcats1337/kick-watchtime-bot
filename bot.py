@@ -25,7 +25,7 @@ from sqlalchemy import create_engine, text  # type: ignore
 # Centralized logging FIRST: installs the root handler + per-server context filter so
 # every log line (and converted print) is tagged "[BOT] [<server name>]". Must run
 # before the core/redis_subscriber imports below, which can log at import time.
-from utils.log_context import server_context, set_server  # noqa: E402
+from utils.log_context import clear_server, server_context, set_server  # noqa: E402
 from utils.logging_config import setup_logging  # noqa: E402
 
 # Disable Discord.py's default logging to reduce log spam
@@ -615,13 +615,13 @@ class KickWebSocketManager:
     async def _message_sender(self, guild_id: int, guild_name: str, api):
         """Process message queue and send via kickpython (multiserver support)"""
         set_server(guild_id, guild_name)  # tag this per-guild task's logging
-        logger.info(f"📨 Message sender task started!")
+        logger.debug(f"📨 Message sender task started!")
 
         try:
             # Load OAuth 2.1 token ONCE at startup for performance
             oauth_token = None
             try:
-                logger.info(f"🔍 Loading kick_oauth_token from database...")
+                logger.debug(f"🔍 Loading kick_oauth_token from database...")
                 with engine.connect() as conn:
                     result = conn.execute(
                         text(
@@ -656,9 +656,9 @@ class KickWebSocketManager:
                     if result and result[0]:
                         oauth_token = result[0]
                         api.access_token = oauth_token
-                        logger.info(f"✅ OAuth token loaded successfully")
+                        logger.debug(f"✅ OAuth token loaded successfully")
                     else:
-                        logger.info(f"⚠️ No kick_oauth_token found - messages will fail!")
+                        logger.warning(f"⚠️ No kick_oauth_token found - messages will fail!")
                         # Debug: Check what keys exist
                         all_keys = conn.execute(
                             text(
@@ -668,14 +668,14 @@ class KickWebSocketManager:
                             ),
                             {"guild_id": guild_id},
                         ).fetchall()
-                        logger.info(f"🔍 Available keys: {[row[0] for row in all_keys]}")
+                        logger.debug(f"🔍 Available keys: {[row[0] for row in all_keys]}")
             except Exception as e:
                 logger.info(f"❌ Error loading OAuth token: {e}")
                 import traceback
 
                 traceback.print_exc()
 
-            logger.info(f"🔄 Starting message processing loop...")
+            logger.debug(f"🔄 Starting message processing loop...")
 
             while True:
                 try:
@@ -3780,7 +3780,7 @@ async def update_roles_task():
             try:
                 # Validate bot permissions
                 if not guild.me.guild_permissions.manage_roles:
-                    logger.warning(f"⚠️ [Guild {guild.name}] Bot lacks manage_roles permission!")
+                    logger.warning(f"⚠️ Bot lacks manage_roles permission!")
                     continue
 
                 # Load current role configuration from database
@@ -3791,7 +3791,7 @@ async def update_roles_task():
                 for role_info in current_roles:
                     role = discord.utils.get(guild.roles, name=role_info["name"])
                     if not role:
-                        logger.warning(f"⚠️ [Guild {guild.name}] Role {role_info['name']} not found in server!")
+                        logger.warning(f"⚠️ Role {role_info['name']} not found in server!")
                         continue
                     role_cache[role_info["name"]] = role
 
@@ -3856,7 +3856,7 @@ async def update_roles_task():
                                 logger.warning(f"Error assigning role: {e}")
 
             except Exception as guild_error:
-                logger.warning(f"⚠️ [Guild {guild.name}] Role update error: {guild_error}")
+                logger.warning(f"⚠️ Role update error: {guild_error}")
 
     except Exception as e:
         logger.error(f"⚠️ Error in role update task: {e}")
@@ -4087,7 +4087,7 @@ async def proactive_token_refresh_task():
         return
 
     try:
-        logger.info("[Kick] 🔄 Checking for access tokens that need refresh...")
+        logger.debug("[Kick] 🔄 Checking for access tokens that need refresh...")
 
         with engine.connect() as conn:
             results = conn.execute(
@@ -4148,11 +4148,17 @@ async def proactive_token_refresh_task():
                 else:
                     # Plenty of time left
                     hours = minutes_until_expiry / 60
-                    logger.info(f"[Kick] ✓ {kick_username} token valid for {hours:.1f} more hours")
+                    logger.debug(f"[Kick] ✓ {kick_username} token valid for {hours:.1f} more hours")
 
-            logger.info(
-                f"[Kick] Token refresh check complete: {refreshed} refreshed, {failed} failed, {checked} checked"
-            )
+            # Only announce at INFO when work was done or there were failures.
+            if refreshed or failed:
+                logger.info(
+                    f"[Kick] Token refresh check complete: {refreshed} refreshed, {failed} failed, {checked} checked"
+                )
+            else:
+                logger.debug(
+                    f"[Kick] Token refresh check complete: {refreshed} refreshed, {failed} failed, {checked} checked"
+                )
 
     except Exception as e:
         logger.info(f"[Kick] ❌ Error in token refresh task: {e}")
@@ -4407,7 +4413,7 @@ async def clip_buffer_management_task():
                 continue
             if not dashboard_url or not bot_api_key:
                 if guild_id not in clip_buffer_active_by_guild:  # Only log once
-                    logger.info(f"[Clip Buffer][{guild_name}] ⚠️ Missing dashboard_url or bot_api_key")
+                    logger.info(f"[Clip Buffer] ⚠️ Missing dashboard_url or bot_api_key")
                 continue
 
             # Get per-guild state
@@ -4419,12 +4425,12 @@ async def clip_buffer_management_task():
                 is_live = await check_stream_live(kick_channel)
                 if last_stream_live_state != is_live:  # Only log state changes
                     logger.info(
-                        f"[Clip Buffer][{guild_name}] Stream live check for '{kick_channel}': {is_live} | Last state: {last_stream_live_state} | Buffer active: {clip_buffer_active}"
+                        f"[Clip Buffer] Stream live check for '{kick_channel}': {is_live} | Last state: {last_stream_live_state} | Buffer active: {clip_buffer_active}"
                     )
             except Exception as e:
                 # Cloudflare block or other error - skip this guild
                 if "403" not in str(e) and "Cloudflare" not in str(e):
-                    logger.info(f"[Clip Buffer][{guild_name}] ⚠️ Error checking stream status: {e}")
+                    logger.info(f"[Clip Buffer] ⚠️ Error checking stream status: {e}")
                 continue
 
             # Detect state transitions
@@ -4434,10 +4440,10 @@ async def clip_buffer_management_task():
                 last_stream_live_state_by_guild[guild_id] = is_live
                 last_stream_live_state = is_live
                 if is_live:
-                    logger.info(f"[Clip Buffer][{guild_name}] 🎬 Stream is already live on startup, starting buffer...")
+                    logger.info(f"[Clip Buffer] 🎬 Stream is already live on startup, starting buffer...")
                     should_start_buffer = True
                 else:
-                    logger.info(f"[Clip Buffer][{guild_name}] 📴 Stream is offline on startup")
+                    logger.info(f"[Clip Buffer] 📴 Stream is offline on startup")
 
             # If stream is live but buffer is not active, check if we need to start it
             if is_live and not clip_buffer_active and not should_start_buffer:
@@ -4450,22 +4456,18 @@ async def clip_buffer_management_task():
                         ) as response:
                             if response.status == 404:
                                 # No buffer exists, need to start it
-                                logger.info(
-                                    f"[Clip Buffer][{guild_name}] 🔄 Stream is live but no buffer running, starting..."
-                                )
+                                logger.info(f"[Clip Buffer] 🔄 Stream is live but no buffer running, starting...")
                                 should_start_buffer = True
                             elif response.status == 200:
                                 status = await response.json()
                                 if status.get("is_recording"):
                                     clip_buffer_active_by_guild[guild_id] = True
-                                    logger.info(f"[Clip Buffer][{guild_name}] ℹ️ Buffer already running")
+                                    logger.info(f"[Clip Buffer] ℹ️ Buffer already running")
                                 else:
-                                    logger.info(
-                                        f"[Clip Buffer][{guild_name}] ⚠️ Buffer exists but not recording, restarting..."
-                                    )
+                                    logger.info(f"[Clip Buffer] ⚠️ Buffer exists but not recording, restarting...")
                                     should_start_buffer = True
                 except Exception as e:
-                    logger.info(f"[Clip Buffer][{guild_name}] ⚠️ Error checking buffer status: {e}")
+                    logger.info(f"[Clip Buffer] ⚠️ Error checking buffer status: {e}")
 
             # Periodic verification: Even if we think buffer is active, verify with dashboard
             elif is_live and clip_buffer_active:
@@ -4477,19 +4479,17 @@ async def clip_buffer_management_task():
                         ) as response:
                             if response.status == 404:
                                 # Buffer disappeared (dashboard restarted?)
-                                logger.info(f"[Clip Buffer][{guild_name}] ⚠️ Buffer disappeared! Restarting...")
+                                logger.info(f"[Clip Buffer] ⚠️ Buffer disappeared! Restarting...")
                                 clip_buffer_active_by_guild[guild_id] = False
                                 should_start_buffer = True
                             elif response.status == 200:
                                 status = await response.json()
                                 if not status.get("is_recording"):
-                                    logger.info(
-                                        f"[Clip Buffer][{guild_name}] ⚠️ Buffer stopped recording! Restarting..."
-                                    )
+                                    logger.info(f"[Clip Buffer] ⚠️ Buffer stopped recording! Restarting...")
                                     clip_buffer_active_by_guild[guild_id] = False
                                     should_start_buffer = True
                 except Exception as e:
-                    logger.info(f"[Clip Buffer][{guild_name}] ⚠️ Error verifying buffer status: {e}")
+                    logger.info(f"[Clip Buffer] ⚠️ Error verifying buffer status: {e}")
 
             # Handle transition: OFFLINE -> LIVE (or first run while live)
             if ((is_live and not last_stream_live_state) or should_start_buffer) and not auto_start_buffer:
@@ -4498,11 +4498,11 @@ async def clip_buffer_management_task():
                 # still works.
                 if not should_start_buffer:
                     logger.info(
-                        f"[Clip Buffer][{guild_name}] ⏸️ Auto-start disabled (clips_auto_start_on_live=false) — skipping buffer start"
+                        f"[Clip Buffer] ⏸️ Auto-start disabled (clips_auto_start_on_live=false) — skipping buffer start"
                     )
             elif (is_live and not last_stream_live_state) or should_start_buffer:
                 if not should_start_buffer:
-                    logger.info(f"[Clip Buffer][{guild_name}] 🟢 Stream went LIVE! Starting clip buffer...")
+                    logger.info(f"[Clip Buffer] 🟢 Stream went LIVE! Starting clip buffer...")
 
                 # Use the robust playback URL fetcher with caching and validation
                 playback_url: Optional[str] = None
@@ -4514,11 +4514,11 @@ async def clip_buffer_management_task():
                     playback_url = await get_playback_url(kick_channel, force_refresh=force_refresh)
 
                     if playback_url:
-                        logger.info(f"[Clip Buffer][{guild_name}] 📺 Obtained playback URL: {playback_url[:80]}...")
+                        logger.info(f"[Clip Buffer] 📺 Obtained playback URL: {playback_url[:80]}...")
                     else:
-                        logger.info(f"[Clip Buffer][{guild_name}] ⚠️ No playback URL available")
+                        logger.info(f"[Clip Buffer] ⚠️ No playback URL available")
                 except Exception as e:
-                    logger.info(f"[Clip Buffer][{guild_name}] ⚠️ Error fetching playback URL: {e}")
+                    logger.info(f"[Clip Buffer] ⚠️ Error fetching playback URL: {e}")
 
                 try:
                     async with aiohttp.ClientSession() as session:
@@ -4536,20 +4536,18 @@ async def clip_buffer_management_task():
                             if response.status == 200:
                                 result = await response.json()
                                 clip_buffer_active_by_guild[guild_id] = True
-                                logger.info(
-                                    f"[Clip Buffer][{guild_name}] ✅ Buffer started: {result.get('message', 'OK')}"
-                                )
+                                logger.info(f"[Clip Buffer] ✅ Buffer started: {result.get('message', 'OK')}")
                             else:
                                 response_text = await response.text()
                                 logger.info(
-                                    f"[Clip Buffer][{guild_name}] ❌ Failed to start buffer: HTTP {response.status} - {response_text}"
+                                    f"[Clip Buffer] ❌ Failed to start buffer: HTTP {response.status} - {response_text}"
                                 )
                 except Exception as e:
-                    logger.info(f"[Clip Buffer][{guild_name}] ❌ Error starting buffer: {e}")
+                    logger.info(f"[Clip Buffer] ❌ Error starting buffer: {e}")
 
             # Handle transition: LIVE -> OFFLINE
             elif not is_live and last_stream_live_state:
-                logger.info(f"[Clip Buffer][{guild_name}] 🔴 Stream went OFFLINE! Stopping clip buffer...")
+                logger.info(f"[Clip Buffer] 🔴 Stream went OFFLINE! Stopping clip buffer...")
                 try:
                     async with aiohttp.ClientSession() as session:
                         headers = {"X-API-Key": bot_api_key, "Content-Type": "application/json"}
@@ -4562,22 +4560,18 @@ async def clip_buffer_management_task():
                             if response.status == 200:
                                 result = await response.json()
                                 clip_buffer_active_by_guild[guild_id] = False
-                                logger.info(
-                                    f"[Clip Buffer][{guild_name}] ✅ Buffer stopped: {result.get('message', 'OK')}"
-                                )
+                                logger.info(f"[Clip Buffer] ✅ Buffer stopped: {result.get('message', 'OK')}")
                             else:
                                 error = await response.text()
-                                logger.info(
-                                    f"[Clip Buffer][{guild_name}] ⚠️ Failed to stop buffer: HTTP {response.status} - {error}"
-                                )
+                                logger.info(f"[Clip Buffer] ⚠️ Failed to stop buffer: HTTP {response.status} - {error}")
                 except Exception as e:
-                    logger.info(f"[Clip Buffer][{guild_name}] ⚠️ Error stopping buffer: {e}")
+                    logger.info(f"[Clip Buffer] ⚠️ Error stopping buffer: {e}")
 
             # Update last known state
             last_stream_live_state_by_guild[guild_id] = is_live
 
         except Exception as e:
-            logger.info(f"[Clip Buffer][{guild_name}] ❌ Error in buffer management task: {e}")
+            logger.info(f"[Clip Buffer] ❌ Error in buffer management task: {e}")
 
 
 @clip_buffer_management_task.before_loop
@@ -6997,6 +6991,10 @@ async def on_ready():
             else:
                 logger.info(f"⚠️ No kick_channel configured - skipping WebSocket")
 
+    # WebSocket-start loop done — clear context so the global setup below (and any
+    # task spawned from here, e.g. the Redis subscriber) doesn't inherit the last guild.
+    clear_server()
+
     # Attach helper function to bot so other cogs can access it
     bot.get_active_chatters_count = get_active_chatters_count
 
@@ -7079,16 +7077,21 @@ async def on_ready():
     try:
         # Multiserver: Validate bot permissions for ALL guilds
         for guild in bot.guilds:
+            set_server(guild.id, guild.name)  # tag role-validation warnings with this guild
             me = guild.me
             if not me.guild_permissions.manage_roles:
-                logger.warning(f"⚠️ [Guild {guild.name}] Bot lacks manage_roles permission!")
+                logger.warning(f"⚠️ Bot lacks manage_roles permission!")
 
             # Validate roles exist
             current_roles = load_watchtime_roles()
             existing_roles = {role.name for role in guild.roles}
             for role_config in current_roles:
                 if role_config["name"] not in existing_roles:
-                    logger.warning(f"⚠️ [Guild {guild.name}] Role {role_config['name']} does not exist in the server!")
+                    logger.warning(f"⚠️ Role {role_config['name']} does not exist in the server!")
+
+        # Per-guild role-check loop done — clear so the global task-start block below
+        # isn't tagged with the last guild.
+        clear_server()
 
         # Start background tasks (guarded: tasks already check is_running())
         if not update_watchtime_task.is_running():
@@ -7169,8 +7172,7 @@ async def on_ready():
                 except Exception as e:
                     current_period = None
                     logger.warning(
-                        f"⚠️ [Guild {guild.name}] Could not check raffle period "
-                        f"(DB error: {e}); skipping period creation this startup"
+                        f"⚠️ Could not check raffle period " f"(DB error: {e}); skipping period creation this startup"
                     )
                     create_period = False
                 else:
@@ -7185,19 +7187,19 @@ async def on_ready():
                         end = start.replace(month=start.month + 1, day=1) - timedelta(seconds=1)
 
                     period_id = create_new_period(engine, start, end, discord_server_id=guild.id)
-                    logger.debug(f"✅ [Guild {guild.name}] Created initial raffle period #{period_id}")
+                    logger.debug(f"✅ Created initial raffle period #{period_id}")
                 elif current_period:
-                    logger.debug(f"✅ [Guild {guild.name}] Active raffle period found (#{current_period['id']})")
+                    logger.debug(f"✅ Active raffle period found (#{current_period['id']})")
 
                 # Setup gifted sub tracker for this guild
                 gifted_sub_trackers[guild.id] = setup_gifted_sub_handler(
                     engine, server_id=guild.id, bot_settings=guild_settings
                 )
-                logger.debug(f"✅ [Guild {guild.name}] Gifted sub tracker initialized")
+                logger.debug(f"✅ Gifted sub tracker initialized")
 
                 # Setup watchtime converter for this guild (runs every 10 minutes)
                 await setup_watchtime_converter(bot, engine, server_id=guild.id)
-                logger.debug(f"✅ [Guild {guild.name}] Watchtime converter initialized")
+                logger.debug(f"✅ Watchtime converter initialized")
 
                 # Setup wager tracker for this guild. The tracker self-selects the
                 # active platform (shuffle/howl) from wager_platform_name on every
@@ -7208,7 +7210,7 @@ async def on_ready():
                 # Expose per-guild wager trackers so the Redis settings-sync handler
                 # can call refresh_settings() for an instant platform hot-swap.
                 bot.shuffle_trackers_by_guild = shuffle_trackers
-                logger.debug(f"✅ [Guild {guild.name}] Wager tracker initialized")
+                logger.debug(f"✅ Wager tracker initialized")
 
                 # Setup auto-updating leaderboard for this guild
                 leaderboard_channel_id = guild_settings.raffle_leaderboard_channel_id
@@ -7216,9 +7218,7 @@ async def on_ready():
                 if not hasattr(bot, "auto_leaderboards"):
                     bot.auto_leaderboards = {}
                 bot.auto_leaderboards[guild.id] = auto_leaderboard
-                logger.debug(
-                    f"📊 [Guild {guild.name}] Leaderboard channel: {leaderboard_channel_id or 'Not configured'}"
-                )
+                logger.debug(f"📊 Leaderboard channel: {leaderboard_channel_id or 'Not configured'}")
 
                 # Setup raffle scheduler for this guild
                 raffle_auto_draw = guild_settings.raffle_auto_draw
@@ -7230,7 +7230,7 @@ async def on_ready():
                     announcement_channel_id=raffle_channel_id,
                     discord_server_id=guild.id,
                 )
-                logger.debug(f"✅ [Guild {guild.name}] Raffle system initialized (auto-draw: {raffle_auto_draw})")
+                logger.debug(f"✅ Raffle system initialized (auto-draw: {raffle_auto_draw})")
 
                 # Create slot call tracker for this guild (but don't register cog yet)
                 from features.slot_requests.slot_calls import SlotCallTracker
@@ -7246,16 +7246,14 @@ async def on_ready():
                 if not hasattr(bot, "slot_call_trackers_by_guild"):
                     bot.slot_call_trackers_by_guild = {}
                 bot.slot_call_trackers_by_guild[guild.id] = slot_call_trackers[guild.id]
-                logger.debug(
-                    f"✅ [Guild {guild.name}] Slot call tracker initialized (channel: {slot_calls_channel_id or 'Not configured'})"
-                )
+                logger.debug(f"✅ Slot call tracker initialized (channel: {slot_calls_channel_id or 'Not configured'})")
 
                 # Setup Guess the Balance manager for this guild
                 gtb_managers[guild.id] = GuessTheBalanceManager(engine, guild.id)
                 if not hasattr(bot, "gtb_managers_by_guild"):
                     bot.gtb_managers_by_guild = {}
                 bot.gtb_managers_by_guild[guild.id] = gtb_managers[guild.id]
-                logger.debug(f"✅ [Guild {guild.name}] GTB system initialized")
+                logger.debug(f"✅ GTB system initialized")
 
                 # Setup Custom Commands manager for this guild
                 custom_commands_manager = CustomCommandsManager(
@@ -7269,7 +7267,11 @@ async def on_ready():
                 if not hasattr(bot, "custom_commands_managers"):
                     bot.custom_commands_managers = {}
                 bot.custom_commands_managers[guild.id] = custom_commands_manager
-                logger.debug(f"✅ [Guild {guild.name}] Custom commands system initialized")
+                logger.debug(f"✅ Custom commands system initialized")
+
+            # Per-guild init loop done — clear context so the global setup below
+            # (cogs, views, summaries) isn't mis-tagged with the last guild.
+            clear_server()
 
             # Sync Shuffle code user role (run once, not per-guild)
             await sync_shuffle_role_on_startup(bot, engine)
@@ -7311,7 +7313,7 @@ async def on_ready():
                 if not hasattr(bot, "slot_panels_by_guild"):
                     bot.slot_panels_by_guild = {}
                 bot.slot_panels_by_guild[guild.id] = slot_panel
-                logger.debug(f"✅ [Guild {guild.name}] Slot request panel initialized")
+                logger.debug(f"✅ Slot request panel initialized")
 
                 # Setup GTB panel for this guild (just the instance, no commands)
                 gtb_panel = GTBPanel(
@@ -7324,7 +7326,7 @@ async def on_ready():
                 if not hasattr(bot, "gtb_panels_by_guild"):
                     bot.gtb_panels_by_guild = {}
                 bot.gtb_panels_by_guild[guild.id] = gtb_panel
-                logger.debug(f"✅ [Guild {guild.name}] GTB panel initialized")
+                logger.debug(f"✅ GTB panel initialized")
 
                 # Add cogs only once on first iteration
                 if first_guild:
@@ -7350,6 +7352,9 @@ async def on_ready():
 
                     logger.debug(f"✅ GTB panel commands registered")
                     first_guild = False
+
+            # Panel loop done — clear context; the command setups below are global.
+            clear_server()
 
             logger.debug("📝 About to setup raffle commands...")
             # Setup raffle commands (global cog)
@@ -7430,6 +7435,8 @@ async def on_ready():
             # ── Grouped startup summary ───────────────────────────────────────
             # Per-subsystem/per-guild detail above is DEBUG; emit one INFO line per
             # category so a normal boot shows ~4 lines instead of dozens.
+            # These are GLOBAL lines → clear any lingering per-guild context first.
+            clear_server()
             _gc = len(bot.guilds)
             _adraw = sum(1 for g in bot.guilds if get_guild_settings(g.id).raffle_auto_draw)
             logger.info(f"✅ Trackers ready ({_gc} guilds: gifted-sub, watchtime, wager, leaderboard)")
@@ -7473,10 +7480,11 @@ async def on_ready():
                         bot.loop.create_task(kick_chat_loop(kick_channel, guild.id))
                         logger.debug(f"✅ Pusher listener started for subscription events → {kick_channel}")
                     else:
-                        logger.warning(f"⚠️ [{guild.name}] No Kick channel configured")
+                        logger.warning(f"⚠️ No Kick channel configured")
                         logger.info(f"   Configure it in Dashboard → Profile Settings")
                 except Exception as e:
-                    logger.warning(f"⚠️ [{guild.name}] Failed to start Pusher listener: {e}")
+                    logger.warning(f"⚠️ Failed to start Pusher listener: {e}")
+            clear_server()  # per-guild loop done → global section below
     else:
         logger.info(f"✅ Using webhooks only (Pusher disabled)")
         logger.warning(f"   ⚠️ WARNING: Gifted sub raffle tracking will not work!")
@@ -7484,6 +7492,7 @@ async def on_ready():
 
     # ========== MERGED CODE FROM SECOND ON_READY ==========
     # Additional slot tracker initialization with backwards compatibility
+    clear_server()  # ensure the global "Bot ready" marker below shows [-]
     logger.debug("⚙️  Ensuring slot tracker backwards compatibility...")
     if not hasattr(bot, "slot_trackers"):
         bot.slot_trackers = {}

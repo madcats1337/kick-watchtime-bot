@@ -446,7 +446,7 @@ async def setup_shuffle_panel_system(bot, engine, settings_getter):
     for guild in bot.guilds:
         panel = ShufflePanel(bot, engine, settings_getter, guild_id=guild.id)
         panels[guild.id] = panel
-        logger.debug(f"✅ [Guild {guild.name}] Shuffle verify panel initialized")
+        logger.debug(f"✅ Shuffle verify panel initialized")
 
     @bot.command(name="createshufflepanel")
     @commands.has_permissions(administrator=True)

@@ -1945,18 +1945,21 @@ async def start_redis_subscriber(bot, send_message_callback=None):
 
     if subscriber.enabled:
         # Auto-sync point shop embeds on bot startup for all guilds
-        logger.info("🔄 Auto-syncing point shop embeds on startup...")
+        logger.debug("🔄 Auto-syncing point shop embeds on startup...")
         for guild in bot.guilds:
-            try:
-                from bot import post_point_shop_to_discord
+            # Scope each guild's sync logging to that guild; server_context auto-resets
+            # on exit so the trailing context doesn't bleed into the listen() loop below.
+            with server_context(guild.id, guild.name):
+                try:
+                    from bot import post_point_shop_to_discord
 
-                await post_point_shop_to_discord(bot, guild_id=guild.id, update_existing=True)
-                logger.info(f"✅ Synced shop for {guild.name} (ID: {guild.id})")
-            except ImportError:
-                logger.warning(f"⚠️  post_point_shop_to_discord not available - skipping auto-sync for {guild.name}")
-                break  # Don't try other guilds if function doesn't exist
-            except Exception as e:
-                logger.warning(f"⚠️  Failed to auto-sync shop for {guild.name}: {e}")
+                    await post_point_shop_to_discord(bot, guild_id=guild.id, update_existing=True)
+                    logger.debug(f"✅ Synced shop for {guild.name} (ID: {guild.id})")
+                except ImportError:
+                    logger.warning(f"⚠️  post_point_shop_to_discord not available - skipping auto-sync")
+                    break  # Don't try other guilds if function doesn't exist
+                except Exception as e:
+                    logger.warning(f"⚠️  Failed to auto-sync shop: {e}")
 
         # Run the listener with automatic retry on connection failures
         retry_delay = 5

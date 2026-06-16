@@ -102,7 +102,7 @@ class TimedMessagesManager:
                     """
                         )
                     )
-            logger.info("timed_messages table initialized")
+            logger.debug("timed_messages table initialized")
         except Exception as e:
             logger.error(f"Failed to initialize timed_messages table: {e}")
 
@@ -150,7 +150,7 @@ class TimedMessagesManager:
                     )
                     self.messages[msg.message_id] = msg
 
-                logger.info(f"Loaded {len(self.messages)} timed messages")
+                logger.debug(f"Loaded {len(self.messages)} timed messages")
         except Exception as e:
             logger.error(f"Failed to load timed messages: {e}")
 
@@ -772,7 +772,7 @@ async def setup_timed_messages(bot, engine, kick_send_callback=None):
     for guild in bot.guilds:
         manager = TimedMessagesManager(engine, kick_send_callback, guild_id=guild.id)
         managers[guild.id] = manager
-        logger.debug(f"✅ [Guild {guild.name}] Timed messages initialized ({len(manager.messages)} messages)")
+        logger.debug(f"✅ Timed messages initialized ({len(manager.messages)} messages)")
 
     # Add commands cog only once (it will access managers via bot attribute)
     if managers:
