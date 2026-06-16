@@ -312,7 +312,8 @@ def get_current_period(engine, discord_server_id=None):
                 result = conn.execute(
                     text(
                         """
-                    SELECT id, start_date, end_date, status, total_tickets
+                    SELECT id, start_date, end_date, status, total_tickets,
+                           COALESCE(period_number, id) AS period_number
                     FROM raffle_periods
                     WHERE status = 'active' AND discord_server_id = :server_id
                     ORDER BY start_date DESC
@@ -325,7 +326,8 @@ def get_current_period(engine, discord_server_id=None):
                 result = conn.execute(
                     text(
                         """
-                    SELECT id, start_date, end_date, status, total_tickets
+                    SELECT id, start_date, end_date, status, total_tickets,
+                           COALESCE(period_number, id) AS period_number
                     FROM raffle_periods
                     WHERE status = 'active'
                     ORDER BY start_date DESC
@@ -342,6 +344,7 @@ def get_current_period(engine, discord_server_id=None):
                     "end_date": row[2],
                     "status": row[3],
                     "total_tickets": row[4],
+                    "period_number": row[5],
                 }
             return None
 
@@ -411,12 +414,18 @@ def create_new_period(engine, start_date, end_date, clear_tickets=True, discord_
                 )
                 logger.info(f"Closed old raffle period #{old_period[0]}")
 
-            # Create new period
+            # Create new period. period_number is a per-server display counter
+            # (the global PK `id` keeps growing across all servers); compute the
+            # next value for THIS server in the same statement so it can't race.
             result = conn.execute(
                 text(
                     """
-                INSERT INTO raffle_periods (start_date, end_date, status, discord_server_id)
-                VALUES (:start, :end, 'active', :server_id)
+                INSERT INTO raffle_periods (start_date, end_date, status, discord_server_id, period_number)
+                VALUES (
+                    :start, :end, 'active', :server_id,
+                    (SELECT COALESCE(MAX(period_number), 0) + 1
+                     FROM raffle_periods WHERE discord_server_id = :server_id)
+                )
                 RETURNING id
             """
                 ),

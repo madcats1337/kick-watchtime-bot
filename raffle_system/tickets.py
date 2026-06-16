@@ -434,8 +434,17 @@ class TicketManager:
 
                 row = result.fetchone()
                 if row:
+                    # Per-server display number for this period. Looked up
+                    # directly from raffle_periods (the stats view is positional
+                    # and may not carry it); COALESCE to id for legacy rows.
+                    number_row = conn.execute(
+                        text("SELECT COALESCE(period_number, id) FROM raffle_periods WHERE id = :period_id"),
+                        {"period_id": period_id},
+                    ).fetchone()
+                    period_number = number_row[0] if number_row else period_id
                     return {
                         "period_id": row[0],
+                        "period_number": period_number,
                         "discord_server_id": row[1],
                         "start_date": row[2],
                         "end_date": row[3],

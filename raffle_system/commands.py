@@ -126,7 +126,7 @@ Use `!leaderboard` to see top participants!
             # Get period stats
             stats = ticket_manager.get_period_stats()
 
-            response = f"🏆 **Raffle Leaderboard** (Period #{stats['period_id']})\n\n"
+            response = f"🏆 **Raffle Leaderboard** (Period #{stats['period_number']})\n\n"
             response += f"**Total Tickets**: {stats['total_tickets']:,}\n"
             response += f"**Total Participants**: {stats['total_participants']}\n\n"
 
@@ -196,7 +196,7 @@ Use `!leaderboard` to see top participants!
                 response = f"""
 🎰 **Raffle Period Information**
 
-**Period**: #{stats['period_id']}
+**Period**: #{stats['period_number']}
 **Starts**: {start_date.strftime('%B %d, %Y')}
 **Ends**: {end_date.strftime('%B %d, %Y')}
 **Status**: PENDING (starts in {time_msg})
@@ -240,7 +240,7 @@ Get ready to participate when the period starts!
                 response = f"""
 🎰 **Current Raffle Period**
 
-**Period**: #{stats['period_id']}
+**Period**: #{stats['period_number']}
 **Started**: {start_date.strftime('%B %d, %Y')}
 **Ends**: {end_date.strftime('%B %d, %Y')}
 **Status**: {stats['status'].upper()}
@@ -774,7 +774,7 @@ Get ready to participate when the period starts!
             # Confirmation message
             await ctx.send(
                 f"🎲 **Drawing raffle winner...**\n"
-                f"Period: #{stats['period_id']}\n"
+                f"Period: #{stats['period_number']}\n"
                 f"Total Tickets: {stats['total_tickets']:,}\n"
                 f"Total Participants: {stats['total_participants']}\n"
                 f"Prize: {prize_description}"
@@ -930,7 +930,7 @@ Congratulations! 🎊
                 response = f"""
 📊 **Overall Raffle Statistics**
 
-**Period**: #{stats['period_id']}
+**Period**: #{stats['period_number']}
 **Duration**: {stats['start_date'].strftime('%b %d')} - {stats['end_date'].strftime('%b %d, %Y')}
 **Status**: {stats['status'].upper()}
 
@@ -969,7 +969,7 @@ Use `!rafflestats @user` to see individual stats
                 result = conn.execute(
                     text(
                         """
-                    SELECT id, start_date, end_date, status
+                    SELECT id, start_date, end_date, status, COALESCE(period_number, id)
                     FROM raffle_periods
                     WHERE status = 'active' AND discord_server_id = :guild_id
                     ORDER BY start_date DESC
@@ -997,7 +997,7 @@ Use `!rafflestats @user` to see individual stats
                 )
 
                 await ctx.send(
-                    f"✅ Raffle period #{period[0]} has been ended.\n"
+                    f"✅ Raffle period #{period[4]} has been ended.\n"
                     f"Use `!raffledraw` to select a winner, then `!rafflestart` to begin a new period."
                 )
 
@@ -1048,21 +1048,28 @@ Use `!rafflestats @user` to see individual stats
                     next_month = start + relativedelta(months=1)
                     end = next_month - relativedelta(seconds=1)
 
-                # Create new period
+                # Create new period. period_number is the per-server display
+                # counter (the global PK `id` keeps growing across all servers).
                 result = conn.execute(
                     text(
                         """
-                    INSERT INTO raffle_periods (start_date, end_date, status, discord_server_id)
-                    VALUES (:start, :end, 'active', :guild_id)
-                    RETURNING id
+                    INSERT INTO raffle_periods (start_date, end_date, status, discord_server_id, period_number)
+                    VALUES (
+                        :start, :end, 'active', :guild_id,
+                        (SELECT COALESCE(MAX(period_number), 0) + 1
+                         FROM raffle_periods WHERE discord_server_id = :guild_id)
+                    )
+                    RETURNING id, period_number
                 """
                     ),
                     {"start": start, "end": end, "guild_id": guild_id},
                 )
-                period_id = result.fetchone()[0]
+                row = result.fetchone()
+                period_id = row[0]
+                period_number = row[1]
 
                 await ctx.send(
-                    f"✅ New raffle period #{period_id} started!\n"
+                    f"✅ New raffle period #{period_number} started!\n"
                     f"**Duration**: {start.strftime('%b %d, %Y')} - {end.strftime('%b %d, %Y')}\n"
                     f"Users can now earn tickets!"
                 )
@@ -1126,19 +1133,25 @@ Use `!rafflestats @user` to see individual stats
                 result = conn.execute(
                     text(
                         """
-                    INSERT INTO raffle_periods (start_date, end_date, status, discord_server_id)
-                    VALUES (:start, :end, 'active', :guild_id)
-                    RETURNING id
+                    INSERT INTO raffle_periods (start_date, end_date, status, discord_server_id, period_number)
+                    VALUES (
+                        :start, :end, 'active', :guild_id,
+                        (SELECT COALESCE(MAX(period_number), 0) + 1
+                         FROM raffle_periods WHERE discord_server_id = :guild_id)
+                    )
+                    RETURNING id, period_number
                 """
                     ),
                     {"start": start, "end": end, "guild_id": guild_id},
                 )
-                new_period_id = result.fetchone()[0]
+                row = result.fetchone()
+                new_period_id = row[0]
+                new_period_number = row[1]
 
                 await ctx.send(
                     f"✅ Raffle reset complete!\n\n"
                     f"**Old Period**: Ended with {old_tickets:,} total tickets\n"
-                    f"**New Period #{new_period_id}**: {start.strftime('%b %d, %Y')} - {end.strftime('%b %d, %Y')}\n\n"
+                    f"**New Period #{new_period_number}**: {start.strftime('%b %d, %Y')} - {end.strftime('%b %d, %Y')}\n\n"
                     f"💡 Don't forget to draw a winner from the old period: `!raffledraw`"
                 )
 
@@ -1175,7 +1188,7 @@ Use `!rafflestats @user` to see individual stats
                 result = conn.execute(
                     text(
                         """
-                    SELECT id FROM raffle_periods
+                    SELECT id, COALESCE(period_number, id) FROM raffle_periods
                     WHERE status = 'active' AND discord_server_id = :guild_id
                     ORDER BY start_date DESC
                     LIMIT 1
@@ -1202,7 +1215,7 @@ Use `!rafflestats @user` to see individual stats
                 )
 
                 await ctx.send(
-                    f"✅ Raffle period #{period[0]} dates updated!\n"
+                    f"✅ Raffle period #{period[1]} dates updated!\n"
                     f"**New Duration**: {start.strftime('%b %d, %Y')} - {end.strftime('%b %d, %Y')}"
                 )
 
@@ -1908,7 +1921,7 @@ Use `!rafflestats @user` to see individual stats
             if current_period:
                 start = current_period["start_date"]
                 end = current_period["end_date"]
-                output.append(f"\n**Current Period:** #{current_period['id']}")
+                output.append(f"\n**Current Period:** #{current_period.get('period_number', current_period['id'])}")
                 output.append(f"📅 {start.strftime('%b %d')} - {end.strftime('%b %d, %Y')}")
             else:
                 output.append("\n❌ **No active raffle period!**")

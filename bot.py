@@ -6454,7 +6454,7 @@ async def raffle_system_info(ctx):
         try:
             period = get_current_period(engine)
             if period:
-                period_info = f"✅ Active Period #{period['id']}\n"
+                period_info = f"✅ Active Period #{period.get('period_number', period['id'])}\n"
                 period_info += f"Started: {period['start_date'].strftime('%Y-%m-%d')}\n"
                 period_info += f"Status: {period['status']}"
             else:

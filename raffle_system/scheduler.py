@@ -345,10 +345,23 @@ Please contact an admin to claim your prize! 🎊
                 self.engine, self.discord_server_id, logger
             )
 
+            # Resolve the per-server display number from the global period id.
+            period_display = new_period_id
+            try:
+                with self.engine.begin() as conn:
+                    num_row = conn.execute(
+                        text("SELECT COALESCE(period_number, id) FROM raffle_periods WHERE id = :pid"),
+                        {"pid": new_period_id},
+                    ).fetchone()
+                    if num_row:
+                        period_display = num_row[0]
+            except Exception:
+                pass
+
             message = f"""
 🎰 **NEW RAFFLE PERIOD STARTED!** 🎰
 
-**Period**: #{new_period_id}
+**Period**: #{period_display}
 **Duration**: {start_date.strftime('%B %d')} - {end_date.strftime('%B %d, %Y')}
 
 **How to Earn Tickets**:
