@@ -30,7 +30,7 @@ class CustomCommandsManager:
         self.last_used = {}  # {command_name: last_used_timestamp}
         self.database_url = os.getenv("DATABASE_URL")
 
-        logger.info(f"🔧 Custom Commands Manager initialized for server {discord_server_id}")
+        logger.debug(f"🔧 Custom Commands Manager initialized for server {discord_server_id}")
 
     async def load_commands(self):
         """Load all custom commands from database"""
@@ -53,7 +53,7 @@ class CustomCommandsManager:
                 }
 
             enabled_count = sum(1 for cmd in self.commands.values() if cmd["enabled"])
-            logger.info(f"✅ Loaded {len(self.commands)} custom commands ({enabled_count} enabled)")
+            logger.debug(f"✅ Loaded {len(self.commands)} custom commands ({enabled_count} enabled)")
 
         except Exception as e:
             logger.error(f"❌ Error loading custom commands: {e}")
@@ -305,4 +305,4 @@ class CustomCommandsManager:
     async def start(self):
         """Start the custom commands manager"""
         await self.load_commands()
-        logger.info("🎮 Custom Commands Manager started")
+        logger.debug("🎮 Custom Commands Manager started")

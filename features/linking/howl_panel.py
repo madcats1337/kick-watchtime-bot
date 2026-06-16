@@ -414,7 +414,7 @@ class HowlPanel:
                     self.panel_guild_id = result[0]
                     self.panel_channel_id = result[1]
                     self.panel_message_id = result[2]
-                    logger.info(f"Loaded Howl panel info for guild {self.guild_id}")
+                    logger.debug(f"Loaded Howl panel info for guild {self.guild_id}")
         except Exception as e:
             logger.error(f"Failed to load Howl panel info for guild {self.guild_id}: {e}")
 
@@ -491,7 +491,7 @@ async def setup_howl_panel_system(bot, engine, settings_getter):
     for guild in bot.guilds:
         panel = HowlPanel(bot, engine, settings_getter, guild_id=guild.id)
         panels[guild.id] = panel
-        logger.info(f"✅ [Guild {guild.name}] Howl verify panel initialized")
+        logger.debug(f"✅ [Guild {guild.name}] Howl verify panel initialized")
 
     @bot.command(name="createhowlpanel")
     @commands.has_permissions(administrator=True)
@@ -517,7 +517,7 @@ async def setup_howl_panel_system(bot, engine, settings_getter):
                     message = await channel.fetch_message(panel.panel_message_id)
                     view = HowlPanelView(bot, engine, settings_getter)
                     await message.edit(view=view)
-                    logger.info(f"Re-attached Howl panel view to existing message in guild {guild_id}")
+                    logger.debug(f"Re-attached Howl panel view to existing message in guild {guild_id}")
             except Exception as e:
                 logger.error(f"Failed to re-attach Howl panel view for guild {guild_id}: {e}")
 

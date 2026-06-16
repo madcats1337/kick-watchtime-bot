@@ -101,10 +101,10 @@ class WatchtimeConverter:
 
                 users = list(result)
 
-                logger.info(f"🔍 [WATCHTIME] Found {len(users)} linked users with watchtime")
+                logger.debug(f"🔍 [WATCHTIME] Found {len(users)} linked users with watchtime")
 
                 if not users:
-                    logger.info("No linked users with watchtime found")
+                    logger.debug("No linked users with watchtime found")
                     return {"status": "no_users", "conversions": 0}
 
                 for kick_name, total_minutes, discord_id in users:
@@ -125,7 +125,7 @@ class WatchtimeConverter:
                     # Calculate new minutes to convert
                     new_minutes = total_minutes - minutes_already_converted_this_period
 
-                    logger.info(
+                    logger.debug(
                         f"🔍 [WATCHTIME] {kick_name}: {total_minutes} total - {minutes_already_converted_this_period} this period = {new_minutes} new"
                     )
 
@@ -331,17 +331,14 @@ async def setup_watchtime_converter(bot, engine, server_id=None):
     @tasks.loop(minutes=10)  # Run every 10 minutes
     async def convert_watchtime_task():
         """Periodic task to convert watchtime to tickets"""
-        logger.info("🔄 [WATCHTIME] Running watchtime → tickets conversion...")
-        logger.info("🔄 Running watchtime → tickets conversion...")
+        logger.debug("🔄 [WATCHTIME] Running watchtime → tickets conversion...")
         result = await converter.convert_watchtime_to_tickets()
 
-        logger.info(f"🔄 [WATCHTIME] Result: {result}")
+        logger.debug(f"🔄 [WATCHTIME] Result: {result}")
 
+        # Only log at INFO when work was actually done or something is wrong.
         if result["status"] == "success" and result["conversions"] > 0:
             logger.info(f"✅ [WATCHTIME] Converted watchtime for {result['conversions']} users")
-            logger.info(f"✅ Converted watchtime for {result['conversions']} users")
-        elif result["status"] == "no_users":
-            logger.info(f"ℹ️ [WATCHTIME] No users with 60+ minutes of unconverted watchtime")
         elif result["status"] == "no_active_period":
             logger.warning(f"⚠️ [WATCHTIME] No active raffle period found!")
 

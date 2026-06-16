@@ -82,10 +82,10 @@ class SlotPanelView(View):
             await interaction.response.send_message("❌ Only administrators can use this panel.", ephemeral=True)
             return False
         return True
-    
+
     def _get_panel(self, interaction: discord.Interaction):
         """Get the panel for the interaction's guild"""
-        if not self.bot or not hasattr(self.bot, 'slot_panels_by_guild'):
+        if not self.bot or not hasattr(self.bot, "slot_panels_by_guild"):
             return None
         return self.bot.slot_panels_by_guild.get(interaction.guild_id)
 
@@ -96,7 +96,9 @@ class SlotPanelView(View):
         if panel:
             await panel.pick_random_slot_interaction(interaction)
         else:
-            await interaction.response.send_message("❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True
+            )
 
     @discord.ui.button(style=discord.ButtonStyle.secondary, label="Refresh", emoji="♻️", custom_id="slot_refresh")
     async def refresh_button(self, interaction: discord.Interaction, button: Button):
@@ -105,7 +107,9 @@ class SlotPanelView(View):
         if panel:
             await panel.refresh_interaction(interaction)
         else:
-            await interaction.response.send_message("❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True
+            )
 
     @discord.ui.button(style=discord.ButtonStyle.success, label="Enable Requests", emoji="✅", custom_id="slot_enable")
     async def enable_button(self, interaction: discord.Interaction, button: Button):
@@ -114,7 +118,9 @@ class SlotPanelView(View):
         if panel:
             await panel.enable_requests_interaction(interaction)
         else:
-            await interaction.response.send_message("❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True
+            )
 
     @discord.ui.button(style=discord.ButtonStyle.danger, label="Disable Requests", emoji="❌", custom_id="slot_disable")
     async def disable_button(self, interaction: discord.Interaction, button: Button):
@@ -123,7 +129,9 @@ class SlotPanelView(View):
         if panel:
             await panel.disable_requests_interaction(interaction)
         else:
-            await interaction.response.send_message("❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True
+            )
 
     @discord.ui.button(style=discord.ButtonStyle.secondary, label="Set Limit", emoji="🔢", custom_id="slot_set_limit")
     async def set_limit_button(self, interaction: discord.Interaction, button: Button):
@@ -132,7 +140,9 @@ class SlotPanelView(View):
         if panel:
             await panel.set_limit_interaction(interaction)
         else:
-            await interaction.response.send_message("❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True
+            )
 
 
 class SlotRequestPanel:
@@ -234,7 +244,7 @@ class SlotRequestPanel:
         if not server_id:
             logger.warning("No server_id available for stats, showing all servers")
         else:
-            logger.info(f"Getting slot stats for server_id: {server_id} (type: {type(server_id).__name__})")
+            logger.debug(f"Getting slot stats for server_id: {server_id} (type: {type(server_id).__name__})")
 
         try:
             with self.engine.connect() as conn:
@@ -242,7 +252,7 @@ class SlotRequestPanel:
                 if server_id:
                     # Ensure server_id is int for BIGINT column comparison
                     server_id = int(server_id)
-                    
+
                     total = conn.execute(
                         text("SELECT COUNT(*) FROM slot_requests WHERE discord_server_id = :server_id"),
                         {"server_id": server_id},
@@ -273,8 +283,10 @@ class SlotRequestPanel:
                         ),
                         {"server_id": server_id},
                     ).fetchone()
-                    
-                    logger.info(f"Stats for server {server_id}: total={total}, unpicked={unpicked}, picked={picked}, last_picked={last_picked}")
+
+                    logger.debug(
+                        f"Stats for server {server_id}: total={total}, unpicked={unpicked}, picked={picked}, last_picked={last_picked}"
+                    )
                 else:
                     # Fallback: show all servers
                     total = conn.execute(text("SELECT COUNT(*) FROM slot_requests")).fetchone()[0]
@@ -632,7 +644,7 @@ class SlotRequestPanel:
                                 # Check each reward in order (highest amount first)
                                 for reward_row in all_rewards:
                                     current_chance = float(reward_row[3])
-                                    
+
                                     if current_chance > 0 and result["random_value"] < current_chance:
                                         # Won this reward!
                                         won_reward = True
@@ -640,7 +652,7 @@ class SlotRequestPanel:
                                         reward_type = reward_row[1]
                                         reward_amount = float(reward_row[2])
                                         reward_chance = current_chance
-                                        
+
                                         logger.info(
                                             f"[Server {guild_id}] WON! Random: {result['random_value']:.2f} < Chance: {current_chance}% = ${reward_amount} {reward_type}"
                                         )
@@ -649,7 +661,7 @@ class SlotRequestPanel:
                                         logger.info(
                                             f"[Server {guild_id}] No win - Random: {result['random_value']:.2f} >= Chance: {current_chance}%"
                                         )
-                                
+
                                 # If no reward won, use the first reward's chance for recording
                                 if not won_reward and all_rewards:
                                     reward_chance = float(all_rewards[0][3])
@@ -686,9 +698,7 @@ class SlotRequestPanel:
                                         },
                                     )
                             else:
-                                logger.info(
-                                    f"[Server {guild_id}] User {username} not linked - no reward eligibility"
-                                )
+                                logger.info(f"[Server {guild_id}] User {username} not linked - no reward eligibility")
                 except Exception as reward_error:
                     logger.error(f"[Server {guild_id}] Error checking rewards: {reward_error}")
 

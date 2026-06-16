@@ -126,7 +126,7 @@ class LinkPanel:
                     self.panel_guild_id = result[0]
                     self.panel_channel_id = result[1]
                     self.panel_message_id = result[2]
-                    logger.info(f"Loaded link panel info for guild {self.guild_id}")
+                    logger.debug(f"Loaded link panel info for guild {self.guild_id}")
 
         except Exception as e:
             logger.error(f"Failed to load link panel info for guild {self.guild_id}: {e}")
@@ -222,7 +222,7 @@ async def setup_link_panel_system(bot, engine, oauth_url_generator):
     for guild in bot.guilds:
         panel = LinkPanel(bot, engine, oauth_url_generator, guild_id=guild.id)
         panels[guild.id] = panel
-        logger.info(f"✅ [Guild {guild.name}] Link panel initialized")
+        logger.debug(f"✅ [Guild {guild.name}] Link panel initialized")
 
     # Add command only once
     @bot.command(name="createlinkpanel")
@@ -251,7 +251,7 @@ async def setup_link_panel_system(bot, engine, oauth_url_generator):
 
                     # Re-attach the view
                     await message.edit(view=view)
-                    logger.info(f"Re-attached link panel view to existing message in guild {guild_id}")
+                    logger.debug(f"Re-attached link panel view to existing message in guild {guild_id}")
             except Exception as e:
                 logger.error(f"Failed to re-attach link panel view for guild {guild_id}: {e}")
 

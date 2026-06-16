@@ -117,10 +117,10 @@ class BotSettingsManager:
                 self._last_loaded = datetime.now(timezone.utc)
 
                 guild_info = f" for guild {active_guild_id}" if active_guild_id else ""
-                logger.info(f"[Settings] Loaded {len(self._cache)} settings from database{guild_info}")
+                logger.debug(f"[Settings] Loaded {len(self._cache)} settings from database{guild_info}")
                 return True
         except Exception as e:
-            logger.info(f"[Settings] Error loading settings: {e}")
+            logger.warning(f"[Settings] Error loading settings: {e}")
             return False
 
     # Alias for backwards compatibility

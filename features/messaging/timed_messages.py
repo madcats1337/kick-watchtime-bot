@@ -373,10 +373,10 @@ class TimedMessagesManager:
         if not self.kick_send_callback:
             return
 
-        # Log active chatters count for debugging
+        # Routine per-minute/per-guild check — DEBUG to avoid log spam.
         enabled_count = sum(1 for msg in self.messages.values() if msg.enabled)
         if enabled_count > 0:
-            logger.info(
+            logger.debug(
                 f"[Timed Messages] Check: {active_chatters_count} active chatters, {enabled_count} enabled messages"
             )
 
@@ -384,7 +384,7 @@ class TimedMessagesManager:
         # This prevents spam when stream is offline
         if active_chatters_count < 2:
             if enabled_count > 0:
-                logger.info(
+                logger.debug(
                     f"[Timed Messages] Skipping - need 2+ active chatters, currently have {active_chatters_count}"
                 )
             return
@@ -772,7 +772,7 @@ async def setup_timed_messages(bot, engine, kick_send_callback=None):
     for guild in bot.guilds:
         manager = TimedMessagesManager(engine, kick_send_callback, guild_id=guild.id)
         managers[guild.id] = manager
-        logger.info(f"✅ [Guild {guild.name}] Timed messages initialized ({len(manager.messages)} messages)")
+        logger.debug(f"✅ [Guild {guild.name}] Timed messages initialized ({len(manager.messages)} messages)")
 
     # Add commands cog only once (it will access managers via bot attribute)
     if managers:

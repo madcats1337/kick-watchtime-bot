@@ -3872,12 +3872,12 @@ async def update_roles_task():
                                 except discord.Forbidden:
                                     pass  # User has DMs disabled
                                 except Exception as dm_error:
-                                    logger.info(f"[Guild {guild.name}] Error sending DM: {dm_error}")
+                                    logger.debug(f"[Guild {guild.name}] Error sending DM: {dm_error}")
 
                             except discord.Forbidden:
-                                logger.info(f"[Guild {guild.name}] Missing permission to assign {role.name}")
+                                logger.warning(f"[Guild {guild.name}] Missing permission to assign {role.name}")
                             except Exception as e:
-                                logger.info(f"[Guild {guild.name}] Error assigning role: {e}")
+                                logger.warning(f"[Guild {guild.name}] Error assigning role: {e}")
 
             except Exception as guild_error:
                 logger.warning(f"⚠️ [Guild {guild.name}] Role update error: {guild_error}")
@@ -4610,15 +4610,15 @@ async def before_clip_buffer_task():
     await bot.wait_until_ready()
     # Initial delay to allow settings to load
     await asyncio.sleep(10)
-    logger.info("[Clip Buffer] 🎬 Starting clip buffer management task...")
-    logger.info(
+    logger.debug("[Clip Buffer] 🎬 Starting clip buffer management task...")
+    logger.debug(
         f"[Clip Buffer] Settings manager initialized: {hasattr(bot, 'settings_manager') and bot.settings_manager is not None}"
     )
     if hasattr(bot, "settings_manager") and bot.settings_manager:
         bot.settings_manager.refresh()
-        logger.info(f"[Clip Buffer] dashboard_url: {bool(bot.settings_manager.dashboard_url)}")
-        logger.info(f"[Clip Buffer] bot_api_key: {bool(bot.settings_manager.bot_api_key)}")
-        logger.info(f"[Clip Buffer] kick_channel: {bot.settings_manager.kick_channel}")
+        logger.debug(f"[Clip Buffer] dashboard_url: {bool(bot.settings_manager.dashboard_url)}")
+        logger.debug(f"[Clip Buffer] bot_api_key: {bool(bot.settings_manager.bot_api_key)}")
+        logger.debug(f"[Clip Buffer] kick_channel: {bot.settings_manager.kick_channel}")
 
 
 # -------------------------
@@ -7207,19 +7207,19 @@ async def on_ready():
                         end = start.replace(month=start.month + 1, day=1) - timedelta(seconds=1)
 
                     period_id = create_new_period(engine, start, end, discord_server_id=guild.id)
-                    logger.info(f"✅ [Guild {guild.name}] Created initial raffle period #{period_id}")
+                    logger.debug(f"✅ [Guild {guild.name}] Created initial raffle period #{period_id}")
                 elif current_period:
-                    logger.info(f"✅ [Guild {guild.name}] Active raffle period found (#{current_period['id']})")
+                    logger.debug(f"✅ [Guild {guild.name}] Active raffle period found (#{current_period['id']})")
 
                 # Setup gifted sub tracker for this guild
                 gifted_sub_trackers[guild.id] = setup_gifted_sub_handler(
                     engine, server_id=guild.id, bot_settings=guild_settings
                 )
-                logger.info(f"✅ [Guild {guild.name}] Gifted sub tracker initialized")
+                logger.debug(f"✅ [Guild {guild.name}] Gifted sub tracker initialized")
 
                 # Setup watchtime converter for this guild (runs every 10 minutes)
                 await setup_watchtime_converter(bot, engine, server_id=guild.id)
-                logger.info(f"✅ [Guild {guild.name}] Watchtime converter initialized")
+                logger.debug(f"✅ [Guild {guild.name}] Watchtime converter initialized")
 
                 # Setup wager tracker for this guild. The tracker self-selects the
                 # active platform (shuffle/howl) from wager_platform_name on every
@@ -7230,7 +7230,7 @@ async def on_ready():
                 # Expose per-guild wager trackers so the Redis settings-sync handler
                 # can call refresh_settings() for an instant platform hot-swap.
                 bot.shuffle_trackers_by_guild = shuffle_trackers
-                logger.info(f"✅ [Guild {guild.name}] Wager tracker initialized")
+                logger.debug(f"✅ [Guild {guild.name}] Wager tracker initialized")
 
                 # Setup auto-updating leaderboard for this guild
                 leaderboard_channel_id = guild_settings.raffle_leaderboard_channel_id
@@ -7238,7 +7238,7 @@ async def on_ready():
                 if not hasattr(bot, "auto_leaderboards"):
                     bot.auto_leaderboards = {}
                 bot.auto_leaderboards[guild.id] = auto_leaderboard
-                logger.info(
+                logger.debug(
                     f"📊 [Guild {guild.name}] Leaderboard channel: {leaderboard_channel_id or 'Not configured'}"
                 )
 
@@ -7252,7 +7252,7 @@ async def on_ready():
                     announcement_channel_id=raffle_channel_id,
                     discord_server_id=guild.id,
                 )
-                logger.info(f"✅ [Guild {guild.name}] Raffle system initialized (auto-draw: {raffle_auto_draw})")
+                logger.debug(f"✅ [Guild {guild.name}] Raffle system initialized (auto-draw: {raffle_auto_draw})")
 
                 # Create slot call tracker for this guild (but don't register cog yet)
                 from features.slot_requests.slot_calls import SlotCallTracker
@@ -7268,7 +7268,7 @@ async def on_ready():
                 if not hasattr(bot, "slot_call_trackers_by_guild"):
                     bot.slot_call_trackers_by_guild = {}
                 bot.slot_call_trackers_by_guild[guild.id] = slot_call_trackers[guild.id]
-                logger.info(
+                logger.debug(
                     f"✅ [Guild {guild.name}] Slot call tracker initialized (channel: {slot_calls_channel_id or 'Not configured'})"
                 )
 
@@ -7277,7 +7277,7 @@ async def on_ready():
                 if not hasattr(bot, "gtb_managers_by_guild"):
                     bot.gtb_managers_by_guild = {}
                 bot.gtb_managers_by_guild[guild.id] = gtb_managers[guild.id]
-                logger.info(f"✅ [Guild {guild.name}] GTB system initialized")
+                logger.debug(f"✅ [Guild {guild.name}] GTB system initialized")
 
                 # Setup Custom Commands manager for this guild
                 custom_commands_manager = CustomCommandsManager(
@@ -7291,7 +7291,7 @@ async def on_ready():
                 if not hasattr(bot, "custom_commands_managers"):
                     bot.custom_commands_managers = {}
                 bot.custom_commands_managers[guild.id] = custom_commands_manager
-                logger.info(f"✅ [Guild {guild.name}] Custom commands system initialized")
+                logger.debug(f"✅ [Guild {guild.name}] Custom commands system initialized")
 
             # Sync Shuffle code user role (run once, not per-guild)
             await sync_shuffle_role_on_startup(bot, engine)
@@ -7333,7 +7333,7 @@ async def on_ready():
                 if not hasattr(bot, "slot_panels_by_guild"):
                     bot.slot_panels_by_guild = {}
                 bot.slot_panels_by_guild[guild.id] = slot_panel
-                logger.info(f"✅ [Guild {guild.name}] Slot request panel initialized")
+                logger.debug(f"✅ [Guild {guild.name}] Slot request panel initialized")
 
                 # Setup GTB panel for this guild (just the instance, no commands)
                 gtb_panel = GTBPanel(
@@ -7346,7 +7346,7 @@ async def on_ready():
                 if not hasattr(bot, "gtb_panels_by_guild"):
                     bot.gtb_panels_by_guild = {}
                 bot.gtb_panels_by_guild[guild.id] = gtb_panel
-                logger.info(f"✅ [Guild {guild.name}] GTB panel initialized")
+                logger.debug(f"✅ [Guild {guild.name}] GTB panel initialized")
 
                 # Add cogs only once on first iteration
                 if first_guild:
@@ -8698,7 +8698,7 @@ class PointShopConfirmView(discord.ui.View):
             )
 
         except Exception as e:
-            logger.info(f"[Point Shop] Purchase error: {e}")
+            logger.warning(f"[Point Shop] Purchase error: {e}")
             import traceback
 
             traceback.print_exc()
@@ -9291,7 +9291,7 @@ async def post_point_shop_to_discord(
         if channel_id:
             channel = bot.get_channel(channel_id)
             if not channel:
-                logger.info(f"[Point Shop] Channel {channel_id} not found")
+                logger.debug(f"[Point Shop] Channel {channel_id} not found")
                 return False
             # Get guild_id from channel if not provided
             if not guild_id:
@@ -9314,18 +9314,18 @@ async def post_point_shop_to_discord(
                 ).fetchone()
 
                 if not result:
-                    logger.info("[Point Shop] No shop channel configured")
+                    logger.debug("[Point Shop] No shop channel configured")
                     return False
 
                 channel_id = int(result[0])
 
             channel = bot.get_channel(channel_id)
             if not channel:
-                logger.info(f"[Point Shop] Channel {channel_id} not found")
+                logger.debug(f"[Point Shop] Channel {channel_id} not found")
                 return False
 
         # Get active shop items
-        logger.info(f"[Point Shop] Querying items for guild_id: {guild_id}")
+        logger.debug(f"[Point Shop] Querying items for guild_id: {guild_id}")
         with engine.connect() as conn:
             items = conn.execute(
                 text(
@@ -9339,7 +9339,7 @@ async def post_point_shop_to_discord(
                 ),
                 {"guild_id": guild_id},
             ).fetchall()
-            logger.info(f"[Point Shop] Found {len(items)} items")
+            logger.debug(f"[Point Shop] Found {len(items)} items")
 
             # Get existing message ID
             existing_msg_result = conn.execute(
@@ -9384,11 +9384,11 @@ async def post_point_shop_to_discord(
                     try:
                         existing_message = await channel.fetch_message(msg_id)
                         await existing_message.delete()
-                        logger.info(f"[Point Shop] Deleted old shop message {msg_id}")
+                        logger.debug(f"[Point Shop] Deleted old shop message {msg_id}")
                     except discord.NotFound:
                         pass
                     except Exception as e:
-                        logger.info(f"[Point Shop] Error deleting message {msg_id}: {e}")
+                        logger.warning(f"[Point Shop] Error deleting message {msg_id}: {e}")
 
         # Check if Components V2 is supported (discord.py 2.6+)
         has_components_v2 = hasattr(discord.ui, "LayoutView") and hasattr(discord.ui, "MediaGallery")
@@ -9548,19 +9548,19 @@ async def post_point_shop_to_discord(
                             {"m": str(footer_msg.id), "guild_id": guild_id},
                         )
 
-                logger.info(f"[Point Shop] Posted Components V2 mosaic shop to channel {channel_id}")
+                logger.debug(f"[Point Shop] Posted Components V2 mosaic shop to channel {channel_id}")
                 return True
 
             except Exception as v2_error:
                 if not v2_success:
-                    logger.info(f"[Point Shop] Components V2 failed, falling back to legacy: {v2_error}")
+                    logger.warning(f"[Point Shop] Components V2 failed, falling back to legacy: {v2_error}")
                     import traceback
 
                     traceback.print_exc()
                     # Fall through to legacy mode
                 else:
                     # Messages were sent successfully, just log the error and return
-                    logger.info(f"[Point Shop] Components V2 posted but error occurred: {v2_error}")
+                    logger.warning(f"[Point Shop] Components V2 posted but error occurred: {v2_error}")
                     return True
 
         # ==================== Legacy Mode (Embed + Mosaic) ====================
@@ -9643,11 +9643,11 @@ async def post_point_shop_to_discord(
                 {"guild_id": guild_id},
             )
 
-        logger.info(f"[Point Shop] Posted shop to channel {channel_id}")
+        logger.debug(f"[Point Shop] Posted shop to channel {channel_id}")
         return True
 
     except Exception as e:
-        logger.info(f"[Point Shop] Error posting shop: {e}")
+        logger.warning(f"[Point Shop] Error posting shop: {e}")
         import traceback
 
         traceback.print_exc()

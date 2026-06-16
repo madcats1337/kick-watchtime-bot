@@ -369,7 +369,7 @@ class ShufflePanel:
                     self.panel_guild_id = result[0]
                     self.panel_channel_id = result[1]
                     self.panel_message_id = result[2]
-                    logger.info(f"Loaded Shuffle panel info for guild {self.guild_id}")
+                    logger.debug(f"Loaded Shuffle panel info for guild {self.guild_id}")
         except Exception as e:
             logger.error(f"Failed to load Shuffle panel info for guild {self.guild_id}: {e}")
 
@@ -446,7 +446,7 @@ async def setup_shuffle_panel_system(bot, engine, settings_getter):
     for guild in bot.guilds:
         panel = ShufflePanel(bot, engine, settings_getter, guild_id=guild.id)
         panels[guild.id] = panel
-        logger.info(f"✅ [Guild {guild.name}] Shuffle verify panel initialized")
+        logger.debug(f"✅ [Guild {guild.name}] Shuffle verify panel initialized")
 
     @bot.command(name="createshufflepanel")
     @commands.has_permissions(administrator=True)
@@ -472,7 +472,7 @@ async def setup_shuffle_panel_system(bot, engine, settings_getter):
                     message = await channel.fetch_message(panel.panel_message_id)
                     view = ShufflePanelView(bot, engine, settings_getter)
                     await message.edit(view=view)
-                    logger.info(f"Re-attached Shuffle panel view to existing message in guild {guild_id}")
+                    logger.debug(f"Re-attached Shuffle panel view to existing message in guild {guild_id}")
             except Exception as e:
                 logger.error(f"Failed to re-attach Shuffle panel view for guild {guild_id}: {e}")
 

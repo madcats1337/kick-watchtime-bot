@@ -38,18 +38,18 @@ class ShuffleWagerTracker:
         # Load settings from bot_settings (database) or fall back to env vars
         self._load_settings()
 
-        logger.info(f"[Shuffle Tracker] 🎰 Initialized for platform: {self.platform_name}")
-        # Show campaign codes (supports comma-separated multiple codes)
+        # Per-guild init detail — DEBUG (startup is summarized elsewhere).
+        logger.debug(f"[Shuffle Tracker] 🎰 Initialized for platform: {self.platform_name}")
         codes = [c.strip() for c in self.campaign_code.split(",")]
         if len(codes) > 1:
-            logger.info(f"[Shuffle Tracker] 📊 Campaign codes ({len(codes)}): {', '.join(codes)}")
+            logger.debug(f"[Shuffle Tracker] 📊 Campaign codes ({len(codes)}): {', '.join(codes)}")
         else:
-            logger.info(f"[Shuffle Tracker] 📊 Campaign code: {self.campaign_code}")
-        logger.info(f"[Shuffle Tracker] 🎫 Rate: {self.tickets_per_1000} tickets per $1000 wagered")
+            logger.debug(f"[Shuffle Tracker] 📊 Campaign code: {self.campaign_code}")
+        logger.debug(f"[Shuffle Tracker] 🎫 Rate: {self.tickets_per_1000} tickets per $1000 wagered")
         if self.affiliate_url:
-            logger.info(f"[Shuffle Tracker] 🔗 Affiliate URL configured: {self.affiliate_url[:50]}...")
+            logger.debug(f"[Shuffle Tracker] 🔗 Affiliate URL configured: {self.affiliate_url[:50]}...")
         else:
-            logger.info(f"[Shuffle Tracker] ⚠️ No affiliate URL configured!")
+            logger.debug(f"[Shuffle Tracker] No affiliate URL configured")
 
     # Default howl affiliate leaderboard endpoint (overridable per-server).
     HOWL_DEFAULT_LB_URL = "https://howl.gg/api/user/affiliate/lb"
@@ -99,7 +99,7 @@ class ShuffleWagerTracker:
         self._load_settings()
         codes = [c.strip() for c in self.campaign_code.split(",")]
         codes_str = f"{len(codes)} codes" if len(codes) > 1 else self.campaign_code
-        logger.info(f"[Shuffle Tracker] 🔄 Settings refreshed - URL: {bool(self.affiliate_url)}, Codes: {codes_str}")
+        logger.debug(f"[Shuffle Tracker] 🔄 Settings refreshed - URL: {bool(self.affiliate_url)}, Codes: {codes_str}")
 
     def _record_wager_history(self, conn, shuffle_username, total_wager_usd, wager_delta):
         """Append a row to shuffle_wager_history for the dashboard leaderboard.
@@ -208,7 +208,7 @@ class ShuffleWagerTracker:
                 logger.warning(f"No users found with campaign codes '{self.campaign_code}' on {self.platform_name}")
                 return {"status": "no_users", "updates": 0}
 
-            logger.info(
+            logger.debug(
                 f"Found {len(filtered_data)} users with campaign codes '{self.campaign_code}' on {self.platform_name}"
             )
 
@@ -718,12 +718,13 @@ async def setup_shuffle_tracker(bot, engine, server_id=None, bot_settings=None):
             tracker.refresh_settings()
 
             if not tracker.affiliate_url:
-                logger.info("[Shuffle Tracker] ⚠️ No affiliate URL configured - skipping update")
+                logger.debug("[Shuffle Tracker] No affiliate URL configured - skipping update")
                 return
 
-            logger.info("[Shuffle Tracker] 🔄 Checking wagers...")
+            logger.debug("[Shuffle Tracker] 🔄 Checking wagers...")
             result = await tracker.update_shuffle_wagers()
 
+            # Only log at INFO when wagers were actually awarded or something is wrong.
             if result["status"] == "success" and result["updates"] > 0:
                 logger.info(f"[Shuffle Tracker] ✅ Updated {result['updates']} wager(s)")
                 # Print details of each update
@@ -733,20 +734,17 @@ async def setup_shuffle_tracker(bot, engine, server_id=None, bot_settings=None):
                         f"${detail['wager_delta']:.2f} → +{detail['tickets_awarded']} tickets"
                     )
             elif result["status"] == "success":
-                logger.info(f"[Shuffle Tracker] ℹ️ No new wagers found")
+                logger.debug(f"[Shuffle Tracker] No new wagers found")
             elif result["status"] == "no_active_period":
-                logger.info("[Shuffle Tracker] ⏸️ No active raffle period")
+                logger.debug("[Shuffle Tracker] No active raffle period")
             elif result["status"] == "no_users":
-                logger.info(f"[Shuffle Tracker] ℹ️ No users found with campaign code(s): {tracker.campaign_code}")
+                logger.debug(f"[Shuffle Tracker] No users found with campaign code(s): {tracker.campaign_code}")
             elif result["status"] == "fetch_failed":
-                logger.info(f"[Shuffle Tracker] ❌ Failed to fetch data from affiliate URL")
+                logger.warning(f"[Shuffle Tracker] ❌ Failed to fetch data from affiliate URL")
             elif result["status"] == "error":
-                logger.info(f"[Shuffle Tracker] ❌ Update failed: {result.get('error')}")
+                logger.warning(f"[Shuffle Tracker] ❌ Update failed: {result.get('error')}")
         except Exception as e:
-            logger.info(f"[Shuffle Tracker] ❌ Task error: {e}")
-            import traceback
-
-            traceback.print_exc()
+            logger.error(f"[Shuffle Tracker] ❌ Task error: {e}", exc_info=True)
 
     @update_shuffle_task.before_loop
     async def before_shuffle_task():
