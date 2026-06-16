@@ -3662,6 +3662,9 @@ async def update_watchtime_task():
         for guild in bot.guilds:
             server_id = guild.id
 
+            # Tag this guild's iteration's logging with the server name.
+            set_server(server_id, guild.name)
+
             # 🔒 SECURITY: Per-guild multi-factor stream-live detection
             if not tracking_force_override:
                 # Check last chat activity for THIS GUILD

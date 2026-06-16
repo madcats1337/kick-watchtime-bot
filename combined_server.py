@@ -219,13 +219,20 @@ def run_discord_bot():
 
 
 def stream_subprocess_output(process, prefix="[BOT]"):
-    """Read and print subprocess output line by line"""
+    """Relay subprocess output to our stdout line by line.
+
+    The bot subprocess already formats its own lines via setup_logging
+    (e.g. "[time] INFO [BOT] [server] msg"), so we pass them through VERBATIM.
+    Re-logging them through `logger` here would double-wrap each line with a
+    second "[BOT] ..." prefix.
+    """
     try:
         for line in iter(process.stdout.readline, ""):
             if line:
-                logger.info(f"{prefix} {line.rstrip()}")
+                sys.stdout.write(line if line.endswith("\n") else line + "\n")
+                sys.stdout.flush()
     except Exception as e:
-        logger.info(f"{prefix} Stream ended: {e}")
+        logger.warning(f"{prefix} output stream ended: {e}")
     finally:
         if process.stdout:
             process.stdout.close()

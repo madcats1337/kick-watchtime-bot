@@ -18,13 +18,18 @@ logger = logging.getLogger(__name__)
 
 
 def stream_output(process, name):
-    """Stream process output to stdout in real-time"""
+    """Relay subprocess output to our stdout in real-time.
+
+    Subprocess lines are already formatted by their own setup_logging, so we pass
+    them through VERBATIM — re-logging via `logger` would double-wrap each line.
+    """
     try:
         for line in iter(process.stdout.readline, ""):
             if line:
-                logger.info(f"[{name}] {line.rstrip()}")
+                sys.stdout.write(line if line.endswith("\n") else line + "\n")
+                sys.stdout.flush()
     except Exception as e:
-        logger.info(f"[{name}] Stream error: {e}")
+        logger.warning(f"[{name}] output stream ended: {e}")
     finally:
         if process.stdout:
             process.stdout.close()

@@ -11,6 +11,8 @@ import discord
 from discord.ext import commands, tasks
 from sqlalchemy import text
 
+from utils.log_context import set_server
+
 logger = logging.getLogger(__name__)
 
 
@@ -470,6 +472,10 @@ class TimedMessagesCommands(commands.Cog):
             return
 
         for guild_id, manager in self.bot.timed_messages_managers.items():
+            # Tag this guild's logging with the server name.
+            _g = self.bot.get_guild(int(guild_id)) if guild_id else None
+            set_server(guild_id, _g.name if _g else None)
+
             # Get active chatters count for this guild
             active_chatters_count = 0
             if hasattr(self.bot, "get_active_chatters_count"):
