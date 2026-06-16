@@ -315,11 +315,11 @@ async def setup_auto_leaderboard(bot, engine, channel_id=None, server_id=None):
 
         if success:
             if AUTO_LEADERBOARD_UPDATE_INTERVAL >= 3600:
-                logger.info(
+                logger.debug(
                     f"✅ [Auto-Leaderboard] Started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/3600:.1f} hours)"
                 )
             elif AUTO_LEADERBOARD_UPDATE_INTERVAL >= 60:
-                logger.info(
+                logger.debug(
                     f"✅ [Auto-Leaderboard] Started (updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/60:.0f} minutes)"
                 )
             else:

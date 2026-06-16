@@ -7082,12 +7082,14 @@ async def on_ready():
             if not me.guild_permissions.manage_roles:
                 logger.warning(f"⚠️ Bot lacks manage_roles permission!")
 
-            # Validate roles exist
+            # Validate roles exist. DEBUG only — the update_roles_task background loop
+            # re-checks and reports missing roles at WARNING on its first tick, so
+            # logging them here too would double every missing-role warning at boot.
             current_roles = load_watchtime_roles()
             existing_roles = {role.name for role in guild.roles}
             for role_config in current_roles:
                 if role_config["name"] not in existing_roles:
-                    logger.warning(f"⚠️ Role {role_config['name']} does not exist in the server!")
+                    logger.debug(f"⚠️ Role {role_config['name']} does not exist in the server!")
 
         # Per-guild role-check loop done — clear so the global task-start block below
         # isn't tagged with the last guild.
@@ -9387,7 +9389,7 @@ async def post_point_shop_to_discord(
         # Check if Components V2 is supported (discord.py 2.6+)
         has_components_v2 = hasattr(discord.ui, "LayoutView") and hasattr(discord.ui, "MediaGallery")
 
-        logger.info(
+        logger.debug(
             f"[Point Shop] Components V2 available: {has_components_v2}, use_components_v2: {use_components_v2}, items count: {len(items)}"
         )
 

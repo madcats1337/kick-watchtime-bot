@@ -168,7 +168,7 @@ class SlotCallTracker:
 
                     if result:
                         max_requests = int(result[0])
-                        logger.info(
+                        logger.debug(
                             f"Loaded max slot requests per user (server {self.server_id}): {max_requests if max_requests > 0 else 'unlimited'}"
                         )
                         return max_requests
@@ -186,7 +186,7 @@ class SlotCallTracker:
 
                 if result:
                     max_requests = int(result[0])
-                    logger.info(
+                    logger.debug(
                         f"Loaded max slot requests per user (global): {max_requests if max_requests > 0 else 'unlimited'}"
                     )
                     return max_requests
