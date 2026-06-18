@@ -1331,15 +1331,17 @@ def handle_bot_authorization_callback(code, code_verifier, state):
         logger.info(f"✅ [BOT AUTH] Got bot access token (expires in {expires_in} seconds)")
         logger.info(f"✅ [BOT AUTH] Token preview: {sanitize_for_logs(access_token, 'token')}")
 
-        # Get bot user info
+        # Get bot user info. Fall back to a neutral placeholder (not a specific
+        # bot's name) if Kick doesn't return a username — this is only stored as
+        # a display label and is overwritten next time the API call succeeds.
         try:
             kick_user = get_kick_user_info(access_token)
-            kick_username = kick_user.get("username", "lelebot")
+            kick_username = kick_user.get("username") or "bot"
             kick_user_id = kick_user.get("user_id", 0)
             logger.info(f"🤖 Bot username: {kick_username}, user_id: {kick_user_id}")
         except Exception as e:
-            logger.warning(f"⚠️ Could not get bot user info: {e}, using default: lelebot")
-            kick_username = "lelebot"
+            logger.warning(f"⚠️ Could not get bot user info: {e}, using default placeholder")
+            kick_username = "bot"
             kick_user_id = 0
 
         # Calculate expiration time

@@ -10,10 +10,11 @@ import discord
 from discord.ext import commands
 from sqlalchemy import text
 
+from utils.bot_settings import BotSettingsManager
 from utils.log_context import set_server
 
 from .draw import RaffleDraw
-from .reward_settings import get_ticket_reward_settings
+from .reward_settings import get_ticket_reward_settings, platform_display_name
 from .shuffle_tracker import ShuffleWagerTracker
 from .tickets import TicketManager
 
@@ -29,12 +30,27 @@ class RaffleCommands(commands.Cog):
         self.ticket_manager = TicketManager(engine)  # Default manager (backward compat)
         self.raffle_draw = RaffleDraw(engine)  # Default draw (backward compat)
         self.shuffle_tracker = ShuffleWagerTracker(engine)  # Default tracker (backward compat)
+        self._settings_by_guild = {}  # Cached per-guild settings managers
 
     async def cog_before_invoke(self, ctx):
         """Tag logging for this cog's commands with the guild (belt-and-suspenders;
         the bot's global before_invoke also does this). Runs in the command's Task."""
         if ctx.guild:
             set_server(ctx.guild.id, ctx.guild.name)
+
+    def _get_guild_settings(self, ctx):
+        """Get a per-guild settings manager (cached) for reading dashboard config.
+
+        Prefer the bot's shared get_guild_settings (same cache as the rest of the
+        bot) when available; otherwise build/cache one locally.
+        """
+        guild_id = ctx.guild.id if ctx.guild else None
+        getter = getattr(self.bot, "get_guild_settings", None)
+        if callable(getter) and guild_id is not None:
+            return getter(guild_id)
+        if guild_id not in self._settings_by_guild:
+            self._settings_by_guild[guild_id] = BotSettingsManager(self.engine, guild_id=guild_id)
+        return self._settings_by_guild[guild_id]
 
     def _get_guild_managers(self, ctx):
         """Get guild-specific managers for multiserver support"""
@@ -69,6 +85,9 @@ class RaffleCommands(commands.Cog):
             watchtime_tickets, gifted_sub_tickets, wager_tickets = get_ticket_reward_settings(
                 self.engine, ctx.guild.id if ctx.guild else None, logger
             )
+            settings = self._get_guild_settings(ctx)
+            platform = platform_display_name(settings)
+            code = settings.shuffle_campaign_code
 
             if not tickets or tickets["total_tickets"] == 0:
                 await ctx.send(
@@ -76,7 +95,7 @@ class RaffleCommands(commands.Cog):
                     f"Earn tickets by:\n"
                     f"• Watching streams ({watchtime_tickets} tickets per hour)\n"
                     f"• Gifting subs ({gifted_sub_tickets} tickets per sub)\n"
-                    f"• Wagering on Shuffle.com with code 'lele' ({wager_tickets} tickets per $1000)"
+                    f"• Wagering on {platform} with code '{code}' ({wager_tickets} tickets per $1000)"
                 )
                 return
 
@@ -181,6 +200,9 @@ Use `!leaderboard` to see top participants!
             watchtime_tickets, gifted_sub_tickets, wager_tickets = get_ticket_reward_settings(
                 self.engine, ctx.guild.id if ctx.guild else None, logger
             )
+            settings = self._get_guild_settings(ctx)
+            platform = platform_display_name(settings)
+            code = settings.shuffle_campaign_code
 
             # Debug logging
             logger.info(f"[raffleinfo] guild_id={ctx.guild.id}, server_id={managers['ticket_manager'].server_id}")
@@ -214,7 +236,7 @@ Use `!leaderboard` to see top participants!
 **How to Earn Tickets** (once period starts):
 ⏱️ **Watch Streams** - {watchtime_tickets} tickets per hour
 🎁 **Gift Subs** - {gifted_sub_tickets} tickets per sub
-🎲 **Shuffle Wagers** - {wager_tickets} tickets per $1000 wagered (code 'lele')
+🎲 **{platform} Wagers** - {wager_tickets} tickets per $1000 wagered (code '{code}')
 ⭐ **Bonus** - Admin awarded for events
 
 **Commands**:
@@ -260,7 +282,7 @@ Get ready to participate when the period starts!
 **How to Earn Tickets**:
 ⏱️ **Watch Streams** - {watchtime_tickets} tickets per hour
 🎁 **Gift Subs** - {gifted_sub_tickets} tickets per sub
-🎲 **Shuffle Wagers** - {wager_tickets} tickets per $1000 wagered (code 'lele')
+🎲 **{platform} Wagers** - {wager_tickets} tickets per $1000 wagered (code '{code}')
 ⭐ **Bonus** - Admin awarded for events
 
 **Commands**:
@@ -298,13 +320,16 @@ Get ready to participate when the period starts!
         """
         try:
             _, _, wager_tickets = get_ticket_reward_settings(self.engine, ctx.guild.id if ctx.guild else None, logger)
+            settings = self._get_guild_settings(ctx)
+            platform = platform_display_name(settings)
+            code = settings.shuffle_campaign_code
 
             if not shuffle_username:
                 await ctx.send(
-                    f"❌ {ctx.author.mention} Please provide your Shuffle username!\n\n"
+                    f"❌ {ctx.author.mention} Please provide your {platform} username!\n\n"
                     f"**Usage**: `!linkshuffle <your_shuffle_username>`\n"
                     f"**Example**: `!linkshuffle CryptoKing420`\n\n"
-                    f"💡 **Tip**: Use code **'lele'** on Shuffle to earn {wager_tickets} tickets per $1000 wagered!"
+                    f"💡 **Tip**: Use code **'{code}'** on {platform} to earn {wager_tickets} tickets per $1000 wagered!"
                 )
                 return
 
@@ -350,7 +375,7 @@ Get ready to participate when the period starts!
                     f"**Kick**: `{kick_name}`\n\n"
                     f"⏳ **Pending Admin Verification**\n"
                     f"An admin will review your request. Once verified:\n"
-                    f"• Your Shuffle wagers under code **'lele'** will earn **{wager_tickets} tickets per $1000**\n"
+                    f"• Your {platform} wagers under code **'{code}'** will earn **{wager_tickets} tickets per $1000**\n"
                     f"• Tickets are awarded automatically for future wagers\n"
                     f"• Use `!tickets` to check your balance!"
                 )
@@ -393,6 +418,9 @@ Get ready to participate when the period starts!
             guild_id = ctx.guild.id
             managers = self._get_guild_managers(ctx)
             ticket_manager = managers["ticket_manager"]
+
+            settings = self._get_guild_settings(ctx)
+            code = settings.shuffle_campaign_code
 
             discord_id = user.id
             admin_id = ctx.author.id
@@ -587,36 +615,44 @@ Get ready to participate when the period starts!
                             },
                         )
 
-            # Assign "Shuffle Code User" role
+            # Assign the verified-Shuffle role (resolved from the per-guild
+            # dashboard setting shuffle_verified_role_id, with a legacy name
+            # fallback). role_name drives the user-facing confirmation text.
             role_assigned = False
+            role_name = None
             try:
                 # Get the guild member
                 member = ctx.guild.get_member(discord_id)
                 if member:
-                    # Find the "Shuffle Code User" role
-                    shuffle_role = discord.utils.get(ctx.guild.roles, name="Shuffle Code User")
+                    shuffle_role = None
+                    role_id = settings.get_int("shuffle_verified_role_id")
+                    if role_id:
+                        shuffle_role = ctx.guild.get_role(role_id)
+                    if not shuffle_role:
+                        shuffle_role = discord.utils.get(ctx.guild.roles, name="Shuffle Code User")
                     if shuffle_role:
+                        role_name = shuffle_role.name
                         if shuffle_role not in member.roles:
                             await member.add_roles(shuffle_role, reason=f"Verified Shuffle account by {ctx.author}")
                             role_assigned = True
-                            logger.info(f"🎭 Assigned 'Shuffle Code User' role to {member} ({discord_id})")
+                            logger.info(f"🎭 Assigned '{role_name}' role to {member} ({discord_id})")
                     else:
-                        logger.warning(f"⚠️ 'Shuffle Code User' role not found in guild {ctx.guild.id}")
+                        logger.warning(f"⚠️ Verified-Shuffle role not configured for guild {ctx.guild.id}")
             except Exception as e:
-                logger.error(f"Error assigning Shuffle Code User role: {e}")
+                logger.error(f"Error assigning verified-Shuffle role: {e}")
 
             if tickets_awarded > 0:
-                role_msg = "\n🎭 **Role assigned:** Shuffle Code User" if role_assigned else ""
+                role_msg = f"\n🎭 **Role assigned:** {role_name}" if role_assigned else ""
                 await ctx.send(
                     f"✅ **Verified!** {user.mention}'s Shuffle account '{shuffle_username}' is now linked.\n"
                     f"🎟️ **Awarded {tickets_awarded:,} tickets** for ${wager_row[0]:.2f} wagered this period!\n"
-                    f"Future wagers under code 'lele' will continue earning tickets.{role_msg}"
+                    f"Future wagers under code '{code}' will continue earning tickets.{role_msg}"
                 )
             else:
-                role_msg = "\n🎭 **Role assigned:** Shuffle Code User" if role_assigned else ""
+                role_msg = f"\n🎭 **Role assigned:** {role_name}" if role_assigned else ""
                 await ctx.send(
                     f"✅ **Verified!** {user.mention}'s Shuffle account '{shuffle_username}' is now linked.\n"
-                    f"Future wagers under code 'lele' will earn raffle tickets!{role_msg}"
+                    f"Future wagers under code '{code}' will earn raffle tickets!{role_msg}"
                 )
 
             logger.info(

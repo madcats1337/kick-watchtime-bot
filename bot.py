@@ -1837,6 +1837,37 @@ def get_guild_settings(guild_id: int) -> BotSettingsManager:
     return guild_settings_managers[guild_id]
 
 
+# Default !raffle promo (used when a guild hasn't configured its own in the dashboard).
+# Kept identical to the original hardcoded text so unconfigured servers are unchanged.
+DEFAULT_RAFFLE_PROMO_MESSAGE = (
+    "Do you want to win a $100 super buy on Sweet Bonanza 1000? "
+    "All you gotta do is join my discord, verify with lelebot and follow the instructions"
+)
+DEFAULT_DISCORD_INVITE_URL = "https://discord.gg/k7CXJtfrPY"
+
+
+def build_raffle_promo(settings) -> str:
+    """Build the !raffle chat promo from per-guild dashboard settings.
+
+    Reads `raffle_promo_message` and `discord_invite_url` from the guild's
+    BotSettingsManager, falling back to the original hardcoded text so servers
+    that haven't configured anything see no change. The invite is appended as
+    "-> <url>" only when present.
+    """
+    message = DEFAULT_RAFFLE_PROMO_MESSAGE
+    invite = DEFAULT_DISCORD_INVITE_URL
+    if settings is not None:
+        try:
+            message = settings.get("raffle_promo_message", default=DEFAULT_RAFFLE_PROMO_MESSAGE)
+            invite = settings.get("discord_invite_url", default=DEFAULT_DISCORD_INVITE_URL)
+        except Exception:
+            pass
+    invite = (invite or "").strip()
+    if invite:
+        return f"{message.rstrip()} -> {invite}"
+    return message.rstrip()
+
+
 # Multiserver: No global KICK_CHANNEL or SLOT_CALLS_CHANNEL_ID
 # All features must use get_guild_settings(guild.id) to access per-guild configuration
 logger.debug("✅ Multiserver bot ready - configure each guild in Dashboard → Profile Settings")
@@ -2146,9 +2177,7 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                             # !raffle command
                             if content_stripped.lower() == "!raffle":
                                 await send_kick_message(
-                                    "Do you want to win a $100 super buy on Sweet Bonanza 1000? "
-                                    "All you gotta do is join my discord, verify with lelebot and follow the instructions -> "
-                                    "https://discord.gg/k7CXJtfrPY",
+                                    build_raffle_promo(get_guild_settings(guild_id)),
                                     guild_id=guild_id,
                                 )
 
@@ -2243,6 +2272,9 @@ async def deduplicate_command(ctx):
 
 # Store settings manager on bot for access throughout
 bot.settings_manager = bot_settings
+# Expose the per-guild settings accessor so cogs can read guild-scoped config
+# off the shared cache (e.g. raffle commands resolving campaign code / platform).
+bot.get_guild_settings = get_guild_settings
 
 # -------------------------
 # Bot lifecycle: start Kick chat listeners
@@ -3087,11 +3119,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
 
                                     # Handle !raffle command
                                     if content_stripped.lower() == "!raffle":
-                                        raffle_message = (
-                                            "Do you want to win a $100 super buy on Sweet Bonanza 1000? "
-                                            "All you gotta do is join my discord, verify with lelebot and follow the instructions -> "
-                                            "https://discord.gg/k7CXJtfrPY"
-                                        )
+                                        raffle_message = build_raffle_promo(get_guild_settings(guild_id))
                                         # Send message to Kick chat using the API
                                         await send_kick_message(raffle_message, guild_id=guild_id)
 
@@ -6862,10 +6890,17 @@ async def sync_shuffle_role_on_startup(bot, engine):
     try:
         # Sync for all guilds
         for guild in bot.guilds:
-            # Get the "Shuffle Code User" role
-            shuffle_role = discord.utils.get(guild.roles, name="Shuffle Code User")
+            # Resolve the verified-Shuffle role from the per-guild dashboard
+            # setting (shuffle_verified_role_id). Fall back to the legacy
+            # name lookup for servers that haven't configured the ID yet.
+            shuffle_role = None
+            role_id = get_guild_settings(guild.id).get_int("shuffle_verified_role_id")
+            if role_id:
+                shuffle_role = guild.get_role(role_id)
             if not shuffle_role:
-                continue  # Skip guilds without this role
+                shuffle_role = discord.utils.get(guild.roles, name="Shuffle Code User")
+            if not shuffle_role:
+                continue  # Skip guilds with no verified-Shuffle role configured
 
             # Get all verified Shuffle links for this guild
             with engine.begin() as conn:

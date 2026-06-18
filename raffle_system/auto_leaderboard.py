@@ -12,6 +12,7 @@ from discord.ext import tasks
 from sqlalchemy import text
 
 from .config import AUTO_LEADERBOARD_UPDATE_INTERVAL
+from .reward_settings import platform_display_name
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +119,12 @@ class AutoLeaderboard:
             start_date = stats["start_date"]
             end_date = stats["end_date"]
 
+            # Resolve the configured wager platform name for this server's messages.
+            platform = "Shuffle"
+            getter = getattr(self.bot, "get_guild_settings", None)
+            if callable(getter) and self.server_id is not None:
+                platform = platform_display_name(getter(self.server_id))
+
             # Check if period hasn't started yet
             now = datetime.now()
             if now < start_date:
@@ -133,7 +140,7 @@ class AutoLeaderboard:
                         f"📅 **Starts:** {start_date.strftime('%b %d, %Y at %I:%M %p')}\n"
                         f"📅 **Ends:** {end_date.strftime('%b %d, %Y at %I:%M %p')}\n\n"
                         f"⏳ **Time until start:** {time_msg}\n\n"
-                        f"Get ready to earn tickets by watching streams, gifting subs, and wagering on Shuffle!"
+                        f"Get ready to earn tickets by watching streams, gifting subs, and wagering on {platform}!"
                     ),
                     color=discord.Color.blue(),
                 )

@@ -44,6 +44,33 @@ def _get_setting_value(conn, key, server_id):
     return result[0] if result else None
 
 
+# Display names for the supported wager platforms (wager_platform_name is
+# stored lowercase, e.g. "shuffle" / "howl"). Falls back to a title-cased
+# version of whatever value is stored so an unknown platform still renders.
+_PLATFORM_DISPLAY_NAMES = {
+    "shuffle": "Shuffle",
+    "howl": "Howl",
+}
+
+
+def platform_display_name(settings, default="Shuffle"):
+    """Return the user-facing wager-platform name (e.g. "Shuffle" / "Howl").
+
+    Reads `wager_platform_name` from a BotSettingsManager. Used so raffle
+    messages show the platform the server is actually configured for instead
+    of a hardcoded "Shuffle".
+    """
+    if settings is None:
+        return default
+    try:
+        raw = (settings.get("wager_platform_name") or "").strip().lower()
+    except Exception:
+        return default
+    if not raw:
+        return default
+    return _PLATFORM_DISPLAY_NAMES.get(raw, raw.title())
+
+
 def get_ticket_reward_settings(engine, server_id=None, logger=None):
     """Return (watchtime_tickets, gifted_sub_tickets, wager_tickets) as display-safe strings."""
     watchtime_tickets = "10"

@@ -8,7 +8,7 @@ import logging
 
 from discord.ext import commands
 
-from setup_webhooks import setup_webhooks_for_server
+from setup_webhooks import WEBHOOK_URL, setup_webhooks_for_server
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ class WebhookSetupCommands(commands.Cog):
 • `channel.subscription.gifts` - Gifted sub tracking (auto-adds to raffle)
 • `channel.subscription.renewal` - Subscription renewals
 
-**Webhook URL:** `https://bot.lelebot.xyz/webhooks/kick`
+**Webhook URL:** `{WEBHOOK_URL}`
 
 Your bot will now receive real-time Kick events with secure signature verification! 🎉"""
                 )
