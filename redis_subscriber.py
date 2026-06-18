@@ -1827,6 +1827,25 @@ Congratulations! Please contact an admin to claim your prize! 🎊
 
             traceback.print_exc()
 
+    async def handle_subscriptions_event(self, action, data):
+        """Handle subscription tier changes from the dashboard.
+
+        On any tier change (Stripe webhook or super-admin override), the
+        dashboard publishes here so the bot drops its local tier cache for that
+        guild immediately — making chat-command gating reflect the new tier
+        instantly instead of waiting for the ~60s cache TTL to expire.
+        """
+        if action != "tier_changed":
+            return
+        guild_id = data.get("discord_server_id")
+        try:
+            from utils.subscription_tier import invalidate_cache
+
+            invalidate_cache(guild_id)
+            logger.info(f"🔄 Tier cache invalidated for guild {guild_id}")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to invalidate tier cache for {guild_id}: {e}")
+
     async def listen(self):
         """Listen for events on all dashboard channels"""
         if not self.enabled:
@@ -1847,6 +1866,7 @@ Congratulations! Please contact an admin to claim your prize! 🎊
             "dashboard:bot_settings",
             "dashboard:giveaway",
             "dashboard:stream_notification",
+            "dashboard:subscriptions",
             # 'bot_events' removed - no longer using webhooks for chat
         )
 
@@ -1899,6 +1919,8 @@ Congratulations! Please contact an admin to claim your prize! 🎊
                                 await self.handle_giveaway_event(action, data)
                             elif channel == "dashboard:stream_notification":
                                 await self.handle_stream_notification_event(action, data)
+                            elif channel == "dashboard:subscriptions":
+                                await self.handle_subscriptions_event(action, data)
                             # elif channel == 'bot_events':  # Disabled - using direct WebSocket
                             #     await self.handle_webhook_event(payload)
 
@@ -1929,6 +1951,7 @@ Congratulations! Please contact an admin to claim your prize! 🎊
                         "dashboard:bot_settings",
                         "dashboard:giveaway",
                         "dashboard:stream_notification",
+                        "dashboard:subscriptions",
                         # 'bot_events' removed - no longer using webhooks
                     )
 

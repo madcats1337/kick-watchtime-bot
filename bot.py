@@ -27,6 +27,7 @@ from sqlalchemy import create_engine, text  # type: ignore
 # before the core/redis_subscriber imports below, which can log at import time.
 from utils.log_context import clear_server, server_context, set_server  # noqa: E402
 from utils.logging_config import setup_logging  # noqa: E402
+from utils.subscription_tier import server_has_feature, upgrade_message  # noqa: E402
 
 # Disable Discord.py's default logging to reduce log spam
 logging.getLogger("discord").setLevel(logging.ERROR)
@@ -957,8 +958,12 @@ class KickWebSocketManager:
             content_stripped = content.strip()
             logger.info(f"🔍 Processing message: '{content_stripped[:50]}...'")
 
-            # Custom commands (from dashboard)
-            if hasattr(bot, "custom_commands_managers") and guild_id in bot.custom_commands_managers:
+            # Custom commands (from dashboard) — Tier 2+ feature.
+            if (
+                hasattr(bot, "custom_commands_managers")
+                and guild_id in bot.custom_commands_managers
+                and server_has_feature(engine, guild_id, "commands")
+            ):
                 try:
                     commands_manager = bot.custom_commands_managers[guild_id]
                     original_guild_id = getattr(commands_manager, "discord_server_id", None)
@@ -977,6 +982,11 @@ class KickWebSocketManager:
             # !points command
             if content_stripped.lower() == "!points":
                 logger.info(f"💰 Processing !points command from {username}")
+                # Point shop is a Tier 2+ feature.
+                if not server_has_feature(engine, guild_id, "point_shop"):
+                    logger.info(f"🔒 !points blocked: server tier lacks point_shop")
+                    await send_kick_message(upgrade_message(username, "point_shop"), guild_id=guild_id)
+                    return
                 try:
                     with engine.connect() as conn:
                         result = conn.execute(
@@ -1008,6 +1018,12 @@ class KickWebSocketManager:
             # !call / !sr commands (slot requests)
             elif content_stripped.startswith(("!call", "!sr")):
                 logger.info(f"🎰 Detected slot command: {content_stripped[:50]}")
+                # Slot requests are a Tier 1 (free) feature — gated for
+                # uniformity / future suspended-server handling.
+                if not server_has_feature(engine, guild_id, "slot_requests"):
+                    logger.info(f"🔒 !sr blocked: server tier lacks slot_requests")
+                    await send_kick_message(upgrade_message(username, "slot_requests"), guild_id=guild_id)
+                    return
                 logger.info(f"🔍 Has slot_trackers: {hasattr(bot, 'slot_trackers')}")
 
                 # Use guild-specific tracker (check both naming conventions)
@@ -1072,6 +1088,12 @@ class KickWebSocketManager:
             # !gtb command
             elif content_stripped.lower().startswith("!gtb"):
                 logger.info(f"🎲 Processing !gtb command from {username}")
+                # Guess the Balance is a Tier 1 (free) feature — gated for
+                # uniformity / future suspended-server handling.
+                if not server_has_feature(engine, guild_id, "gtb"):
+                    logger.info(f"🔒 !gtb blocked: server tier lacks gtb")
+                    await send_kick_message(upgrade_message(username, "gtb"), guild_id=guild_id)
+                    return
                 parts = content_stripped.split(maxsplit=1)
                 if len(parts) == 2:
                     amount = parse_amount(parts[1])

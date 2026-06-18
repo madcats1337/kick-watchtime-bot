@@ -373,6 +373,18 @@ class TimedMessagesManager:
         if not self.kick_send_callback:
             return
 
+        # Timed messages are a Tier 2+ feature. Skip the whole cycle when the
+        # guild's subscription doesn't grant it. (guild_id=None is the legacy
+        # all-guilds mode, which predates per-guild tiers — leave it ungated.)
+        if self.guild_id is not None:
+            try:
+                from utils.subscription_tier import server_has_feature
+
+                if not server_has_feature(self.engine, self.guild_id, "timed_messages"):
+                    return
+            except Exception as e:
+                logger.debug(f"[Timed Messages] tier check failed, allowing: {e}")
+
         # Routine per-minute/per-guild check — DEBUG to avoid log spam.
         enabled_count = sum(1 for msg in self.messages.values() if msg.enabled)
         if enabled_count > 0:

@@ -1,0 +1,133 @@
+"""
+Subscription tier lookups for the bot.
+
+The bot shares ONE Postgres database with the Admin-Dashboard, which owns the
+`server_subscriptions` table. This module reads (never writes) that table to
+decide whether a per-server feature is enabled for a guild, so chat commands
+can be gated by the same tiers the dashboard enforces.
+
+Mirrors Admin-Dashboard/utils/tiers.py — keep the feature map and effective-
+tier rules in sync between the two repos.
+
+Sync by design: the bot's command handlers already use synchronous
+`engine.connect()` queries inside async callbacks, so these helpers follow the
+same idiom (no await).
+"""
+
+import logging
+import time
+
+from sqlalchemy import text
+
+logger = logging.getLogger(__name__)
+
+# Cumulative feature -> tier map. MUST match Admin-Dashboard/utils/tiers.py.
+FREE = ["bonus_hunt", "slot_requests", "gtb", "widgets"]
+TIER2 = FREE + [
+    "extension",
+    "point_shop",
+    "point_rewards",
+    "commands",
+    "timed_messages",
+    "personal_subdomain",
+]
+TIER3 = TIER2 + ["full_dashboard"]
+
+TIER_FEATURES = {"free": FREE, "tier2": TIER2, "tier3": TIER3}
+
+# Small in-process cache so we don't hit the DB on every chat line. Keyed by
+# guild_id -> (tier, expires_at). The dashboard caches in Redis (~60s); a short
+# local TTL here is enough since tier changes are rare and not latency-critical.
+_CACHE_TTL = 60.0
+_cache: dict[int, tuple[str, float]] = {}
+
+
+def get_server_tier(engine, guild_id) -> str:
+    """Effective tier for a guild: 'free' | 'tier2' | 'tier3'.
+
+    Resolution order (mirrors the dashboard):
+      1. No row / no guild      -> 'free'
+      2. manual_override        -> override_tier
+      3. status past_due/cancel -> 'free'
+      4. otherwise              -> stored tier
+
+    Fails open to 'free' on any DB error so a billing hiccup never blocks chat.
+    """
+    if guild_id is None:
+        return "free"
+    try:
+        guild_id = int(guild_id)
+    except (TypeError, ValueError):
+        return "free"
+
+    now = time.monotonic()
+    cached = _cache.get(guild_id)
+    if cached and cached[1] > now:
+        return cached[0]
+
+    tier = "free"
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT tier, status, manual_override, override_tier
+                    FROM server_subscriptions
+                    WHERE discord_server_id = :guild_id
+                    """
+                ),
+                {"guild_id": guild_id},
+            ).fetchone()
+        if row:
+            db_tier, status, manual_override, override_tier = row[0], row[1], row[2], row[3]
+            if manual_override and override_tier:
+                tier = override_tier
+            elif status in ("past_due", "canceled"):
+                tier = "free"
+            else:
+                tier = db_tier or "free"
+    except Exception as e:
+        logger.warning(f"get_server_tier({guild_id}) failed, defaulting to free: {e}")
+        return "free"
+
+    if tier not in TIER_FEATURES:
+        tier = "free"
+
+    _cache[guild_id] = (tier, now + _CACHE_TTL)
+    return tier
+
+
+def server_has_feature(engine, guild_id, feature_key: str) -> bool:
+    """True if the guild's effective tier grants `feature_key`."""
+    return feature_key in TIER_FEATURES.get(get_server_tier(engine, guild_id), FREE)
+
+
+def tier_needed_for(feature_key: str) -> str:
+    """Cheapest tier that grants `feature_key` (for upgrade messages)."""
+    for tier in ("free", "tier2", "tier3"):
+        if feature_key in TIER_FEATURES[tier]:
+            return tier
+    return "tier3"
+
+
+# Human labels for chat replies.
+TIER_LABEL = {"free": "Tier 1", "tier2": "Tier 2", "tier3": "Tier 3"}
+
+
+def upgrade_message(username: str, feature_key: str) -> str:
+    """Standard chat reply when a command is gated by tier."""
+    needed = TIER_LABEL.get(tier_needed_for(feature_key), "a higher tier")
+    return f"@{username} This feature requires {needed}. Ask the streamer to upgrade on the dashboard."
+
+
+def invalidate_cache(guild_id=None) -> None:
+    """Drop the local tier cache (all, or one guild). Called by the Redis
+    subscriber's handle_subscriptions_event on every dashboard tier change so
+    gating reflects the new tier instantly."""
+    if guild_id is None:
+        _cache.clear()
+    else:
+        try:
+            _cache.pop(int(guild_id), None)
+        except (TypeError, ValueError):
+            pass
