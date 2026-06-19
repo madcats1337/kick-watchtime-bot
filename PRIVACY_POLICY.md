@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Last Updated:** May 2026
+**Last Updated:** June 2026
 
 **Service:** LeleBot - Discord Bot, Admin Dashboard & Browser Extension
 
@@ -96,6 +96,19 @@ The LeleBot Browser Extension is an optional companion to your Admin Dashboard. 
 - It does not execute remote code; all of its code is contained in the published package.
 - It only communicates with your own LeleBot dashboard — never with third-party servers.
 
+### 2.5 Subscription and Billing Information
+
+If you purchase a paid subscription, payment is processed by **Stripe, Inc.**, our third-party payment processor.
+
+**We do NOT collect or store your full payment card details.** Your card number, expiry, and security code are entered directly into Stripe's systems and are handled by Stripe, not by us.
+
+**What we store about a subscription** (in our database, keyed to your Discord server):
+- A Stripe customer identifier and subscription identifier
+- Your current subscription tier (free, tier2, or tier3) and status (active, past due, or canceled)
+- The date your current billing period ends, and whether the subscription is set to cancel at period end
+
+**What Stripe handles and may collect** to process your payment includes your payment method details, billing name, and related transaction information, in accordance with Stripe's own privacy policy (https://stripe.com/privacy). We receive from Stripe only the non-card information needed to provision and manage your subscription (such as the identifiers and status above).
+
 ## 3. How We Use Your Information
 
 **Core Bot Functionality:**
@@ -128,6 +141,12 @@ The LeleBot Browser Extension is an optional companion to your Admin Dashboard. 
 - Show your active bonus hunt, slot calls, Guess-the-Balance status, and raffle info
 - Let you add slots to your hunt and trigger dashboard actions (pick random slot, open/close GTB, toggle slot requests) from supported sites
 - Cache the above locally so the popup and in-page panel render instantly
+
+**Billing & Subscriptions:**
+- Provision and manage paid subscription tiers per Discord server
+- Process recurring payments through Stripe and respond to payment events (renewal, cancellation, payment failure)
+- Determine which features a server can access based on its current tier
+- Provide access to the Stripe billing portal so you can manage your subscription and payment method
 
 **Security & Compliance:**
 - Prevent abuse, farming, and fraud through anti-farming measures
@@ -200,30 +219,33 @@ The LeleBot Browser Extension is an optional companion to your Admin Dashboard. 
 - Configuration history retained indefinitely
 - Login records retained for security purposes
 
+**Subscription & Billing Data:**
+- Subscription records (tier, status, Stripe identifiers, period end) retained while the server exists and for a reasonable period afterward for accounting and tax purposes
+- Full payment card details are never stored by us; they are held by Stripe under Stripe's retention practices
+
 ### 4.3 Security Measures
 
 **Encryption & Authentication:**
-- All database connections use SSL/TLS encryption
-- OAuth tokens encrypted with AES-256
+- Database connections use SSL/TLS encryption
+- OAuth tokens are encrypted at rest
 - HMAC-SHA256 signature verification for OAuth links
 - PKCE (Proof Key for Code Exchange) for OAuth security
-- Time-limited token expiration (1-10 minutes)
-- Multi-factor authentication available for dashboard
+- Time-limited OAuth state/token expiration
+- Authentication via Discord OAuth; access is scoped per Discord server
 
 **Access Control:**
 - Environment-based credential management (no hardcoded secrets)
-- Role-based access control (RBAC) for dashboard
+- Role-based access control for the dashboard
 - Authentication required for all sensitive operations
 - Admin actions logged with timestamp and user ID
-- IP-based rate limiting on authentication endpoints
+- Rate limiting on sensitive endpoints
 
 **Operational Security:**
-- Regular security audits and penetration testing
-- Automated dependency updates and patching
-- Monitoring for suspicious activity patterns
-- Intrusion detection systems
-- Regular backup testing and disaster recovery drills
-- Security incident response procedures
+- Payment webhooks are signature-verified before processing
+- Dependencies are kept up to date
+- Access is restricted to authenticated services
+
+While we use industry-standard measures to protect your data, no method of transmission or storage is completely secure, and we cannot guarantee absolute security.
 
 ## 5. Data Sharing and Disclosure
 
@@ -250,11 +272,10 @@ The LeleBot Browser Extension is an optional companion to your Admin Dashboard. 
 - To comply with valid court orders
 
 **Service Providers:**
-- **Discord** - For bot functionality and message handling
+- **Discord** - For bot functionality, authentication, and message handling
 - **Kick.com** - For OAuth authentication and chat monitoring
+- **Stripe** - For processing paid subscription payments
 - **Railway.app** - For hosting and infrastructure
-- **PostgreSQL** - For data storage and backup
-- **Amazon Web Services** (if applicable) - For storage infrastructure
 
 ### 5.2 What We DO NOT Share
 
@@ -267,8 +288,10 @@ We strictly do not:
 - Share private account information
 - Share Discord IDs or sensitive identifiers without authorization
 - Share dashboard access credentials
-- Share email addresses or contact information
+- Share email addresses or contact information for marketing
 - Use data for any purpose beyond stated functionality
+
+This does not restrict the limited information necessarily provided to the service providers listed above (such as Stripe for payment processing) to operate the Service on your behalf.
 
 ## 6. Your Rights and Choices
 
@@ -310,6 +333,11 @@ Note: Raffle draw records may be retained for transparency.
 - Privacy Policy: https://kick.com/privacy
 - Used for: OAuth authentication, chat monitoring, stream information
 - Monitoring: We track public chat messages for watchtime; no private messages stored
+
+**Stripe:**
+- Privacy Policy: https://stripe.com/privacy
+- Used for: Processing paid subscription payments and recurring billing
+- Data shared: Your payment method and billing details are provided directly to Stripe; we receive only subscription identifiers and status. We do not store full card details.
 
 **Gambling Platforms** (Shuffle, Stake, Stake.us, etc.):
 - Used for: Wager tracking and verification via public APIs
@@ -397,11 +425,9 @@ These automated decisions do not have legal effects beyond Discord server role a
 
 ## 16. Contact Information
 
-For privacy-related questions, concerns, or requests:
-- Contact server administrators in the Discord server where the bot is deployed
-- Open an issue on the GitHub repository
-- Contact server administrators in the Discord server where the bot is deployed
-- For data deletion requests, contact an administrator with "Manage Server" permissions
+For privacy-related questions, concerns, billing inquiries, or data requests:
+- Email **support@lelebot.xyz**
+- For requests specific to a particular Discord community, you may also contact that server's administrators (for data deletion, an administrator with "Manage Server" permissions)
 - Visit the Admin Dashboard for server-specific support
 
 ---

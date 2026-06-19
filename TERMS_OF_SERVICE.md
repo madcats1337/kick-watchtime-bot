@@ -1,6 +1,6 @@
 # Terms of Service
 
-**Last Updated:** May 2026
+**Last Updated:** June 2026
 
 ## 1. Acceptance of Terms
 
@@ -8,7 +8,7 @@ By using the LeleBot Discord bot, the associated Admin Dashboard, and the LeleBo
 
 ## 2. Description of Service
 
-LeleBot is a comprehensive Discord-Kick integration platform providing automation, community engagement, and fair gaming systems. The Service includes:
+LeleBot is a comprehensive Discord-Kick integration platform providing automation, community engagement, and fair gaming systems. The Service is offered on a freemium basis: a free tier is available to everyone, and paid subscription tiers unlock additional features (see Section 11, "Subscriptions and Billing"). The Service includes:
 
 **Core Discord Bot Features:**
 - **Account Linking:** Secure OAuth 2.0 linking between Discord and Kick.com accounts
@@ -116,13 +116,42 @@ You may NOT:
 - Verification tools are publicly available at `/provably-fair/winners#verify`
 - We do not and cannot manipulate provably fair outcomes
 
-## 11. Data Collection and Privacy
+## 11. Subscriptions and Billing
+
+LeleBot offers a free tier and paid subscription tiers. Subscriptions apply per Discord server.
+
+**Tiers and pricing:**
+- **Tier 1 (Free):** Bonus Hunt, Slot Requests, Guess the Balance, and OBS widgets for those features. No payment required.
+- **Tier 2 ($20.00 USD / month):** Everything in Tier 1, plus the Browser Extension, Point Shop and Point Rewards, Custom Commands, Timed Messages, Giveaways, and a personal sub-domain.
+- **Tier 3 ($35.00 USD / month):** Everything in Tier 2, plus full dashboard access (activity logs, role-based access control, and all settings), Raffle, Clips, Wager tracking, and hands-on setup help.
+
+Feature availability by tier is current as of the "Last Updated" date and may change; the in-app pricing page reflects the then-current offering.
+
+**Payment processing:**
+- Paid subscriptions are processed by **Stripe, Inc.**, our third-party payment processor. By subscribing, you also agree to Stripe's terms and authorize Stripe to charge your payment method on a recurring monthly basis.
+- We do not collect or store your full payment card details. Card data is handled by Stripe. We store only a Stripe customer identifier, a subscription identifier, your current subscription tier and status, and the date the current billing period ends (see the Privacy Policy).
+
+**Billing, renewal, and cancellation:**
+- Paid subscriptions are billed monthly in advance and renew automatically until cancelled.
+- You may cancel at any time from the Billing page in your dashboard (which opens the Stripe billing portal). When you cancel, your paid features remain active until the end of the current billing period, after which the server is downgraded to the Free tier.
+- If a payment fails, the subscription may be marked past due and the server downgraded to the Free tier until payment is resolved.
+
+**Refunds:**
+- Payments are **non-refundable**, except where a refund is required by applicable law. Cancelling stops future charges; it does not refund the current or prior billing periods.
+
+**Downgrades and your data:**
+- Downgrading or cancelling locks the paid features but **does not delete your server's data**. If you re-subscribe, your data and configuration are restored.
+
+**Price changes:**
+- We may change subscription pricing or the features included in a tier. We will make commercially reasonable efforts to communicate material changes in advance. Price changes do not apply to a billing period you have already paid for.
+
+## 12. Data Collection and Privacy
 
 - The Service collects and stores data as described in our Privacy Policy
 - By using the Service, you consent to data collection as outlined in the Privacy Policy
 - Data is stored securely and used only for Service functionality
 
-## 12. Termination
+## 13. Termination
 
 We reserve the right to:
 - Terminate or suspend your access to the Service at any time
@@ -136,7 +165,7 @@ Reasons for termination may include:
 - Abuse of the Service's features
 - At the request of server administrators
 
-## 13. Disclaimer of Warranties
+## 14. Disclaimer of Warranties
 
 THE SERVICE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. WE DO NOT GUARANTEE:
 - Uninterrupted or error-free operation
@@ -145,7 +174,7 @@ THE SERVICE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED
 - That the Service will meet your specific requirements
 - Fairness of outcomes beyond the provably fair algorithm
 
-## 14. Limitation of Liability
+## 15. Limitation of Liability
 
 TO THE MAXIMUM EXTENT PERMITTED BY LAW, WE SHALL NOT BE LIABLE FOR:
 - Any indirect, incidental, special, or consequential damages
@@ -154,38 +183,39 @@ TO THE MAXIMUM EXTENT PERMITTED BY LAW, WE SHALL NOT BE LIABLE FOR:
 - Damages resulting from use or inability to use the Service
 - Outcomes of raffles, giveaways, or slot reward systems
 
-## 15. Third-Party Services
+## 16. Third-Party Services
 
 The Service integrates with third-party services including:
-- **Discord** - Chat platform and bot hosting
+- **Discord** - Chat platform and OAuth provider
 - **Kick.com** - Streaming platform and OAuth provider
-- **Pusher** - Real-time messaging
+- **Stripe** - Payment processing for paid subscriptions
 - **Railway.app** - Hosting infrastructure
 
 You are subject to the terms and policies of these third-party services.
 
-## 16. Intellectual Property
+## 17. Intellectual Property
 
 - The Service and its original content, features, and functionality are owned by LeleBot
 - You may not copy, modify, distribute, or create derivative works without permission
 - OBS overlays may be used for streaming purposes as intended
 
-## 17. Changes to Terms
+## 18. Changes to Terms
 
 We reserve the right to modify these Terms at any time. Changes will be effective immediately upon posting. Your continued use of the Service after changes constitutes acceptance of the modified Terms.
 
-## 18. Severability
+## 19. Severability
 
 If any provision of these Terms is found to be unenforceable or invalid, that provision shall be limited or eliminated to the minimum extent necessary, and the remaining provisions shall remain in full force and effect.
 
-## 19. Governing Law
+## 20. Governing Law
 
 These Terms shall be governed by and construed in accordance with applicable laws, without regard to conflict of law principles.
 
-## 20. Contact Information
+## 21. Contact Information
 
-For questions about these Terms:
-- Contact server administrators in the Discord server where the bot is deployed
+For questions about these Terms, billing, or your subscription:
+- Email **support@lelebot.xyz**
+- For questions specific to a particular Discord community, contact that server's administrators
 - Visit the Admin Dashboard for server-specific support
 
 ---
