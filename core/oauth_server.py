@@ -41,6 +41,16 @@ except ImportError:
     register_webhook_routes = None
     WebhookEventHandler = None
 
+# Import Twitch webhook handlers (independent of Kick availability)
+try:
+    from .twitch_webhooks import create_twitch_event_handler, register_twitch_webhook_routes
+
+    HAS_TWITCH = True
+except ImportError:
+    HAS_TWITCH = False
+    register_twitch_webhook_routes = None
+    create_twitch_event_handler = None
+
 # -------------------------
 # 🔒 Security: OAuth Token Signing
 # -------------------------
@@ -402,6 +412,14 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
     logger.info("[OAuth] ✅ Webhook routes registered at /webhooks/kick")
 else:
     logger.info("[OAuth] ⚠️ Kick webhook support not available")
+
+# Register Twitch EventSub webhook routes if available
+if HAS_TWITCH and register_twitch_webhook_routes:
+    twitch_webhook_handler = create_twitch_event_handler()
+    register_twitch_webhook_routes(app, twitch_webhook_handler)
+    logger.info("[OAuth] ✅ Twitch EventSub routes registered at /webhooks/twitch")
+else:
+    logger.info("[OAuth] ⚠️ Twitch webhook support not available")
 
 
 # 404 handler - ignore not found errors (bots/scanners)
@@ -1588,9 +1606,9 @@ def handle_user_linking_callback(code, code_verifier, state, discord_id, created
                 conn.execute(
                     text(
                         """
-                    INSERT INTO links (discord_id, kick_name, discord_server_id)
-                    VALUES (:d, :k, :gid)
-                    ON CONFLICT(discord_id, discord_server_id) DO UPDATE
+                    INSERT INTO links (discord_id, kick_name, discord_server_id, platform)
+                    VALUES (:d, :k, :gid, 'kick')
+                    ON CONFLICT(discord_id, discord_server_id, platform) DO UPDATE
                     SET kick_name = excluded.kick_name, linked_at = CURRENT_TIMESTAMP
                 """
                     ),
@@ -1601,11 +1619,11 @@ def handle_user_linking_callback(code, code_verifier, state, discord_id, created
                 error_str = str(insert_error).lower()
                 if "unique constraint" in error_str or "duplicate key" in error_str:
                     logger.warning(f"⚠️ Falling back to DELETE+INSERT due to old schema: {insert_error}")
-                    # Delete existing link for this user on this server
+                    # Delete existing Kick link for this user on this server
                     conn.execute(
                         text(
                             """
-                        DELETE FROM links WHERE discord_id = :d AND discord_server_id = :gid
+                        DELETE FROM links WHERE discord_id = :d AND discord_server_id = :gid AND platform = 'kick'
                     """
                         ),
                         {"d": discord_id, "gid": guild_id},
@@ -1615,7 +1633,7 @@ def handle_user_linking_callback(code, code_verifier, state, discord_id, created
                         conn.execute(
                             text(
                                 """
-                            DELETE FROM links WHERE discord_id = :d AND (discord_server_id IS NULL OR discord_server_id = 0)
+                            DELETE FROM links WHERE discord_id = :d AND (discord_server_id IS NULL OR discord_server_id = 0) AND platform = 'kick'
                         """
                             ),
                             {"d": discord_id},
@@ -1624,8 +1642,8 @@ def handle_user_linking_callback(code, code_verifier, state, discord_id, created
                     conn.execute(
                         text(
                             """
-                        INSERT INTO links (discord_id, kick_name, discord_server_id, linked_at)
-                        VALUES (:d, :k, :gid, CURRENT_TIMESTAMP)
+                        INSERT INTO links (discord_id, kick_name, discord_server_id, platform, linked_at)
+                        VALUES (:d, :k, :gid, 'kick', CURRENT_TIMESTAMP)
                     """
                         ),
                         {"d": discord_id, "k": kick_username.lower(), "gid": guild_id},
@@ -1670,6 +1688,153 @@ def handle_user_linking_callback(code, code_verifier, state, discord_id, created
 
     except Exception as e:
         logger.error(f"❌ [OAuth] Error during callback: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return render_error(f"An error occurred: {str(e)}")
+
+
+# =====================================================
+# TWITCH VIEWER ACCOUNT LINKING (link panel button flow)
+# Mirrors /auth/kick + /auth/kick/callback. Writes a links row with
+# platform='twitch' and notifies the bot (oauth_notifications) to grant the
+# linked role — reusing the same machinery as Kick.
+# =====================================================
+
+TWITCH_AUTHORIZE_URL = "https://id.twitch.tv/oauth2/authorize"
+TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
+TWITCH_USERS_URL = "https://api.twitch.tv/helix/users"
+
+
+@app.route("/auth/twitch/link")
+def auth_twitch_link():
+    """Initiate Twitch viewer OAuth (signed link from the Discord link panel)."""
+    discord_id = request.args.get("discord_id")
+    guild_id = request.args.get("guild_id", "0")
+    timestamp_str = request.args.get("timestamp")
+    signature = request.args.get("signature")
+
+    if not discord_id or not timestamp_str or not signature:
+        return "❌ Missing required parameters (discord_id, timestamp, signature)", 400
+    try:
+        timestamp = int(timestamp_str)
+    except ValueError:
+        return "❌ Invalid timestamp format", 400
+
+    if not verify_discord_id_signature(discord_id, timestamp, signature, guild_id):
+        logger.info(f"🚨 SECURITY: Invalid Twitch OAuth signature for Discord ID {discord_id}")
+        return (
+            "❌ Invalid or expired authentication token. Please use the link panel in Discord to get a new link.",
+            403,
+        )
+
+    client_id = os.getenv("TWITCH_CLIENT_ID")
+    if not client_id:
+        return "❌ Twitch OAuth not configured. Please set TWITCH_CLIENT_ID.", 500
+
+    state = secrets.token_urlsafe(32)
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM oauth_states WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes'"))
+        # code_verifier column tags the provider for the shared callback router.
+        conn.execute(
+            text(
+                """
+                INSERT INTO oauth_states (state, discord_id, code_verifier, created_at, guild_id)
+                VALUES (:state, :discord_id, 'twitch_link', CURRENT_TIMESTAMP, :guild_id)
+                """
+            ),
+            {"state": state, "discord_id": int(discord_id), "guild_id": int(guild_id)},
+        )
+
+    redirect_uri = f"{OAUTH_BASE_URL}/auth/twitch/link/callback"
+    # Viewer linking only needs identity; no chat/sub scopes.
+    auth_params = {
+        "client_id": client_id,
+        "response_type": "code",
+        "redirect_uri": redirect_uri,
+        "state": state,
+        "scope": "",  # public identity via /helix/users needs no scope
+    }
+    return redirect(f"{TWITCH_AUTHORIZE_URL}?{urlencode(auth_params)}")
+
+
+@app.route("/auth/twitch/link/callback")
+def auth_twitch_link_callback():
+    """Handle Twitch viewer OAuth callback — create the links row (platform='twitch')."""
+    import requests
+
+    code = request.args.get("code")
+    state = request.args.get("state")
+    error = request.args.get("error")
+    if error:
+        return render_error(f"Twitch authorization failed: {error}")
+    if not code or not state:
+        return render_error("Missing authorization code or state")
+
+    # Validate + consume state.
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT discord_id, guild_id FROM oauth_states WHERE state = :s"),
+            {"s": state},
+        ).fetchone()
+    if not row:
+        return render_error("Invalid or expired link. Please use the panel again.")
+    discord_id, guild_id = int(row[0]), int(row[1] or 0)
+
+    client_id = os.getenv("TWITCH_CLIENT_ID")
+    client_secret = os.getenv("TWITCH_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        return render_error("Twitch OAuth not configured")
+    redirect_uri = f"{OAUTH_BASE_URL}/auth/twitch/link/callback"
+
+    try:
+        token_resp = requests.post(
+            TWITCH_TOKEN_URL,
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "client_id": client_id,
+                "client_secret": client_secret,
+            },
+            timeout=15,
+        )
+        if token_resp.status_code != 200:
+            return render_error(f"Token exchange failed: {token_resp.status_code}")
+        access_token = token_resp.json().get("access_token")
+
+        user_resp = requests.get(
+            TWITCH_USERS_URL,
+            headers={"Authorization": f"Bearer {access_token}", "Client-Id": client_id},
+            timeout=10,
+        )
+        twitch_login = None
+        if user_resp.status_code == 200:
+            udata = (user_resp.json().get("data") or [{}])[0]
+            twitch_login = udata.get("login")
+        if not twitch_login:
+            return render_error("Could not read your Twitch username")
+
+        # Create/update the link (platform='twitch') + notify the bot to grant the role.
+        from core.stream_links import upsert_link
+
+        upsert_link(engine, discord_id, twitch_login, guild_id, platform="twitch")
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM oauth_states WHERE state = :s"), {"s": state})
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO oauth_notifications (discord_id, kick_username, discord_server_id, platform)
+                    VALUES (:d, :k, :g, 'twitch')
+                    """
+                ),
+                {"d": discord_id, "k": twitch_login, "g": guild_id},
+            )
+
+        logger.info(f"✅ Twitch link successful: Discord {discord_id} -> Twitch {twitch_login}")
+        return render_success(twitch_login, discord_id)
+    except Exception as e:
+        logger.error(f"❌ [Twitch OAuth] Error during callback: {e}")
         import traceback
 
         traceback.print_exc()

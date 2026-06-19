@@ -37,6 +37,9 @@ TIER3 = TIER2 + [
     "raffle",
     "clips",
     "wagers",
+    # Running more than one stream platform (Kick + Twitch) at once. Mirror of
+    # Admin-Dashboard/utils/tiers.py.
+    "multi_platform",
 ]
 
 TIER_FEATURES = {"free": FREE, "tier2": TIER2, "tier3": TIER3}

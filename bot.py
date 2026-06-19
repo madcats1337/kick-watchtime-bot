@@ -55,6 +55,7 @@ from features.linking.howl_panel import setup_howl_panel_system
 # Link panel import
 from features.linking.link_panel import setup_link_panel_system
 from features.linking.shuffle_panel import setup_shuffle_panel_system
+from features.linking.twitch_panel import setup_twitch_link_panel_system
 
 # Timed messages import
 from features.messaging.timed_messages import setup_timed_messages
@@ -78,6 +79,7 @@ from raffle_system.database import (
 )
 from raffle_system.gifted_sub_tracker import setup_gifted_sub_handler
 from raffle_system.migrations.add_commit_reveal_to_periods import migrate_add_commit_reveal_to_periods
+from raffle_system.migrations.add_platform_to_links import migrate_add_platform_to_links
 from raffle_system.migrations.add_provably_fair_to_draws import migrate_add_provably_fair_to_draws
 from raffle_system.migrations.platform_scope_raffle_constraints import migrate_platform_scope_raffle_constraints
 from raffle_system.scheduler import setup_raffle_scheduler
@@ -244,6 +246,20 @@ def generate_signed_oauth_url(discord_id: int, guild_id: int = None) -> str:
     sig_encoded = base64.urlsafe_b64encode(signature).decode().rstrip("=")
 
     return f"{OAUTH_BASE_URL}/auth/kick?discord_id={discord_id}&guild_id={guild_id}&timestamp={timestamp}&signature={sig_encoded}"
+
+
+def generate_signed_twitch_oauth_url(discord_id: int, guild_id: int = None) -> str:
+    """
+    Signed viewer-OAuth URL for Twitch account linking (mirrors the Kick version).
+    Points at the bot OAuth server's /auth/twitch/link route. The signature scheme
+    is identical, so verify_discord_id_signature validates both.
+    """
+    timestamp = int(datetime.now(timezone.utc).timestamp())
+    guild_id = guild_id or 0
+    message = f"{discord_id}:{guild_id}:{timestamp}"
+    signature = hmac.new(OAUTH_SECRET_KEY.encode(), message.encode(), hashlib.sha256).digest()
+    sig_encoded = base64.urlsafe_b64encode(signature).decode().rstrip("=")
+    return f"{OAUTH_BASE_URL}/auth/twitch/link?discord_id={discord_id}&guild_id={guild_id}&timestamp={timestamp}&signature={sig_encoded}"
 
 
 # URLs and Pusher config
@@ -1393,6 +1409,79 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
         return False
 
 
+async def send_twitch_message(message: str, guild_id: int = None) -> bool:
+    """
+    Send a message to Twitch chat via the Helix Send Chat Message endpoint, using
+    the bot account's user token (user:write:chat + user:bot).
+    https://dev.twitch.tv/docs/chat/send-receive-messages/
+
+    Resolves the broadcaster id from bot_settings(twitch_broadcaster_user_id) and
+    the bot sender id from TWITCH_BOT_USER_ID. Returns True on success.
+    """
+    try:
+        import os as _os
+
+        from sqlalchemy import text as _text
+
+        bot_user_id = _os.getenv("TWITCH_BOT_USER_ID")
+        if not bot_user_id:
+            logger.info("[Twitch Send] TWITCH_BOT_USER_ID not set")
+            return False
+
+        with engine.connect() as conn:
+            row = conn.execute(
+                _text(
+                    "SELECT value FROM bot_settings WHERE key = 'twitch_broadcaster_user_id' AND discord_server_id = :g"
+                ),
+                {"g": guild_id},
+            ).fetchone()
+            broadcaster_id = row[0] if row else None
+            # Bot account user token (stored by its OAuth link under auth/twitch_oauth_tokens).
+            tok = conn.execute(
+                _text("SELECT access_token FROM twitch_oauth_tokens WHERE user_id = :u LIMIT 1"),
+                {"u": int(bot_user_id) if str(bot_user_id).isdigit() else 0},
+            ).fetchone()
+            access_token = tok[0] if tok else None
+
+        if not broadcaster_id or not access_token:
+            logger.info("[Twitch Send] Missing broadcaster id or bot token — cannot send")
+            return False
+
+        from core.twitch_api import TwitchAPI
+
+        api = TwitchAPI(access_token=access_token)
+        try:
+            result = await api.send_chat_message(broadcaster_id, bot_user_id, message)
+            if result.get("is_sent"):
+                return True
+            logger.info(f"[Twitch Send] Not sent: {result.get('drop_reason')}")
+            return False
+        finally:
+            await api.close()
+    except Exception as e:
+        logger.info(f"[Twitch Send] Failed: {e}")
+        return False
+
+
+async def send_stream_message(message: str, guild_id: int = None) -> bool:
+    """
+    Send a chat message to whichever stream platform(s) the server runs (per the
+    `stream_platforms` setting). Sends to each active platform; returns True if any
+    send succeeded. Use this for cross-platform announcements (raffle winners, etc.)
+    instead of send_kick_message directly.
+    """
+    from utils.bot_settings import BotSettingsManager
+
+    platforms_raw = BotSettingsManager(engine, guild_id).get("stream_platforms", "kick") or "kick"
+    active = [p.strip() for p in str(platforms_raw).split(",") if p.strip()] or ["kick"]
+    ok = False
+    if "kick" in active:
+        ok = await send_kick_message(message, guild_id=guild_id) or ok
+    if "twitch" in active:
+        ok = await send_twitch_message(message, guild_id=guild_id) or ok
+    return ok
+
+
 # -------------------------
 # -------------------------
 # Database setup and utilities
@@ -1515,6 +1604,12 @@ try:
         );
         """
             )
+        )
+
+        # Platform tag so the role-grant picks the right linked-role per platform
+        # (kick_linked_role_id vs twitch_linked_role_id). Backfills to 'kick'.
+        conn.execute(
+            text("ALTER TABLE oauth_notifications ADD COLUMN IF NOT EXISTS platform TEXT NOT NULL DEFAULT 'kick'")
         )
 
         # Create link_panels table for reaction-based OAuth linking
@@ -3927,7 +4022,7 @@ async def check_oauth_notifications_task():
             notifications = conn.execute(
                 text(
                     """
-                SELECT id, discord_id, kick_username, channel_id, message_id, discord_server_id
+                SELECT id, discord_id, kick_username, channel_id, message_id, discord_server_id, platform
                 FROM oauth_notifications
                 WHERE processed = FALSE AND kick_username != ''
                 ORDER BY created_at ASC
@@ -3936,7 +4031,15 @@ async def check_oauth_notifications_task():
                 )
             ).fetchall()
 
-            for notification_id, discord_id, kick_username, channel_id, message_id, guild_id in notifications:
+            for (
+                notification_id,
+                discord_id,
+                kick_username,
+                channel_id,
+                message_id,
+                guild_id,
+                link_platform,
+            ) in notifications:
                 # Tag this notification's logging with its server.
                 _g = bot.get_guild(int(guild_id)) if guild_id else None
                 set_server(guild_id, _g.name if _g else None)
@@ -4044,18 +4147,26 @@ async def check_oauth_notifications_task():
                                         if not member:
                                             logger.warning(f"⚠️ Member {discord_id} not found in guild {guild.name}")
                                         else:
-                                            # Get linked role ID from bot_settings
+                                            # Get linked role ID from bot_settings — platform-aware
+                                            # (twitch_linked_role_id for Twitch links, else kick_linked_role_id).
+                                            role_setting_key = (
+                                                "twitch_linked_role_id"
+                                                if link_platform == "twitch"
+                                                else "kick_linked_role_id"
+                                            )
                                             try:
                                                 linked_role_id = conn.execute(
                                                     text(
                                                         """
                                                         SELECT value FROM bot_settings
-                                                        WHERE key = 'kick_linked_role_id' AND discord_server_id = :guild_id
+                                                        WHERE key = :role_key AND discord_server_id = :guild_id
                                                     """
                                                     ),
-                                                    {"guild_id": guild_id},
+                                                    {"role_key": role_setting_key, "guild_id": guild_id},
                                                 ).scalar()
-                                                logger.info(f"📋 Linked role ID from DB: {linked_role_id!r}")
+                                                logger.info(
+                                                    f"📋 Linked role ID ({role_setting_key}) from DB: {linked_role_id!r}"
+                                                )
                                             except Exception as query_err:
                                                 logger.error(f"❌ Failed to query linked role ID: {query_err}")
                                                 linked_role_id = None
@@ -4072,11 +4183,13 @@ async def check_oauth_notifications_task():
                                                             f"ℹ️ Member {member.display_name} already has role '{role.name}'"
                                                         )
                                                     else:
+                                                        _plat_label = "Twitch" if link_platform == "twitch" else "Kick"
                                                         await member.add_roles(
-                                                            role, reason=f"Linked Kick account: {actual_kick_username}"
+                                                            role,
+                                                            reason=f"Linked {_plat_label} account: {actual_kick_username}",
                                                         )
                                                         logger.info(
-                                                            f"✅ Granted role '{role.name}' to {member.display_name} for Kick link"
+                                                            f"✅ Granted role '{role.name}' to {member.display_name} for {_plat_label} link"
                                                         )
                                                 except ValueError as val_err:
                                                     logger.error(f"❌ Invalid role ID {linked_role_id}: {val_err}")
@@ -4755,10 +4868,12 @@ async def cmd_unlink(ctx, member: discord.Member = None):
     discord_id = member.id
     guild_id = ctx.guild.id if ctx.guild else None
 
-    # Check if user has a linked account
+    # Check if user has a linked account (Kick platform)
     with engine.connect() as conn:
         existing = conn.execute(
-            text("SELECT kick_name FROM links WHERE discord_id = :d AND discord_server_id = :guild_id"),
+            text(
+                "SELECT kick_name FROM links WHERE discord_id = :d AND discord_server_id = :guild_id AND platform = 'kick'"
+            ),
             {"d": discord_id, "guild_id": guild_id},
         ).fetchone()
 
@@ -4768,10 +4883,10 @@ async def cmd_unlink(ctx, member: discord.Member = None):
 
     kick_name = existing[0]
 
-    # Unlink without confirmation (admin action)
+    # Unlink without confirmation (admin action) — Kick platform only
     with engine.begin() as conn:
         conn.execute(
-            text("DELETE FROM links WHERE discord_id = :d AND discord_server_id = :guild_id"),
+            text("DELETE FROM links WHERE discord_id = :d AND discord_server_id = :guild_id AND platform = 'kick'"),
             {"d": discord_id, "guild_id": guild_id},
         )
 
@@ -4855,13 +4970,13 @@ async def cmd_update_kick(ctx, member: discord.Member, new_kick_username: str):
     tables_updated = []
 
     with engine.begin() as conn:
-        # 1. Update links table
+        # 1. Update links table (Kick platform)
         conn.execute(
             text(
                 """
                 UPDATE links
                 SET kick_name = :new_name, linked_at = CURRENT_TIMESTAMP
-                WHERE discord_id = :d AND discord_server_id = :guild_id
+                WHERE discord_id = :d AND discord_server_id = :guild_id AND platform = 'kick'
             """
             ),
             {"new_name": new_kick_username, "d": discord_id, "guild_id": guild_id},
@@ -7197,6 +7312,8 @@ async def on_ready():
             migrate_add_platform_to_wager_tables(engine)
             # Must run AFTER migrate_add_platform_to_wager_tables (needs the platform column)
             migrate_platform_scope_raffle_constraints(engine)
+            # Stream-link platform scoping (Kick + Twitch per Discord user per server)
+            migrate_add_platform_to_links(engine)
             migrate_add_provably_fair_to_draws(engine)
             # Commit-reveal columns (raffle_periods seed/commitment + draw commitment).
             # After add_provably_fair_to_draws so raffle_draws already has its base PF columns.
@@ -7447,6 +7564,10 @@ async def on_ready():
                 bot.link_panel = next(iter(link_panels.values()))
 
             logger.debug(f"✅ Link panel system initialized ({len(link_panels)} guilds)")
+
+            # Setup Twitch link panel with per-guild instances (parity with Kick)
+            bot.twitch_link_panels = await setup_twitch_link_panel_system(bot, engine, generate_signed_twitch_oauth_url)
+            logger.debug(f"✅ Twitch link panel system initialized ({len(bot.twitch_link_panels)} guilds)")
 
             # Setup Shuffle verify panel with per-guild instances
             bot.shuffle_panels = await setup_shuffle_panel_system(bot, engine, get_guild_settings)

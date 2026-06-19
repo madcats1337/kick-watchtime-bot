@@ -1328,7 +1328,7 @@ class RedisSubscriber:
     async def _post_panel(self, data):
         """Post or move a link/verify panel into the channel chosen on the dashboard.
 
-        data: {panel_type: 'kick_link' | 'shuffle_verify' | 'howl_verify', channel_id, discord_server_id}
+        data: {panel_type: 'kick_link' | 'twitch_link' | 'shuffle_verify' | 'howl_verify', channel_id, discord_server_id}
         Reuses the panel's existing create_panel(channel) (which rewrites the
         link_panels DB row); we additionally delete the previous Discord message
         so the panel "moves" rather than leaving a stale copy behind.
@@ -1351,6 +1351,7 @@ class RedisSubscriber:
         # Resolve the right per-guild panel registry
         registry_attr = {
             "kick_link": "link_panels",
+            "twitch_link": "twitch_link_panels",
             "shuffle_verify": "shuffle_panels",
             "howl_verify": "howl_panels",
         }.get(panel_type)
@@ -1846,6 +1847,62 @@ Congratulations! Please contact an admin to claim your prize! 🎊
         except Exception as e:
             logger.warning(f"⚠️ Failed to invalidate tier cache for {guild_id}: {e}")
 
+    async def handle_bot_event(self, payload):
+        """Handle events forwarded from the Gunicorn webhook process via Redis
+        `bot_events`. Currently: Twitch chat messages routed into the shared chat
+        handler so watchtime/points/!commands/bonus-hunt/slot/GTB work for Twitch."""
+        event_type = payload.get("type")
+        data = payload.get("data", {}) or {}
+
+        if event_type != "twitch_chat_message":
+            logger.debug(f"[bot_events] Ignoring unknown type: {event_type}")
+            return
+
+        try:
+            server_id = data.get("_server_id")
+            msg = data.get("msg", {}) or {}
+            if server_id is None:
+                logger.info("[Twitch Chat] ⚠️ Missing _server_id, dropping message")
+                return
+            guild_id = int(server_id)
+
+            from bot import engine, kick_ws_manager
+
+            # Multi-platform paywall: Twitch is the secondary platform. If this
+            # server also runs Kick (both configured) but lacks the 'multi_platform'
+            # tier, skip Twitch chat. Single-platform Twitch is always allowed.
+            try:
+                from utils.bot_settings import BotSettingsManager
+                from utils.subscription_tier import server_has_feature
+
+                platforms_raw = BotSettingsManager(engine, guild_id).get("stream_platforms", "kick") or "kick"
+                active = {p.strip() for p in str(platforms_raw).split(",") if p.strip()}
+                if len(active) > 1 and not server_has_feature(engine, guild_id, "multi_platform"):
+                    logger.debug(f"[Twitch Chat] Skipping (multi_platform not entitled) for {guild_id}")
+                    return
+            except Exception:
+                pass  # never block chat on a gating hiccup
+
+            # Unified identity: remap the Twitch chatter to the viewer's canonical
+            # username so username-keyed downstream tables credit one shared viewer.
+            try:
+                from core.stream_links import resolve_canonical_identity
+
+                _discord_id, canonical = resolve_canonical_identity(engine, msg.get("username", ""), guild_id, "twitch")
+                if canonical:
+                    msg["username"] = canonical
+                    msg["sender_username"] = canonical
+            except Exception as e:
+                logger.debug(f"[Twitch Chat] canonical resolve skipped: {e}")
+
+            guild = self.bot.get_guild(guild_id)
+            guild_name = guild.name if guild else str(guild_id)
+
+            await kick_ws_manager._handle_incoming_message(guild_id, guild_name, msg)
+            logger.info(f"[Twitch Chat] 💬 Processed {msg.get('username')} via shared handler")
+        except Exception as e:
+            logger.error(f"[Twitch Chat] Error handling forwarded message: {e}")
+
     async def listen(self):
         """Listen for events on all dashboard channels"""
         if not self.enabled:
@@ -1867,7 +1924,10 @@ Congratulations! Please contact an admin to claim your prize! 🎊
             "dashboard:giveaway",
             "dashboard:stream_notification",
             "dashboard:subscriptions",
-            # 'bot_events' removed - no longer using webhooks for chat
+            # bot_events: Twitch chat (via EventSub webhook in the Gunicorn process)
+            # is forwarded here for the bot to process. Kick chat still uses the
+            # direct WebSocket (not this channel).
+            "bot_events",
         )
 
         logger.info("🎧 Redis subscriber listening for dashboard events...")
@@ -1921,8 +1981,9 @@ Congratulations! Please contact an admin to claim your prize! 🎊
                                 await self.handle_stream_notification_event(action, data)
                             elif channel == "dashboard:subscriptions":
                                 await self.handle_subscriptions_event(action, data)
-                            # elif channel == 'bot_events':  # Disabled - using direct WebSocket
-                            #     await self.handle_webhook_event(payload)
+                            elif channel == "bot_events":
+                                # bot_events uses {type, data} rather than {action, data}.
+                                await self.handle_bot_event(payload)
 
                     except json.JSONDecodeError as e:
                         logger.info(f"Failed to decode message: {e}")

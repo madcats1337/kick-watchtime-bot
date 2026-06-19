@@ -1001,7 +1001,13 @@ def create_discord_notifier(discord_bot, channel_id: int):
 
     @handler.on("livestream.status.updated")
     async def on_stream_status(data):
-        """Handle stream going live/offline - triggers clip buffer and dashboard notifications"""
+        """Handle stream going live/offline - triggers clip buffer and dashboard notifications.
+
+        Delegates the go-live notification + Redis publish + clip buffer to the
+        shared, platform-agnostic sender (core.stream_notifications) so Kick and
+        Twitch behave identically. The only Kick-specific extra is the legacy
+        message to the handler's hardcoded channel below.
+        """
         is_live = data.get("is_live", False)
         broadcaster = data.get("broadcaster", {}).get("username", "")
         title = data.get("livestream", {}).get("session_title", "")
@@ -1012,137 +1018,19 @@ def create_discord_notifier(discord_bot, channel_id: int):
             f"[Webhook] 📺 Stream status update: {broadcaster} is_live={is_live}, server_id={discord_server_id}"
         )
 
-        # Send Discord embed notification if enabled
-        if discord_server_id and is_live:
-            try:
-                import aiohttp
-                from sqlalchemy import create_engine, text
+        # Shared sender: Discord notification + Redis publish + clip buffer control.
+        from core.stream_notifications import send_stream_notification
 
-                db_url = os.getenv("DATABASE_URL")
-                if db_url:
-                    engine = create_engine(db_url, pool_pre_ping=True)
-                    with engine.connect() as conn:
-                        # Get stream notification settings
-                        settings_result = conn.execute(
-                            text(
-                                """
-                            SELECT key, value FROM bot_settings
-                            WHERE discord_server_id = :guild_id
-                            AND key IN ('stream_notification_enabled', 'stream_notification_channel_id',
-                                        'stream_notification_title', 'stream_notification_description',
-                                        'stream_notification_link_text', 'stream_notification_link_small',
-                                        'stream_notification_footer', 'kick_channel')
-                        """
-                            ),
-                            {"guild_id": discord_server_id},
-                        ).fetchall()
+        await send_stream_notification(
+            discord_server_id=discord_server_id,
+            streamer=broadcaster,
+            is_live=is_live,
+            title=title,
+            category=category,
+            platform="kick",
+        )
 
-                        settings = {key: value for key, value in settings_result}
-
-                        if settings.get("stream_notification_enabled") == "true" and settings.get(
-                            "stream_notification_channel_id"
-                        ):
-                            notification_channel_id = settings["stream_notification_channel_id"]
-
-                            stream_url = f"https://kick.com/{broadcaster}"
-                            # Use clkick.com for Discord video embed (proxy with proper oEmbed)
-                            embed_url = f"https://clkick.com/{broadcaster}"
-
-                            # Get custom title, description, link text, small text and footer
-                            custom_title = settings.get("stream_notification_title")
-                            custom_description = settings.get("stream_notification_description")
-                            custom_link_text = settings.get("stream_notification_link_text")
-                            link_small = settings.get("stream_notification_link_small") == "true"
-                            custom_footer = settings.get("stream_notification_footer")
-
-                            # Replace placeholders in custom title/description
-                            def replace_placeholders(text):
-                                if not text:
-                                    return text
-                                return text.replace("{streamer}", broadcaster).replace("{channel}", broadcaster)
-
-                            # Build message content using Discord markdown hyperlink to hide URL
-                            # Format: [Link Text](URL) - Discord may still show embed from oEmbed
-                            # Use -# prefix for small/subtext format if enabled
-                            link_text = custom_link_text or "Watch Preview"
-                            hidden_link = f"[{link_text}]({embed_url})"
-                            if link_small:
-                                hidden_link = f"-# {hidden_link}"
-
-                            if custom_title:
-                                title_text = replace_placeholders(custom_title)
-                            else:
-                                title_text = f"🔴 **{broadcaster}** is now LIVE on Kick!"
-
-                            if custom_description:
-                                desc_text = replace_placeholders(custom_description)
-                                message_content = f"{title_text}\n{desc_text}\n{hidden_link}"
-                            else:
-                                message_content = f"{title_text}\n{hidden_link}"
-
-                            # Process footer if set
-                            footer_text = None
-                            if custom_footer:
-                                footer_text = replace_placeholders(custom_footer)
-
-                            # Discord button component for "Watch Stream"
-                            components = [
-                                {
-                                    "type": 1,
-                                    "components": [
-                                        {
-                                            "type": 2,
-                                            "style": 5,
-                                            "label": "Watch Stream",
-                                            "url": stream_url,
-                                            "emoji": {"name": "🔴"},
-                                        }
-                                    ],
-                                }
-                            ]
-
-                            bot_token = os.getenv("DISCORD_TOKEN")
-                            if bot_token:
-                                async with aiohttp.ClientSession() as session:
-                                    async with session.post(
-                                        f"https://discord.com/api/v10/channels/{notification_channel_id}/messages",
-                                        headers={
-                                            "Authorization": f"Bot {bot_token}",
-                                            "Content-Type": "application/json",
-                                        },
-                                        json={"content": message_content, "components": components},
-                                        timeout=aiohttp.ClientTimeout(total=10),
-                                    ) as resp:
-                                        if resp.status in [200, 201]:
-                                            # Send footer as follow-up if set
-                                            if footer_text:
-                                                await asyncio.sleep(0.5)
-                                                async with session.post(
-                                                    f"https://discord.com/api/v10/channels/{notification_channel_id}/messages",
-                                                    headers={
-                                                        "Authorization": f"Bot {bot_token}",
-                                                        "Content-Type": "application/json",
-                                                    },
-                                                    json={"content": f"-# {footer_text}"},
-                                                    timeout=aiohttp.ClientTimeout(total=10),
-                                                ) as footer_resp:
-                                                    if footer_resp.status not in [200, 201]:
-                                                        logger.info(
-                                                            f"[Webhook] ⚠️ Failed to send footer: {footer_resp.status}"
-                                                        )
-
-                                            logger.info(
-                                                f"[Webhook] ✅ Discord stream notification sent to channel {notification_channel_id}"
-                                            )
-                                        else:
-                                            error_text = await resp.text()
-                                            logger.info(
-                                                f"[Webhook] ⚠️ Failed to send Discord notification: {resp.status} - {error_text[:200]}"
-                                            )
-            except Exception as e:
-                logger.info(f"[Webhook] ⚠️ Failed to send Discord stream notification: {e}")
-
-        # Send basic Discord notification (legacy - to the handler's configured channel)
+        # Legacy basic notification to the handler's configured channel (Kick-only).
         channel = discord_bot.get_channel(channel_id)
         if channel:
             if is_live:
@@ -1154,97 +1042,6 @@ def create_discord_notifier(discord_bot, channel_id: int):
                 )
             else:
                 await channel.send(f"⚫ **Stream Ended**\n" f"**{broadcaster}** has ended their stream.")
-
-        # Publish to Redis for dashboard notifications
-        if discord_server_id:
-            try:
-                from utils.redis_publisher import bot_redis_publisher
-
-                if is_live:
-                    bot_redis_publisher.publish_stream_live(
-                        discord_server_id=str(discord_server_id),
-                        streamer=broadcaster,
-                        stream_url=f"https://kick.com/{broadcaster}",
-                    )
-                    logger.info(f"[Webhook] 📤 Published stream_live to Redis for server {discord_server_id}")
-                else:
-                    bot_redis_publisher.publish_stream_offline(
-                        discord_server_id=str(discord_server_id), streamer=broadcaster
-                    )
-                    logger.info(f"[Webhook] 📤 Published stream_offline to Redis for server {discord_server_id}")
-            except Exception as e:
-                logger.info(f"[Webhook] ⚠️ Failed to publish stream status to Redis: {e}")
-
-        # Trigger clip buffer start/stop via dashboard API
-        if discord_server_id:
-            try:
-                import aiohttp
-                from sqlalchemy import create_engine, text
-
-                db_url = os.getenv("DATABASE_URL")
-                if db_url:
-                    engine = create_engine(db_url, pool_pre_ping=True)
-                    with engine.connect() as conn:
-                        # Get dashboard URL and API key for this server
-                        settings_result = conn.execute(
-                            text(
-                                """
-                            SELECT key, value FROM bot_settings
-                            WHERE discord_server_id = :guild_id
-                            AND key IN ('kick_channel', 'dashboard_url', 'bot_api_key', 'clips_auto_start_on_live')
-                        """
-                            ),
-                            {"guild_id": discord_server_id},
-                        ).fetchall()
-
-                        settings = {key: value for key, value in settings_result}
-                        kick_channel = settings.get("kick_channel")
-                        dashboard_url = settings.get("dashboard_url")
-                        api_key = settings.get("bot_api_key")
-                        # Default True: only the explicit string 'false' disables auto-start.
-                        auto_start_buffer = str(settings.get("clips_auto_start_on_live", "true")).lower() != "false"
-
-                        if dashboard_url and api_key and kick_channel:
-                            async with aiohttp.ClientSession() as session:
-                                if is_live:
-                                    if not auto_start_buffer:
-                                        # Auto-start disabled for this guild — skip starting
-                                        # the buffer (manual Start from the dashboard still works).
-                                        logger.info(
-                                            f"[Webhook] ⏸️ Auto-start disabled (clips_auto_start_on_live=false) — skipping clip buffer for {broadcaster}"
-                                        )
-                                    else:
-                                        # Start clip buffer
-                                        async with session.post(
-                                            f"{dashboard_url}/api/clips/buffer/start",
-                                            headers={"X-API-Key": api_key, "Content-Type": "application/json"},
-                                            json={"channel": kick_channel, "buffer_minutes": 4},
-                                            timeout=30,
-                                        ) as resp:
-                                            if resp.status == 200:
-                                                logger.info(f"[Webhook] ✅ Clip buffer started for {broadcaster}")
-                                            else:
-                                                error_text = await resp.text()
-                                                logger.info(
-                                                    f"[Webhook] ⚠️ Failed to start clip buffer: {resp.status} - {error_text[:200]}"
-                                                )
-                                else:
-                                    # Stop clip buffer
-                                    async with session.post(
-                                        f"{dashboard_url}/api/clips/buffer/stop",
-                                        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
-                                        json={"channel": kick_channel},
-                                        timeout=10,
-                                    ) as resp:
-                                        if resp.status == 200:
-                                            logger.info(f"[Webhook] ✅ Clip buffer stopped for {broadcaster}")
-                                        else:
-                                            error_text = await resp.text()
-                                            logger.info(
-                                                f"[Webhook] ⚠️ Failed to stop clip buffer: {resp.status} - {error_text[:200]}"
-                                            )
-            except Exception as e:
-                logger.info(f"[Webhook] ⚠️ Failed to control clip buffer: {e}")
 
     @handler.on("channel.followed")
     async def on_follow(data):
