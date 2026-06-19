@@ -30,8 +30,14 @@ TIER2 = FREE + [
     "commands",
     "timed_messages",
     "personal_subdomain",
+    "giveaway",
 ]
-TIER3 = TIER2 + ["full_dashboard"]
+TIER3 = TIER2 + [
+    "full_dashboard",
+    "raffle",
+    "clips",
+    "wagers",
+]
 
 TIER_FEATURES = {"free": FREE, "tier2": TIER2, "tier3": TIER3}
 
