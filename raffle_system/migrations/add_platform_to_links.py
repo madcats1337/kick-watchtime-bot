@@ -85,6 +85,34 @@ def migrate_add_platform_to_links(engine):
         # 1. Add the platform column, backfilling existing rows to 'kick'.
         cursor.execute("ALTER TABLE links ADD COLUMN IF NOT EXISTS platform varchar(50) NOT NULL DEFAULT 'kick'")
 
+        # 1b. Rescope the PRIMARY KEY to include platform. The original PK on
+        #     (discord_id, discord_server_id) blocks a user from linking a second
+        #     platform (e.g. adding Twitch when they already have Kick) — the
+        #     upsert's 3-col ON CONFLICT can't catch the 2-col PK violation.
+        #     Find the actual PK constraint name (Postgres default is 'links_pkey'),
+        #     check its columns, and recreate it with platform if needed.
+        cursor.execute(
+            """
+            SELECT con.conname, array_agg(att.attname ORDER BY att.attname) AS cols
+            FROM pg_constraint con
+            JOIN pg_class rel ON rel.oid = con.conrelid
+            JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = ANY(con.conkey)
+            WHERE rel.relname = 'links' AND con.contype = 'p'
+            GROUP BY con.conname
+            """
+        )
+        pk = cursor.fetchone()
+        if pk:
+            pk_name, pk_cols = pk[0], set(pk[1])
+            if "platform" not in pk_cols:
+                logger.info(f"   Rescoping PK {pk_name} {sorted(pk_cols)} -> include platform")
+                cursor.execute(f"ALTER TABLE links DROP CONSTRAINT {pk_name}")
+                cursor.execute(
+                    "ALTER TABLE links ADD CONSTRAINT links_pkey PRIMARY KEY (discord_id, discord_server_id, platform)"
+                )
+            else:
+                logger.debug("   ✓ PK already includes platform")
+
         # 2. Add the new platform-scoped UNIQUE constraints (guarded).
         for conname, definition in _NEW_CONSTRAINTS:
             cursor.execute("SELECT 1 FROM pg_constraint WHERE conname = %s", (conname,))
