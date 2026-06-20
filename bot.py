@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import contextvars  # noqa: E402
 import hashlib
 import hmac
 import json
@@ -28,6 +29,12 @@ from sqlalchemy import create_engine, text  # type: ignore
 from utils.log_context import clear_server, server_context, set_server  # noqa: E402
 from utils.logging_config import setup_logging  # noqa: E402
 from utils.subscription_tier import server_has_feature, upgrade_message  # noqa: E402
+
+# Platform that the chat message currently being handled arrived on ('kick' |
+# 'twitch'). Set at the top of _handle_incoming_message so send_kick_message can
+# route the REPLY back to the originating platform without touching every call
+# site. Defaults to 'kick' (the legacy websocket path).
+_reply_platform: "contextvars.ContextVar[str]" = contextvars.ContextVar("reply_platform", default="kick")
 
 # Disable Discord.py's default logging to reduce log spam
 logging.getLogger("discord").setLevel(logging.ERROR)
@@ -908,8 +915,23 @@ class KickWebSocketManager:
             content = msg.get("content") or ""
             chat_id = msg.get("chat_id") or msg.get("id")
 
+            # Route any reply this handler produces back to the platform the message
+            # arrived on (Twitch chat → Twitch, Kick chat → Kick). send_kick_message
+            # reads this contextvar; defaults to 'kick'.
+            platform = (msg.get("_platform") or "kick").lower()
+            _reply_platform.set(platform)
+
+            # Ignore the bot's OWN messages so its replies don't loop back in as new
+            # input. On Twitch the chatter id equals our bot account id; on Kick the
+            # username matches the bot account login.
+            twitch_bot_id = os.getenv("TWITCH_BOT_USER_ID")
+            if platform == "twitch" and twitch_bot_id:
+                chatter_id = str((msg.get("user") or {}).get("id") or "")
+                if chatter_id and chatter_id == str(twitch_bot_id):
+                    return
+
             # Debug: Log every incoming message
-            logger.info(f"💬 Received Kick message: {username}: {content[:100]}")
+            logger.info(f"💬 Received {platform} message: {username}: {content[:100]}")
 
             # Update watchtime tracking (per-guild)
             now = datetime.now(timezone.utc)
@@ -1349,15 +1371,24 @@ kick_ws_manager = KickWebSocketManager()
 
 async def send_kick_message(message: str, guild_id: int = None) -> bool:
     """
-    Send a message to Kick chat using kickpython message queue.
+    Send a message to the originating platform's chat.
+
+    Despite the name (kept for back-compat with ~30 call sites in the chat
+    handler), this routes the reply to whichever platform the message being
+    handled arrived on, via the _reply_platform contextvar. Twitch → Helix send;
+    Kick → kickpython queue (the original behavior, and the default).
 
     Args:
         message: The message to send
         guild_id: Discord server ID (for multiserver support)
 
     Returns:
-        True if message queued successfully, False otherwise
+        True if message queued/sent successfully, False otherwise
     """
+    # Reply on the platform the current message came from.
+    if _reply_platform.get() == "twitch":
+        return await send_twitch_message(message, guild_id=guild_id)
+
     # Get guild name for logging
     guild_name = "Unknown"
     if guild_id:
