@@ -1470,6 +1470,7 @@ async def send_twitch_message(message: str, guild_id: int = None) -> bool:
             logger.info("[Twitch Send] TWITCH_BOT_USER_ID not set")
             return False
 
+        bot_uid = int(bot_user_id) if str(bot_user_id).isdigit() else 0
         with engine.connect() as conn:
             row = conn.execute(
                 _text(
@@ -1478,12 +1479,13 @@ async def send_twitch_message(message: str, guild_id: int = None) -> bool:
                 {"g": guild_id},
             ).fetchone()
             broadcaster_id = row[0] if row else None
-            # Bot account user token (stored by its OAuth link under auth/twitch_oauth_tokens).
+            # Bot account user token + refresh token (stored at OAuth link time).
             tok = conn.execute(
-                _text("SELECT access_token FROM twitch_oauth_tokens WHERE user_id = :u LIMIT 1"),
-                {"u": int(bot_user_id) if str(bot_user_id).isdigit() else 0},
+                _text("SELECT access_token, refresh_token FROM twitch_oauth_tokens WHERE user_id = :u LIMIT 1"),
+                {"u": bot_uid},
             ).fetchone()
             access_token = tok[0] if tok else None
+            refresh_token = tok[1] if tok else None
 
         if not broadcaster_id or not access_token:
             logger.info("[Twitch Send] Missing broadcaster id or bot token — cannot send")
@@ -1491,9 +1493,38 @@ async def send_twitch_message(message: str, guild_id: int = None) -> bool:
 
         from core.twitch_api import TwitchAPI
 
-        api = TwitchAPI(access_token=access_token)
+        # Pass the refresh token so TwitchAPI._request auto-refreshes on 401 (the
+        # bot's user token expires ~every 4h). Persist the rotated token after.
+        api = TwitchAPI(access_token=access_token, refresh_token=refresh_token)
         try:
             result = await api.send_chat_message(broadcaster_id, bot_user_id, message)
+            # If the token was refreshed mid-request, persist the new one.
+            if api.access_token and api.access_token != access_token:
+                try:
+                    from datetime import datetime as _dt
+                    from datetime import timedelta as _td
+                    from datetime import timezone as _tz
+
+                    with engine.begin() as conn:
+                        conn.execute(
+                            _text(
+                                """
+                                UPDATE twitch_oauth_tokens
+                                SET access_token = :at, refresh_token = :rt,
+                                    expires_at = :exp, updated_at = CURRENT_TIMESTAMP
+                                WHERE user_id = :u
+                                """
+                            ),
+                            {
+                                "at": api.access_token,
+                                "rt": api.refresh_token or refresh_token,
+                                "exp": _dt.now(_tz.utc) + _td(hours=4),
+                                "u": bot_uid,
+                            },
+                        )
+                    logger.info("[Twitch Send] 🔄 Refreshed + persisted bot token")
+                except Exception as persist_err:
+                    logger.info(f"[Twitch Send] ⚠️ Token refreshed but persist failed: {persist_err}")
             if result.get("is_sent"):
                 return True
             logger.info(f"[Twitch Send] Not sent: {result.get('drop_reason')}")
@@ -4275,6 +4306,101 @@ async def check_oauth_notifications_task():
 
     except Exception as e:
         logger.error(f"⚠️ Error in OAuth notifications task: {e}")
+
+
+@tasks.loop(minutes=60)  # Twitch requires hourly validation; also refresh proactively
+async def proactive_twitch_token_refresh_task():
+    """
+    Keep Twitch user tokens (the shared bot account + any broadcaster tokens) alive
+    so chat sending never goes stale.
+
+    Twitch rules (https://dev.twitch.tv/docs/authentication/validate-tokens/ +
+    .../refresh-tokens/):
+      - Apps MUST validate tokens hourly (compliance; Twitch audits this).
+      - User access tokens expire (~4h); refresh tokens for a confidential client
+        (we have a client secret) do NOT expire — they only break on password
+        change / app disconnect / client-secret rotation.
+      - Refresh ROTATES the refresh token — persist the new one every time.
+
+    For each stored token: validate it; if expiring within 60 min (or validation
+    401s), refresh and persist the rotated tokens.
+    """
+    if not engine:
+        return
+
+    try:
+        from core.twitch_api import TwitchAPI
+
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT user_id, twitch_username, access_token, refresh_token, expires_at
+                    FROM twitch_oauth_tokens
+                    WHERE refresh_token IS NOT NULL
+                    ORDER BY expires_at ASC NULLS FIRST
+                    """
+                )
+            ).fetchall()
+
+        if not rows:
+            logger.debug("[Twitch] ℹ️ No Twitch OAuth tokens to maintain")
+            return
+
+        refreshed = failed = validated = 0
+        for user_id, twitch_username, access_token, refresh_token, expires_at in rows:
+            api = TwitchAPI(access_token=access_token, refresh_token=refresh_token)
+            try:
+                needs_refresh = False
+                # 1) Hourly validation (compliance) — also tells us real expiry.
+                try:
+                    info = await api.validate_token(access_token)
+                    validated += 1
+                    if int(info.get("expires_in", 0)) < 3600:  # <60 min left
+                        needs_refresh = True
+                except Exception:
+                    # Validation failed (likely 401 / expired) — refresh.
+                    needs_refresh = True
+
+                if needs_refresh:
+                    tokens = await api.refresh_user_token()
+                    from datetime import timedelta as _td
+
+                    new_expires = datetime.now(timezone.utc) + _td(seconds=tokens.expires_in or 14400)
+                    with engine.begin() as conn:
+                        conn.execute(
+                            text(
+                                """
+                                UPDATE twitch_oauth_tokens
+                                SET access_token = :at, refresh_token = :rt,
+                                    expires_at = :exp, updated_at = CURRENT_TIMESTAMP
+                                WHERE user_id = :u
+                                """
+                            ),
+                            {
+                                "at": tokens.access_token,
+                                "rt": tokens.refresh_token or refresh_token,
+                                "exp": new_expires,
+                                "u": user_id,
+                            },
+                        )
+                    refreshed += 1
+                    logger.info(f"[Twitch] ✅ Refreshed token for {twitch_username or user_id}")
+            except Exception as e:
+                failed += 1
+                logger.info(f"[Twitch] ❌ Failed to maintain token for {twitch_username or user_id}: {e}")
+            finally:
+                await api.close()
+
+        if refreshed or failed:
+            logger.info(f"[Twitch] Token maintenance: {validated} validated, {refreshed} refreshed, {failed} failed")
+        else:
+            logger.debug(f"[Twitch] Token maintenance: {validated} validated, all healthy")
+    except Exception as e:
+        logger.info(f"[Twitch] ❌ Error in token maintenance task: {e}")
+        import traceback
+
+        traceback.print_exc()
 
 
 @tasks.loop(minutes=30)  # Check every 30 minutes
@@ -7327,6 +7453,10 @@ async def on_ready():
         if not proactive_token_refresh_task.is_running() and engine:
             proactive_token_refresh_task.start()
             logger.debug("✅ Proactive token refresh task started (runs every 30 minutes)")
+
+        if not proactive_twitch_token_refresh_task.is_running() and engine:
+            proactive_twitch_token_refresh_task.start()
+            logger.debug("✅ Twitch token maintenance task started (validate + refresh hourly)")
 
         if not check_oauth_notifications_task.is_running():
             check_oauth_notifications_task.start()
