@@ -1865,6 +1865,23 @@ try:
         except Exception:
             pass  # Columns may already exist
 
+        # Ensure the per-server column exists on the OAuth token tables the BOT
+        # READS (twitch_oauth_tokens / kick_oauth_tokens). These tables are created
+        # by the dashboard's run_migrations(), but the bot must not depend on the
+        # dashboard having deployed first — add the column defensively so the bot's
+        # token-maintenance + send queries (which filter by discord_server_id)
+        # never hit "column does not exist". The PK rescope stays the dashboard's
+        # job; only the column is needed here.
+        for _tok_table in ("twitch_oauth_tokens", "kick_oauth_tokens"):
+            try:
+                conn.execute(
+                    text(
+                        f"ALTER TABLE {_tok_table} ADD COLUMN IF NOT EXISTS discord_server_id BIGINT NOT NULL DEFAULT 0;"
+                    )
+                )
+            except Exception:
+                pass  # Table may not exist yet (dashboard creates it) or column present
+
         # -------------------------
         # Point Reward System Tables
         # -------------------------
