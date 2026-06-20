@@ -1123,7 +1123,9 @@ class KickWebSocketManager:
                             original_guild_id = getattr(tracker, "discord_server_id", None)
                             tracker.discord_server_id = guild_id
                             try:
-                                await tracker.handle_slot_call(username, slot_call, avatar_url=avatar_url)
+                                await tracker.handle_slot_call(
+                                    username, slot_call, avatar_url=avatar_url, platform=platform
+                                )
                                 logger.info(f"✅ Slot call processed: {username} - {slot_call}")
                             finally:
                                 if original_guild_id:
@@ -1514,10 +1516,14 @@ async def send_twitch_message(message: str, guild_id: int = None) -> bool:
         try:
             tokens = await api.get_app_token()
             api.access_token = tokens.access_token
+            logger.info(
+                f"[Twitch Send] POST broadcaster_id={broadcaster_id} sender_id={bot_user_id} msg={message[:40]!r}"
+            )
             result = await api.send_chat_message(broadcaster_id, bot_user_id, message)
+            logger.info(f"[Twitch Send] Helix result: {result}")
             if result.get("is_sent"):
                 return True
-            logger.info(f"[Twitch Send] Not sent: {result.get('drop_reason')}")
+            logger.info(f"[Twitch Send] Not sent: drop_reason={result.get('drop_reason')}")
             return False
         finally:
             await api.close()
@@ -2401,7 +2407,7 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                                         else content_stripped[3:].strip()[:200]
                                     )
                                     if slot_call:
-                                        await tracker.handle_slot_call(username, slot_call)
+                                        await tracker.handle_slot_call(username, slot_call, platform="kick")
 
                             # !gtb command
                             elif content_stripped.lower().startswith("!gtb"):
@@ -2418,7 +2424,8 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                                         if amount is not None:
                                             success, message = gtb_mgr.add_guess(username, amount)
                                             response = f"@{username} {message}" + (" Good luck! 🎰" if success else "")
-                                            await send_kick_message(response, guild_id=guild_id)
+                                            # Legacy Kick-only loop → reply on Kick directly.
+                                            await _send_kick_message_raw(response, guild_id=guild_id)
 
                         # Connection health
                         elif event_type == "pusher:connection_established":
@@ -3307,7 +3314,7 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                 slot_call = content_stripped[3:].strip()[:200]  # Remove "!sr"
 
                                             if slot_call:  # Only process if there's actually a call
-                                                await tracker.handle_slot_call(username, slot_call)
+                                                await tracker.handle_slot_call(username, slot_call, platform="kick")
                                             else:
                                                 # Send usage message when no content is provided (only to non-blacklisted users)
                                                 try:
@@ -3342,29 +3349,28 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                 if amount is not None:
                                                     success, message = gtb_mgr.add_guess(username, amount)
                                                     if success:
-                                                        # Send confirmation to Kick chat
+                                                        # Legacy Kick-only loop → reply on Kick directly.
                                                         response = f"@{username} {message} Good luck! 🎰"
-                                                        await send_kick_message(response, guild_id=guild_id)
+                                                        await _send_kick_message_raw(response, guild_id=guild_id)
                                                         logger.info(f"[GTB] {username} guessed ${amount:,.2f}")
                                                     else:
-                                                        # Send error message to Kick chat
-                                                        await send_kick_message(
+                                                        await _send_kick_message_raw(
                                                             f"@{username} {message}", guild_id=guild_id
                                                         )
                                                         logger.info(f"[GTB] Failed guess from {username}: {message}")
                                                 else:
-                                                    await send_kick_message(
+                                                    await _send_kick_message_raw(
                                                         f"@{username} Invalid amount. Use: !gtb <amount> (e.g., !gtb 1234.56)",
                                                         guild_id=guild_id,
                                                     )
                                             else:
-                                                await send_kick_message(
+                                                await _send_kick_message_raw(
                                                     f"@{username} Usage: !gtb <amount> (e.g., !gtb 1234.56)",
                                                     guild_id=guild_id,
                                                 )
                                         else:
                                             logger.info(f"[GTB] GTB manager not found for guild {guild_id}")
-                                            await send_kick_message(
+                                            await _send_kick_message_raw(
                                                 f"@{username} GTB system not initialized", guild_id=guild_id
                                             )
 

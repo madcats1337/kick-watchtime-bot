@@ -319,15 +319,39 @@ class SlotCallTracker:
             except Exception as e:
                 logger.error(f"Failed to update panel: {e}")
 
-    async def handle_slot_call(self, kick_username: str, slot_call: str, avatar_url: Optional[str] = None):
+    async def handle_slot_call(
+        self, kick_username: str, slot_call: str, avatar_url: Optional[str] = None, platform: str = "kick"
+    ):
         """
-        Handle a slot call from Kick chat
+        Handle a slot call from chat.
 
         Args:
-            kick_username: Username from Kick chat
+            kick_username: Username from chat
             slot_call: The slot call text (everything after !call)
-            avatar_url: Avatar URL from Kick websocket (if available)
+            avatar_url: Avatar URL (if available)
+            platform: Which chat the command came from ('kick' | 'twitch'). The
+                confirmation REPLY is sent back to ONLY this platform (a reply, not
+                a broadcast), so a Twitch !call doesn't also post in Kick chat.
         """
+
+        async def _reply(msg: str):
+            """Send a command reply to only the originating platform."""
+            try:
+                import sys as _sys
+
+                _main = _sys.modules.get("__main__")
+                if platform == "twitch":
+                    sender = getattr(_main, "send_twitch_message", None)
+                else:
+                    sender = getattr(_main, "_send_kick_message_raw", None)
+                if sender is not None:
+                    await sender(msg, guild_id=self.discord_server_id)
+                elif self.kick_send_callback:
+                    # Fallback (shouldn't normally happen).
+                    await self.kick_send_callback(msg, guild_id=self.discord_server_id)
+            except Exception as e:
+                logger.error(f"[Slot Call] Failed to send {platform} reply: {e}")
+
         # 🔒 SECURITY: Check if user is blacklisted (defensive check)
         if self.engine:
             try:
@@ -349,15 +373,7 @@ class SlotCallTracker:
                 logger.error(f"Error checking slot call blacklist: {e}")
 
         if not self.enabled:
-            # Send "slot requests not open" message to Kick chat
-            if self.kick_send_callback:
-                try:
-                    await self.kick_send_callback(
-                        f"@{kick_username} Slot requests are not open at the moment.", guild_id=self.discord_server_id
-                    )
-                    logger.info(f"Sent 'slot requests not open' message to {kick_username}")
-                except Exception as e:
-                    logger.error(f"Failed to send disabled message to Kick: {e}")
+            await _reply(f"@{kick_username} Slot requests are not open at the moment.")
             return
 
         if not self.discord_channel_id:
@@ -419,19 +435,13 @@ class SlotCallTracker:
                         logger.warning(
                             f"[LIMIT CHECK] BLOCKING {kick_username}: {total_requests} >= {self.max_requests_per_user}"
                         )
-                        if self.kick_send_callback:
-                            try:
-                                logger.info(f"[SLOT TRACKER DEBUG] discord_server_id = {self.discord_server_id}")
-                                await self.kick_send_callback(
-                                    f"@{kick_username} You have reached the maximum of {self.max_requests_per_user} slot request(s). "
-                                    f"Please wait for the current hunt to complete.",
-                                    guild_id=self.discord_server_id,
-                                )
-                                logger.info(
-                                    f"User {kick_username} blocked: {total_requests}/{self.max_requests_per_user} total requests"
-                                )
-                            except Exception as e:
-                                logger.error(f"Failed to send limit message to Kick: {e}")
+                        await _reply(
+                            f"@{kick_username} You have reached the maximum of {self.max_requests_per_user} slot request(s). "
+                            f"Please wait for the current hunt to complete."
+                        )
+                        logger.info(
+                            f"User {kick_username} blocked: {total_requests}/{self.max_requests_per_user} total requests"
+                        )
                         return
                     else:
                         logger.info(
@@ -476,28 +486,14 @@ class SlotCallTracker:
 
                     # Block if slot is banned
                     if is_banned:
-                        if self.kick_send_callback:
-                            try:
-                                await self.kick_send_callback(
-                                    f"@{kick_username_safe} Sorry, {slot_call_safe} is currently banned.",
-                                    guild_id=self.discord_server_id,
-                                )
-                                logger.info(f"Blocked banned slot request: {slot_call_safe}")
-                            except Exception as e:
-                                logger.error(f"Failed to send banned slot message to Kick: {e}")
+                        await _reply(f"@{kick_username_safe} Sorry, {slot_call_safe} is currently banned.")
+                        logger.info(f"Blocked banned slot request: {slot_call_safe}")
                         return
 
                     # Block if provider is disabled (inactive)
                     if not is_active:
-                        if self.kick_send_callback:
-                            try:
-                                await self.kick_send_callback(
-                                    f"@{kick_username_safe} Sorry, {slot_call_safe} is currently unavailable.",
-                                    guild_id=self.discord_server_id,
-                                )
-                                logger.info(f"Blocked slot request for disabled provider: {slot_call_safe}")
-                            except Exception as e:
-                                logger.error(f"Failed to send disabled provider message to Kick: {e}")
+                        await _reply(f"@{kick_username_safe} Sorry, {slot_call_safe} is currently unavailable.")
+                        logger.info(f"Blocked slot request for disabled provider: {slot_call_safe}")
                         return
             except Exception as e:
                 logger.error(f"Failed to check slot availability: {e}")
@@ -547,17 +543,8 @@ class SlotCallTracker:
 
                         if dup_result and dup_result[0] > 0:
                             # Slot already requested or in active hunt
-                            if self.kick_send_callback:
-                                try:
-                                    await self.kick_send_callback(
-                                        f"@{kick_username_safe} Sorry, {slot_call_safe} has already been requested.",
-                                        guild_id=self.discord_server_id,
-                                    )
-                                    logger.info(
-                                        f"Blocked duplicate slot request: {slot_call_safe} by {kick_username_safe}"
-                                    )
-                                except Exception as e:
-                                    logger.error(f"Failed to send duplicate message to Kick: {e}")
+                            await _reply(f"@{kick_username_safe} Sorry, {slot_call_safe} has already been requested.")
+                            logger.info(f"Blocked duplicate slot request: {slot_call_safe} by {kick_username_safe}")
                             return
             except Exception as e:
                 logger.error(f"Failed to check for duplicate slot requests: {e}")
@@ -674,14 +661,9 @@ class SlotCallTracker:
                 except Exception as e:
                     logger.error(f"Failed to save slot request to database: {e}")
 
-            # Send confirmation message to Kick chat immediately (no delay)
-            if self.kick_send_callback:
-                kick_response = f"@{kick_username_safe} Your slot request for {slot_call_safe} has been received! ✅"
-                try:
-                    await self.kick_send_callback(kick_response, guild_id=self.discord_server_id)
-                    logger.info(f"Sent Kick chat response to {kick_username_safe}")
-                except Exception as kick_error:
-                    logger.error(f"Failed to send Kick chat response: {kick_error}")
+            # Send confirmation reply to ONLY the originating platform (not a broadcast).
+            await _reply(f"@{kick_username_safe} Your slot request for {slot_call_safe} has been received! ✅")
+            logger.info(f"Sent slot confirmation to {kick_username_safe} on {platform}")
 
             # Update panel if available
             if self.panel:
