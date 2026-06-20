@@ -1360,10 +1360,12 @@ class RedisSubscriber:
             logger.warning(f"⚠️ post_panel bad ids: guild={guild_id!r} channel={channel_id!r}")
             return
 
-        # Resolve the right per-guild panel registry
+        # Resolve the right per-guild panel registry. kick_link / twitch_link /
+        # link all map to the single combined link panel now (bot.link_panels).
         registry_attr = {
             "kick_link": "link_panels",
-            "twitch_link": "twitch_link_panels",
+            "twitch_link": "link_panels",
+            "link": "link_panels",
             "shuffle_verify": "shuffle_panels",
             "howl_verify": "howl_panels",
         }.get(panel_type)

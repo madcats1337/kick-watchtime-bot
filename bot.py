@@ -56,13 +56,12 @@ from features.games.guess_the_balance import GuessTheBalanceManager, parse_amoun
 # Giveaway system import
 from features.giveaway.giveaway_manager import GiveawayManager, setup_giveaway_managers
 
+# Link panel import — combined Kick+Twitch panel (per-platform buttons)
+from features.linking.combined_link_panel import setup_combined_link_panel_system
+
 # Shuffle verify panel import
 from features.linking.howl_panel import setup_howl_panel_system
-
-# Link panel import
-from features.linking.link_panel import setup_link_panel_system
 from features.linking.shuffle_panel import setup_shuffle_panel_system
-from features.linking.twitch_panel import setup_twitch_link_panel_system
 
 # Timed messages import
 from features.messaging.timed_messages import setup_timed_messages
@@ -7731,20 +7730,20 @@ async def on_ready():
             logger.debug("✅ All guilds initialized with multiserver features")
 
             logger.debug("📝 About to setup link panel...")
-            # Setup link panel with per-guild instances
-            link_panels = await setup_link_panel_system(bot, engine, generate_signed_oauth_url)
-            # Store as bot attribute
+            # Combined link panel: one panel with Kick and/or Twitch buttons based
+            # on the server's stream_platforms. Replaces the separate Kick/Twitch panels.
+            link_panels = await setup_combined_link_panel_system(
+                bot, engine, generate_signed_oauth_url, generate_signed_twitch_oauth_url
+            )
             bot.link_panels = link_panels
+            # Back-compat: redis post_panel handler also reads twitch_link_panels; point
+            # it at the same combined registry so 'twitch_link' posts still work.
+            bot.twitch_link_panels = link_panels
 
-            # Legacy single panel reference (use first guild for backwards compatibility)
             if link_panels:
                 bot.link_panel = next(iter(link_panels.values()))
 
-            logger.debug(f"✅ Link panel system initialized ({len(link_panels)} guilds)")
-
-            # Setup Twitch link panel with per-guild instances (parity with Kick)
-            bot.twitch_link_panels = await setup_twitch_link_panel_system(bot, engine, generate_signed_twitch_oauth_url)
-            logger.debug(f"✅ Twitch link panel system initialized ({len(bot.twitch_link_panels)} guilds)")
+            logger.debug(f"✅ Combined link panel system initialized ({len(link_panels)} guilds)")
 
             # Setup Shuffle verify panel with per-guild instances
             bot.shuffle_panels = await setup_shuffle_panel_system(bot, engine, get_guild_settings)
