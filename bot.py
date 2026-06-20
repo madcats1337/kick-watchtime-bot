@@ -983,12 +983,12 @@ class KickWebSocketManager:
                         if entry_method == "keyword":
                             keyword = giveaway_manager.active_giveaway.get("keyword", "").lower()
                             if keyword and content.strip().lower() == keyword:
-                                await giveaway_manager.add_entry(username, entry_method="keyword")
+                                await giveaway_manager.add_entry(username, entry_method="keyword", platform=platform)
                                 logger.info(f"🎁 Giveaway entry added: {username} (keyword: {keyword})")
 
                         # Active chatter tracking
                         elif entry_method == "active_chatter":
-                            await giveaway_manager.track_message(username, content)
+                            await giveaway_manager.track_message(username, content, platform=platform)
                     except Exception as e:
                         logger.info(f"⚠️ Giveaway tracking error: {e}")
 

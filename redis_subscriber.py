@@ -125,30 +125,42 @@ class RedisSubscriber:
             logger.warning("⚠️  REDIS_URL not set, dashboard events will not be received")
 
     async def announce_in_chat(self, message, guild_id=None):
-        """Send a message to Kick chat using the callback function
+        """Send a message to the server's active stream chat(s).
+
+        Routes through send_stream_message (from __main__) so the announcement
+        fans out to whichever platform(s) the server runs (Kick and/or Twitch).
+        Falls back to the Kick-only callback if send_stream_message is unavailable.
 
         Args:
             message: Message to send
             guild_id: Discord server ID (if None, uses first available guild)
         """
-        if self.send_message_callback:
-            try:
-                # If no guild_id provided, try to get from bot's first guild
-                if guild_id is None and hasattr(self.bot, "guilds") and self.bot.guilds:
-                    guild_id = self.bot.guilds[0].id
+        try:
+            # If no guild_id provided, try to get from bot's first guild
+            if guild_id is None and hasattr(self.bot, "guilds") and self.bot.guilds:
+                guild_id = self.bot.guilds[0].id
+            if guild_id is not None:
+                guild_id = int(guild_id)
 
-                # Ensure guild_id is an integer (may come as string from JSON)
-                if guild_id is not None:
-                    guild_id = int(guild_id)
+            # Prefer the platform-aware fan-out sender from the running entrypoint.
+            import sys as _sys
 
+            _main = _sys.modules.get("__main__")
+            send_stream_message = getattr(_main, "send_stream_message", None)
+            if send_stream_message is not None:
+                await send_stream_message(message, guild_id=guild_id)
+                logger.info(f"💬 Announced to active stream chat(s): {message}")
+                return
+
+            if self.send_message_callback:
                 await self.send_message_callback(message, guild_id=guild_id)
                 logger.info(f"💬 Sent to Kick chat: {message}")
-            except Exception as e:
-                logger.warning(f"⚠️ Kick chat message not sent: {e}")
-                logger.info(f"   Message was: {message}")
-                import traceback
+        except Exception as e:
+            logger.warning(f"⚠️ Chat announcement not sent: {e}")
+            logger.info(f"   Message was: {message}")
+            import traceback
 
-                traceback.print_exc()
+            traceback.print_exc()
         else:
             logger.info(f"ℹ️  Kick chat disabled: {message}")
 

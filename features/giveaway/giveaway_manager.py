@@ -94,8 +94,40 @@ class GiveawayManager:
         logger.info(f"Stopped giveaway {giveaway_id}")
         return True
 
-    async def add_entry(self, kick_username, kick_user_id=None, discord_id=None, entry_method="keyword"):
-        """Add an entry to the active giveaway"""
+    async def _fetch_avatar(self, username, platform="kick"):
+        """Resolve a chat entrant's avatar URL for the given platform. Best-effort;
+        returns None on any failure (entry still records without a picture)."""
+        try:
+            if platform == "twitch":
+                from core.twitch_api import TwitchAPI
+
+                # Resolve via Helix /users using an app token. Fall back silently.
+                api = TwitchAPI()
+                try:
+                    tokens = await api.get_app_token()
+                    api.access_token = tokens.access_token
+                    user = await api.get_user(login=username)
+                    return user.get("profile_image_url") if user else None
+                finally:
+                    await api.close()
+            else:
+                from core.kick_api import get_channel_info
+
+                channel_data = await get_channel_info(username)
+                if channel_data and "user" in channel_data:
+                    return channel_data["user"].get("profile_pic")
+        except Exception as e:
+            logger.warning(f"Failed to fetch {platform} profile pic for {username}: {e}")
+        return None
+
+    async def add_entry(
+        self, kick_username, kick_user_id=None, discord_id=None, entry_method="keyword", platform="kick"
+    ):
+        """Add an entry to the active giveaway.
+
+        `platform` selects where to resolve the entrant's avatar from (Kick API
+        vs Twitch Helix). Entries from Twitch chat pass platform='twitch'.
+        """
         if not self.active_giveaway:
             logger.warning(f"No active giveaway for entry from {kick_username}")
             return False
@@ -104,17 +136,8 @@ class GiveawayManager:
         allow_multiple = self.active_giveaway["allow_multiple_entries"]
         max_entries = self.active_giveaway["max_entries_per_user"]
 
-        # Fetch profile picture from Kick API
-        profile_pic_url = None
-        try:
-            from core.kick_api import get_channel_info
-
-            channel_data = await get_channel_info(kick_username)
-            if channel_data and "user" in channel_data:
-                profile_pic_url = channel_data["user"].get("profile_pic")
-                logger.debug(f"Fetched profile pic for {kick_username}: {profile_pic_url}")
-        except Exception as e:
-            logger.warning(f"Failed to fetch profile pic for {kick_username}: {e}")
+        # Fetch profile picture from the entrant's platform.
+        profile_pic_url = await self._fetch_avatar(kick_username, platform)
 
         with self.engine.connect() as conn:
             # Check existing entries
@@ -177,7 +200,7 @@ class GiveawayManager:
             conn.commit()
             return True
 
-    async def track_message(self, kick_username, message):
+    async def track_message(self, kick_username, message, platform="kick"):
         """Track a chat message for active chatter detection"""
         if not self.active_giveaway:
             return
@@ -251,7 +274,7 @@ class GiveawayManager:
             if message_count and message_count[0] >= messages_required:
                 # User qualifies! Add entry
                 logger.info(f"{kick_username} qualified for auto-entry with {message_count[0]} unique messages")
-                await self.add_entry(kick_username, entry_method="active_chatter")
+                await self.add_entry(kick_username, entry_method="active_chatter", platform=platform)
 
     async def get_entries(self):
         """Get all entries for active giveaway"""
