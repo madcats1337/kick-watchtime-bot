@@ -157,9 +157,19 @@ def _timestamp_too_old(timestamp: str) -> bool:
         return False
 
 
-def _resolve_subscription(subscription_id: str):
+def _resolve_subscription(subscription_id: str, broadcaster_user_id: str = None):
     """Look up (discord_server_id, broadcaster_user_id, webhook_secret) for a sub.
-    Returns (None, None, None) if unknown."""
+
+    Does NOT filter on status: the verification challenge arrives while the sub is
+    still 'webhook_callback_verification_pending', and we need its secret to answer
+    it. Excludes only deleted/revoked rows.
+
+    Falls back to matching by broadcaster_user_id when the subscription_id isn't in
+    our DB yet (a row-commit race right after creation). All of a broadcaster's
+    subs share one secret, so the secret + server resolve correctly either way.
+
+    Returns (None, None, None) if unknown.
+    """
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
         return None, None, None
@@ -172,11 +182,26 @@ def _resolve_subscription(subscription_id: str):
                 """
                 SELECT discord_server_id, broadcaster_user_id, webhook_secret
                 FROM twitch_webhook_subscriptions
-                WHERE subscription_id = :sub_id AND status = 'active'
+                WHERE subscription_id = :sub_id
+                  AND status NOT IN ('deleted', 'revoked')
                 """
             ),
             {"sub_id": subscription_id},
         ).fetchone()
+        if not row and broadcaster_user_id:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT discord_server_id, broadcaster_user_id, webhook_secret
+                    FROM twitch_webhook_subscriptions
+                    WHERE broadcaster_user_id = :bid
+                      AND status NOT IN ('deleted', 'revoked')
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {"bid": str(broadcaster_user_id)},
+            ).fetchone()
     if not row:
         return None, None, None
     return row[0], row[1], row[2]
@@ -266,6 +291,10 @@ def handle_twitch_webhook():
 
     subscription = body.get("subscription", {}) or {}
     subscription_id = subscription.get("id", "")
+    # The broadcaster id is in the subscription condition; used as a fallback to
+    # find the shared secret if the sub row hasn't committed yet (creation race).
+    cond = subscription.get("condition", {}) or {}
+    cond_broadcaster_id = cond.get("broadcaster_user_id")
 
     if not subscription_id:
         logger.info("[Twitch Webhook] ❌ Missing subscription id in payload")
@@ -273,7 +302,9 @@ def handle_twitch_webhook():
 
     # 1️⃣ Resolve subscription context + secret from our DB.
     try:
-        discord_server_id, broadcaster_user_id, webhook_secret = _resolve_subscription(subscription_id)
+        discord_server_id, broadcaster_user_id, webhook_secret = _resolve_subscription(
+            subscription_id, cond_broadcaster_id
+        )
     except Exception as db_err:
         logger.info(f"[Twitch Webhook] ❌ Database error: {db_err}")
         return jsonify({"error": "Database error"}), 500
