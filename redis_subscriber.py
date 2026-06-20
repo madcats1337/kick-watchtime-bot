@@ -1866,7 +1866,19 @@ Congratulations! Please contact an admin to claim your prize! 🎊
                 return
             guild_id = int(server_id)
 
-            from bot import engine, kick_ws_manager
+            # IMPORTANT: bot.py runs as the "__main__" module (python bot.py), so
+            # its configured Bot/engine/kick_ws_manager live in sys.modules["__main__"].
+            # `from bot import ...` would RE-IMPORT bot.py as a SECOND module with a
+            # fresh, unconfigured Bot instance (no on_ready → guilds=0, no trackers).
+            # Always resolve the live instances from __main__ to avoid that split.
+            import sys as _sys
+
+            _main = _sys.modules.get("__main__")
+            engine = getattr(_main, "engine", None)
+            kick_ws_manager = getattr(_main, "kick_ws_manager", None)
+            if engine is None or kick_ws_manager is None:
+                # Fallback for when bot IS imported as 'bot' (e.g. tests).
+                from bot import engine, kick_ws_manager
 
             # Multi-platform paywall: Twitch is the secondary platform. If this
             # server also runs Kick (both configured) but lacks the 'multi_platform'
