@@ -1064,13 +1064,24 @@ class KickWebSocketManager:
                     return
                 logger.info(f"🔍 Has slot_trackers: {hasattr(bot, 'slot_trackers')}")
 
-                # Use guild-specific tracker (check both naming conventions)
+                # Use guild-specific tracker (check both naming conventions).
+                # Look up tolerant of int/str key type so a guild_id arriving as a
+                # different type (e.g. from the Twitch redis path) still matches.
+                def _tracker_for(registry):
+                    if not isinstance(registry, dict):
+                        return None
+                    if guild_id in registry:
+                        return registry[guild_id]
+                    return registry.get(int(guild_id), registry.get(str(guild_id)))
+
                 tracker = None
-                if hasattr(bot, "slot_call_trackers_by_guild") and guild_id in bot.slot_call_trackers_by_guild:
-                    tracker = bot.slot_call_trackers_by_guild[guild_id]
+                _byg = getattr(bot, "slot_call_trackers_by_guild", None)
+                _alt = getattr(bot, "slot_trackers", None)
+                if _tracker_for(_byg) is not None:
+                    tracker = _tracker_for(_byg)
                     logger.info(f"✅ Found guild-specific tracker (slot_call_trackers_by_guild)")
-                elif hasattr(bot, "slot_trackers") and guild_id in bot.slot_trackers:
-                    tracker = bot.slot_trackers[guild_id]
+                elif _tracker_for(_alt) is not None:
+                    tracker = _tracker_for(_alt)
                     logger.info(f"✅ Found guild-specific tracker (slot_trackers)")
                 elif hasattr(bot, "slot_call_tracker"):
                     tracker = bot.slot_call_tracker
@@ -1122,6 +1133,14 @@ class KickWebSocketManager:
                             await send_kick_message(f"@{username} Please specify a slot!", guild_id=guild_id)
                 else:
                     logger.info(f"❌ No slot tracker found for this guild")
+                    # Diagnostic: show what the tracker registries actually hold so we
+                    # can tell "never initialized" from "key/type mismatch".
+                    _byg = getattr(bot, "slot_call_trackers_by_guild", None)
+                    logger.info(
+                        f"🔍 slot_call_trackers_by_guild present={_byg is not None} "
+                        f"keys={list(_byg.keys()) if isinstance(_byg, dict) else 'n/a'} "
+                        f"lookup_guild_id={guild_id!r} ({type(guild_id).__name__})"
+                    )
 
             # !gtb command
             elif content_stripped.lower().startswith("!gtb"):
