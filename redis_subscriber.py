@@ -148,21 +148,24 @@ class RedisSubscriber:
             _main = _sys.modules.get("__main__")
             send_stream_message = getattr(_main, "send_stream_message", None)
             if send_stream_message is not None:
-                await send_stream_message(message, guild_id=guild_id)
-                logger.info(f"💬 Announced to active stream chat(s): {message}")
+                sent = await send_stream_message(message, guild_id=guild_id)
+                if sent:
+                    logger.info(f"💬 Announced to active stream chat(s): {message}")
+                else:
+                    logger.warning(f"⚠️ Announcement returned no successful send (guild={guild_id}): {message}")
                 return
 
             if self.send_message_callback:
                 await self.send_message_callback(message, guild_id=guild_id)
-                logger.info(f"💬 Sent to Kick chat: {message}")
+                logger.info(f"💬 Sent to chat (fallback): {message}")
+            else:
+                logger.info(f"ℹ️  No chat sender available: {message}")
         except Exception as e:
             logger.warning(f"⚠️ Chat announcement not sent: {e}")
             logger.info(f"   Message was: {message}")
             import traceback
 
             traceback.print_exc()
-        else:
-            logger.info(f"ℹ️  Kick chat disabled: {message}")
 
     # ❌ WEBHOOK HANDLING DISABLED - Using direct Pusher WebSocket instead
     # NOTE: The previous webhook handler implementation was intentionally removed

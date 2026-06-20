@@ -1381,24 +1381,30 @@ kick_ws_manager = KickWebSocketManager()
 
 async def send_kick_message(message: str, guild_id: int = None) -> bool:
     """
-    Send a message to the originating platform's chat.
+    Send a message to the originating platform's chat (for COMMAND REPLIES).
 
     Despite the name (kept for back-compat with ~30 call sites in the chat
     handler), this routes the reply to whichever platform the message being
     handled arrived on, via the _reply_platform contextvar. Twitch → Helix send;
     Kick → kickpython queue (the original behavior, and the default).
 
-    Args:
-        message: The message to send
-        guild_id: Discord server ID (for multiserver support)
+    NOTE: announcements (slot picks, GTB, winners, timed messages) must NOT use
+    this — they run outside the chat handler where the contextvar may carry a
+    stale value. They use send_stream_message, which calls the raw Kick sender
+    directly so it always reaches Kick.
 
-    Returns:
-        True if message queued/sent successfully, False otherwise
+    Returns True if message queued/sent successfully, False otherwise.
     """
     # Reply on the platform the current message came from.
     if _reply_platform.get() == "twitch":
         return await send_twitch_message(message, guild_id=guild_id)
+    return await _send_kick_message_raw(message, guild_id=guild_id)
 
+
+async def _send_kick_message_raw(message: str, guild_id: int = None) -> bool:
+    """Send a message to KICK chat unconditionally (no platform contextvar).
+    The actual kickpython-queue delivery used by both command replies (via
+    send_kick_message) and announcements (via send_stream_message)."""
     # Get guild name for logging
     guild_name = "Unknown"
     if guild_id:
@@ -1530,13 +1536,17 @@ async def send_stream_message(message: str, guild_id: int = None) -> bool:
     from utils.bot_settings import BotSettingsManager
 
     platforms_raw = BotSettingsManager(engine, guild_id).get("stream_platforms", "kick") or "kick"
-    active = [p.strip() for p in str(platforms_raw).split(",") if p.strip()] or ["kick"]
-    ok = False
+    active = [p.strip().lower() for p in str(platforms_raw).split(",") if p.strip()] or ["kick"]
+    logger.info(f"[StreamSend] guild={guild_id} active_platforms={active} msg={message[:40]!r}")
+    kick_ok = twitch_ok = None
     if "kick" in active:
-        ok = await send_kick_message(message, guild_id=guild_id) or ok
+        # Raw Kick sender (NOT send_kick_message) so announcements never get
+        # mis-routed by a stale _reply_platform contextvar.
+        kick_ok = await _send_kick_message_raw(message, guild_id=guild_id)
     if "twitch" in active:
-        ok = await send_twitch_message(message, guild_id=guild_id) or ok
-    return ok
+        twitch_ok = await send_twitch_message(message, guild_id=guild_id)
+    logger.info(f"[StreamSend] result kick={kick_ok} twitch={twitch_ok}")
+    return bool(kick_ok) or bool(twitch_ok)
 
 
 # -------------------------
@@ -7349,18 +7359,16 @@ async def on_ready():
     bot.giveaway_managers = giveaway_managers
     logger.debug(f"✅ Giveaway managers initialized for {len(giveaway_managers)} guilds")
 
-    # Start Redis subscriber with Kick message callback
-    # Guard against creating duplicate subscriber tasks on Discord gateway reconnects
-    # (on_ready fires every time the bot reconnects, not just on first login)
-    kick_callback = send_kick_message if KICK_BOT_USER_TOKEN else None
+    # Start Redis subscriber with the platform-aware send callback (fallback for
+    # announce_in_chat). NOT gated on KICK_BOT_USER_TOKEN: send_kick_message queues
+    # via the kickpython websocket (same path commands use) and send_stream_message
+    # fans out to active platforms, so announcements work regardless of that env var.
+    # Guard against duplicate subscriber tasks on Discord gateway reconnects.
+    kick_callback = send_stream_message
     if not hasattr(bot, "_redis_subscriber_started"):
         bot._redis_subscriber_started = True
         asyncio.create_task(start_redis_subscriber(bot, kick_callback))
-
-    if kick_callback:
-        logger.debug("✅ Redis subscriber will send messages to Kick chat")
-    else:
-        logger.debug("ℹ️  Redis subscriber started (messages logged only - set KICK_BOT_USER_TOKEN to enable Kick chat)")
+    logger.debug("✅ Redis subscriber started (platform-aware chat announcements)")
 
     # Auto-migrate database tables
     if engine:
@@ -7591,7 +7599,9 @@ async def on_ready():
                 slot_call_trackers[guild.id] = SlotCallTracker(
                     bot=bot,
                     discord_channel_id=slot_calls_channel_id,
-                    kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None,
+                    # Platform-aware: fans out to the server's active platform(s)
+                    # (Kick and/or Twitch), not Kick-only.
+                    kick_send_callback=send_stream_message,
                     engine=engine,
                     server_id=guild.id,
                 )
@@ -7611,7 +7621,7 @@ async def on_ready():
                 custom_commands_manager = CustomCommandsManager(
                     bot=bot,
                     send_message_callback=lambda msg, gid=guild.id: asyncio.create_task(
-                        send_kick_message(msg, guild_id=gid)
+                        send_stream_message(msg, guild_id=gid)
                     ),
                     discord_server_id=guild.id,
                 )
@@ -7658,7 +7668,7 @@ async def on_ready():
                     bot,
                     engine,
                     slot_call_trackers[guild.id],
-                    kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None,
+                    kick_send_callback=send_stream_message,
                 )
                 slot_call_trackers[guild.id].panel = slot_panel
 
@@ -7672,7 +7682,7 @@ async def on_ready():
                     bot,
                     engine,
                     gtb_managers[guild.id],
-                    kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None,
+                    kick_send_callback=send_stream_message,
                     guild_id=guild.id,
                 )
                 if not hasattr(bot, "gtb_panels_by_guild"):
@@ -7753,10 +7763,10 @@ async def on_ready():
             bot.howl_panels = await setup_howl_panel_system(bot, engine, get_guild_settings)
             logger.debug(f"✅ Howl verify panel system initialized ({len(bot.howl_panels)} guilds)")
 
-            # Setup timed messages system with per-guild instances
-            timed_messages_managers = await setup_timed_messages(
-                bot, engine, kick_send_callback=send_kick_message if KICK_BOT_USER_TOKEN else None
-            )
+            # Setup timed messages system with per-guild instances.
+            # Platform-aware: send_stream_message fans out to the server's active
+            # platform(s); each platform sender no-ops if that platform isn't set up.
+            timed_messages_managers = await setup_timed_messages(bot, engine, kick_send_callback=send_stream_message)
             # Store as bot attribute for Redis subscriber and commands
             bot.timed_messages_managers = timed_messages_managers
 
@@ -7764,23 +7774,17 @@ async def on_ready():
             if timed_messages_managers:
                 bot.timed_messages_manager = next(iter(timed_messages_managers.values()))
 
-            if KICK_BOT_USER_TOKEN:
-                total_messages = sum(len(mgr.messages) for mgr in timed_messages_managers.values())
-                logger.debug(
-                    f"✅ Timed messages system initialized ({len(timed_messages_managers)} guilds, {total_messages} total messages)"
-                )
-            else:
-                logger.debug("ℹ️  Timed messages disabled (set KICK_BOT_USER_TOKEN to enable)")
+            total_messages = sum(len(mgr.messages) for mgr in timed_messages_managers.values())
+            logger.debug(
+                f"✅ Timed messages system initialized ({len(timed_messages_managers)} guilds, {total_messages} total messages)"
+            )
 
-            # Setup custom commands manager
-            if KICK_BOT_USER_TOKEN:
-                custom_commands_manager = CustomCommandsManager(bot, send_message_callback=send_kick_message)
-                await custom_commands_manager.start()
-                # Store as bot attribute for Redis subscriber
-                bot.custom_commands_manager = custom_commands_manager
-                logger.debug(f"✅ Custom commands system initialized")
-            else:
-                logger.debug("ℹ️  Custom commands disabled (set KICK_BOT_USER_TOKEN to enable)")
+            # Setup custom commands manager (platform-aware send; works for Kick
+            # and/or Twitch servers).
+            custom_commands_manager = CustomCommandsManager(bot, send_message_callback=send_stream_message)
+            await custom_commands_manager.start()
+            bot.custom_commands_manager = custom_commands_manager
+            logger.debug(f"✅ Custom commands system initialized")
 
             # Clip service is now on Dashboard - no local buffer needed
             # Bot calls Dashboard API at /api/clips/create when !clip is used

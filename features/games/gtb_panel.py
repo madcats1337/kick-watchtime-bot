@@ -75,10 +75,10 @@ class SetResultModal(Modal, title="Set Result Amount"):
                             medal = "🥇" if winner["rank"] == 1 else "🥈" if winner["rank"] == 2 else "🥉"
                             winner_texts.append(f"{medal} {winner['username']} (${winner['guess']:,.2f})")
                         kick_msg += " | ".join(winner_texts)
-                        await self.panel.kick_send_callback(kick_msg)
-                        logger.info(f"Announced GTB winners to Kick chat")
+                        await self.panel.kick_send_callback(kick_msg, guild_id=self.panel.guild_id)
+                        logger.info(f"Announced GTB winners to stream chat")
                     except Exception as e:
-                        logger.error(f"Failed to announce winners to Kick: {e}")
+                        logger.error(f"Failed to announce winners to chat: {e}")
 
                 # Update the panel
                 await self.panel.update_panel(force=True)
@@ -109,10 +109,10 @@ class GTBPanelView(View):
             await interaction.response.send_message("❌ Only administrators can use this panel.", ephemeral=True)
             return False
         return True
-    
+
     def _get_panel(self, interaction: discord.Interaction):
         """Get the panel for the interaction's guild"""
-        if not self.bot or not hasattr(self.bot, 'gtb_panels_by_guild'):
+        if not self.bot or not hasattr(self.bot, "gtb_panels_by_guild"):
             return None
         return self.bot.gtb_panels_by_guild.get(interaction.guild_id)
 
@@ -123,7 +123,9 @@ class GTBPanelView(View):
         if panel:
             await panel.open_session_interaction(interaction)
         else:
-            await interaction.response.send_message("❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True
+            )
 
     @discord.ui.button(style=discord.ButtonStyle.danger, label="Close Session", emoji="🔒", custom_id="gtb_close")
     async def close_button(self, interaction: discord.Interaction, button: Button):
@@ -132,7 +134,9 @@ class GTBPanelView(View):
         if panel:
             await panel.close_session_interaction(interaction)
         else:
-            await interaction.response.send_message("❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True
+            )
 
     @discord.ui.button(style=discord.ButtonStyle.primary, label="Set Result", emoji="💰", custom_id="gtb_result")
     async def result_button(self, interaction: discord.Interaction, button: Button):
@@ -141,7 +145,9 @@ class GTBPanelView(View):
         if panel:
             await panel.set_result_interaction(interaction)
         else:
-            await interaction.response.send_message("❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True
+            )
 
     @discord.ui.button(style=discord.ButtonStyle.secondary, label="Refresh", emoji="♻️", custom_id="gtb_refresh")
     async def refresh_button(self, interaction: discord.Interaction, button: Button):
@@ -150,7 +156,9 @@ class GTBPanelView(View):
         if panel:
             await panel.refresh_interaction(interaction)
         else:
-            await interaction.response.send_message("❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Panel not initialized for this server. Please recreate the panel.", ephemeral=True
+            )
 
 
 class GTBPanel:
@@ -303,7 +311,7 @@ class GTBPanel:
                         LIMIT 1
                     """
                         ),
-                        {"server_id": self.guild_id}
+                        {"server_id": self.guild_id},
                     ).fetchone()
 
                     if last_session:
@@ -391,10 +399,11 @@ class GTBPanel:
                 try:
                     await self.kick_send_callback(
                         "🎮 Guess the Balance is now OPEN! Type !gtb <amount> to guess the final balance. "
-                        "Example: !gtb 1234.56"
+                        "Example: !gtb 1234.56",
+                        guild_id=self.guild_id,
                     )
                 except Exception as e:
-                    logger.error(f"Failed to announce session open to Kick: {e}")
+                    logger.error(f"Failed to announce session open to chat: {e}")
 
             await self.update_panel(force=True)
         else:
@@ -414,10 +423,11 @@ class GTBPanel:
                 try:
                     await self.kick_send_callback(
                         f"🔒 Guess the Balance session is now CLOSED! No more guesses accepted. "
-                        f"Waiting for final result..."
+                        f"Waiting for final result...",
+                        guild_id=self.guild_id,
                     )
                 except Exception as e:
-                    logger.error(f"Failed to announce session close to Kick: {e}")
+                    logger.error(f"Failed to announce session close to chat: {e}")
 
             await self.update_panel(force=True)
         else:
