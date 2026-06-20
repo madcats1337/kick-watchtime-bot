@@ -4139,10 +4139,12 @@ async def check_oauth_notifications_task():
                                 guild_id=guild_id,
                             )
                         else:
+                            # Platform-aware label (Twitch links share this path).
+                            _plat_label = "Twitch" if link_platform == "twitch" else "Kick"
                             # Send success message via DM
                             try:
                                 await user.send(
-                                    f"✅ **Verification Successful!**\n\nYour Discord account has been linked to Kick account **{actual_kick_username}**."
+                                    f"✅ **Verification Successful!**\n\nYour Discord account has been linked to {_plat_label} account **{actual_kick_username}**."
                                 )
                             except discord.Forbidden:
                                 # If DM fails, try to find a guild channel
@@ -4169,7 +4171,7 @@ async def check_oauth_notifications_task():
 
                                         if target_channel:
                                             await target_channel.send(
-                                                f"{member.mention} ✅ **Verification Successful!** Your account has been linked to Kick **{actual_kick_username}**."
+                                                f"{member.mention} ✅ **Verification Successful!** Your account has been linked to {_plat_label} **{actual_kick_username}**."
                                             )
 
                             # Log the successful link attempt

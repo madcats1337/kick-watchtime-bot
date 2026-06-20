@@ -1832,7 +1832,7 @@ def auth_twitch_link_callback():
             )
 
         logger.info(f"✅ Twitch link successful: Discord {discord_id} -> Twitch {twitch_login}")
-        return render_success(twitch_login, discord_id)
+        return render_success(twitch_login, discord_id, platform="twitch")
     except Exception as e:
         logger.error(f"❌ [Twitch OAuth] Error during callback: {e}")
         import traceback
@@ -1912,8 +1912,9 @@ def get_kick_user_info(access_token):
         raise Exception(f"Could not get user info from Kick API: {str(e)}")
 
 
-def render_success(kick_username, discord_id):
+def render_success(kick_username, discord_id, platform="kick"):
     """Render success page with auto-close."""
+    platform_label = "Twitch" if platform == "twitch" else "Kick"
     return f"""
     <html>
         <head>
@@ -1979,7 +1980,7 @@ def render_success(kick_username, discord_id):
                 <h1>✅</h1>
                 <h2>Account Linked Successfully!</h2>
                 <div class="username">{kick_username}</div>
-                <p>Your Discord account is now linked to your Kick account.</p>
+                <p>Your Discord account is now linked to your {platform_label} account.</p>
                 <p id="autoClose">Window will close automatically...</p>
                 <p id="manualClose" style="display:none;">You can now close this tab and return to Discord.</p>
             </div>
