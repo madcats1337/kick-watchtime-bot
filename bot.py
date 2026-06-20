@@ -1453,9 +1453,17 @@ async def send_kick_message(message: str, guild_id: int = None) -> bool:
 
 async def send_twitch_message(message: str, guild_id: int = None) -> bool:
     """
-    Send a message to Twitch chat via the Helix Send Chat Message endpoint, using
-    the bot account's user token (user:write:chat + user:bot).
-    https://dev.twitch.tv/docs/chat/send-receive-messages/
+    Send a message to Twitch chat via the Helix Send Chat Message API.
+
+    IMPORTANT — chatbot badge: to receive the Twitch "chatbot" badge, the send MUST
+    use an APP ACCESS TOKEN (not the bot's user token), per
+    https://dev.twitch.tv/docs/chat/#chatbot-badge-and-chat-identity :
+      - must use the Send Chat Message API
+      - must use an App Access Token
+      - the broadcaster must have granted channel:bot (or the bot is a mod)
+      - the bot account must NOT be the broadcaster
+    The bot account must still have authorized the app once (user:write:chat +
+    user:bot) — that authorization is a prerequisite; the SEND itself is app-token.
 
     Resolves the broadcaster id from bot_settings(twitch_broadcaster_user_id) and
     the bot sender id from TWITCH_BOT_USER_ID. Returns True on success.
@@ -1479,54 +1487,29 @@ async def send_twitch_message(message: str, guild_id: int = None) -> bool:
                 {"g": guild_id},
             ).fetchone()
             broadcaster_id = row[0] if row else None
-            # Bot account user token + refresh token (global → discord_server_id = 0).
-            tok = conn.execute(
-                _text(
-                    "SELECT access_token, refresh_token FROM twitch_oauth_tokens WHERE user_id = :u AND discord_server_id = 0 LIMIT 1"
-                ),
+            # The bot account must have authorized once (prerequisite for the badge
+            # + chat grants). We don't SEND with this token, but its presence tells
+            # us the bot is set up. Global row → discord_server_id = 0.
+            authorized = conn.execute(
+                _text("SELECT 1 FROM twitch_oauth_tokens WHERE user_id = :u AND discord_server_id = 0 LIMIT 1"),
                 {"u": bot_uid},
             ).fetchone()
-            access_token = tok[0] if tok else None
-            refresh_token = tok[1] if tok else None
 
-        if not broadcaster_id or not access_token:
-            logger.info("[Twitch Send] Missing broadcaster id or bot token — cannot send")
+        if not broadcaster_id:
+            logger.info("[Twitch Send] No twitch_broadcaster_user_id for this server — cannot send")
+            return False
+        if not authorized:
+            logger.info("[Twitch Send] Bot account not authorized (no token row) — authorize it in SuperAdmin")
             return False
 
         from core.twitch_api import TwitchAPI
 
-        # Pass the refresh token so TwitchAPI._request auto-refreshes on 401 (the
-        # bot's user token expires ~every 4h). Persist the rotated token after.
-        api = TwitchAPI(access_token=access_token, refresh_token=refresh_token)
+        # Send with an APP ACCESS TOKEN so the message earns the chatbot badge.
+        api = TwitchAPI()
         try:
+            tokens = await api.get_app_token()
+            api.access_token = tokens.access_token
             result = await api.send_chat_message(broadcaster_id, bot_user_id, message)
-            # If the token was refreshed mid-request, persist the new one.
-            if api.access_token and api.access_token != access_token:
-                try:
-                    from datetime import datetime as _dt
-                    from datetime import timedelta as _td
-                    from datetime import timezone as _tz
-
-                    with engine.begin() as conn:
-                        conn.execute(
-                            _text(
-                                """
-                                UPDATE twitch_oauth_tokens
-                                SET access_token = :at, refresh_token = :rt,
-                                    expires_at = :exp, updated_at = CURRENT_TIMESTAMP
-                                WHERE user_id = :u AND discord_server_id = 0
-                                """
-                            ),
-                            {
-                                "at": api.access_token,
-                                "rt": api.refresh_token or refresh_token,
-                                "exp": _dt.now(_tz.utc) + _td(hours=4),
-                                "u": bot_uid,
-                            },
-                        )
-                    logger.info("[Twitch Send] 🔄 Refreshed + persisted bot token")
-                except Exception as persist_err:
-                    logger.info(f"[Twitch Send] ⚠️ Token refreshed but persist failed: {persist_err}")
             if result.get("is_sent"):
                 return True
             logger.info(f"[Twitch Send] Not sent: {result.get('drop_reason')}")
