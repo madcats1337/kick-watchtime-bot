@@ -1133,15 +1133,6 @@ class KickWebSocketManager:
                             await send_kick_message(f"@{username} Please specify a slot!", guild_id=guild_id)
                 else:
                     logger.info(f"❌ No slot tracker found for this guild")
-                    # Diagnostic: show what the tracker registries actually hold so we
-                    # can tell "never initialized" from "key/type mismatch".
-                    _byg = getattr(bot, "slot_call_trackers_by_guild", None)
-                    logger.info(
-                        f"🔍 [pid={os.getpid()}] slot_call_trackers_by_guild present={_byg is not None} "
-                        f"keys={list(_byg.keys()) if isinstance(_byg, dict) else 'n/a'} "
-                        f"lookup_guild_id={guild_id!r} ({type(guild_id).__name__}) "
-                        f"bot_ready={bot.is_ready()} guilds={len(bot.guilds)}"
-                    )
 
             # !gtb command
             elif content_stripped.lower().startswith("!gtb"):
@@ -7473,10 +7464,7 @@ async def on_ready():
                 if not hasattr(bot, "slot_call_trackers_by_guild"):
                     bot.slot_call_trackers_by_guild = {}
                 bot.slot_call_trackers_by_guild[guild.id] = slot_call_trackers[guild.id]
-                logger.info(
-                    f"✅ Slot call tracker initialized for guild {guild.id} "
-                    f"(pid={os.getpid()}, channel: {slot_calls_channel_id or 'Not configured'})"
-                )
+                logger.debug(f"✅ Slot call tracker initialized (channel: {slot_calls_channel_id or 'Not configured'})")
 
                 # Setup Guess the Balance manager for this guild
                 gtb_managers[guild.id] = GuessTheBalanceManager(engine, guild.id)
