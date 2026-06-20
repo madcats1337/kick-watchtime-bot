@@ -1479,9 +1479,11 @@ async def send_twitch_message(message: str, guild_id: int = None) -> bool:
                 {"g": guild_id},
             ).fetchone()
             broadcaster_id = row[0] if row else None
-            # Bot account user token + refresh token (stored at OAuth link time).
+            # Bot account user token + refresh token (global → discord_server_id = 0).
             tok = conn.execute(
-                _text("SELECT access_token, refresh_token FROM twitch_oauth_tokens WHERE user_id = :u LIMIT 1"),
+                _text(
+                    "SELECT access_token, refresh_token FROM twitch_oauth_tokens WHERE user_id = :u AND discord_server_id = 0 LIMIT 1"
+                ),
                 {"u": bot_uid},
             ).fetchone()
             access_token = tok[0] if tok else None
@@ -1512,7 +1514,7 @@ async def send_twitch_message(message: str, guild_id: int = None) -> bool:
                                 UPDATE twitch_oauth_tokens
                                 SET access_token = :at, refresh_token = :rt,
                                     expires_at = :exp, updated_at = CURRENT_TIMESTAMP
-                                WHERE user_id = :u
+                                WHERE user_id = :u AND discord_server_id = 0
                                 """
                             ),
                             {
@@ -4335,7 +4337,7 @@ async def proactive_twitch_token_refresh_task():
             rows = conn.execute(
                 text(
                     """
-                    SELECT user_id, twitch_username, access_token, refresh_token, expires_at
+                    SELECT user_id, discord_server_id, twitch_username, access_token, refresh_token, expires_at
                     FROM twitch_oauth_tokens
                     WHERE refresh_token IS NOT NULL
                     ORDER BY expires_at ASC NULLS FIRST
@@ -4348,7 +4350,7 @@ async def proactive_twitch_token_refresh_task():
             return
 
         refreshed = failed = validated = 0
-        for user_id, twitch_username, access_token, refresh_token, expires_at in rows:
+        for user_id, row_server_id, twitch_username, access_token, refresh_token, expires_at in rows:
             api = TwitchAPI(access_token=access_token, refresh_token=refresh_token)
             try:
                 needs_refresh = False
@@ -4374,7 +4376,7 @@ async def proactive_twitch_token_refresh_task():
                                 UPDATE twitch_oauth_tokens
                                 SET access_token = :at, refresh_token = :rt,
                                     expires_at = :exp, updated_at = CURRENT_TIMESTAMP
-                                WHERE user_id = :u
+                                WHERE user_id = :u AND discord_server_id = :sid
                                 """
                             ),
                             {
@@ -4382,6 +4384,7 @@ async def proactive_twitch_token_refresh_task():
                                 "rt": tokens.refresh_token or refresh_token,
                                 "exp": new_expires,
                                 "u": user_id,
+                                "sid": row_server_id,
                             },
                         )
                     refreshed += 1
