@@ -69,6 +69,13 @@ from features.messaging.timed_messages import setup_timed_messages
 # Slot call tracker import
 from features.slot_requests.slot_calls import setup_slot_call_tracker
 from features.slot_requests.slot_request_panel import setup_slot_panel
+
+# Global super-admin panels for the official guild (footer/patch-notes/rules/
+# features/subscription roles managed from the dashboard super-admin console).
+from features.superadmin.features_panel import setup_features_panel_system
+from features.superadmin.patchnotes_panel import setup_patchnotes_panel_system
+from features.superadmin.rules_panel import setup_rules_panel_system
+from features.superadmin.sub_role_panel import setup_sub_role_panel_system
 from raffle_system.auto_leaderboard import setup_auto_leaderboard
 from raffle_system.commands import setup as setup_raffle_commands
 
@@ -8226,6 +8233,18 @@ async def on_ready():
             # Setup Howl verify panel with per-guild instances
             bot.howl_panels = await setup_howl_panel_system(bot, engine, get_guild_settings)
             logger.debug(f"✅ Howl verify panel system initialized ({len(bot.howl_panels)} guilds)")
+
+            # Setup global super-admin panels for the official guild. These are
+            # posted/moved from the dashboard super-admin console via the existing
+            # redis post_panel flow (registry attrs read by _post_panel).
+            try:
+                bot.patchnotes_panels = await setup_patchnotes_panel_system(bot, engine)
+                bot.rules_panels = await setup_rules_panel_system(bot, engine)
+                bot.features_panels = await setup_features_panel_system(bot, engine)
+                bot.sub_role_panels = await setup_sub_role_panel_system(bot, engine)
+                logger.debug("✅ Super-admin global panels initialized")
+            except Exception as e:
+                logger.error(f"⚠️ Failed to initialize super-admin global panels: {e}")
 
             # Setup timed messages system with per-guild instances.
             # Platform-aware: send_stream_message fans out to the server's active

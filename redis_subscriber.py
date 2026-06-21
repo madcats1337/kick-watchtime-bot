@@ -1371,6 +1371,11 @@ class RedisSubscriber:
             "link": "link_panels",
             "shuffle_verify": "shuffle_panels",
             "howl_verify": "howl_panels",
+            # Global super-admin panels for the official guild.
+            "patchnotes": "patchnotes_panels",
+            "rules": "rules_panels",
+            "features": "features_panels",
+            "sub_roles": "sub_role_panels",
         }.get(panel_type)
         if not registry_attr:
             logger.warning(f"⚠️ post_panel unknown panel_type: {panel_type}")
@@ -1402,7 +1407,14 @@ class RedisSubscriber:
                 logger.info(f"ℹ️ Could not delete old {panel_type} panel message: {e}")
 
         try:
-            success = await panel.create_panel(new_channel)
+            # The patch-notes panel renders content forwarded in the event data
+            # (the latest release from the /patch-notes page); other global panels
+            # read their content from bot_settings. Existing link/verify panels
+            # take only the channel.
+            if panel_type in ("patchnotes", "rules", "features", "sub_roles"):
+                success = await panel.create_panel(new_channel, data=data)
+            else:
+                success = await panel.create_panel(new_channel)
             if success:
                 logger.info(f"✅ Posted {panel_type} panel in channel {channel_id} (guild {guild_id})")
             else:

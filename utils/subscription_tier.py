@@ -116,6 +116,43 @@ def server_has_feature(engine, guild_id, feature_key: str) -> bool:
     return feature_key in TIER_FEATURES.get(get_server_tier(engine, guild_id), FREE)
 
 
+# Tier ordering for picking a user's "highest" paid tier.
+_TIER_RANK = {"free": 0, "tier2": 1, "tier3": 2, "tier4": 3}
+
+
+def get_user_highest_tier(engine, discord_id) -> str:
+    """The highest effective tier across all servers a Discord user administers.
+
+    Drives the subscription-role panel: a user clicks "claim" and gets the role
+    for the best active paid tier among the servers they admin (recorded in
+    `server_admins` at dashboard login). Returns 'free' if they administer no
+    server / no paid server / on any error (fails open to no paid role).
+    """
+    if discord_id is None:
+        return "free"
+    try:
+        discord_id = int(discord_id)
+    except (TypeError, ValueError):
+        return "free"
+
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT discord_server_id FROM server_admins WHERE discord_id = :d"),
+                {"d": discord_id},
+            ).fetchall()
+    except Exception as e:
+        logger.warning(f"get_user_highest_tier({discord_id}) failed: {e}")
+        return "free"
+
+    best = "free"
+    for (server_id,) in rows:
+        tier = get_server_tier(engine, server_id)
+        if _TIER_RANK.get(tier, 0) > _TIER_RANK.get(best, 0):
+            best = tier
+    return best
+
+
 def tier_needed_for(feature_key: str) -> str:
     """Cheapest tier that grants `feature_key` (for upgrade messages)."""
     for tier in ("free", "tier2", "tier3"):
