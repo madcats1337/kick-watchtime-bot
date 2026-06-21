@@ -95,6 +95,24 @@ CREATE TABLE IF NOT EXISTS raffle_shuffle_wagers (
     UNIQUE(period_id, shuffle_username)
 );
 
+-- Period-INDEPENDENT lifetime wager totals (powers the Tier-4 wager leaderboard).
+-- Unlike raffle_shuffle_wagers (which is FK'd to a raffle period and only written
+-- while a raffle is active), this table is upserted on EVERY tracker poll
+-- regardless of raffle state, so the dashboard leaderboard always has fresh
+-- totals to read without hitting shuffle's rate-limited API itself. One row per
+-- (server, platform, username); total_wager_usd is the current lifetime figure.
+CREATE TABLE IF NOT EXISTS shuffle_wager_totals (
+    id SERIAL PRIMARY KEY,
+    discord_server_id BIGINT NOT NULL,
+    platform VARCHAR(50) NOT NULL DEFAULT 'shuffle',
+    shuffle_username TEXT NOT NULL,
+    kick_name TEXT,
+    discord_id BIGINT,
+    total_wager_usd DECIMAL(15, 2) DEFAULT 0,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(discord_server_id, platform, shuffle_username)
+);
+
 -- Shuffle username → Kick/Discord mapping
 CREATE TABLE IF NOT EXISTS raffle_shuffle_links (
     id SERIAL PRIMARY KEY,

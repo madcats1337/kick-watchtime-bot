@@ -169,6 +169,79 @@ class ShuffleWagerTracker:
         except Exception as pub_err:
             logger.info(f"[Shuffle Tracker] wager publish failed: {pub_err}")
 
+    def _store_lifetime_totals(self, filtered_data):
+        """Upsert current lifetime wager totals into shuffle_wager_totals.
+
+        Period-INDEPENDENT: called on every poll (even with no active raffle
+        period) so the dashboard's Tier-4 wager leaderboard always has fresh
+        totals to read without hitting shuffle's rate-limited API itself. One row
+        per (server, platform, username); we also carry the verified kick/discord
+        link (if any) for display badges. Best-effort: a failure here never blocks
+        the ticket-awarding path that follows.
+        """
+        if not self.server_id or not filtered_data:
+            return
+
+        try:
+            with self.engine.begin() as conn:
+                # Verified links for this platform → identity badges on the board.
+                link_rows = conn.execute(
+                    text(
+                        """
+                        SELECT shuffle_username, kick_name, discord_id
+                        FROM raffle_shuffle_links
+                        WHERE verified = TRUE AND platform = :platform
+                        """
+                    ),
+                    {"platform": self.platform_name},
+                ).fetchall()
+                links = {str(r[0]).lower(): (r[1], r[2]) for r in link_rows}
+
+                for user_data in filtered_data:
+                    username = user_data.get("username")
+                    if not username:
+                        continue
+                    try:
+                        total = round(float(user_data.get("wagerAmount", 0) or 0), 2)
+                    except (TypeError, ValueError):
+                        total = 0.0
+                    kick_name, discord_id = links.get(str(username).lower(), (None, None))
+
+                    # Upsert keyed on (server, platform, username). COALESCE keeps a
+                    # previously-stored link if this poll has no fresh one, so a
+                    # later unlink doesn't silently wipe the badge mid-period.
+                    conn.execute(
+                        text(
+                            """
+                            INSERT INTO shuffle_wager_totals
+                                (discord_server_id, platform, shuffle_username,
+                                 kick_name, discord_id, total_wager_usd, last_updated)
+                            VALUES
+                                (:server_id, :platform, :username,
+                                 :kick_name, :discord_id, :total, CURRENT_TIMESTAMP)
+                            ON CONFLICT (discord_server_id, platform, shuffle_username)
+                            DO UPDATE SET
+                                total_wager_usd = EXCLUDED.total_wager_usd,
+                                kick_name = COALESCE(EXCLUDED.kick_name, shuffle_wager_totals.kick_name),
+                                discord_id = COALESCE(EXCLUDED.discord_id, shuffle_wager_totals.discord_id),
+                                last_updated = CURRENT_TIMESTAMP
+                            """
+                        ),
+                        {
+                            "server_id": self.server_id,
+                            "platform": self.platform_name,
+                            "username": username,
+                            "kick_name": kick_name,
+                            "discord_id": discord_id,
+                            "total": total,
+                        },
+                    )
+        except Exception as e:
+            logger.info(
+                f"[Shuffle Tracker] shuffle_wager_totals upsert failed for "
+                f"server={self.server_id}: {type(e).__name__}: {e}"
+            )
+
     async def update_shuffle_wagers(self):
         """
         Poll gambling platform affiliate API and update wager tracking
@@ -180,13 +253,11 @@ class ShuffleWagerTracker:
             dict: Summary of updates performed
         """
         try:
-            # Get active raffle period
-            period_id = self._get_active_period_id()
-            if not period_id:
-                logger.warning(f"No active raffle period - skipping {self.platform_name} wager update")
-                return {"status": "no_active_period", "updates": 0}
-
-            # Fetch current wager data from platform
+            # Fetch current wager data from the platform FIRST. The lifetime
+            # totals feed the dashboard's Tier-4 wager leaderboard, which is
+            # independent of raffles — so we store totals on every poll even when
+            # no raffle period is active. (The period gate below only governs
+            # raffle TICKET awarding, which genuinely needs a period.)
             wager_data = await self._fetch_shuffle_data()
 
             if not wager_data:
@@ -211,6 +282,17 @@ class ShuffleWagerTracker:
             logger.debug(
                 f"Found {len(filtered_data)} users with campaign codes '{self.campaign_code}' on {self.platform_name}"
             )
+
+            # Always refresh the period-independent leaderboard totals.
+            self._store_lifetime_totals(filtered_data)
+
+            # Raffle ticket awarding requires an active raffle period. With no
+            # period we've still stored the leaderboard totals above, so just stop
+            # here rather than treating it as a failure.
+            period_id = self._get_active_period_id()
+            if not period_id:
+                logger.debug(f"No active raffle period - leaderboard totals stored, skipping ticket awards")
+                return {"status": "no_active_period", "updates": 0}
 
             updates = []
             tickets_to_award = []  # Store ticket awards to process after wager updates
@@ -710,7 +792,7 @@ async def setup_shuffle_tracker(bot, engine, server_id=None, bot_settings=None):
 
     tracker = ShuffleWagerTracker(engine, bot_settings=bot_settings, server_id=server_id)
 
-    @tasks.loop(minutes=15)  # Run every 15 minutes
+    @tasks.loop(minutes=2)  # Run every 2 minutes
     async def update_shuffle_task():
         """Periodic task to update Shuffle wagers and award tickets"""
         try:
@@ -750,7 +832,7 @@ async def setup_shuffle_tracker(bot, engine, server_id=None, bot_settings=None):
     async def before_shuffle_task():
         """Wait for bot to be ready before starting the task"""
         await bot.wait_until_ready()
-        logger.debug("[Shuffle Tracker] ✅ Started (runs every 15 minutes)")
+        logger.debug("[Shuffle Tracker] ✅ Started (runs every 2 minutes)")
 
     # Start the task
     update_shuffle_task.start()
