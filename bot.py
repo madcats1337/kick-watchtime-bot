@@ -5099,73 +5099,32 @@ def _fetch_howl_freeze_rows(conn, server_id, start_dt, end_dt, winner_count):
     return out[:limit]
 
 
-# Short cache so the leaderboard sync doesn't add to shuffle's rate limit
-# (shuffle 400s with TOO_MANY_REQUEST under load). { (url, code): (exp, totals) }
-_SHUFFLE_LB_CACHE_TTL = 60
-_shuffle_lb_cache: dict = {}
-
-
 def _shuffle_lifetime_totals(conn, server_id):
-    """Current lifetime totals per shuffle user from the server's affiliate URL.
+    """Lifetime totals per shuffle user, from the bot's tracked rows (DB read).
 
-    Mirrors utils.shuffle_lb.fetch_shuffle_totals: reads shuffle_affiliate_url +
-    shuffle_campaign_code from bot_settings, fetches the bare-list endpoint, and
-    returns {uname_key: (username, total)} of LIFETIME totals. NOT from the
-    tracker's stored totals — the leaderboard is self-contained from the URL.
-    Returns {} on any error / missing URL. Cached ~60s to avoid rate limiting.
+    The shuffle tracker already polls the affiliate URL continuously and stores
+    total_wager_usd in raffle_shuffle_wagers, so the leaderboard reads THOSE rows
+    instead of fetching shuffle's API again (shuffle 400s with TOO_MANY_REQUEST
+    when many surfaces hit it). Pure DB read — no external request.
+
+    One row per username (most recent), INDEPENDENT of any raffle period_id.
+    Returns {uname_key: (username, total)}.
     """
-    s = _lb_bot_settings(conn, server_id, ("shuffle_affiliate_url", "shuffle_campaign_code"))
-    url = s.get("shuffle_affiliate_url")
-    code = s.get("shuffle_campaign_code")
-    if not url:
-        return {}
-
-    cache_key = (url.strip(), (code or "").strip().lower())
-    cache_now = time.monotonic()
-    cached = _shuffle_lb_cache.get(cache_key)
-    if cached and cached[0] > cache_now:
-        return cached[1]
-
-    try:
-        # Plain GET, no headers — matches the working shuffle tracker / shuffle_api.
-        resp = requests.get(url, timeout=15)
-        if resp.status_code != 200:
-            logger.warning(
-                f"[Leaderboard] shuffle affiliate URL returned {resp.status_code} for server {server_id}: {resp.text[:200]}"
-            )
-            return {}
-        data = resp.json()
-    except Exception as e:
-        logger.warning(f"[Leaderboard] shuffle totals fetch failed for server {server_id}: {e}")
-        return {}
-    # Shuffle returns a bare list of {username, campaignCode, wagerAmount}
-    # (same shape the shuffle tracker has consumed for months). A non-list is a
-    # transient upstream blip (HTML/error page) — skip this tick, retry next.
-    if not isinstance(data, list):
-        logger.warning(f"[Leaderboard] non-list shuffle response for server {server_id}: {str(data)[:200]}")
-        return {}
-
-    codes = {c.strip().lower() for c in code.split(",")} if code else None
-    out = {}
-    for row in data:
-        if not isinstance(row, dict):
-            continue
-        username = row.get("username")
-        if not username:
-            continue
-        if codes is not None and str(row.get("campaignCode", "")).lower() not in codes:
-            continue
-        try:
-            total = round(float(row.get("wagerAmount") or 0), 2)
-        except (TypeError, ValueError):
-            total = 0.0
-        key = str(username).lower()
-        existing = out.get(key)
-        if existing is None or total > existing[1]:
-            out[key] = (username, total)
-
-    _shuffle_lb_cache[cache_key] = (cache_now + _SHUFFLE_LB_CACHE_TTL, out)
-    return out
+    rows = conn.execute(
+        text(
+            """
+            SELECT DISTINCT ON (LOWER(shuffle_username))
+                LOWER(shuffle_username) AS uname_key,
+                shuffle_username,
+                CAST(total_wager_usd AS FLOAT) AS total
+            FROM raffle_shuffle_wagers
+            WHERE discord_server_id = :sid AND platform = 'shuffle'
+            ORDER BY LOWER(shuffle_username), last_updated DESC
+            """
+        ),
+        {"sid": server_id},
+    ).fetchall()
+    return {r[0]: (r[1], float(r[2] or 0)) for r in rows}
 
 
 def _shuffle_identity(conn, server_id):
