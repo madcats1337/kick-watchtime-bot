@@ -41,8 +41,13 @@ TIER3 = TIER2 + [
     # Admin-Dashboard/utils/tiers.py.
     "multi_platform",
 ]
+TIER4 = TIER3 + [
+    # Public affiliate leaderboard page generator. Mirror of
+    # Admin-Dashboard/utils/tiers.py.
+    "leaderboard_generator",
+]
 
-TIER_FEATURES = {"free": FREE, "tier2": TIER2, "tier3": TIER3}
+TIER_FEATURES = {"free": FREE, "tier2": TIER2, "tier3": TIER3, "tier4": TIER4}
 
 # Small in-process cache so we don't hit the DB on every chat line. Keyed by
 # guild_id -> (tier, expires_at). The dashboard caches in Redis (~60s); a short
@@ -52,7 +57,7 @@ _cache: dict[int, tuple[str, float]] = {}
 
 
 def get_server_tier(engine, guild_id) -> str:
-    """Effective tier for a guild: 'free' | 'tier2' | 'tier3'.
+    """Effective tier for a guild: 'free' | 'tier2' | 'tier3' | 'tier4'.
 
     Resolution order (mirrors the dashboard):
       1. No row / no guild      -> 'free'

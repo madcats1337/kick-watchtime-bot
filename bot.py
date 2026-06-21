@@ -5025,6 +5025,202 @@ async def before_clip_buffer_task():
         logger.debug(f"[Clip Buffer] kick_channel: {bot.settings_manager.kick_channel}")
 
 
+# ---------------------------------------------------------------------------
+# Leaderboard period auto-renewal (Tier 4: "leaderboard_generator")
+#
+# When an active wager_leaderboard_periods row's end_date passes, freeze its
+# top-N snapshot (the SAME SUM(wager_delta) math as the dashboard's
+# get_wager_leaderboard) and, if auto_renew is on, immediately start the next
+# back-to-back period (new.start = old.end, new.end = old.end + duration),
+# copying the prizes/site/settings.
+#
+# These tables are wager-leaderboard-specific — this task NEVER touches
+# raffle_periods, points, or watchtime. It mirrors the raffle period-rollover
+# fail-safe: any error for a guild skips that guild and is retried next tick;
+# we never end/create from a partial read.
+# ---------------------------------------------------------------------------
+def _freeze_leaderboard_snapshot(conn, period_id, server_id, start_dt, end_dt, winner_count):
+    """Write the frozen top-N winners for a period (SQLAlchemy connection).
+
+    Replicates utils/database.get_wager_leaderboard: SUM(wager_delta) per user
+    over [start, end), joined to the latest identity row, top-N by total.
+    """
+    conn.execute(
+        text("DELETE FROM wager_leaderboard_winners WHERE period_id = :pid"),
+        {"pid": period_id},
+    )
+    rows = conn.execute(
+        text(
+            """
+            WITH agg AS (
+                SELECT LOWER(shuffle_username) AS uname_key,
+                       SUM(wager_delta) AS wagered_usd
+                FROM shuffle_wager_history
+                WHERE discord_server_id = :sid
+                  AND recorded_at >= :start AND recorded_at < :end
+                GROUP BY LOWER(shuffle_username)
+            ),
+            latest_identity AS (
+                SELECT DISTINCT ON (LOWER(shuffle_username))
+                       LOWER(shuffle_username) AS uname_key,
+                       shuffle_username, kick_name, discord_id
+                FROM raffle_shuffle_wagers
+                WHERE discord_server_id = :sid
+                ORDER BY LOWER(shuffle_username), last_updated DESC
+            )
+            SELECT li.shuffle_username, li.kick_name, li.discord_id,
+                   (li.discord_id IS NOT NULL) AS is_linked, a.wagered_usd
+            FROM agg a
+            LEFT JOIN latest_identity li USING (uname_key)
+            WHERE a.wagered_usd > 0
+            ORDER BY a.wagered_usd DESC
+            LIMIT :limit
+            """
+        ),
+        {"sid": server_id, "start": start_dt, "end": end_dt, "limit": winner_count or 10},
+    ).fetchall()
+
+    prizes = {
+        r[0]: r[1]
+        for r in conn.execute(
+            text("SELECT rank, amount FROM wager_leaderboard_prizes WHERE period_id = :pid"),
+            {"pid": period_id},
+        ).fetchall()
+    }
+
+    for i, row in enumerate(rows):
+        rank = i + 1
+        conn.execute(
+            text(
+                """
+                INSERT INTO wager_leaderboard_winners
+                    (period_id, rank, shuffle_username, kick_name, discord_id,
+                     wagered_usd, prize_amount, is_linked)
+                VALUES (:pid, :rank, :uname, :kick, :did, :wag, :prize, :linked)
+                """
+            ),
+            {
+                "pid": period_id,
+                "rank": rank,
+                "uname": row[0],
+                "kick": row[1],
+                "did": int(row[2]) if row[2] is not None else None,
+                "wag": float(row[4]) if row[4] is not None else 0,
+                "prize": float(prizes.get(rank, 0) or 0),
+                "linked": bool(row[3]),
+            },
+        )
+    return len(rows)
+
+
+@tasks.loop(minutes=15)
+async def leaderboard_autorenew_task():
+    """Freeze ended leaderboard periods and roll over the auto-renewing ones."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)  # naive UTC (column type)
+
+    for guild in bot.guilds:
+        guild_id = guild.id
+        set_server(guild_id, guild.name)
+        try:
+            with engine.begin() as conn:
+                period = conn.execute(
+                    text(
+                        """
+                        SELECT id, start_date, end_date, winner_count, auto_renew,
+                               site, title, prize_pool, stats_url, join_code, cta_url
+                        FROM wager_leaderboard_periods
+                        WHERE discord_server_id = :sid
+                          AND status = 'active'
+                          AND end_date <= :now
+                        ORDER BY end_date ASC
+                        LIMIT 1
+                        """
+                    ),
+                    {"sid": guild_id, "now": now},
+                ).fetchone()
+
+                if not period:
+                    continue
+
+                (
+                    pid,
+                    start_dt,
+                    end_dt,
+                    winner_count,
+                    auto_renew,
+                    site,
+                    title,
+                    prize_pool,
+                    stats_url,
+                    join_code,
+                    cta_url,
+                ) = period
+
+                # 1) Freeze the finished period.
+                count = _freeze_leaderboard_snapshot(conn, pid, guild_id, start_dt, end_dt, winner_count)
+                conn.execute(
+                    text("UPDATE wager_leaderboard_periods " "SET status = 'ended', frozen_at = NOW() WHERE id = :pid"),
+                    {"pid": pid},
+                )
+                logger.info(f"[Leaderboard] Froze period {pid} ({count} winners)")
+
+                # 2) Roll over if auto-renew is on. Back-to-back, same duration.
+                if auto_renew:
+                    duration = end_dt - start_dt
+                    new_start = end_dt
+                    new_end = end_dt + duration
+                    new_id = conn.execute(
+                        text(
+                            """
+                            INSERT INTO wager_leaderboard_periods
+                                (discord_server_id, site, title, prize_pool, winner_count,
+                                 start_date, end_date, stats_url, join_code, cta_url,
+                                 auto_renew, status)
+                            VALUES (:sid, :site, :title, :pool, :wc, :start, :end,
+                                    :stats, :join, :cta, TRUE, 'active')
+                            RETURNING id
+                            """
+                        ),
+                        {
+                            "sid": guild_id,
+                            "site": site,
+                            "title": title,
+                            "pool": prize_pool,
+                            "wc": winner_count,
+                            "start": new_start,
+                            "end": new_end,
+                            "stats": stats_url,
+                            "join": join_code,
+                            "cta": cta_url,
+                        },
+                    ).scalar()
+                    # Copy the prize grid into the new period.
+                    conn.execute(
+                        text(
+                            """
+                            INSERT INTO wager_leaderboard_prizes (period_id, rank, amount)
+                            SELECT :new_id, rank, amount
+                            FROM wager_leaderboard_prizes WHERE period_id = :old_id
+                            """
+                        ),
+                        {"new_id": new_id, "old_id": pid},
+                    )
+                    logger.info(f"[Leaderboard] Auto-renewed period {pid} -> {new_id}")
+        except Exception as e:
+            # Fail safe: skip this guild and retry next tick. Never end/create
+            # from a partial read (the raffle period-rollover lesson).
+            logger.warning(f"[Leaderboard] auto-renew skipped for guild {guild_id}: {e}")
+            continue
+
+
+@leaderboard_autorenew_task.before_loop
+async def before_leaderboard_autorenew_task():
+    """Wait for the bot to be ready before rolling over leaderboard periods."""
+    await bot.wait_until_ready()
+    await asyncio.sleep(15)
+    logger.debug("[Leaderboard] 🏆 Starting leaderboard auto-renew task...")
+
+
 # -------------------------
 # Command cooldowns and checks
 # -------------------------
@@ -7565,6 +7761,11 @@ async def on_ready():
         if not clip_buffer_management_task.is_running():
             clip_buffer_management_task.start()
             logger.debug("✅ Clip buffer management task started (monitors stream status)")
+
+        # Start leaderboard auto-renew task (Tier 4 leaderboard_generator)
+        if not leaderboard_autorenew_task.is_running() and engine:
+            leaderboard_autorenew_task.start()
+            logger.debug("✅ Leaderboard auto-renew task started (runs every 15 minutes)")
 
         # Initialize raffle system — skip cog/command registration on gateway reconnects.
         # (on_ready fires on every reconnect; cog/command re-registration would raise errors.)
