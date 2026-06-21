@@ -1912,8 +1912,14 @@ Congratulations! Please contact an admin to claim your prize! 🎊
             except Exception:
                 pass  # never block chat on a gating hiccup
 
+            # Preserve the REAL chatter display name (their Twitch name) so replies
+            # address them correctly — e.g. "@MadcatsTV", not their canonical Kick
+            # name. Identity crediting still uses the canonical username below.
+            msg["display_username"] = msg.get("username", "")
+
             # Unified identity: remap the Twitch chatter to the viewer's canonical
-            # username so username-keyed downstream tables credit one shared viewer.
+            # username so username-keyed downstream tables (watchtime/points/GTB/
+            # tickets) credit + dedupe to ONE shared viewer across platforms.
             try:
                 from core.stream_links import resolve_canonical_identity
 

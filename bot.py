@@ -911,6 +911,11 @@ class KickWebSocketManager:
         set_server(guild_id, guild_name)
         try:
             username = msg.get("sender_username") or msg.get("username") or "unknown"
+            # The chatter's REAL name on their platform, for @-mentions in replies.
+            # On Twitch dual-link, `username` is canonicalized for identity/crediting,
+            # but replies must address the actual chatter (e.g. @MadcatsTV). Falls
+            # back to `username` on the Kick path (no remapping there).
+            display_username = msg.get("display_username") or username
             content = msg.get("content") or ""
             chat_id = msg.get("chat_id") or msg.get("id")
 
@@ -1039,17 +1044,18 @@ class KickWebSocketManager:
                         if result and result[0] is not None:
                             points_balance = int(result[0])
                             await send_kick_message(
-                                f"@{username}, You currently have {points_balance:,} points.", guild_id=guild_id
+                                f"@{display_username}, You currently have {points_balance:,} points.",
+                                guild_id=guild_id,
                             )
                         else:
                             await send_kick_message(
-                                f"@{username}, You currently have 0 points. Start watching to earn points!",
+                                f"@{display_username}, You currently have 0 points. Start watching to earn points!",
                                 guild_id=guild_id,
                             )
                 except Exception as e:
                     logger.info(f"❌ Error fetching points for {username}: {e}")
                     await send_kick_message(
-                        f"@{username}, Unable to retrieve points balance at this time.", guild_id=guild_id
+                        f"@{display_username}, Unable to retrieve points balance at this time.", guild_id=guild_id
                     )
 
             # !call / !sr commands (slot requests)
@@ -1093,7 +1099,7 @@ class KickWebSocketManager:
                     if not tracker.enabled:
                         logger.info(f"❌ Slot requests disabled, sending rejection message")
                         await send_kick_message(
-                            f"@{username} Slot requests are not open at the moment.", guild_id=guild_id
+                            f"@{display_username} Slot requests are not open at the moment.", guild_id=guild_id
                         )
                     else:
                         logger.info(f"✅ Slot requests enabled, processing command")
@@ -1124,14 +1130,18 @@ class KickWebSocketManager:
                             tracker.discord_server_id = guild_id
                             try:
                                 await tracker.handle_slot_call(
-                                    username, slot_call, avatar_url=avatar_url, platform=platform
+                                    username,
+                                    slot_call,
+                                    avatar_url=avatar_url,
+                                    platform=platform,
+                                    display_username=display_username,
                                 )
                                 logger.info(f"✅ Slot call processed: {username} - {slot_call}")
                             finally:
                                 if original_guild_id:
                                     tracker.discord_server_id = original_guild_id
                         else:
-                            await send_kick_message(f"@{username} Please specify a slot!", guild_id=guild_id)
+                            await send_kick_message(f"@{display_username} Please specify a slot!", guild_id=guild_id)
                 else:
                     logger.info(f"❌ No slot tracker found for this guild")
 
@@ -1154,16 +1164,22 @@ class KickWebSocketManager:
                         )
                         if gtb_mgr:
                             success, message = gtb_mgr.add_guess(username, amount)
-                            response = f"@{username} {message}" + (" Good luck! 🎰" if success else "")
+                            response = f"@{display_username} {message}" + (" Good luck! 🎰" if success else "")
                             await send_kick_message(response, guild_id=guild_id)
                             logger.info(f"✅ GTB guess processed: {username} - ${amount}")
                         else:
-                            await send_kick_message(f"@{username} GTB system not initialized", guild_id=guild_id)
+                            await send_kick_message(
+                                f"@{display_username} GTB system not initialized", guild_id=guild_id
+                            )
                             logger.info(f"❌ GTB system not initialized")
                     else:
-                        await send_kick_message(f"@{username} Invalid amount. Use: !gtb <amount>", guild_id=guild_id)
+                        await send_kick_message(
+                            f"@{display_username} Invalid amount. Use: !gtb <amount>", guild_id=guild_id
+                        )
                 else:
-                    await send_kick_message(f"@{username} Usage: !gtb <amount> (e.g., !gtb 1234.56)", guild_id=guild_id)
+                    await send_kick_message(
+                        f"@{display_username} Usage: !gtb <amount> (e.g., !gtb 1234.56)", guild_id=guild_id
+                    )
 
             # !clip command
             elif content_stripped.lower().startswith("!clip"):

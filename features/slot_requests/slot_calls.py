@@ -320,19 +320,28 @@ class SlotCallTracker:
                 logger.error(f"Failed to update panel: {e}")
 
     async def handle_slot_call(
-        self, kick_username: str, slot_call: str, avatar_url: Optional[str] = None, platform: str = "kick"
+        self,
+        kick_username: str,
+        slot_call: str,
+        avatar_url: Optional[str] = None,
+        platform: str = "kick",
+        display_username: Optional[str] = None,
     ):
         """
         Handle a slot call from chat.
 
         Args:
-            kick_username: Username from chat
+            kick_username: Canonical identity username (used for DB writes/dedup).
             slot_call: The slot call text (everything after !call)
             avatar_url: Avatar URL (if available)
             platform: Which chat the command came from ('kick' | 'twitch'). The
                 confirmation REPLY is sent back to ONLY this platform (a reply, not
                 a broadcast), so a Twitch !call doesn't also post in Kick chat.
+            display_username: The chatter's REAL name on their platform, used for the
+                @-mention in replies (e.g. @MadcatsTV). Defaults to kick_username.
         """
+        # Name shown in @-mentions; identity/crediting still uses kick_username.
+        mention_name = display_username or kick_username
 
         async def _reply(msg: str):
             """Send a command reply to only the originating platform."""
@@ -373,7 +382,7 @@ class SlotCallTracker:
                 logger.error(f"Error checking slot call blacklist: {e}")
 
         if not self.enabled:
-            await _reply(f"@{kick_username} Slot requests are not open at the moment.")
+            await _reply(f"@{mention_name} Slot requests are not open at the moment.")
             return
 
         if not self.discord_channel_id:
@@ -436,7 +445,7 @@ class SlotCallTracker:
                             f"[LIMIT CHECK] BLOCKING {kick_username}: {total_requests} >= {self.max_requests_per_user}"
                         )
                         await _reply(
-                            f"@{kick_username} You have reached the maximum of {self.max_requests_per_user} slot request(s). "
+                            f"@{mention_name} You have reached the maximum of {self.max_requests_per_user} slot request(s). "
                             f"Please wait for the current hunt to complete."
                         )
                         logger.info(
@@ -457,6 +466,7 @@ class SlotCallTracker:
 
         # 🔒 SECURITY: Input validation - prevent excessively long inputs
         kick_username_safe = kick_username[: self.max_username_length]
+        mention_name_safe = mention_name[: self.max_username_length]
         slot_call_safe = slot_call[: self.max_slot_call_length]
 
         # Check if slot is banned or provider is disabled (supports name or slug match, basic slug normalization)
@@ -486,13 +496,13 @@ class SlotCallTracker:
 
                     # Block if slot is banned
                     if is_banned:
-                        await _reply(f"@{kick_username_safe} Sorry, {slot_call_safe} is currently banned.")
+                        await _reply(f"@{mention_name_safe} Sorry, {slot_call_safe} is currently banned.")
                         logger.info(f"Blocked banned slot request: {slot_call_safe}")
                         return
 
                     # Block if provider is disabled (inactive)
                     if not is_active:
-                        await _reply(f"@{kick_username_safe} Sorry, {slot_call_safe} is currently unavailable.")
+                        await _reply(f"@{mention_name_safe} Sorry, {slot_call_safe} is currently unavailable.")
                         logger.info(f"Blocked slot request for disabled provider: {slot_call_safe}")
                         return
             except Exception as e:
@@ -543,7 +553,7 @@ class SlotCallTracker:
 
                         if dup_result and dup_result[0] > 0:
                             # Slot already requested or in active hunt
-                            await _reply(f"@{kick_username_safe} Sorry, {slot_call_safe} has already been requested.")
+                            await _reply(f"@{mention_name_safe} Sorry, {slot_call_safe} has already been requested.")
                             logger.info(f"Blocked duplicate slot request: {slot_call_safe} by {kick_username_safe}")
                             return
             except Exception as e:
@@ -662,7 +672,7 @@ class SlotCallTracker:
                     logger.error(f"Failed to save slot request to database: {e}")
 
             # Send confirmation reply to ONLY the originating platform (not a broadcast).
-            await _reply(f"@{kick_username_safe} Your slot request for {slot_call_safe} has been received! ✅")
+            await _reply(f"@{mention_name_safe} Your slot request for {slot_call_safe} has been received! ✅")
             logger.info(f"Sent slot confirmation to {kick_username_safe} on {platform}")
 
             # Update panel if available
