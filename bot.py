@@ -5115,13 +5115,22 @@ def _shuffle_lifetime_totals(conn, server_id):
         return {}
 
     try:
+        # Plain GET, no headers — matches the working shuffle tracker / shuffle_api.
         resp = requests.get(url, timeout=15)
-        data = resp.json() if resp.status_code == 200 else None
+        if resp.status_code != 200:
+            logger.warning(
+                f"[Leaderboard] shuffle affiliate URL returned {resp.status_code} for server {server_id}: {resp.text[:200]}"
+            )
+            return {}
+        data = resp.json()
     except Exception as e:
         logger.warning(f"[Leaderboard] shuffle totals fetch failed for server {server_id}: {e}")
         return {}
+    # Shuffle returns a bare list of {username, campaignCode, wagerAmount}
+    # (same shape the shuffle tracker has consumed for months). A non-list is a
+    # transient upstream blip (HTML/error page) — skip this tick, retry next.
     if not isinstance(data, list):
-        logger.warning(f"[Leaderboard] unexpected shuffle affiliate response for server {server_id}")
+        logger.warning(f"[Leaderboard] non-list shuffle response for server {server_id}: {str(data)[:200]}")
         return {}
 
     codes = {c.strip().lower() for c in code.split(",")} if code else None
