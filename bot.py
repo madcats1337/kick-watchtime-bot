@@ -2678,9 +2678,17 @@ def load_watchtime_roles():
 # Link logging helper
 # -------------------------
 async def log_link_attempt(
-    discord_user, kick_username: str, success: bool, error_message: str = None, guild_id: int = None
+    discord_user,
+    kick_username: str,
+    success: bool,
+    error_message: str = None,
+    guild_id: int = None,
+    platform: str = "kick",
 ):
-    """Log account linking attempts to configured Discord channel."""
+    """Log account linking attempts to configured Discord channel.
+
+    `platform` ('kick' | 'twitch') labels the username field, since both
+    platforms' link flows share this logger."""
     if not guild_id:
         logger.warning("⚠️ log_link_attempt: No guild_id provided, skipping log")
         return
@@ -2715,8 +2723,9 @@ async def log_link_attempt(
             timestamp=datetime.now(timezone.utc),
         )
 
+        platform_label = "Twitch" if str(platform).lower() == "twitch" else "Kick"
         embed.add_field(name="Discord User", value=f"{discord_user.mention} ({discord_user})", inline=False)
-        embed.add_field(name="Kick Username", value=kick_username, inline=True)
+        embed.add_field(name=f"{platform_label} Username", value=kick_username, inline=True)
         embed.add_field(name="Status", value="✅ Success" if success else "❌ Failed", inline=True)
 
         if not success and error_message:
@@ -4259,11 +4268,13 @@ async def check_oauth_notifications_task():
                     # Get the user
                     user = await bot.fetch_user(int(discord_id))
                     if user:
+                        # Platform-aware label (Twitch links share this path).
+                        _plat_label = "Twitch" if link_platform == "twitch" else "Kick"
                         if is_failed:
                             # Send failure message via DM
                             try:
                                 await user.send(
-                                    f"❌ **Link Failed**\n\n{error_message}\n\nKick account: **{actual_kick_username}**"
+                                    f"❌ **Link Failed**\n\n{error_message}\n\n{_plat_label} account: **{actual_kick_username}**"
                                 )
                             except discord.Forbidden:
                                 pass  # User has DMs disabled
@@ -4275,10 +4286,9 @@ async def check_oauth_notifications_task():
                                 success=False,
                                 error_message=error_message,
                                 guild_id=guild_id,
+                                platform=link_platform,
                             )
                         else:
-                            # Platform-aware label (Twitch links share this path).
-                            _plat_label = "Twitch" if link_platform == "twitch" else "Kick"
                             # Send success message via DM
                             try:
                                 await user.send(
@@ -4313,7 +4323,9 @@ async def check_oauth_notifications_task():
                                             )
 
                             # Log the successful link attempt
-                            await log_link_attempt(user, actual_kick_username, success=True, guild_id=guild_id)
+                            await log_link_attempt(
+                                user, actual_kick_username, success=True, guild_id=guild_id, platform=link_platform
+                            )
 
                             # Grant linked role if configured
                             if guild_id:
