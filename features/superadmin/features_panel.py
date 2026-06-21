@@ -1,10 +1,10 @@
 """Feature-list panel (Components V2).
 
-Renders a polished, multi-section feature showcase. Content priority:
+Renders a professional, multi-section feature catalog. Content priority:
   1. features_body from the console, if set. The body may be split into sections
      with `## Section Heading` lines; each section becomes its own headed block
      with a divider. Plain text (no `##`) renders as a single section.
-  2. Otherwise a professionally-written built-in default (DEFAULT_SECTIONS).
+  2. Otherwise the built-in full catalog (DEFAULT_SECTIONS).
 
 The optional features_title overrides the panel heading.
 """
@@ -17,41 +17,82 @@ from ._panel_base import ACCENT, TEXT_CAP, GlobalPanel, get_setting, text_block
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_TITLE = "✨ LeleBot — Features"
-_INTRO = "The all-in-one toolkit for **Kick & Twitch** casino streamers — dashboard, bot, and browser extension."
+_DEFAULT_TITLE = "LeleBot — Feature Overview"
+_INTRO = (
+    "The complete stream toolkit for **Kick** and **Twitch** casino streamers — "
+    "a web dashboard, a chat & Discord bot, and a browser extension, working together."
+)
 
-# Built-in default: (emoji+heading, [bullet lines]). Used when no console body is
-# set. Kept tight and skimmable.
+# Built-in full catalog: (heading, [bullet lines]). Used when no console body is
+# set. Professional tone, no emojis.
 DEFAULT_SECTIONS = [
     (
-        "🎰 Streaming Tools",
+        "Bonus Hunt",
         [
-            "**Bonus Hunt** — live hunt tracking with profit/loss, payouts & multipliers",
-            "**Slot Requests** — viewers queue slots from chat, with an OBS overlay",
-            "**Guess the Balance** — chat prediction game with a live winner",
+            "**Hunt tracking** — live sessions with starting balance, profit/loss, total bet, payouts, and break-even multipliers.",
+            "**Slot management** — add bonuses with search, drag-to-reorder, randomize, and bulk edit.",
+            "**Open Bonuses** — step through each bonus to record payouts on stream, with full hunt history.",
         ],
     ),
     (
-        "🎟️ Community & Rewards",
+        "Slot Requests & Guess the Balance",
         [
-            "**Raffles** — earn tickets from watchtime, subs & wagers; animated draws",
-            "**Giveaways** — keyword, active-chatter, or ticket-weighted",
-            "**Points & Shop** — earn points and redeem rewards in chat",
+            "**Slot Requests** — viewers request slots from chat into a live queue, with random pick, add-to-hunt, an OBS overlay, and a ban list.",
+            "**Guess the Balance** — a chat prediction game with live guesses and an automatic winner.",
         ],
     ),
     (
-        "💰 Wagers & Leaderboards",
+        "Raffles & Giveaways",
         [
-            "**Wager tracking** — Shuffle.com & Howl.gg, with live stats",
-            "**Affiliate leaderboards** — prize periods + a public results page",
+            "**Raffles** — earn tickets from watchtime, gifted subs, and wagers; provably-fair, ticket-weighted draws with animated OBS overlays and an auto-updating leaderboard.",
+            "**Giveaways** — keyword, active-chatter, or ticket-weighted draws with Discord announcements.",
         ],
     ),
     (
-        "📺 Overlays & Bot",
+        "Wagers & Leaderboards",
         [
-            "**Stream widgets** — OBS overlays for hunts, GTB & raffle draws",
-            "**Custom commands & timed messages** for Kick and Twitch",
-            "**Go-live alerts, account linking & roles** in Discord",
+            "**Wager tracking** — automatic Shuffle.com and Howl.gg tracking with stats and a live activity feed.",
+            "**Affiliate Leaderboard Generator** — run wager competitions with prize periods, a public results page, frozen winners, and JSON / text / PDF export.",
+        ],
+    ),
+    (
+        "Points & Economy",
+        [
+            "**Point rewards** — earn points from watchtime, subscriptions, and sub-gifting, with a leaderboard.",
+            "**Point shop** — sell items with images and discounts, manage orders, and post the shop to Discord.",
+            "**Provably-fair games** — point-based Blackjack, Roll, and Double, fully verifiable.",
+        ],
+    ),
+    (
+        "Stream Widgets & Overlays",
+        [
+            "**OBS overlays** — template-based widgets for bonus hunts, Guess the Balance, and raffle draws.",
+            "**Customization** — brand colors, typography, and layout, with multiple saved projects per template.",
+            "**Advanced editor** — build fully custom widgets with your own layout and styling.",
+        ],
+    ),
+    (
+        "Bot & Chat Automation",
+        [
+            "**Custom commands** — with dynamic variables for user, channel, tickets, points, and watchtime.",
+            "**Timed messages** — scheduled announcements posted to your active platform(s).",
+            "**Clips** — create clips from chat or the dashboard, with history.",
+        ],
+    ),
+    (
+        "Discord Integration",
+        [
+            "**Account linking** — viewers connect their Kick/Twitch accounts; verification panels for Shuffle and Howl.",
+            "**Roles & alerts** — automatic watchtime roles and customizable go-live notifications.",
+            "**Subscription roles** — claim the Discord role matching your active subscription tier.",
+        ],
+    ),
+    (
+        "Platforms & Plans",
+        [
+            "**Kick and Twitch** — run either platform, or both at once on Tier 3, with one shared identity per viewer.",
+            "**Browser extension** — add bonuses straight from the casino and view live hunt stats.",
+            "**Subscriptions** — manage your plan in-dashboard via Stripe, with instant feature unlocks.",
         ],
     ),
 ]
@@ -103,10 +144,10 @@ class FeaturesPanel(GlobalPanel):
                 block = f"### {heading}\n{text}" if heading else text
                 container.add_item(text_block(block[:TEXT_CAP]))
         else:
-            # Polished built-in default.
+            # Built-in full catalog.
             for heading, bullets in DEFAULT_SECTIONS:
                 container.add_item(discord.ui.Separator())
-                lines = "\n".join(f"• {b}" for b in bullets)
+                lines = "\n".join(f"- {b}" for b in bullets)
                 container.add_item(text_block(f"### {heading}\n{lines}"))
 
         view = discord.ui.LayoutView(timeout=None)

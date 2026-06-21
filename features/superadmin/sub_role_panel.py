@@ -35,7 +35,7 @@ _ALL_TIER_KEYS = {
 _TIER_LABEL = {"free": "Tier 1", "tier2": "Tier 2", "tier3": "Tier 3", "tier4": "Tier 4"}
 
 _PANEL_TEXT = (
-    "# 🎟️ Subscription Roles\n"
+    "# Subscription Roles\n"
     "Click the button below to claim the Discord role for your active "
     "subscription tier.\n\n"
     "Your role matches the **highest active paid tier** among the servers you "
@@ -65,7 +65,6 @@ class SubRolePanelView(discord.ui.LayoutView):
             super().__init__(
                 label="Claim subscription role",
                 style=discord.ButtonStyle.success,
-                emoji="🎟️",
                 custom_id="claim_subscription_role",
             )
 
@@ -144,7 +143,7 @@ class SubRolePanelView(discord.ui.LayoutView):
             return
 
         await interaction.response.send_message(
-            f"🎟️ You've been given the **{target_role.name}** role ({_TIER_LABEL.get(tier, tier)}).",
+            f"You've been given the **{target_role.name}** role ({_TIER_LABEL.get(tier, tier)}).",
             ephemeral=True,
         )
 

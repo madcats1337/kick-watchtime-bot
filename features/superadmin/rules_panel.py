@@ -15,7 +15,7 @@ class RulesPanel(GlobalPanel):
     PANEL_TYPE = "rules"
 
     def build_view(self, data=None) -> discord.ui.LayoutView:
-        title = get_setting(self.engine, "rules_title") or "📜 Server Rules"
+        title = get_setting(self.engine, "rules_title") or "Server Rules"
         raw = get_setting(self.engine, "rules_list") or "[]"
         try:
             rules = json.loads(raw)

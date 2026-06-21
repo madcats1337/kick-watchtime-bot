@@ -70,7 +70,7 @@ class PatchNotesPanel(GlobalPanel):
         date = release.get("date") or ""
         tag = release.get("tag") or ""
 
-        header = f"# 📋 {version}"
+        header = f"# {version}"
         if tag:
             header += f" — {tag}"
         if date:
@@ -79,21 +79,36 @@ class PatchNotesPanel(GlobalPanel):
         container = discord.ui.Container(accent_colour=ACCENT)
         container.add_item(text_block(header))
 
-        any_group = False
-        for group in release.get("groups", []) or []:
-            name = group.get("title") or "Changes"
-            bullets = []
-            for entry in (group.get("entries", []) or [])[:_MAX_ENTRIES_PER_GROUP]:
-                txt = _html_to_text(entry.get("html", ""))
-                if txt:
-                    bullets.append(f"• {_shorten(txt)}")
-            if not bullets:
-                continue
-            any_group = True
-            container.add_item(discord.ui.Separator())
-            container.add_item(text_block(f"**{name}**\n" + "\n".join(bullets)))
+        # Prefer the purpose-written `summary` (concise, Discord-ready markdown).
+        # Fall back to condensing the full `groups` only when no summary is given.
+        summary = release.get("summary") or []
+        any_section = False
 
-        if not any_group:
+        if summary:
+            for section in summary:
+                title = section.get("title") or "Changes"
+                items = [str(i).strip() for i in (section.get("items") or []) if str(i).strip()]
+                if not items:
+                    continue
+                any_section = True
+                container.add_item(discord.ui.Separator())
+                bullets = "\n".join(f"- {i}" for i in items)
+                container.add_item(text_block(f"**{title}**\n{bullets}"))
+        else:
+            for group in release.get("groups", []) or []:
+                name = group.get("title") or "Changes"
+                bullets = []
+                for entry in (group.get("entries", []) or [])[:_MAX_ENTRIES_PER_GROUP]:
+                    txt = _html_to_text(entry.get("html", ""))
+                    if txt:
+                        bullets.append(f"- {_shorten(txt)}")
+                if not bullets:
+                    continue
+                any_section = True
+                container.add_item(discord.ui.Separator())
+                container.add_item(text_block(f"**{name}**\n" + "\n".join(bullets)))
+
+        if not any_section:
             container.add_item(text_block("No changelog entries."))
 
         view = discord.ui.LayoutView(timeout=None)
