@@ -1,9 +1,15 @@
 """Shared base for the global super-admin panels.
 
+These panels render with Discord **Components V2** (discord.py 2.6+): instead of
+a classic embed, each panel sends a `discord.ui.LayoutView` containing a colored
+`Container` of `TextDisplay` blocks (and, for the subscription-role panel, an
+`ActionRow` with the claim button). A Components V2 message carries no embed and
+no top-level content — it's the LayoutView only.
+
 Each panel tracks its posted Discord message in the existing `link_panels` table
 (free-text `panel_type`), keyed by the official guild id, so the redis
 `_post_panel` move/re-attach logic works unchanged. Subclasses override
-`PANEL_TYPE` and implement `build_embed(data)` (+ optionally `build_view()`).
+`PANEL_TYPE` and implement `build_view(data)`.
 """
 
 import logging
@@ -15,6 +21,18 @@ from sqlalchemy import text
 logger = logging.getLogger(__name__)
 
 OFFICIAL_GUILD_ID = int(os.getenv("OFFICIAL_GUILD_ID", "914986636629143562"))
+
+# Brand accent used across the panels (matches the dashboard yellow).
+ACCENT = 0xFACC15
+
+# Component limits we defend against. A single TextDisplay can hold up to 4000
+# chars; we keep a little headroom.
+TEXT_CAP = 3900
+
+
+def text_block(content):
+    """A Components V2 markdown text block (replaces an embed's description)."""
+    return discord.ui.TextDisplay(content if content else "​")
 
 
 def get_setting(engine, key, default=None):
@@ -88,23 +106,18 @@ class GlobalPanel:
         except Exception as e:
             logger.error(f"[{self.PANEL_TYPE}] save panel info failed: {e}")
 
-    # -- subclass hooks -----------------------------------------------------
-    def build_embed(self, data=None) -> discord.Embed:
+    # -- subclass hook ------------------------------------------------------
+    def build_view(self, data=None) -> discord.ui.LayoutView:
+        """Return the Components V2 LayoutView for this panel. Subclasses build a
+        Container of TextDisplay blocks (+ an ActionRow for interactive panels)."""
         raise NotImplementedError
-
-    def build_view(self):
-        """Override to attach a persistent view. Default: static embed."""
-        return None
 
     # -- posting ------------------------------------------------------------
     async def create_panel(self, channel, data=None):
         try:
-            embed = self.build_embed(data)
-            view = self.build_view()
-            if view is not None:
-                message = await channel.send(embed=embed, view=view)
-            else:
-                message = await channel.send(embed=embed)
+            view = self.build_view(data)
+            # Components V2: send the LayoutView only (no embed, no content).
+            message = await channel.send(view=view)
             self.panel_channel_id = channel.id
             self.panel_message_id = message.id
             self._save_panel_info(channel.id, message.id)

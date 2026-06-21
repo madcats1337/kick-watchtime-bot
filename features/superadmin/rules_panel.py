@@ -1,22 +1,20 @@
-"""Server-rules panel. Reads rules_title + rules_list (JSON array) from
-bot_settings under the official guild."""
+"""Server-rules panel (Components V2). Reads rules_title + rules_list (JSON
+array) from bot_settings under the official guild."""
 
 import json
 import logging
 
 import discord
 
-from ._panel_base import GlobalPanel, get_setting
+from ._panel_base import ACCENT, TEXT_CAP, GlobalPanel, get_setting, text_block
 
 logger = logging.getLogger(__name__)
-
-_DESC_CAP = 4096
 
 
 class RulesPanel(GlobalPanel):
     PANEL_TYPE = "rules"
 
-    def build_embed(self, data=None) -> discord.Embed:
+    def build_view(self, data=None) -> discord.ui.LayoutView:
         title = get_setting(self.engine, "rules_title") or "📜 Server Rules"
         raw = get_setting(self.engine, "rules_list") or "[]"
         try:
@@ -27,10 +25,18 @@ class RulesPanel(GlobalPanel):
             rules = []
 
         lines = [f"**{i}.** {str(rule).strip()}" for i, rule in enumerate(rules, 1) if str(rule).strip()]
-        description = "\n\n".join(lines) if lines else "No rules have been set yet."
-        if len(description) > _DESC_CAP:
-            description = description[: _DESC_CAP - 1] + "…"
-        return discord.Embed(title=title, description=description, color=0xFACC15)
+        body = "\n\n".join(lines) if lines else "No rules have been set yet."
+        if len(body) > TEXT_CAP:
+            body = body[: TEXT_CAP - 1] + "…"
+
+        container = discord.ui.Container(accent_colour=ACCENT)
+        container.add_item(text_block(f"# {title}"))
+        container.add_item(discord.ui.Separator())
+        container.add_item(text_block(body))
+
+        view = discord.ui.LayoutView(timeout=None)
+        view.add_item(container)
+        return view
 
 
 async def setup_rules_panel_system(bot, engine):

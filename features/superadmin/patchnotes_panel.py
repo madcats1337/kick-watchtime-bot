@@ -1,8 +1,11 @@
-"""Patch-notes / changelog panel.
+"""Patch-notes / changelog panel (Components V2).
 
 Content is NOT stored in the DB — the dashboard forwards the latest `release`
 object from the /patch-notes page in the post_panel event data. Shape:
   {version, date, tag, tone, groups: [{category, title, entries: [{html}]}]}
+
+The posted panel is a COMPACT changelog: a heading line plus a few bullets per
+group, so it stays short in Discord even though the dashboard page is detailed.
 """
 
 import logging
@@ -10,12 +13,14 @@ import re
 
 import discord
 
-from ._panel_base import GlobalPanel
+from ._panel_base import ACCENT, GlobalPanel, text_block
 
 logger = logging.getLogger(__name__)
 
-# Discord field values cap at 1024 chars.
-_FIELD_CAP = 1024
+# Keep the Discord post compact: at most this many bullets per group, and an
+# overall entry length cap so a single long line can't blow the post up.
+_MAX_ENTRIES_PER_GROUP = 5
+_ENTRY_CAP = 200
 
 
 def _html_to_text(html: str) -> str:
@@ -32,7 +37,6 @@ def _html_to_text(html: str) -> str:
     s = re.sub(r"</?i>", "*", s)
     s = re.sub(r"</?code>", "`", s)
     s = re.sub(r"<[^>]+>", "", s)  # strip any remaining tags
-    # Common entities present in the source data.
     for ent, ch in (
         ("&rsquo;", "’"),
         ("&lsquo;", "‘"),
@@ -47,45 +51,59 @@ def _html_to_text(html: str) -> str:
     return s.strip()
 
 
+def _shorten(text: str) -> str:
+    """Trim a single changelog entry to a compact one-liner. Keeps the leading
+    bolded label (up to the em dash) intact when it fits."""
+    text = " ".join(text.split())  # collapse whitespace/newlines
+    if len(text) <= _ENTRY_CAP:
+        return text
+    cut = text[:_ENTRY_CAP].rsplit(" ", 1)[0]
+    return cut + "…"
+
+
 class PatchNotesPanel(GlobalPanel):
     PANEL_TYPE = "patchnotes"
 
-    def build_embed(self, data=None) -> discord.Embed:
+    def build_view(self, data=None) -> discord.ui.LayoutView:
         release = (data or {}).get("release") or {}
         version = release.get("version") or "Patch Notes"
         date = release.get("date") or ""
         tag = release.get("tag") or ""
 
-        title = f"📋 {version}"
+        header = f"# 📋 {version}"
         if tag:
-            title += f" — {tag}"
-        embed = discord.Embed(title=title, color=0xFACC15)
+            header += f" — {tag}"
         if date:
-            embed.set_footer(text=date)
+            header += f"\n-# {date}"
 
+        container = discord.ui.Container(accent_colour=ACCENT)
+        container.add_item(text_block(header))
+
+        any_group = False
         for group in release.get("groups", []) or []:
             name = group.get("title") or "Changes"
-            lines = []
-            for entry in group.get("entries", []) or []:
+            bullets = []
+            for entry in (group.get("entries", []) or [])[:_MAX_ENTRIES_PER_GROUP]:
                 txt = _html_to_text(entry.get("html", ""))
                 if txt:
-                    lines.append(f"• {txt}")
-            value = "\n".join(lines).strip()
-            if not value:
+                    bullets.append(f"• {_shorten(txt)}")
+            if not bullets:
                 continue
-            if len(value) > _FIELD_CAP:
-                value = value[: _FIELD_CAP - 1] + "…"
-            embed.add_field(name=name, value=value, inline=False)
+            any_group = True
+            container.add_item(discord.ui.Separator())
+            container.add_item(text_block(f"**{name}**\n" + "\n".join(bullets)))
 
-        if not embed.fields:
-            embed.description = "No changelog entries."
-        return embed
+        if not any_group:
+            container.add_item(text_block("No changelog entries."))
+
+        view = discord.ui.LayoutView(timeout=None)
+        view.add_item(container)
+        return view
 
 
 async def setup_patchnotes_panel_system(bot, engine):
-    """Build the per-(official)-guild patch-notes panel registry and re-attach
-    on restart. Returns {guild_id: PatchNotesPanel}."""
+    """Build the per-(official)-guild patch-notes panel registry. Returns
+    {guild_id: PatchNotesPanel}."""
     from ._panel_base import OFFICIAL_GUILD_ID
 
-    panels = {OFFICIAL_GUILD_ID: PatchNotesPanel(bot, engine)}
-    return panels
+    return {OFFICIAL_GUILD_ID: PatchNotesPanel(bot, engine)}
