@@ -5039,6 +5039,20 @@ async def before_clip_buffer_task():
 # fail-safe: any error for a guild skips that guild and is retried next tick;
 # we never end/create from a partial read.
 # ---------------------------------------------------------------------------
+def _lb_bot_settings(conn, server_id, keys):
+    """Read per-server bot_settings for the given keys. Returns {key: value}."""
+    rows = conn.execute(
+        text("SELECT key, value FROM bot_settings WHERE discord_server_id = :sid AND key = ANY(:keys)"),
+        {"keys": list(keys), "sid": server_id},
+    ).fetchall()
+    out = {}
+    for k, v in rows:
+        val = (v or "").strip()
+        if val:
+            out[k] = val
+    return out
+
+
 def _fetch_howl_freeze_rows(conn, server_id, start_dt, end_dt, winner_count):
     """Fetch Howl's per-window leaderboard for a freeze (sync, via requests).
 
@@ -5047,23 +5061,9 @@ def _fetch_howl_freeze_rows(conn, server_id, start_dt, end_dt, winner_count):
     Returns a list of (shuffle_username, kick_name, discord_id, is_linked,
     wagered_usd) tuples matching the SQL path's row shape, or [] on any error.
     """
-    settings = conn.execute(
-        text(
-            """
-            SELECT key, value FROM bot_settings
-            WHERE discord_server_id = :sid
-              AND key IN ('howl_affiliate_url', 'howl_api_key')
-            """
-        ),
-        {"sid": server_id},
-    ).fetchall()
-    url = "https://howl.gg/api/user/affiliate/lb"
-    api_key = None
-    for k, v in settings:
-        if k == "howl_affiliate_url" and (v or "").strip():
-            url = v.strip()
-        elif k == "howl_api_key":
-            api_key = (v or "").strip() or None
+    s = _lb_bot_settings(conn, server_id, ("howl_affiliate_url", "howl_api_key"))
+    url = s.get("howl_affiliate_url") or "https://howl.gg/api/user/affiliate/lb"
+    api_key = s.get("howl_api_key")
     if not api_key:
         logger.warning(f"[Leaderboard] howl freeze: no api_key for server {server_id}")
         return []
@@ -5108,22 +5108,9 @@ def _shuffle_lifetime_totals(conn, server_id):
     tracker's stored totals — the leaderboard is self-contained from the URL.
     Returns {} on any error / missing URL.
     """
-    settings = conn.execute(
-        text(
-            """
-            SELECT key, value FROM bot_settings
-            WHERE discord_server_id = :sid
-              AND key IN ('shuffle_affiliate_url', 'shuffle_campaign_code')
-            """
-        ),
-        {"sid": server_id},
-    ).fetchall()
-    url = code = None
-    for k, v in settings:
-        if k == "shuffle_affiliate_url" and (v or "").strip():
-            url = v.strip()
-        elif k == "shuffle_campaign_code":
-            code = (v or "").strip() or None
+    s = _lb_bot_settings(conn, server_id, ("shuffle_affiliate_url", "shuffle_campaign_code"))
+    url = s.get("shuffle_affiliate_url")
+    code = s.get("shuffle_campaign_code")
     if not url:
         return {}
 
