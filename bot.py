@@ -5099,6 +5099,12 @@ def _fetch_howl_freeze_rows(conn, server_id, start_dt, end_dt, winner_count):
     return out[:limit]
 
 
+# Short cache so the leaderboard sync doesn't add to shuffle's rate limit
+# (shuffle 400s with TOO_MANY_REQUEST under load). { (url, code): (exp, totals) }
+_SHUFFLE_LB_CACHE_TTL = 60
+_shuffle_lb_cache: dict = {}
+
+
 def _shuffle_lifetime_totals(conn, server_id):
     """Current lifetime totals per shuffle user from the server's affiliate URL.
 
@@ -5106,13 +5112,19 @@ def _shuffle_lifetime_totals(conn, server_id):
     shuffle_campaign_code from bot_settings, fetches the bare-list endpoint, and
     returns {uname_key: (username, total)} of LIFETIME totals. NOT from the
     tracker's stored totals — the leaderboard is self-contained from the URL.
-    Returns {} on any error / missing URL.
+    Returns {} on any error / missing URL. Cached ~60s to avoid rate limiting.
     """
     s = _lb_bot_settings(conn, server_id, ("shuffle_affiliate_url", "shuffle_campaign_code"))
     url = s.get("shuffle_affiliate_url")
     code = s.get("shuffle_campaign_code")
     if not url:
         return {}
+
+    cache_key = (url.strip(), (code or "").strip().lower())
+    cache_now = time.monotonic()
+    cached = _shuffle_lb_cache.get(cache_key)
+    if cached and cached[0] > cache_now:
+        return cached[1]
 
     try:
         # Plain GET, no headers — matches the working shuffle tracker / shuffle_api.
@@ -5151,6 +5163,8 @@ def _shuffle_lifetime_totals(conn, server_id):
         existing = out.get(key)
         if existing is None or total > existing[1]:
             out[key] = (username, total)
+
+    _shuffle_lb_cache[cache_key] = (cache_now + _SHUFFLE_LB_CACHE_TTL, out)
     return out
 
 
