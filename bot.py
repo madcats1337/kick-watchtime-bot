@@ -5039,46 +5039,207 @@ async def before_clip_buffer_task():
 # fail-safe: any error for a guild skips that guild and is retried next tick;
 # we never end/create from a partial read.
 # ---------------------------------------------------------------------------
-def _freeze_leaderboard_snapshot(conn, period_id, server_id, start_dt, end_dt, winner_count):
+def _fetch_howl_freeze_rows(conn, server_id, start_dt, end_dt, winner_count):
+    """Fetch Howl's per-window leaderboard for a freeze (sync, via requests).
+
+    Howl's affiliate API returns the exact per-window wagered total, so a Howl
+    period is frozen from the API directly — NOT from shuffle_wager_history.
+    Returns a list of (shuffle_username, kick_name, discord_id, is_linked,
+    wagered_usd) tuples matching the SQL path's row shape, or [] on any error.
+    """
+    settings = conn.execute(
+        text(
+            """
+            SELECT key, value FROM bot_settings
+            WHERE discord_server_id = :sid
+              AND key IN ('howl_affiliate_url', 'howl_api_key')
+            """
+        ),
+        {"sid": server_id},
+    ).fetchall()
+    url = "https://howl.gg/api/user/affiliate/lb"
+    api_key = None
+    for k, v in settings:
+        if k == "howl_affiliate_url" and (v or "").strip():
+            url = v.strip()
+        elif k == "howl_api_key":
+            api_key = (v or "").strip() or None
+    if not api_key:
+        logger.warning(f"[Leaderboard] howl freeze: no api_key for server {server_id}")
+        return []
+
+    limit = max(1, min(int(winner_count or 10), 1000))
+    params = {
+        "from": start_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+        "to": end_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+        "limit": str(limit),
+    }
+    try:
+        resp = requests.get(url, params=params, headers={"Authorization": api_key}, timeout=15)
+        body = resp.json() if resp.status_code == 200 else None
+    except Exception as e:
+        logger.warning(f"[Leaderboard] howl freeze fetch failed for server {server_id}: {e}")
+        return []
+    if not isinstance(body, dict) or not body.get("success"):
+        logger.warning(f"[Leaderboard] howl freeze API error: {body.get('error') if isinstance(body, dict) else body}")
+        return []
+
+    out = []
+    for r in body.get("data") or []:
+        name = r.get("name")
+        if not name:
+            continue
+        try:
+            wagered = round(float(r.get("wageredUSD") or 0), 2)
+        except (TypeError, ValueError):
+            wagered = 0.0
+        # (username, kick_name, discord_id, is_linked, wagered) — Howl has no link info.
+        out.append((name, None, None, False, wagered))
+    out.sort(key=lambda t: t[4], reverse=True)
+    return out[:limit]
+
+
+def _shuffle_lifetime_totals(conn, server_id):
+    """Current lifetime totals per shuffle user from the server's affiliate URL.
+
+    Mirrors utils.shuffle_lb.fetch_shuffle_totals: reads shuffle_affiliate_url +
+    shuffle_campaign_code from bot_settings, fetches the bare-list endpoint, and
+    returns {uname_key: (username, total)} of LIFETIME totals. NOT from the
+    tracker's stored totals — the leaderboard is self-contained from the URL.
+    Returns {} on any error / missing URL.
+    """
+    settings = conn.execute(
+        text(
+            """
+            SELECT key, value FROM bot_settings
+            WHERE discord_server_id = :sid
+              AND key IN ('shuffle_affiliate_url', 'shuffle_campaign_code')
+            """
+        ),
+        {"sid": server_id},
+    ).fetchall()
+    url = code = None
+    for k, v in settings:
+        if k == "shuffle_affiliate_url" and (v or "").strip():
+            url = v.strip()
+        elif k == "shuffle_campaign_code":
+            code = (v or "").strip() or None
+    if not url:
+        return {}
+
+    try:
+        resp = requests.get(url, timeout=15)
+        data = resp.json() if resp.status_code == 200 else None
+    except Exception as e:
+        logger.warning(f"[Leaderboard] shuffle totals fetch failed for server {server_id}: {e}")
+        return {}
+    if not isinstance(data, list):
+        logger.warning(f"[Leaderboard] unexpected shuffle affiliate response for server {server_id}")
+        return {}
+
+    codes = {c.strip().lower() for c in code.split(",")} if code else None
+    out = {}
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        username = row.get("username")
+        if not username:
+            continue
+        if codes is not None and str(row.get("campaignCode", "")).lower() not in codes:
+            continue
+        try:
+            total = round(float(row.get("wagerAmount") or 0), 2)
+        except (TypeError, ValueError):
+            total = 0.0
+        key = str(username).lower()
+        existing = out.get(key)
+        if existing is None or total > existing[1]:
+            out[key] = (username, total)
+    return out
+
+
+def _shuffle_identity(conn, server_id):
+    """Map shuffle username -> (kick_name, discord_id) for link badges (DB)."""
+    rows = conn.execute(
+        text(
+            """
+            SELECT DISTINCT ON (LOWER(shuffle_username))
+                LOWER(shuffle_username) AS uname_key, kick_name, discord_id
+            FROM raffle_shuffle_wagers
+            WHERE discord_server_id = :sid AND platform = 'shuffle'
+            ORDER BY LOWER(shuffle_username), last_updated DESC
+            """
+        ),
+        {"sid": server_id},
+    ).fetchall()
+    return {r[0]: (r[1], r[2]) for r in rows}
+
+
+def _ensure_leaderboard_baselines(conn, period_id, totals, identity):
+    """Snapshot a baseline for any user not yet baselined for this period.
+
+    `totals` is {uname_key: (username, total)} from the affiliate URL. First
+    sighting during a period fixes that user's baseline at their current lifetime
+    total, so only wagering from that point counts. Existing baselines are never
+    overwritten.
+    """
+    for key, (username, total) in totals.items():
+        kick, did = identity.get(key, (None, None))
+        conn.execute(
+            text(
+                """
+                INSERT INTO wager_leaderboard_baselines
+                    (period_id, shuffle_username, baseline_amount, kick_name, discord_id)
+                VALUES (:pid, :u, :b, :k, :d)
+                ON CONFLICT (period_id, shuffle_username) DO NOTHING
+                """
+            ),
+            {"pid": period_id, "u": username, "b": total, "k": kick, "d": did},
+        )
+
+
+def _shuffle_baseline_rows(conn, period_id, server_id, winner_count):
+    """Top-N shuffle rows for a period via the baseline model (SQLAlchemy).
+
+    leaderboard_value = max(0, current_lifetime_total - period_baseline), where
+    the current total comes from the affiliate URL. Baselines are seeded by the
+    live sync, so freezing just reads them.
+    """
+    totals = _shuffle_lifetime_totals(conn, server_id)
+    identity = _shuffle_identity(conn, server_id)
+    baselines = {
+        str(u).lower(): float(b)
+        for u, b in conn.execute(
+            text("SELECT shuffle_username, baseline_amount FROM wager_leaderboard_baselines WHERE period_id = :pid"),
+            {"pid": period_id},
+        ).fetchall()
+    }
+    rows = []
+    for key, (username, total) in totals.items():
+        baseline = baselines.get(key, total)
+        period_wagered = round(max(0.0, total - baseline), 2)
+        if period_wagered > 0:
+            kick, did = identity.get(key, (None, None))
+            rows.append((username, kick, did, did is not None, period_wagered))
+    rows.sort(key=lambda t: t[4], reverse=True)
+    return rows[: winner_count or 10]
+
+
+def _freeze_leaderboard_snapshot(conn, period_id, server_id, start_dt, end_dt, winner_count, site="shuffle"):
     """Write the frozen top-N winners for a period (SQLAlchemy connection).
 
-    Replicates utils/database.get_wager_leaderboard: SUM(wager_delta) per user
-    over [start, end), joined to the latest identity row, top-N by total.
+    - Howl: query the Howl affiliate API directly for [start, end).
+    - Shuffle: the baseline model (current lifetime total - period baseline).
     """
     conn.execute(
         text("DELETE FROM wager_leaderboard_winners WHERE period_id = :pid"),
         {"pid": period_id},
     )
-    rows = conn.execute(
-        text(
-            """
-            WITH agg AS (
-                SELECT LOWER(shuffle_username) AS uname_key,
-                       SUM(wager_delta) AS wagered_usd
-                FROM shuffle_wager_history
-                WHERE discord_server_id = :sid
-                  AND recorded_at >= :start AND recorded_at < :end
-                GROUP BY LOWER(shuffle_username)
-            ),
-            latest_identity AS (
-                SELECT DISTINCT ON (LOWER(shuffle_username))
-                       LOWER(shuffle_username) AS uname_key,
-                       shuffle_username, kick_name, discord_id
-                FROM raffle_shuffle_wagers
-                WHERE discord_server_id = :sid
-                ORDER BY LOWER(shuffle_username), last_updated DESC
-            )
-            SELECT li.shuffle_username, li.kick_name, li.discord_id,
-                   (li.discord_id IS NOT NULL) AS is_linked, a.wagered_usd
-            FROM agg a
-            LEFT JOIN latest_identity li USING (uname_key)
-            WHERE a.wagered_usd > 0
-            ORDER BY a.wagered_usd DESC
-            LIMIT :limit
-            """
-        ),
-        {"sid": server_id, "start": start_dt, "end": end_dt, "limit": winner_count or 10},
-    ).fetchall()
+
+    if (site or "shuffle").lower() == "howl":
+        rows = _fetch_howl_freeze_rows(conn, server_id, start_dt, end_dt, winner_count)
+    else:
+        rows = _shuffle_baseline_rows(conn, period_id, server_id, winner_count)
 
     prizes = {
         r[0]: r[1]
@@ -5113,9 +5274,49 @@ def _freeze_leaderboard_snapshot(conn, period_id, server_id, start_dt, end_dt, w
     return len(rows)
 
 
-@tasks.loop(minutes=15)
-async def leaderboard_autorenew_task():
-    """Freeze ended leaderboard periods and roll over the auto-renewing ones."""
+def _sync_active_leaderboard_baselines(conn, guild_id, now):
+    """Snapshot baselines for active, started SHUFFLE periods (decoupled from raffle).
+
+    Ensures the shuffle baseline exists for every tracked user once a period has
+    started, so the leaderboard (current total - baseline) is populated even
+    before anyone views the public page. Howl periods need no baselines (their
+    API returns per-window totals). Independent of raffle periods entirely.
+    """
+    active = conn.execute(
+        text(
+            """
+            SELECT id, site, winner_count
+            FROM wager_leaderboard_periods
+            WHERE discord_server_id = :sid
+              AND status = 'active'
+              AND start_date <= :now
+            """
+        ),
+        {"sid": guild_id, "now": now},
+    ).fetchall()
+    if not active:
+        return
+    # Fetch once per guild (not per period) — all active periods share the same
+    # affiliate totals + identity.
+    totals = None
+    identity = None
+    for pid, site, _wc in active:
+        if (site or "shuffle").lower() == "howl":
+            continue
+        if totals is None:
+            totals = _shuffle_lifetime_totals(conn, guild_id)
+            identity = _shuffle_identity(conn, guild_id)
+        if totals:
+            _ensure_leaderboard_baselines(conn, pid, totals, identity)
+
+
+@tasks.loop(minutes=2)
+async def leaderboard_sync_task():
+    """Keep leaderboard periods current: snapshot shuffle baselines for active
+    periods, freeze ended periods, and roll over auto-renewing ones.
+
+    Fully independent of the raffle period system.
+    """
     now = datetime.now(timezone.utc).replace(tzinfo=None)  # naive UTC (column type)
 
     for guild in bot.guilds:
@@ -5123,6 +5324,9 @@ async def leaderboard_autorenew_task():
         set_server(guild_id, guild.name)
         try:
             with engine.begin() as conn:
+                # 0) Keep active shuffle periods' baselines seeded.
+                _sync_active_leaderboard_baselines(conn, guild_id, now)
+
                 period = conn.execute(
                     text(
                         """
@@ -5156,8 +5360,8 @@ async def leaderboard_autorenew_task():
                     cta_url,
                 ) = period
 
-                # 1) Freeze the finished period.
-                count = _freeze_leaderboard_snapshot(conn, pid, guild_id, start_dt, end_dt, winner_count)
+                # 1) Freeze the finished period (platform-correct source).
+                count = _freeze_leaderboard_snapshot(conn, pid, guild_id, start_dt, end_dt, winner_count, site=site)
                 conn.execute(
                     text("UPDATE wager_leaderboard_periods " "SET status = 'ended', frozen_at = NOW() WHERE id = :pid"),
                     {"pid": pid},
@@ -5213,12 +5417,12 @@ async def leaderboard_autorenew_task():
             continue
 
 
-@leaderboard_autorenew_task.before_loop
-async def before_leaderboard_autorenew_task():
-    """Wait for the bot to be ready before rolling over leaderboard periods."""
+@leaderboard_sync_task.before_loop
+async def before_leaderboard_sync_task():
+    """Wait for the bot to be ready before syncing leaderboard periods."""
     await bot.wait_until_ready()
     await asyncio.sleep(15)
-    logger.debug("[Leaderboard] 🏆 Starting leaderboard auto-renew task...")
+    logger.debug("[Leaderboard] 🏆 Starting leaderboard sync task...")
 
 
 # -------------------------
@@ -7762,10 +7966,11 @@ async def on_ready():
             clip_buffer_management_task.start()
             logger.debug("✅ Clip buffer management task started (monitors stream status)")
 
-        # Start leaderboard auto-renew task (Tier 4 leaderboard_generator)
-        if not leaderboard_autorenew_task.is_running() and engine:
-            leaderboard_autorenew_task.start()
-            logger.debug("✅ Leaderboard auto-renew task started (runs every 15 minutes)")
+        # Start leaderboard sync task (Tier 4 leaderboard_generator):
+        # seeds shuffle baselines for active periods, freezes/rolls over ended ones.
+        if not leaderboard_sync_task.is_running() and engine:
+            leaderboard_sync_task.start()
+            logger.debug("✅ Leaderboard sync task started (runs every 2 minutes)")
 
         # Initialize raffle system — skip cog/command registration on gateway reconnects.
         # (on_ready fires on every reconnect; cog/command re-registration would raise errors.)
