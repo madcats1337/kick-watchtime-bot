@@ -121,12 +121,20 @@ class GiveawayManager:
         return None
 
     async def add_entry(
-        self, kick_username, kick_user_id=None, discord_id=None, entry_method="keyword", platform="kick"
+        self,
+        kick_username,
+        kick_user_id=None,
+        discord_id=None,
+        entry_method="keyword",
+        platform="kick",
+        display_name=None,
     ):
         """Add an entry to the active giveaway.
 
         `platform` selects where to resolve the entrant's avatar from (Kick API
         vs Twitch Helix). Entries from Twitch chat pass platform='twitch'.
+        `display_name` is the native platform name shown in the winner announcement
+        (falls back to kick_username); kick_username stays the credit/dedup key.
         """
         if not self.active_giveaway:
             logger.warning(f"No active giveaway for entry from {kick_username}")
@@ -181,8 +189,8 @@ class GiveawayManager:
                     text(
                         """
                     INSERT INTO giveaway_entries
-                    (giveaway_id, discord_server_id, discord_id, kick_username, kick_user_id, entry_method, entry_count, profile_pic_url)
-                    VALUES (:giveaway_id, :server_id, :discord_id, :username, :user_id, :method, 1, :profile_pic)
+                    (giveaway_id, discord_server_id, discord_id, kick_username, kick_user_id, entry_method, entry_count, profile_pic_url, display_name)
+                    VALUES (:giveaway_id, :server_id, :discord_id, :username, :user_id, :method, 1, :profile_pic, :display_name)
                 """
                     ),
                     {
@@ -193,6 +201,7 @@ class GiveawayManager:
                         "user_id": kick_user_id,
                         "method": entry_method,
                         "profile_pic": profile_pic_url,
+                        "display_name": display_name or kick_username,
                     },
                 )
                 logger.info(f"Added new entry for {kick_username} in giveaway {giveaway_id} via {entry_method}")
@@ -200,7 +209,7 @@ class GiveawayManager:
             conn.commit()
             return True
 
-    async def track_message(self, kick_username, message, platform="kick"):
+    async def track_message(self, kick_username, message, platform="kick", display_name=None):
         """Track a chat message for active chatter detection"""
         if not self.active_giveaway:
             return
@@ -274,7 +283,9 @@ class GiveawayManager:
             if message_count and message_count[0] >= messages_required:
                 # User qualifies! Add entry
                 logger.info(f"{kick_username} qualified for auto-entry with {message_count[0]} unique messages")
-                await self.add_entry(kick_username, entry_method="active_chatter", platform=platform)
+                await self.add_entry(
+                    kick_username, entry_method="active_chatter", platform=platform, display_name=display_name
+                )
 
     async def get_entries(self):
         """Get all entries for active giveaway"""
@@ -285,7 +296,8 @@ class GiveawayManager:
             results = conn.execute(
                 text(
                     """
-                SELECT kick_username, kick_user_id, entry_count, entry_method, created_at
+                SELECT kick_username, kick_user_id, entry_count, entry_method, created_at,
+                       COALESCE(display_name, kick_username) AS display_name
                 FROM giveaway_entries
                 WHERE giveaway_id = :giveaway_id
                 ORDER BY created_at ASC
@@ -339,6 +351,11 @@ class GiveawayManager:
         winner_index = int((result["random_value"] / 100.0) * len(weighted_entries))
         winner_index = min(winner_index, len(weighted_entries) - 1)  # Ensure within bounds
         winner_username = weighted_entries[winner_index]
+        # Map the canonical winner back to their native display name for the announcement.
+        winner_display = next(
+            (e.get("display_name") or e["kick_username"] for e in entries if e["kick_username"] == winner_username),
+            winner_username,
+        )
 
         logger.info(
             f"Provably fair draw - Random value: {result['random_value']}, Index: {winner_index}/{len(weighted_entries)}, Winner: {winner_username}"
@@ -375,9 +392,11 @@ class GiveawayManager:
             )
             conn.commit()
 
-        logger.info(f"Drew winner: {winner_username} for giveaway {giveaway_id} (provably fair)")
+        logger.info(f"Drew winner: {winner_username} (shown as {winner_display}) for giveaway {giveaway_id}")
         self.active_giveaway = None
-        return winner_username
+        # Return the NATIVE display name for announcements; DB keeps the canonical
+        # winner_kick_username for crediting.
+        return winner_display
 
 
 async def setup_giveaway_managers(bot, engine):

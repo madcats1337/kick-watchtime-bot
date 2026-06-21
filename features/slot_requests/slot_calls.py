@@ -93,6 +93,13 @@ class SlotCallTracker:
                 except Exception:
                     pass  # Column might already exist
 
+                # Native display name (Twitch name on Twitch, Kick name on Kick) shown
+                # in embeds. kick_username stays the canonical credit/dedup key.
+                try:
+                    conn.execute(text("ALTER TABLE slot_requests ADD COLUMN IF NOT EXISTS display_name TEXT"))
+                except Exception:
+                    pass
+
                 # Add performance index for requested_at ordering
                 conn.execute(
                     text(
@@ -608,14 +615,15 @@ class SlotCallTracker:
             logger.error(f"Could not find Discord channel {self.discord_channel_id}")
             return
 
-        # Create embed for the slot call
+        # Create embed for the slot call — show the viewer's NATIVE platform name.
+        platform_label = "Twitch" if platform == "twitch" else "Kick"
         embed = discord.Embed(
             title="🎰 Slot Call",
-            description=f"**{kick_username_safe}** requested **{slot_call_safe}**",
+            description=f"**{mention_name_safe}** requested **{slot_call_safe}**",
             color=discord.Color.gold(),
             timestamp=datetime.utcnow(),
         )
-        embed.set_footer(text=f"From Kick chat • {kick_username_safe}")
+        embed.set_footer(text=f"From {platform_label} chat • {mention_name_safe}")
 
         try:
             await channel.send(embed=embed)
@@ -630,8 +638,8 @@ class SlotCallTracker:
                             conn.execute(
                                 text(
                                     """
-                                INSERT INTO slot_requests (kick_username, slot_call, requested_at, discord_server_id, avatar_url)
-                                VALUES (:username, :slot_call, CURRENT_TIMESTAMP, :server_id, :avatar_url)
+                                INSERT INTO slot_requests (kick_username, slot_call, requested_at, discord_server_id, avatar_url, display_name)
+                                VALUES (:username, :slot_call, CURRENT_TIMESTAMP, :server_id, :avatar_url, :display_name)
                             """
                                 ),
                                 {
@@ -639,17 +647,23 @@ class SlotCallTracker:
                                     "slot_call": slot_call_safe,
                                     "server_id": self.server_id,
                                     "avatar_url": avatar_url,
+                                    "display_name": mention_name_safe,
                                 },
                             )
                         else:
                             conn.execute(
                                 text(
                                     """
-                                INSERT INTO slot_requests (kick_username, slot_call, requested_at, avatar_url)
-                                VALUES (:username, :slot_call, CURRENT_TIMESTAMP, :avatar_url)
+                                INSERT INTO slot_requests (kick_username, slot_call, requested_at, avatar_url, display_name)
+                                VALUES (:username, :slot_call, CURRENT_TIMESTAMP, :avatar_url, :display_name)
                             """
                                 ),
-                                {"username": kick_username_safe, "slot_call": slot_call_safe, "avatar_url": avatar_url},
+                                {
+                                    "username": kick_username_safe,
+                                    "slot_call": slot_call_safe,
+                                    "avatar_url": avatar_url,
+                                    "display_name": mention_name_safe,
+                                },
                             )
                     logger.debug(f"Saved slot request to database with avatar")
 
@@ -777,7 +791,7 @@ class SlotCallCommands(commands.Cog):
                     result = conn.execute(
                         text(
                             """
-                        SELECT id, kick_username, slot_call, requested_at
+                        SELECT id, COALESCE(display_name, kick_username), slot_call, requested_at
                         FROM slot_requests
                         WHERE picked = FALSE AND discord_server_id = :server_id
                         ORDER BY RANDOM()
@@ -790,7 +804,7 @@ class SlotCallCommands(commands.Cog):
                     result = conn.execute(
                         text(
                             """
-                        SELECT id, kick_username, slot_call, requested_at
+                        SELECT id, COALESCE(display_name, kick_username), slot_call, requested_at
                         FROM slot_requests
                         WHERE picked = FALSE
                         ORDER BY RANDOM()
@@ -805,6 +819,7 @@ class SlotCallCommands(commands.Cog):
                     )
                     return
 
+                # `username` here is the native display name (COALESCE display_name→kick_username).
                 request_id, username, slot_call, requested_at = result
 
                 # Mark as picked

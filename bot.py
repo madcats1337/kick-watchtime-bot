@@ -987,12 +987,16 @@ class KickWebSocketManager:
                         if entry_method == "keyword":
                             keyword = giveaway_manager.active_giveaway.get("keyword", "").lower()
                             if keyword and content.strip().lower() == keyword:
-                                await giveaway_manager.add_entry(username, entry_method="keyword", platform=platform)
+                                await giveaway_manager.add_entry(
+                                    username, entry_method="keyword", platform=platform, display_name=display_username
+                                )
                                 logger.info(f"🎁 Giveaway entry added: {username} (keyword: {keyword})")
 
                         # Active chatter tracking
                         elif entry_method == "active_chatter":
-                            await giveaway_manager.track_message(username, content, platform=platform)
+                            await giveaway_manager.track_message(
+                                username, content, platform=platform, display_name=display_username
+                            )
                     except Exception as e:
                         logger.info(f"⚠️ Giveaway tracking error: {e}")
 
@@ -1066,6 +1070,13 @@ class KickWebSocketManager:
                 if not server_has_feature(engine, guild_id, "slot_requests"):
                     logger.info(f"🔒 !sr blocked: server tier lacks slot_requests")
                     await send_kick_message(upgrade_message(username, "slot_requests"), guild_id=guild_id)
+                    return
+                # Anti-multi-account: require a link on the chatter's own platform when enabled.
+                if not require_link_ok(guild_id, username, platform):
+                    await send_kick_message(
+                        f"@{display_username} Link your {platform.capitalize()} account (!link in Discord) to request slots.",
+                        guild_id=guild_id,
+                    )
                     return
                 logger.info(f"🔍 Has slot_trackers: {hasattr(bot, 'slot_trackers')}")
 
@@ -1154,6 +1165,13 @@ class KickWebSocketManager:
                     logger.info(f"🔒 !gtb blocked: server tier lacks gtb")
                     await send_kick_message(upgrade_message(username, "gtb"), guild_id=guild_id)
                     return
+                # Anti-multi-account: require a link on the chatter's own platform when enabled.
+                if not require_link_ok(guild_id, username, platform):
+                    await send_kick_message(
+                        f"@{display_username} Link your {platform.capitalize()} account (!link in Discord) to guess.",
+                        guild_id=guild_id,
+                    )
+                    return
                 parts = content_stripped.split(maxsplit=1)
                 if len(parts) == 2:
                     amount = parse_amount(parts[1])
@@ -1163,7 +1181,7 @@ class KickWebSocketManager:
                             bot.gtb_managers_by_guild.get(guild_id) if hasattr(bot, "gtb_managers_by_guild") else None
                         )
                         if gtb_mgr:
-                            success, message = gtb_mgr.add_guess(username, amount)
+                            success, message = gtb_mgr.add_guess(username, amount, display_name=display_username)
                             response = f"@{display_username} {message}" + (" Good luck! 🎰" if success else "")
                             await send_kick_message(response, guild_id=guild_id)
                             logger.info(f"✅ GTB guess processed: {username} - ${amount}")
@@ -1571,6 +1589,33 @@ async def send_stream_message(message: str, guild_id: int = None) -> bool:
     return bool(kick_ok) or bool(twitch_ok)
 
 
+def require_link_ok(guild_id: int, username: str, platform: str) -> bool:
+    """
+    Gate for chat-activity commands (slot requests, GTB) when the server has the
+    'require_link_for_chat' toggle ON.
+
+    Returns True if the command is ALLOWED to proceed:
+      - toggle OFF  → always True (open participation, unchanged behavior)
+      - toggle ON   → True only if the chatter is linked ON THE PLATFORM they're
+                      chatting from (Twitch chatter needs a twitch link, Kick
+                      chatter needs a kick link). This yields a discord_id, which
+                      makes cross-platform dedup possible.
+
+    Fails OPEN (returns True) on any error so a DB hiccup never blocks chat.
+    """
+    try:
+        from utils.bot_settings import BotSettingsManager
+
+        if not BotSettingsManager(engine, guild_id).get_bool("require_link_for_chat", default=False):
+            return True
+        from core.stream_links import resolve_discord_id
+
+        return resolve_discord_id(engine, username, guild_id, platform) is not None
+    except Exception as e:
+        logger.warning(f"[require_link] check failed (allowing): {e}")
+        return True
+
+
 # -------------------------
 # -------------------------
 # Database setup and utilities
@@ -1895,6 +1940,16 @@ try:
                 )
             except Exception:
                 pass  # Table may not exist yet (dashboard creates it) or column present
+
+        # Native display name for chat-activity entries (Twitch name on Twitch, Kick
+        # name on Kick). The existing username column stays the canonical credit/dedup
+        # key; display_name is what's SHOWN in embeds/panels/announcements. Nullable —
+        # old rows fall back to the username column at render time.
+        for _disp_table in ("slot_requests", "gtb_guesses", "gtb_winners", "giveaway_entries"):
+            try:
+                conn.execute(text(f"ALTER TABLE {_disp_table} ADD COLUMN IF NOT EXISTS display_name TEXT;"))
+            except Exception:
+                pass  # Table may not exist yet or column already present
 
         # -------------------------
         # Point Reward System Tables
@@ -2416,7 +2471,7 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                                     # Fallback to global tracker for backwards compatibility
                                     tracker = bot.slot_call_tracker
 
-                                if tracker:
+                                if tracker and require_link_ok(guild_id, username, "kick"):
                                     slot_call = (
                                         content_stripped[5:].strip()[:200]
                                         if content_stripped.startswith("!call")
@@ -2433,7 +2488,7 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                                     if hasattr(bot, "gtb_managers_by_guild")
                                     else None
                                 )
-                                if gtb_mgr:
+                                if gtb_mgr and require_link_ok(guild_id, username, "kick"):
                                     parts = content_stripped.split(maxsplit=1)
                                     if len(parts) == 2:
                                         amount = parse_amount(parts[1])
@@ -3329,7 +3384,12 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                             else:  # !sr
                                                 slot_call = content_stripped[3:].strip()[:200]  # Remove "!sr"
 
-                                            if slot_call:  # Only process if there's actually a call
+                                            if slot_call and not require_link_ok(guild_id, username, "kick"):
+                                                await send_kick_message(
+                                                    f"@{username} Link your Kick account (!link in Discord) to request slots.",
+                                                    guild_id=guild_id,
+                                                )
+                                            elif slot_call:  # Only process if there's actually a call
                                                 await tracker.handle_slot_call(username, slot_call, platform="kick")
                                             else:
                                                 # Send usage message when no content is provided (only to non-blacklisted users)
@@ -3350,12 +3410,19 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                     # Handle !gtb (Guess the Balance) command
                                     elif content_stripped.lower().startswith("!gtb"):
                                         logger.info(f"[GTB] {username} issued !gtb command")
-                                        # Use per-guild GTB manager
-                                        gtb_mgr = (
-                                            bot.gtb_managers_by_guild.get(guild_id)
-                                            if hasattr(bot, "gtb_managers_by_guild")
-                                            else None
-                                        )
+                                        if not require_link_ok(guild_id, username, "kick"):
+                                            await _send_kick_message_raw(
+                                                f"@{username} Link your Kick account (!link in Discord) to guess.",
+                                                guild_id=guild_id,
+                                            )
+                                            gtb_mgr = None
+                                        else:
+                                            # Use per-guild GTB manager
+                                            gtb_mgr = (
+                                                bot.gtb_managers_by_guild.get(guild_id)
+                                                if hasattr(bot, "gtb_managers_by_guild")
+                                                else None
+                                            )
                                         if gtb_mgr:
                                             gtb_parts = content_stripped.split(maxsplit=1)
                                             if len(gtb_parts) == 2:

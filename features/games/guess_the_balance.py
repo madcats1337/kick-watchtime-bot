@@ -158,9 +158,13 @@ class GuessTheBalanceManager:
             logger.error(f"Failed to close session: {e}")
             return False, f"Failed to close session: {str(e)}", None
 
-    def add_guess(self, kick_username: str, guess_amount: float) -> Tuple[bool, str]:
+    def add_guess(self, kick_username: str, guess_amount: float, display_name: str = None) -> Tuple[bool, str]:
         """
-        Add a user's guess to the active session
+        Add a user's guess to the active session.
+
+        kick_username = canonical credit/dedup key (ON CONFLICT keeps one guess per
+        Discord identity per session). display_name = native platform name shown in
+        the winner panel/announcement (falls back to kick_username).
 
         Returns:
             (success, message)
@@ -188,10 +192,11 @@ class GuessTheBalanceManager:
                 conn.execute(
                     text(
                         """
-                    INSERT INTO gtb_guesses (session_id, kick_username, guess_amount, discord_server_id)
-                    VALUES (:session_id, :username, :amount, :server_id)
+                    INSERT INTO gtb_guesses (session_id, kick_username, guess_amount, discord_server_id, display_name)
+                    VALUES (:session_id, :username, :amount, :server_id, :display_name)
                     ON CONFLICT (session_id, kick_username)
-                    DO UPDATE SET guess_amount = :amount, guessed_at = CURRENT_TIMESTAMP
+                    DO UPDATE SET guess_amount = :amount, guessed_at = CURRENT_TIMESTAMP,
+                                  display_name = EXCLUDED.display_name
                 """
                     ),
                     {
@@ -199,6 +204,7 @@ class GuessTheBalanceManager:
                         "username": kick_username,
                         "amount": guess_amount,
                         "server_id": self.server_id,
+                        "display_name": display_name or kick_username,
                     },
                 )
 
@@ -277,11 +283,13 @@ class GuessTheBalanceManager:
                     {"amount": result_amount, "session_id": session_id},
                 )
 
-                # Get all guesses with calculated differences
+                # Get all guesses with calculated differences. Select the native
+                # display name (fallback to the canonical kick_username).
                 guesses = conn.execute(
                     text(
                         """
-                    SELECT kick_username, guess_amount,
+                    SELECT kick_username, COALESCE(display_name, kick_username) AS display_name,
+                           guess_amount,
                            ABS(guess_amount - :result) as difference
                     FROM gtb_guesses
                     WHERE session_id = :session_id
@@ -307,13 +315,13 @@ class GuessTheBalanceManager:
 
                 # Insert winners
                 winners = []
-                for rank, (username, guess, diff) in enumerate(guesses, 1):
+                for rank, (username, display_name, guess, diff) in enumerate(guesses, 1):
                     conn.execute(
                         text(
                             """
                         INSERT INTO gtb_winners
-                        (session_id, kick_username, rank, guess_amount, result_amount, difference)
-                        VALUES (:session_id, :username, :rank, :guess, :result, :diff)
+                        (session_id, kick_username, rank, guess_amount, result_amount, difference, display_name)
+                        VALUES (:session_id, :username, :rank, :guess, :result, :diff, :display_name)
                     """
                         ),
                         {
@@ -323,11 +331,13 @@ class GuessTheBalanceManager:
                             "guess": guess,
                             "result": result_amount,
                             "diff": diff,
+                            "display_name": display_name,
                         },
                     )
 
+                    # `username` in the returned dict is what the panel SHOWS → use display name.
                     winners.append(
-                        {"rank": rank, "username": username, "guess": float(guess), "difference": float(diff)}
+                        {"rank": rank, "username": display_name, "guess": float(guess), "difference": float(diff)}
                     )
 
                 logger.info(f"GTB session #{session_id} completed with result ${result_amount:,.2f}")
