@@ -21,7 +21,7 @@ import os
 
 import discord
 from discord.ext import commands
-from discord.ui import Button, View
+from discord.ui import ActionRow, Button, Container, LayoutView, Separator, TextDisplay
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
@@ -90,27 +90,121 @@ def _active_platforms(engine, guild_id) -> list:
         return ["kick"]
 
 
-class CombinedLinkPanelView(View):
-    """Persistent view with a Kick and a Twitch link button. Both buttons are
-    always attached (so the single persistent view registered at startup matches
-    every posted message); each button checks at click time whether its platform
-    is active for the server and whether the user is already linked."""
+# Brand accent colours used for the V2 Container stripe (matches the old embed
+# colour logic): Twitch purple when twitch-only, otherwise Kick green.
+TWITCH_COLOUR = 0x9146FF
+KICK_COLOUR = 0x53FC18
 
-    def __init__(self, bot, engine, kick_url_generator, twitch_url_generator, kick_emoji=None, twitch_emoji=None):
+
+class CombinedLinkPanelView(LayoutView):
+    """Persistent Components-V2 panel with a Kick and/or Twitch link button.
+
+    `platforms=None` builds the GLOBAL persistent view registered at startup —
+    it carries BOTH buttons (both custom_ids) so every posted message re-binds its
+    handlers after a restart. When posting per-guild, pass `platforms` so only the
+    server's active buttons render. Each button still checks at click time whether
+    its platform is active and whether the user is already linked."""
+
+    def __init__(
+        self,
+        bot,
+        engine,
+        kick_url_generator,
+        twitch_url_generator,
+        kick_emoji=None,
+        twitch_emoji=None,
+        platforms=None,
+    ):
         super().__init__(timeout=None)  # Persistent
         self.bot = bot
         self.engine = engine
         self.kick_url_generator = kick_url_generator
         self.twitch_url_generator = twitch_url_generator
-        # Brand-logo application emojis (or None → unicode fallback). The
-        # decorator emoji is static, so override it on the instance here.
+        # Brand-logo application emojis (or None → unicode fallback).
         self.kick_emoji = kick_emoji or FALLBACK_EMOJI["kick"]
         self.twitch_emoji = twitch_emoji or FALLBACK_EMOJI["twitch"]
-        self.kick_button.emoji = self.kick_emoji
-        self.twitch_button.emoji = self.twitch_emoji
+
+        # None → global persistent view: both platforms, generic copy.
+        show_kick = platforms is None or "kick" in platforms
+        show_twitch = platforms is None or "twitch" in platforms
+        if platforms:
+            names = " & ".join(p.capitalize() for p in platforms)
+        else:
+            names = "Kick & Twitch"
+        accent = TWITCH_COLOUR if platforms == ["twitch"] else KICK_COLOUR
+
+        container = Container(accent_colour=accent)
+        container.add_item(TextDisplay("## 🔗 Link Your Account"))
+        container.add_item(
+            TextDisplay(
+                f"Link your {names} account with Discord to participate in raffles and track your watchtime!\n\n"
+                "**Benefits:**\n"
+                "• Earn raffle tickets from watchtime\n"
+                "• Get bonus tickets from subscriptions\n"
+                "• Participate in raffles and giveaways\n"
+                "• Earn roles based on chat activity\n"
+                "• Track your stats and progress"
+            )
+        )
+        if show_kick and show_twitch:
+            how_to = "**How to Link**\nUse the buttons below — you can link **both** platforms."
+        else:
+            only = "Twitch" if show_twitch and not show_kick else "Kick"
+            how_to = f"**How to Link**\nClick the **'Link {only}'** button below to get started!"
+        container.add_item(TextDisplay(how_to))
+        container.add_item(
+            TextDisplay(
+                "**🔒 Privacy & Security**\n"
+                "• OAuth links are unique and expire after 10 minutes\n"
+                "• Links are sent privately, only you can see them\n"
+                "• Your password is never shared with this bot"
+            )
+        )
+        container.add_item(Separator())
+
+        # Buttons live in an ActionRow inside the container. Built imperatively
+        # (not via decorators) so per-platform filtering is a simple include/skip.
+        row = ActionRow()
+        if show_kick:
+            kick_btn = Button(
+                style=discord.ButtonStyle.success,
+                label="Link Kick",
+                emoji=self.kick_emoji,
+                custom_id="link_kick_account",
+            )
+            kick_btn.callback = self._kick_callback
+            row.add_item(kick_btn)
+        if show_twitch:
+            twitch_btn = Button(
+                style=discord.ButtonStyle.secondary,
+                label="Link Twitch",
+                emoji=self.twitch_emoji,
+                custom_id="link_twitch_account",
+            )
+            twitch_btn.callback = self._twitch_callback
+            row.add_item(twitch_btn)
+        container.add_item(row)
+
+        self.add_item(container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return True
+
+    async def _kick_callback(self, interaction: discord.Interaction):
+        try:
+            await self._handle(interaction, "kick", self.kick_url_generator, self.kick_emoji)
+        except Exception as e:
+            logger.error(f"[CombinedLink] Kick button error: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message("❌ An error occurred.", ephemeral=True)
+
+    async def _twitch_callback(self, interaction: discord.Interaction):
+        try:
+            await self._handle(interaction, "twitch", self.twitch_url_generator, self.twitch_emoji)
+        except Exception as e:
+            logger.error(f"[CombinedLink] Twitch button error: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message("❌ An error occurred.", ephemeral=True)
 
     async def _handle(self, interaction, platform, url_generator, label_emoji):
         discord_id = interaction.user.id
@@ -155,8 +249,19 @@ class CombinedLinkPanelView(View):
             )
             return
 
-        view = View(timeout=600)
-        view.add_item(
+        # Components-V2 ephemeral follow-up: a small container with the prompt text
+        # and the OAuth link button.
+        accent = TWITCH_COLOUR if platform == "twitch" else KICK_COLOUR
+        view = LayoutView(timeout=600)
+        container = Container(accent_colour=accent)
+        container.add_item(
+            TextDisplay(
+                f"{label_emoji} Click the button below to link your {platform.capitalize()} account "
+                f"(expires in 10 minutes):"
+            )
+        )
+        row = ActionRow()
+        row.add_item(
             Button(
                 label=f"Authorize with {platform.capitalize()}",
                 style=discord.ButtonStyle.link,
@@ -164,33 +269,10 @@ class CombinedLinkPanelView(View):
                 emoji=label_emoji,
             )
         )
-        await interaction.response.send_message(
-            f"{label_emoji} Click the button below to link your {platform.capitalize()} account "
-            f"(expires in 10 minutes):",
-            view=view,
-            ephemeral=True,
-        )
+        container.add_item(row)
+        view.add_item(container)
+        await interaction.response.send_message(view=view, ephemeral=True)
         logger.info(f"[CombinedLink] Sent {platform} OAuth link to {interaction.user.name} ({discord_id})")
-
-    @discord.ui.button(style=discord.ButtonStyle.success, label="Link Kick", emoji="🟢", custom_id="link_kick_account")
-    async def kick_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            await self._handle(interaction, "kick", self.kick_url_generator, self.kick_emoji)
-        except Exception as e:
-            logger.error(f"[CombinedLink] Kick button error: {e}")
-            if not interaction.response.is_done():
-                await interaction.response.send_message("❌ An error occurred.", ephemeral=True)
-
-    @discord.ui.button(
-        style=discord.ButtonStyle.secondary, label="Link Twitch", emoji="🟣", custom_id="link_twitch_account"
-    )
-    async def twitch_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            await self._handle(interaction, "twitch", self.twitch_url_generator, self.twitch_emoji)
-        except Exception as e:
-            logger.error(f"[CombinedLink] Twitch button error: {e}")
-            if not interaction.response.is_done():
-                await interaction.response.send_message("❌ An error occurred.", ephemeral=True)
 
 
 def _build_view_for_guild(
@@ -198,18 +280,17 @@ def _build_view_for_guild(
 ):
     """Build a view showing only the buttons for the guild's active platforms.
     Used when POSTING the panel (so a kick-only server shows just the Kick button).
-    The persistent view registered globally keeps both custom_ids alive."""
+    The global persistent view (platforms=None) keeps both custom_ids alive."""
     platforms = _active_platforms(engine, guild_id)
     view = CombinedLinkPanelView(
-        bot, engine, kick_url_generator, twitch_url_generator, kick_emoji=kick_emoji, twitch_emoji=twitch_emoji
+        bot,
+        engine,
+        kick_url_generator,
+        twitch_url_generator,
+        kick_emoji=kick_emoji,
+        twitch_emoji=twitch_emoji,
+        platforms=platforms,
     )
-    # Drop buttons for platforms this server doesn't run.
-    for item in list(view.children):
-        cid = getattr(item, "custom_id", "")
-        if cid == "link_kick_account" and "kick" not in platforms:
-            view.remove_item(item)
-        if cid == "link_twitch_account" and "twitch" not in platforms:
-            view.remove_item(item)
     return view, platforms
 
 
@@ -286,43 +367,9 @@ class CombinedLinkPanel:
                 twitch_emoji=self.twitch_emoji,
             )
             names = " & ".join(p.capitalize() for p in platforms)
-            embed = discord.Embed(
-                title="🔗 Link Your Account",
-                description=(
-                    f"Link your {names} account with Discord to participate in raffles and track your watchtime!\n\n"
-                    "**Benefits:**\n"
-                    "• Earn raffle tickets from watchtime\n"
-                    "• Get bonus tickets from subscriptions\n"
-                    "• Participate in raffles and giveaways\n"
-                    "• Earn roles based on chat activity\n"
-                    "• Track your stats and progress"
-                ),
-                color=0x9146FF if platforms == ["twitch"] else 0x53FC18,
-            )
-            if len(platforms) > 1:
-                embed.add_field(
-                    name="How to Link",
-                    value="Use the buttons below — you can link **both** platforms.",
-                    inline=False,
-                )
-            else:
-                embed.add_field(
-                    name="How to Link",
-                    value=f"Click the **'Link {platforms[0].capitalize()}'** button below to get started!",
-                    inline=False,
-                )
-            embed.add_field(
-                name="🔒 Privacy & Security",
-                value=(
-                    "• OAuth links are unique and expire after 10 minutes\n"
-                    "• Links are sent privately, only you can see them\n"
-                    "• Your password is never shared with this bot"
-                ),
-                inline=False,
-            )
-            embed.set_footer(text="Click a button to get your personal OAuth link")
-
-            message = await channel.send(embed=embed, view=view)
+            # Components V2: the panel is a LayoutView (no embed — a V2 message
+            # can't carry one). All copy lives inside the view's TextDisplays.
+            message = await channel.send(view=view)
             self.panel_guild_id = channel.guild.id
             self.panel_channel_id = channel.id
             self.panel_message_id = message.id
