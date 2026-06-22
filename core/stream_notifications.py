@@ -89,8 +89,13 @@ def _build_live_message(settings: dict, platform: str, streamer: str, title: str
     if custom_description:
         parts.append(repl(custom_description))
 
-    # Kick-only: the clkick unfurl link that Discord turns into the video preview.
-    if platform != "twitch":
+    if platform == "twitch":
+        # Twitch has no video-unfurl proxy — include a plain clickable channel link
+        # (auto-built from the connected handle) so the alert body links the stream.
+        link_text = alert_setting(settings, platform, "link_text") or "Watch on Twitch"
+        parts.append(f"[{link_text}]({_embed_url(platform, streamer)})")
+    else:
+        # Kick: the clkick unfurl link that Discord turns into the video preview.
         link_text = alert_setting(settings, platform, "link_text") or "Watch Preview"
         hidden_link = f"[{link_text}]({_embed_url(platform, streamer)})"
         if alert_setting(settings, platform, "link_small") == "true":

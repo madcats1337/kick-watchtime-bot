@@ -421,7 +421,9 @@ def create_twitch_event_handler():
     handler = TwitchWebhookEventHandler()
 
     def _broadcaster_name(event: Dict[str, Any]) -> str:
-        return event.get("broadcaster_user_name") or event.get("broadcaster_user_login") or ""
+        # Prefer the login (URL-safe, lowercase handle) so the notification's
+        # twitch.tv/<streamer> link + button resolve; fall back to display name.
+        return event.get("broadcaster_user_login") or event.get("broadcaster_user_name") or ""
 
     async def _notify_stream_status(event: Dict[str, Any], is_live: bool, title: str = "", category: str = ""):
         """Reuse the shared stream-notification sender (see send_stream_notification
