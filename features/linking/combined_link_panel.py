@@ -17,6 +17,7 @@ panel_type = 'link' (one row per guild in link_panels).
 """
 
 import logging
+import os
 
 import discord
 from discord.ext import commands
@@ -26,6 +27,50 @@ from sqlalchemy import text
 logger = logging.getLogger(__name__)
 
 PANEL_TYPE = "link"
+
+# Unicode fallbacks used when a brand-logo application emoji isn't available
+# (PNG missing or upload failed) so the panel buttons always render something.
+FALLBACK_EMOJI = {"kick": "🟢", "twitch": "🟣"}
+
+# Application-emoji names + the PNG files supplied under assets/emojis/.
+_EMOJI_FILES = {"kick": "kick.png", "twitch": "twitch.png"}
+_EMOJI_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "emojis")
+
+
+async def ensure_link_emojis(bot) -> dict:
+    """Idempotently register the Kick/Twitch brand logos as the bot's application
+    emojis and return ``{"kick": <Emoji|None>, "twitch": <Emoji|None>}``.
+
+    On first run the PNGs under ``assets/emojis/`` are uploaded; on later runs the
+    already-uploaded emojis are reused (matched by name). A missing PNG or any API
+    error yields ``None`` for that platform, which makes the buttons fall back to
+    the unicode circle — the panel still works either way.
+    """
+    result = {"kick": None, "twitch": None}
+    try:
+        existing = {e.name: e for e in await bot.fetch_application_emojis()}
+    except Exception as e:
+        logger.warning(f"[CombinedLink] Could not fetch application emojis (using unicode fallback): {e}")
+        return result
+
+    for name, filename in _EMOJI_FILES.items():
+        if name in existing:
+            result[name] = existing[name]
+            logger.info(f"[CombinedLink] Reusing existing '{name}' application emoji.")
+            continue
+        path = os.path.join(_EMOJI_DIR, filename)
+        if not os.path.isfile(path):
+            logger.warning(f"[CombinedLink] {filename} not found at {path} — '{name}' button falls back to unicode.")
+            continue
+        try:
+            with open(path, "rb") as f:
+                image_bytes = f.read()
+            result[name] = await bot.create_application_emoji(name=name, image=image_bytes)
+            logger.info(f"[CombinedLink] Uploaded '{name}' application emoji.")
+        except Exception as e:
+            logger.error(f"[CombinedLink] Failed to upload '{name}' application emoji: {e}")
+
+    return result
 
 
 def _active_platforms(engine, guild_id) -> list:
@@ -51,12 +96,18 @@ class CombinedLinkPanelView(View):
     every posted message); each button checks at click time whether its platform
     is active for the server and whether the user is already linked."""
 
-    def __init__(self, bot, engine, kick_url_generator, twitch_url_generator):
+    def __init__(self, bot, engine, kick_url_generator, twitch_url_generator, kick_emoji=None, twitch_emoji=None):
         super().__init__(timeout=None)  # Persistent
         self.bot = bot
         self.engine = engine
         self.kick_url_generator = kick_url_generator
         self.twitch_url_generator = twitch_url_generator
+        # Brand-logo application emojis (or None → unicode fallback). The
+        # decorator emoji is static, so override it on the instance here.
+        self.kick_emoji = kick_emoji or FALLBACK_EMOJI["kick"]
+        self.twitch_emoji = twitch_emoji or FALLBACK_EMOJI["twitch"]
+        self.kick_button.emoji = self.kick_emoji
+        self.twitch_button.emoji = self.twitch_emoji
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return True
@@ -124,7 +175,7 @@ class CombinedLinkPanelView(View):
     @discord.ui.button(style=discord.ButtonStyle.success, label="Link Kick", emoji="🟢", custom_id="link_kick_account")
     async def kick_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            await self._handle(interaction, "kick", self.kick_url_generator, "🟢")
+            await self._handle(interaction, "kick", self.kick_url_generator, self.kick_emoji)
         except Exception as e:
             logger.error(f"[CombinedLink] Kick button error: {e}")
             if not interaction.response.is_done():
@@ -135,19 +186,23 @@ class CombinedLinkPanelView(View):
     )
     async def twitch_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            await self._handle(interaction, "twitch", self.twitch_url_generator, "🟣")
+            await self._handle(interaction, "twitch", self.twitch_url_generator, self.twitch_emoji)
         except Exception as e:
             logger.error(f"[CombinedLink] Twitch button error: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message("❌ An error occurred.", ephemeral=True)
 
 
-def _build_view_for_guild(bot, engine, kick_url_generator, twitch_url_generator, guild_id):
+def _build_view_for_guild(
+    bot, engine, kick_url_generator, twitch_url_generator, guild_id, kick_emoji=None, twitch_emoji=None
+):
     """Build a view showing only the buttons for the guild's active platforms.
     Used when POSTING the panel (so a kick-only server shows just the Kick button).
     The persistent view registered globally keeps both custom_ids alive."""
     platforms = _active_platforms(engine, guild_id)
-    view = CombinedLinkPanelView(bot, engine, kick_url_generator, twitch_url_generator)
+    view = CombinedLinkPanelView(
+        bot, engine, kick_url_generator, twitch_url_generator, kick_emoji=kick_emoji, twitch_emoji=twitch_emoji
+    )
     # Drop buttons for platforms this server doesn't run.
     for item in list(view.children):
         cid = getattr(item, "custom_id", "")
@@ -161,11 +216,15 @@ def _build_view_for_guild(bot, engine, kick_url_generator, twitch_url_generator,
 class CombinedLinkPanel:
     """Manages the combined link panel message for a specific guild."""
 
-    def __init__(self, bot, engine, kick_url_generator, twitch_url_generator, guild_id=None):
+    def __init__(
+        self, bot, engine, kick_url_generator, twitch_url_generator, guild_id=None, kick_emoji=None, twitch_emoji=None
+    ):
         self.bot = bot
         self.engine = engine
         self.kick_url_generator = kick_url_generator
         self.twitch_url_generator = twitch_url_generator
+        self.kick_emoji = kick_emoji
+        self.twitch_emoji = twitch_emoji
         self.guild_id = guild_id
         self.panel_message_id = None
         self.panel_channel_id = None
@@ -218,7 +277,13 @@ class CombinedLinkPanel:
     async def create_panel(self, channel: discord.TextChannel):
         try:
             view, platforms = _build_view_for_guild(
-                self.bot, self.engine, self.kick_url_generator, self.twitch_url_generator, channel.guild.id
+                self.bot,
+                self.engine,
+                self.kick_url_generator,
+                self.twitch_url_generator,
+                channel.guild.id,
+                kick_emoji=self.kick_emoji,
+                twitch_emoji=self.twitch_emoji,
             )
             names = " & ".join(p.capitalize() for p in platforms)
             embed = discord.Embed(
@@ -272,14 +337,32 @@ class CombinedLinkPanel:
 async def setup_combined_link_panel_system(bot, engine, kick_url_generator, twitch_url_generator):
     """Set up the combined link panel: per-guild instances, a global persistent
     view (both custom_ids), the !createlinkpanel command, and restart re-attach."""
+    # Register (or reuse) the Kick/Twitch brand-logo application emojis once, then
+    # thread them into every view so the panel buttons show the logos.
+    emojis = await ensure_link_emojis(bot)
+    kick_emoji = emojis.get("kick")
+    twitch_emoji = emojis.get("twitch")
+
     panels = {}
     for guild in bot.guilds:
-        panels[guild.id] = CombinedLinkPanel(bot, engine, kick_url_generator, twitch_url_generator, guild_id=guild.id)
+        panels[guild.id] = CombinedLinkPanel(
+            bot,
+            engine,
+            kick_url_generator,
+            twitch_url_generator,
+            guild_id=guild.id,
+            kick_emoji=kick_emoji,
+            twitch_emoji=twitch_emoji,
+        )
 
     # Register ONE global persistent view carrying both custom_ids so buttons keep
     # working across restarts regardless of which platforms a guild shows.
     try:
-        bot.add_view(CombinedLinkPanelView(bot, engine, kick_url_generator, twitch_url_generator))
+        bot.add_view(
+            CombinedLinkPanelView(
+                bot, engine, kick_url_generator, twitch_url_generator, kick_emoji=kick_emoji, twitch_emoji=twitch_emoji
+            )
+        )
     except Exception as e:
         logger.warning(f"[CombinedLink] add_view failed (non-fatal): {e}")
 
@@ -303,7 +386,15 @@ async def setup_combined_link_panel_system(bot, engine, kick_url_generator, twit
                 channel = bot.get_channel(panel.panel_channel_id)
                 if channel:
                     message = await channel.fetch_message(panel.panel_message_id)
-                    view, _ = _build_view_for_guild(bot, engine, kick_url_generator, twitch_url_generator, guild_id)
+                    view, _ = _build_view_for_guild(
+                        bot,
+                        engine,
+                        kick_url_generator,
+                        twitch_url_generator,
+                        guild_id,
+                        kick_emoji=kick_emoji,
+                        twitch_emoji=twitch_emoji,
+                    )
                     await message.edit(view=view)
             except Exception as e:
                 logger.error(f"[CombinedLink] Failed to re-attach view for guild {guild_id}: {e}")
