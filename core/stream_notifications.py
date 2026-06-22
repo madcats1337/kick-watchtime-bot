@@ -39,6 +39,20 @@ def _platform_label(platform: str) -> str:
     return "Twitch" if platform == "twitch" else "Kick"
 
 
+def notify_allowed(settings: dict, platform: str) -> bool:
+    """Whether a go-live on `platform` should post a Discord notification, per the
+    server's `stream_notification_platforms` setting.
+
+    Empty/unset => no filter (notify for whatever went live). Otherwise the comma-
+    separated list ('kick', 'twitch', 'kick,twitch') must contain the platform.
+    """
+    raw = (settings.get("stream_notification_platforms") or "").strip()
+    if not raw:
+        return True
+    allowed = [p.strip().lower() for p in raw.split(",") if p.strip()]
+    return platform.lower() in allowed
+
+
 async def send_stream_notification(
     discord_server_id,
     streamer: str,
@@ -98,7 +112,7 @@ async def _post_discord_notification(discord_server_id, streamer, title, categor
                     AND key IN ('stream_notification_enabled', 'stream_notification_channel_id',
                                 'stream_notification_title', 'stream_notification_description',
                                 'stream_notification_link_text', 'stream_notification_link_small',
-                                'stream_notification_footer')
+                                'stream_notification_footer', 'stream_notification_platforms')
                     """
                 ),
                 {"guild_id": discord_server_id},
@@ -109,6 +123,9 @@ async def _post_discord_notification(discord_server_id, streamer, title, categor
             return
         notification_channel_id = settings.get("stream_notification_channel_id")
         if not notification_channel_id:
+            return
+        if not notify_allowed(settings, platform):
+            logger.info(f"[StreamNotify] {platform} go-live not in stream_notification_platforms — skipping")
             return
 
         stream_url = _stream_url(platform, streamer)

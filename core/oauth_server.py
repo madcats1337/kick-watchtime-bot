@@ -260,7 +260,7 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
                     AND key IN ('stream_notification_enabled', 'stream_notification_channel_id',
                                 'stream_notification_title', 'stream_notification_description',
                                 'stream_notification_link_text', 'stream_notification_link_small',
-                                'stream_notification_footer', 'kick_channel')
+                                'stream_notification_footer', 'stream_notification_platforms', 'kick_channel')
                 """
                     ),
                     {"guild_id": discord_server_id},
@@ -275,6 +275,16 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
                 notification_channel_id = settings.get("stream_notification_channel_id")
                 if not notification_channel_id:
                     logger.info(f"[Webhook] ⚠️ No notification channel configured for server {discord_server_id}")
+                    return
+
+                # Gate by the per-server notify-platform setting. This webhook is
+                # Kick-only; empty/unset means notify for whatever went live.
+                from core.stream_notifications import notify_allowed
+
+                if not notify_allowed(settings, "kick"):
+                    logger.info(
+                        f"[Webhook] ℹ️ Kick not in stream_notification_platforms for {discord_server_id} — skipping"
+                    )
                     return
 
                 # Use configured kick_channel or broadcaster from webhook

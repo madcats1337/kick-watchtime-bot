@@ -1613,6 +1613,7 @@ class RedisSubscriber:
             custom_link_text = None
             link_small = False
             custom_footer = None
+            notify_platforms = None
 
             if discord_server_id and engine:
                 try:
@@ -1626,7 +1627,7 @@ class RedisSubscriber:
                             WHERE discord_server_id = :guild_id
                             AND key IN ('stream_notification_title', 'stream_notification_description',
                                         'stream_notification_link_text', 'stream_notification_link_small',
-                                        'stream_notification_footer')
+                                        'stream_notification_footer', 'stream_notification_platforms')
                         """
                             ),
                             {"guild_id": discord_server_id},
@@ -1643,8 +1644,23 @@ class RedisSubscriber:
                                 link_small = value == "true"
                             elif key == "stream_notification_footer" and value:
                                 custom_footer = value
+                            elif key == "stream_notification_platforms":
+                                notify_platforms = value
                 except Exception as db_err:
                     logger.warning(f"⚠️ Failed to fetch notification settings: {db_err}")
+
+            # Gate real (non-test) sends by the per-server notify-platform setting.
+            # This handler is Kick-only; a test always sends (the admin asked for it),
+            # while empty/unset means notify for whatever went live.
+            if not is_test:
+                from core.stream_notifications import notify_allowed
+
+                platform = data.get("platform", "kick")
+                if not notify_allowed({"stream_notification_platforms": notify_platforms}, platform):
+                    logger.info(
+                        f"📺 {platform} not in stream_notification_platforms for {discord_server_id} — skipping"
+                    )
+                    return
 
             # Replace placeholders in custom title/description
             def replace_placeholders(text):
