@@ -20,8 +20,9 @@ buttons** (dashboard → Discord live alerts). A button stores the emoji as an
 `app:<name>` token (e.g. `app:kick`); `build_alert_components()` in
 `core/stream_notifications.py` resolves the token to the custom emoji by name at
 send time (unicode fallback if the upload is missing). The dashboard previews use
-copies of these PNGs under `Admin-Dashboard/frontend/public/emojis/` — keep them
-in sync if you change the art.
+copies of these PNGs under `Admin-Dashboard/frontend/src/assets/emojis/` (imported
+so Vite resolves them under the app's `/static/dist/` base) — keep them in sync if
+you change the art.
 
 If a file is missing or the upload fails, that button falls back to its unicode
 emoji and the panel still works — so the bot won't break if these aren't in place
