@@ -41,7 +41,15 @@ def _platform_label(platform: str) -> str:
 
 # Per-platform live-alert settings live under these prefixes. Kick falls back to
 # the legacy shared `stream_notification_*` keys so existing servers keep working.
-_ALERT_SUFFIXES = ("enabled", "channel_id", "title", "description", "link_text", "link_small", "footer")
+_ALERT_SUFFIXES = ("enabled", "channel_id", "title", "description", "link_text", "link_small", "footer", "buttons")
+
+# Discord caps an action row at 5 buttons and a button label at 80 chars.
+_MAX_ALERT_BUTTONS = 5
+_BUTTON_LABEL_MAX = 80
+
+# Fallback when a server has never configured buttons: a single Watch Stream
+# button that auto-links the live stream (blank url ⇒ stream_url).
+_DEFAULT_ALERT_BUTTON = {"label": "Watch Stream", "emoji": "🔴", "url": ""}
 
 
 def _alert_columns(platform: str) -> list:
@@ -105,6 +113,125 @@ def _build_live_message(settings: dict, platform: str, streamer: str, title: str
     message_content = "\n".join(parts)
     footer_text = repl(alert_setting(settings, platform, "footer"))
     return message_content, footer_text
+
+
+# Emoji values prefixed with this reference an uploaded application emoji (by
+# name) rather than a unicode glyph — see the dashboard's APP_EMOJIS catalog.
+_APP_EMOJI_PREFIX = "app:"
+
+# Cache of {name: {"id", "name", "animated"}} application emojis so we don't hit
+# the Discord REST API on every go-live. Refreshed lazily on the first alert that
+# needs a custom emoji; app emojis change rarely (only when assets are re-uploaded).
+_app_emoji_cache: Optional[dict] = None
+
+
+async def _fetch_application_emojis(session, bot_token: str) -> dict:
+    """Return {name: {"id", "name", "animated"}} for the bot's application emojis,
+    via raw REST (no discord.py client needed). Cached after the first success;
+    returns {} on any failure so callers fall back to unicode."""
+    global _app_emoji_cache
+    if _app_emoji_cache is not None:
+        return _app_emoji_cache
+    headers = {"Authorization": f"Bot {bot_token}"}
+    try:
+        # The bot's application id; for a bot it equals the bot user id.
+        async with session.get("https://discord.com/api/v10/applications/@me", headers=headers) as r:
+            if r.status != 200:
+                return {}
+            app_id = (await r.json()).get("id")
+        if not app_id:
+            return {}
+        async with session.get(f"https://discord.com/api/v10/applications/{app_id}/emojis", headers=headers) as r:
+            if r.status != 200:
+                return {}
+            payload = await r.json()
+        items = payload.get("items", payload) if isinstance(payload, dict) else payload
+        cache = {}
+        for e in items or []:
+            name = e.get("name")
+            if name:
+                cache[name] = {"id": e["id"], "name": name, "animated": bool(e.get("animated"))}
+        _app_emoji_cache = cache
+        return cache
+    except Exception as e:  # noqa: BLE001 — emoji is cosmetic; never block the alert
+        logger.info(f"[StreamNotify] ⚠️ Could not fetch application emojis (using unicode fallback): {e}")
+        return {}
+
+
+async def _resolve_emoji(raw_emoji: str, session, bot_token: str):
+    """Turn a stored emoji value into a Discord button `emoji` dict, or None.
+
+    - "app:<name>"  → custom emoji {"id", "name", "animated"} (None if unknown).
+    - unicode glyph → {"name": "<glyph>"}.
+    - blank         → None.
+    """
+    emoji = (raw_emoji or "").strip()
+    if not emoji:
+        return None
+    if emoji.startswith(_APP_EMOJI_PREFIX):
+        name = emoji[len(_APP_EMOJI_PREFIX) :]
+        resolved = (await _fetch_application_emojis(session, bot_token)).get(name)
+        return resolved  # None ⇒ button renders with no emoji (graceful)
+    return {"name": emoji}
+
+
+async def build_alert_components(settings: dict, platform: str, stream_url: str, session, bot_token: str) -> list:
+    """Build the Discord message `components` (one action row of link buttons) for
+    a go-live alert.
+
+    Buttons come from the per-platform `*_live_alert_buttons` setting (JSON array
+    of {label, emoji, url}). The FIRST button is the primary "Watch Stream"
+    button: a blank url auto-links `stream_url`. Extra buttons need both a label
+    and a url or they're dropped. Falls back to a single auto Watch Stream button
+    when nothing is configured. Discord limits: 5 buttons/row, 80-char labels.
+
+    `emoji` may be a unicode glyph or an "app:<name>" application-emoji token,
+    resolved to the custom-emoji dict via the bot token (`session` is the open
+    aiohttp session the caller is already using to post).
+    """
+    import json
+
+    raw = alert_setting(settings, platform, "buttons")
+    buttons = None
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list) and parsed:
+                buttons = parsed
+        except (ValueError, TypeError):
+            buttons = None
+    if buttons is None:
+        buttons = [dict(_DEFAULT_ALERT_BUTTON)]
+
+    components = []
+    for i, btn in enumerate(buttons[:_MAX_ALERT_BUTTONS]):
+        if not isinstance(btn, dict):
+            continue
+        label = str(btn.get("label") or "").strip()
+        emoji = str(btn.get("emoji") or "").strip()
+        url = str(btn.get("url") or "").strip()
+        is_primary = i == 0
+        # Primary button: blank url ⇒ the live stream; blank label ⇒ "Watch Stream".
+        if is_primary:
+            if not url:
+                url = stream_url
+            if not label:
+                label = "Watch Stream"
+        else:
+            # Extra buttons require both a label and a url; skip incomplete ones.
+            if not label or not url:
+                continue
+        button = {"type": 2, "style": 5, "label": label[:_BUTTON_LABEL_MAX], "url": url}
+        emoji_obj = await _resolve_emoji(emoji, session, bot_token)
+        if emoji_obj:
+            button["emoji"] = emoji_obj
+        components.append(button)
+
+    if not components:
+        # Defensive: never post a live alert with zero buttons.
+        components.append({"type": 2, "style": 5, "label": "Watch Stream", "url": stream_url, "emoji": {"name": "🔴"}})
+
+    return [{"type": 1, "components": components}]
 
 
 async def send_stream_notification(
@@ -184,25 +311,13 @@ async def _post_discord_notification(discord_server_id, streamer, title, categor
         stream_url = _stream_url(platform, streamer)
         message_content, footer_text = _build_live_message(settings, platform, streamer, title, category)
 
-        components = [
-            {
-                "type": 1,
-                "components": [
-                    {
-                        "type": 2,
-                        "style": 5,
-                        "label": "Watch Stream",
-                        "url": stream_url,
-                        "emoji": {"name": "🔴"},
-                    }
-                ],
-            }
-        ]
-
         bot_token = os.getenv("DISCORD_TOKEN")
         if not bot_token:
             return
         async with aiohttp.ClientSession() as session:
+            # Built inside the session so app:<name> emoji tokens can be resolved
+            # against the bot's application emojis over the same connection.
+            components = await build_alert_components(settings, platform, stream_url, session, bot_token)
             async with session.post(
                 f"https://discord.com/api/v10/channels/{notification_channel_id}/messages",
                 headers={"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"},

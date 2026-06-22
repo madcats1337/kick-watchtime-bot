@@ -1597,7 +1597,12 @@ class RedisSubscriber:
 
             import aiohttp
 
-            from core.stream_notifications import _alert_columns, _build_live_message, _stream_url
+            from core.stream_notifications import (
+                _alert_columns,
+                _build_live_message,
+                _stream_url,
+                build_alert_components,
+            )
 
             # Platform of this notification ('kick' | 'twitch'); the dashboard test
             # button sends it. Defaults to kick for legacy callers.
@@ -1638,17 +1643,12 @@ class RedisSubscriber:
             # correct no-video message for free.
             message_content, footer_text = _build_live_message(settings, platform, streamer, "", "")
 
-            # Discord button component for "Watch Stream"
-            components = [
-                {
-                    "type": 1,
-                    "components": [
-                        {"type": 2, "style": 5, "label": "Watch Stream", "url": stream_url, "emoji": {"name": "🔴"}}
-                    ],
-                }
-            ]
-
             async with aiohttp.ClientSession() as session:
+                # Action-row link buttons (primary Watch Stream + any custom buttons),
+                # built from the same per-platform settings as the real go-live post.
+                # Built inside the session so app:<name> emoji tokens resolve against
+                # the bot's application emojis over the same connection.
+                components = await build_alert_components(settings, platform, stream_url, session, bot_token)
                 async with session.post(
                     f"https://discord.com/api/v10/channels/{channel_id}/messages",
                     headers={"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"},
