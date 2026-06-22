@@ -112,12 +112,19 @@ class GlobalPanel:
         Container of TextDisplay blocks (+ an ActionRow for interactive panels)."""
         raise NotImplementedError
 
+    def panel_files(self):
+        """Optional discord.File attachments to send with the panel (e.g. a logo
+        referenced by a MediaGallery via attachment://). Default: none."""
+        return []
+
     # -- posting ------------------------------------------------------------
     async def create_panel(self, channel, data=None):
         try:
             view = self.build_view(data)
-            # Components V2: send the LayoutView only (no embed, no content).
-            message = await channel.send(view=view)
+            files = self.panel_files()
+            # Components V2: send the LayoutView only (no embed, no content). Any
+            # panel_files() are attached so a MediaGallery can reference them.
+            message = await channel.send(view=view, files=files) if files else await channel.send(view=view)
             self.panel_channel_id = channel.id
             self.panel_message_id = message.id
             self._save_panel_info(channel.id, message.id)

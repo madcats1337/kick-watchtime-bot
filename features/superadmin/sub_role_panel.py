@@ -14,6 +14,7 @@ text plus an ActionRow with the claim button (no embed).
 """
 
 import logging
+import os
 
 import discord
 
@@ -22,6 +23,11 @@ from utils.subscription_tier import get_user_highest_tier
 from ._panel_base import ACCENT, OFFICIAL_GUILD_ID, GlobalPanel, get_setting, text_block
 
 logger = logging.getLogger(__name__)
+
+# LeleBot logo shown at the top of the panel (attached to the message and rendered
+# via a Components V2 MediaGallery). Skipped gracefully if the file is missing.
+_LOGO_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "branding", "lebot_logo.png")
+_LOGO_FILENAME = "lebot_logo.png"
 
 # Tier 1..4 → bot_settings role-id key. The full set is what we "manage" when
 # syncing (so an old tier role gets removed when a user changes tier).
@@ -50,12 +56,15 @@ class SubRolePanelView(discord.ui.LayoutView):
     timeout=None + a stable button custom_id make it survive restarts once
     registered via bot.add_view."""
 
-    def __init__(self, bot, engine):
+    def __init__(self, bot, engine, show_logo=True):
         super().__init__(timeout=None)
         self.bot = bot
         self.engine = engine
 
         container = discord.ui.Container(accent_colour=ACCENT)
+        # LeleBot logo banner at the very top (from the message's attachment).
+        if show_logo and os.path.isfile(_LOGO_PATH):
+            container.add_item(discord.ui.MediaGallery(discord.MediaGalleryItem(f"attachment://{_LOGO_FILENAME}")))
         container.add_item(text_block(_PANEL_TEXT))
         container.add_item(discord.ui.ActionRow(self._ClaimButton()))
         self.add_item(container)
@@ -153,6 +162,12 @@ class SubRolePanel(GlobalPanel):
 
     def build_view(self, data=None) -> discord.ui.LayoutView:
         return SubRolePanelView(self.bot, self.engine)
+
+    def panel_files(self):
+        """Attach the LeleBot logo so the view's MediaGallery can render it."""
+        if os.path.isfile(_LOGO_PATH):
+            return [discord.File(_LOGO_PATH, filename=_LOGO_FILENAME)]
+        return []
 
 
 async def setup_sub_role_panel_system(bot, engine):
