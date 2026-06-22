@@ -1597,100 +1597,46 @@ class RedisSubscriber:
 
             import aiohttp
 
-            stream_url = f"https://kick.com/{streamer}"
-            # Use clkick.com for Discord video embed (proxy with proper oEmbed)
-            embed_url = f"https://clkick.com/{streamer}"
+            from core.stream_notifications import _alert_columns, _build_live_message, _stream_url
+
+            # Platform of this notification ('kick' | 'twitch'); the dashboard test
+            # button sends it. Defaults to kick for legacy callers.
+            platform = (data.get("platform") or "kick").lower()
+            if platform not in ("kick", "twitch"):
+                platform = "kick"
+
+            stream_url = _stream_url(platform, streamer)
 
             bot_token = os.getenv("DISCORD_TOKEN")
-
             if not bot_token:
                 logger.error("❌ DISCORD_TOKEN not configured")
                 return
 
-            # Fetch custom title, description, link text, and small text setting from database
-            custom_title = None
-            custom_description = None
-            custom_link_text = None
-            link_small = False
-            custom_footer = None
-            notify_platforms = None
-
+            # Load this platform's live-alert settings (Kick falls back to legacy).
+            settings = {}
             if discord_server_id and engine:
                 try:
                     from sqlalchemy import text
 
+                    cols = _alert_columns(platform)
+                    ph = ", ".join(f":k{i}" for i in range(len(cols)))
+                    params = {"guild_id": discord_server_id}
+                    params.update({f"k{i}": c for i, c in enumerate(cols)})
                     with engine.connect() as conn:
                         result = conn.execute(
                             text(
-                                """
-                            SELECT key, value FROM bot_settings
-                            WHERE discord_server_id = :guild_id
-                            AND key IN ('stream_notification_title', 'stream_notification_description',
-                                        'stream_notification_link_text', 'stream_notification_link_small',
-                                        'stream_notification_footer', 'stream_notification_platforms')
-                        """
+                                f"SELECT key, value FROM bot_settings "
+                                f"WHERE discord_server_id = :guild_id AND key IN ({ph})"
                             ),
-                            {"guild_id": discord_server_id},
+                            params,
                         ).fetchall()
-
-                        for key, value in result:
-                            if key == "stream_notification_title" and value:
-                                custom_title = value
-                            elif key == "stream_notification_description" and value:
-                                custom_description = value
-                            elif key == "stream_notification_link_text" and value:
-                                custom_link_text = value
-                            elif key == "stream_notification_link_small":
-                                link_small = value == "true"
-                            elif key == "stream_notification_footer" and value:
-                                custom_footer = value
-                            elif key == "stream_notification_platforms":
-                                notify_platforms = value
+                    settings = {key: value for key, value in result}
                 except Exception as db_err:
                     logger.warning(f"⚠️ Failed to fetch notification settings: {db_err}")
 
-            # Gate real (non-test) sends by the per-server notify-platform setting.
-            # This handler is Kick-only; a test always sends (the admin asked for it),
-            # while empty/unset means notify for whatever went live.
-            if not is_test:
-                from core.stream_notifications import notify_allowed
-
-                platform = data.get("platform", "kick")
-                if not notify_allowed({"stream_notification_platforms": notify_platforms}, platform):
-                    logger.info(
-                        f"📺 {platform} not in stream_notification_platforms for {discord_server_id} — skipping"
-                    )
-                    return
-
-            # Replace placeholders in custom title/description
-            def replace_placeholders(text):
-                if not text:
-                    return text
-                return text.replace("{streamer}", streamer).replace("{channel}", streamer)
-
-            # Build message content using Discord markdown hyperlink to hide URL
-            # Format: [Link Text](URL) - Discord may still show embed from oEmbed
-            # Use -# prefix for small/subtext format if enabled
-            link_text = custom_link_text or "Watch Preview"
-            hidden_link = f"[{link_text}]({embed_url})"
-            if link_small:
-                hidden_link = f"-# {hidden_link}"
-
-            if custom_title:
-                title_text = replace_placeholders(custom_title)
-            else:
-                title_text = f"🔴 **{streamer}** is now LIVE on Kick!"
-
-            if custom_description:
-                desc_text = replace_placeholders(custom_description)
-                message_content = f"{title_text}\n{desc_text}\n{hidden_link}"
-            else:
-                message_content = f"{title_text}\n{hidden_link}"
-
-            # Add footer if set (appears after the button in the message)
-            footer_text = None
-            if custom_footer:
-                footer_text = replace_placeholders(custom_footer)
+            # Build the message via the shared builder (test ≡ real). Twitch gets its
+            # correct no-video message for free.
+            message_content, footer_text = _build_live_message(settings, platform, streamer, "", "")
 
             # Discord button component for "Watch Stream"
             components = [

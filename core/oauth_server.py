@@ -249,84 +249,38 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
                 logger.info(f"[Webhook] ⚠️ DATABASE_URL not set")
                 return
 
+            # Kick webhook → read the Kick live-alert settings (legacy fallback).
+            from core.stream_notifications import _alert_columns, _build_live_message, alert_setting
+
+            cols = _alert_columns("kick") + ["kick_channel"]
+            ph = ", ".join(f":k{i}" for i in range(len(cols)))
+            params = {"guild_id": discord_server_id}
+            params.update({f"k{i}": c for i, c in enumerate(cols)})
             engine = create_engine(db_url, pool_pre_ping=True)
             with engine.connect() as conn:
-                # Get stream notification settings
                 settings_result = conn.execute(
                     text(
-                        """
-                    SELECT key, value FROM bot_settings
-                    WHERE discord_server_id = :guild_id
-                    AND key IN ('stream_notification_enabled', 'stream_notification_channel_id',
-                                'stream_notification_title', 'stream_notification_description',
-                                'stream_notification_link_text', 'stream_notification_link_small',
-                                'stream_notification_footer', 'stream_notification_platforms', 'kick_channel')
-                """
+                        f"SELECT key, value FROM bot_settings " f"WHERE discord_server_id = :guild_id AND key IN ({ph})"
                     ),
-                    {"guild_id": discord_server_id},
+                    params,
                 ).fetchall()
 
                 settings = {key: value for key, value in settings_result}
 
-                if settings.get("stream_notification_enabled") != "true":
-                    logger.info(f"[Webhook] ℹ️ Stream notifications disabled for server {discord_server_id}")
+                if alert_setting(settings, "kick", "enabled") != "true":
+                    logger.info(f"[Webhook] ℹ️ Kick live alert disabled for server {discord_server_id}")
                     return
 
-                notification_channel_id = settings.get("stream_notification_channel_id")
+                notification_channel_id = alert_setting(settings, "kick", "channel_id")
                 if not notification_channel_id:
-                    logger.info(f"[Webhook] ⚠️ No notification channel configured for server {discord_server_id}")
-                    return
-
-                # Gate by the per-server notify-platform setting. This webhook is
-                # Kick-only; empty/unset means notify for whatever went live.
-                from core.stream_notifications import notify_allowed
-
-                if not notify_allowed(settings, "kick"):
-                    logger.info(
-                        f"[Webhook] ℹ️ Kick not in stream_notification_platforms for {discord_server_id} — skipping"
-                    )
+                    logger.info(f"[Webhook] ⚠️ No Kick live-alert channel configured for server {discord_server_id}")
                     return
 
                 # Use configured kick_channel or broadcaster from webhook
                 streamer = settings.get("kick_channel") or broadcaster
-
                 stream_url = f"https://kick.com/{streamer}"
-                embed_url = f"https://clkick.com/{streamer}"
 
-                # Get custom settings
-                custom_title = settings.get("stream_notification_title")
-                custom_description = settings.get("stream_notification_description")
-                custom_link_text = settings.get("stream_notification_link_text")
-                link_small = settings.get("stream_notification_link_small") == "true"
-                custom_footer = settings.get("stream_notification_footer")
-
-                # Replace placeholders
-                def replace_placeholders(text):
-                    if not text:
-                        return text
-                    return text.replace("{streamer}", streamer).replace("{channel}", streamer)
-
-                # Build message content
-                link_text = custom_link_text or "Watch Preview"
-                hidden_link = f"[{link_text}]({embed_url})"
-                if link_small:
-                    hidden_link = f"-# {hidden_link}"
-
-                if custom_title:
-                    title_text = replace_placeholders(custom_title)
-                else:
-                    title_text = f"🔴 **{streamer}** is now LIVE on Kick!"
-
-                if custom_description:
-                    desc_text = replace_placeholders(custom_description)
-                    message_content = f"{title_text}\n{desc_text}\n{hidden_link}"
-                else:
-                    message_content = f"{title_text}\n{hidden_link}"
-
-                # Process footer separately (will be sent as follow-up)
-                footer_text = None
-                if custom_footer:
-                    footer_text = replace_placeholders(custom_footer)
+                message_content, footer_text = _build_live_message(settings, "kick", streamer, title, category)
 
                 # Discord button component for "Watch Stream"
                 components = [

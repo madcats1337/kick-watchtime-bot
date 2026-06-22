@@ -39,18 +39,67 @@ def _platform_label(platform: str) -> str:
     return "Twitch" if platform == "twitch" else "Kick"
 
 
-def notify_allowed(settings: dict, platform: str) -> bool:
-    """Whether a go-live on `platform` should post a Discord notification, per the
-    server's `stream_notification_platforms` setting.
+# Per-platform live-alert settings live under these prefixes. Kick falls back to
+# the legacy shared `stream_notification_*` keys so existing servers keep working.
+_ALERT_SUFFIXES = ("enabled", "channel_id", "title", "description", "link_text", "link_small", "footer")
 
-    Empty/unset => no filter (notify for whatever went live). Otherwise the comma-
-    separated list ('kick', 'twitch', 'kick,twitch') must contain the platform.
+
+def _alert_columns(platform: str) -> list:
+    """The bot_settings keys to SELECT for a platform's live alert (new + legacy)."""
+    prefix = "twitch_live_alert_" if platform == "twitch" else "kick_live_alert_"
+    keys = [f"{prefix}{s}" for s in _ALERT_SUFFIXES]
+    if platform != "twitch":
+        keys += [f"stream_notification_{s}" for s in _ALERT_SUFFIXES]
+    return keys
+
+
+def alert_setting(settings: dict, platform: str, suffix: str):
+    """Resolve a live-alert setting for a platform: the per-platform key, falling
+    back to the legacy `stream_notification_*` key for Kick."""
+    prefix = "twitch_live_alert_" if platform == "twitch" else "kick_live_alert_"
+    val = settings.get(f"{prefix}{suffix}")
+    if (val is None or val == "") and platform != "twitch":
+        val = settings.get(f"stream_notification_{suffix}")
+    return val
+
+
+def _build_live_message(settings: dict, platform: str, streamer: str, title: str, category: str):
+    """Build the (content, footer) for a go-live message from a platform's alert
+    settings. Kick includes the clkick video-unfurl link; Twitch has no video
+    proxy, so it omits the hidden link (the Watch Stream button links the channel).
     """
-    raw = (settings.get("stream_notification_platforms") or "").strip()
-    if not raw:
-        return True
-    allowed = [p.strip().lower() for p in raw.split(",") if p.strip()]
-    return platform.lower() in allowed
+
+    def repl(t):
+        if not t:
+            return t
+        return (
+            t.replace("{streamer}", streamer)
+            .replace("{channel}", streamer)
+            .replace("{title}", title or "")
+            .replace("{category}", category or "")
+        )
+
+    custom_title = alert_setting(settings, platform, "title")
+    title_text = (
+        repl(custom_title) if custom_title else f"🔴 **{streamer}** is now LIVE on {_platform_label(platform)}!"
+    )
+
+    custom_description = alert_setting(settings, platform, "description")
+    parts = [title_text]
+    if custom_description:
+        parts.append(repl(custom_description))
+
+    # Kick-only: the clkick unfurl link that Discord turns into the video preview.
+    if platform != "twitch":
+        link_text = alert_setting(settings, platform, "link_text") or "Watch Preview"
+        hidden_link = f"[{link_text}]({_embed_url(platform, streamer)})"
+        if alert_setting(settings, platform, "link_small") == "true":
+            hidden_link = f"-# {hidden_link}"
+        parts.append(hidden_link)
+
+    message_content = "\n".join(parts)
+    footer_text = repl(alert_setting(settings, platform, "footer"))
+    return message_content, footer_text
 
 
 async def send_stream_notification(
@@ -102,63 +151,33 @@ async def _post_discord_notification(discord_server_id, streamer, title, categor
         db_url = os.getenv("DATABASE_URL")
         if not db_url:
             return
+        # Read this platform's live-alert settings (new keys; Kick falls back to
+        # the legacy shared stream_notification_* keys).
+        cols = _alert_columns(platform)
+        placeholders = ", ".join(f":k{i}" for i in range(len(cols)))
+        params = {"guild_id": discord_server_id}
+        params.update({f"k{i}": c for i, c in enumerate(cols)})
         engine = create_engine(db_url, pool_pre_ping=True)
         with engine.connect() as conn:
             rows = conn.execute(
                 text(
-                    """
-                    SELECT key, value FROM bot_settings
-                    WHERE discord_server_id = :guild_id
-                    AND key IN ('stream_notification_enabled', 'stream_notification_channel_id',
-                                'stream_notification_title', 'stream_notification_description',
-                                'stream_notification_link_text', 'stream_notification_link_small',
-                                'stream_notification_footer', 'stream_notification_platforms')
-                    """
+                    f"SELECT key, value FROM bot_settings "
+                    f"WHERE discord_server_id = :guild_id AND key IN ({placeholders})"
                 ),
-                {"guild_id": discord_server_id},
+                params,
             ).fetchall()
         settings = {key: value for key, value in rows}
 
-        if settings.get("stream_notification_enabled") != "true":
+        # Gate on this platform's OWN enabled flag.
+        if alert_setting(settings, platform, "enabled") != "true":
             return
-        notification_channel_id = settings.get("stream_notification_channel_id")
+        notification_channel_id = alert_setting(settings, platform, "channel_id")
         if not notification_channel_id:
-            return
-        if not notify_allowed(settings, platform):
-            logger.info(f"[StreamNotify] {platform} go-live not in stream_notification_platforms — skipping")
+            logger.info(f"[StreamNotify] {platform} live alert has no channel — skipping")
             return
 
         stream_url = _stream_url(platform, streamer)
-        embed_url = _embed_url(platform, streamer)
-
-        def replace_placeholders(t):
-            if not t:
-                return t
-            return (
-                t.replace("{streamer}", streamer)
-                .replace("{channel}", streamer)
-                .replace("{title}", title or "")
-                .replace("{category}", category or "")
-            )
-
-        link_text = settings.get("stream_notification_link_text") or "Watch Preview"
-        hidden_link = f"[{link_text}]({embed_url})"
-        if settings.get("stream_notification_link_small") == "true":
-            hidden_link = f"-# {hidden_link}"
-
-        custom_title = settings.get("stream_notification_title")
-        if custom_title:
-            title_text = replace_placeholders(custom_title)
-        else:
-            title_text = f"🔴 **{streamer}** is now LIVE on {_platform_label(platform)}!"
-
-        custom_description = settings.get("stream_notification_description")
-        if custom_description:
-            message_content = f"{title_text}\n{replace_placeholders(custom_description)}\n{hidden_link}"
-        else:
-            message_content = f"{title_text}\n{hidden_link}"
-
-        footer_text = replace_placeholders(settings.get("stream_notification_footer"))
+        message_content, footer_text = _build_live_message(settings, platform, streamer, title, category)
 
         components = [
             {
