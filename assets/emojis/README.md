@@ -1,18 +1,23 @@
-# Link-panel brand emojis
+# Panel brand emojis (application emojis)
 
-Drop the Twitch and Kick brand logos here so the combined link panel buttons show
-real logos instead of the 🟢 / 🟣 unicode circles.
+Square brand logos uploaded as the bot's **application emojis** and shown on panel
+buttons in place of unicode emojis.
 
-Required files (square, transparent PNG, ~128×128, ≤ 256 KB each — Discord's
+Required files (square, transparent PNG, **128×128**, ≤ 256 KB each — Discord's
 application-emoji size limit):
 
-- `kick.png`   — Kick logo
-- `twitch.png` — Twitch logo
+- `kick.png`    — Kick logo   → combined link panel "Link Kick" button (else 🟢)
+- `twitch.png`  — Twitch logo → combined link panel "Link Twitch" button (else 🟣)
+- `shuffle.png` — Shuffle logo → Shuffle verify panel "Verify" button (else 🎰)
 
-On startup `ensure_link_emojis()` (in
-`features/linking/combined_link_panel.py`) uploads these as the bot's
-**application emojis** the first time, then reuses them by name on later boots.
+On startup the bot uploads each as an application emoji the first time
+(`ensure_link_emojis()` in `combined_link_panel.py` for kick/twitch;
+`ensure_shuffle_emoji()` in `shuffle_panel.py` for shuffle), then reuses them by
+name on later boots.
 
-If a file is missing or the upload fails, that platform's button falls back to its
-unicode circle and the panel still works — so the bot won't break if these aren't
-in place yet.
+If a file is missing or the upload fails, that button falls back to its unicode
+emoji and the panel still works — so the bot won't break if these aren't in place
+yet.
+
+> The **wide** Shuffle logotype shown at the top of the verify panel is a separate
+> image — `assets/branding/shuffle_logo.png`. See `assets/branding/README.md`.

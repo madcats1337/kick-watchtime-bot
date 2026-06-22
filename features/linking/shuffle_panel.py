@@ -14,16 +14,61 @@ create command + re-attach on restart) and is the automated equivalent of the ad
 
 import asyncio
 import logging
+import os
 
 import aiohttp
 import discord
+from discord import MediaGalleryItem
 from discord.ext import commands
-from discord.ui import Modal, TextInput, View
+from discord.ui import ActionRow, Button, Container, LayoutView, MediaGallery, Modal, Separator, TextDisplay, TextInput
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
-EMBED_COLOR = 0x6C5CE7  # Shuffle purple
+ACCENT_COLOR = 0x6C5CE7  # Shuffle purple
+
+# Unicode fallback for the verify button when the brand app emoji isn't available.
+FALLBACK_EMOJI = "🎰"
+
+# Brand assets. The square emoji (button) is uploaded as an application emoji; the
+# wide logotype is attached to the panel message and shown in a MediaGallery.
+#   - assets/emojis/shuffle.png        → 128×128 square PNG (Discord app-emoji limit)
+#   - assets/branding/shuffle_logo.png → ~600×160 logotype PNG (panel header image)
+_ASSET_ROOT = os.path.join(os.path.dirname(__file__), "..", "..", "assets")
+_EMOJI_PATH = os.path.join(_ASSET_ROOT, "emojis", "shuffle.png")
+_LOGO_PATH = os.path.join(_ASSET_ROOT, "branding", "shuffle_logo.png")
+_LOGO_FILENAME = "shuffle_logo.png"
+
+
+async def ensure_shuffle_emoji(bot):
+    """Idempotently register the Shuffle brand logo as the bot's 'shuffle'
+    application emoji and return it (or None → unicode fallback on the button).
+
+    Mirrors features/linking/combined_link_panel.ensure_link_emojis: reuse the
+    existing app emoji by name, else upload assets/emojis/shuffle.png. Any missing
+    file or API error returns None and the button keeps the 🎰 fallback."""
+    try:
+        existing = {e.name: e for e in await bot.fetch_application_emojis()}
+    except Exception as e:
+        logger.warning(f"[Shuffle] Could not fetch application emojis (using unicode fallback): {e}")
+        return None
+
+    if "shuffle" in existing:
+        logger.info("[Shuffle] Reusing existing 'shuffle' application emoji.")
+        return existing["shuffle"]
+
+    if not os.path.isfile(_EMOJI_PATH):
+        logger.warning(f"[Shuffle] shuffle.png not found at {_EMOJI_PATH} — button falls back to unicode.")
+        return None
+    try:
+        with open(_EMOJI_PATH, "rb") as f:
+            image_bytes = f.read()
+        emoji = await bot.create_application_emoji(name="shuffle", image=image_bytes)
+        logger.info("[Shuffle] Uploaded 'shuffle' application emoji.")
+        return emoji
+    except Exception as e:
+        logger.error(f"[Shuffle] Failed to upload 'shuffle' application emoji: {e}")
+        return None
 
 
 async def _fetch_affiliate_data(affiliate_url: str):
@@ -306,22 +351,60 @@ class ShuffleVerifyModal(Modal, title="Verify Your Shuffle Account"):
                 await interaction.followup.send("❌ An error occurred.", ephemeral=True)
 
 
-class ShufflePanelView(View):
-    """Button view for the Shuffle verify panel (persistent)."""
+class ShufflePanelView(LayoutView):
+    """Components-V2 panel for the Shuffle verify flow (persistent).
 
-    def __init__(self, bot, engine, settings_getter):
+    The panel copy lives in TextDisplays inside a Container; the single
+    "Verify Shuffle Account" button (stable custom_id, so the message re-binds
+    its handler after a restart) opens the verification modal."""
+
+    def __init__(self, bot, engine, settings_getter, shuffle_emoji=None, show_logo=True):
         super().__init__(timeout=None)
         self.bot = bot
         self.engine = engine
         self.settings_getter = settings_getter
+        self.shuffle_emoji = shuffle_emoji or FALLBACK_EMOJI
 
-    @discord.ui.button(
-        style=discord.ButtonStyle.success,
-        label="Verify Shuffle Account",
-        emoji="🎰",
-        custom_id="shuffle_verify",
-    )
-    async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        container = Container(accent_colour=ACCENT_COLOR)
+        # Shuffle logotype banner at the very top, shown from the message's
+        # attachment (ShufflePanel.create_panel sends shuffle_logo.png). show_logo
+        # is False only when that file is missing, so the panel still posts.
+        if show_logo:
+            container.add_item(MediaGallery(MediaGalleryItem(f"attachment://{_LOGO_FILENAME}")))
+        container.add_item(TextDisplay("## Verify Your Shuffle Account"))
+        container.add_item(
+            TextDisplay(
+                "Verify that you're one of our Shuffle affiliates to unlock your reward role!\n\n"
+                "**How to Verify:**\n"
+                "Click the **'Verify Shuffle Account'** button below and enter your "
+                "Shuffle.com username. We'll check it against our affiliate stats and "
+                "grant your role instantly."
+            )
+        )
+        container.add_item(
+            TextDisplay(
+                "**📋 Before you start**\n"
+                "• Make sure you signed up on Shuffle using our affiliate code\n"
+                "• Enter your **exact** Shuffle username\n"
+                "• One Shuffle account per Discord user"
+            )
+        )
+        container.add_item(Separator())
+
+        verify_btn = Button(
+            style=discord.ButtonStyle.success,
+            label="Verify Shuffle Account",
+            emoji=self.shuffle_emoji,
+            custom_id="shuffle_verify",
+        )
+        verify_btn.callback = self._verify_callback
+        row = ActionRow()
+        row.add_item(verify_btn)
+        container.add_item(row)
+
+        self.add_item(container)
+
+    async def _verify_callback(self, interaction: discord.Interaction):
         try:
             await interaction.response.send_modal(ShuffleVerifyModal(self.engine, self.settings_getter))
         except Exception as e:
@@ -338,10 +421,11 @@ class ShufflePanel:
 
     PANEL_TYPE = "shuffle_verify"
 
-    def __init__(self, bot, engine, settings_getter, guild_id=None):
+    def __init__(self, bot, engine, settings_getter, guild_id=None, shuffle_emoji=None):
         self.bot = bot
         self.engine = engine
         self.settings_getter = settings_getter
+        self.shuffle_emoji = shuffle_emoji
         self.guild_id = guild_id
         self.panel_message_id = None
         self.panel_channel_id = None
@@ -402,30 +486,21 @@ class ShufflePanel:
 
     async def create_panel(self, channel: discord.TextChannel):
         try:
-            embed = discord.Embed(
-                title="🎰 Verify Your Shuffle Account",
-                description=(
-                    "Verify that you're one of our Shuffle affiliates to unlock your reward role!\n\n"
-                    "**How to Verify:**\n"
-                    "Click the **'Verify Shuffle Account'** button below and enter your "
-                    "Shuffle.com username. We'll check it against our affiliate stats and "
-                    "grant your role instantly."
-                ),
-                color=EMBED_COLOR,
+            # Components V2: the panel is a LayoutView (no embed — a V2 message
+            # can't carry one). All copy lives inside the view's TextDisplays.
+            # The logotype banner is attached and shown via the view's MediaGallery
+            # (attachment://shuffle_logo.png); skip the gallery if the file is
+            # missing so the panel still posts.
+            has_logo = os.path.isfile(_LOGO_PATH)
+            view = ShufflePanelView(
+                self.bot, self.engine, self.settings_getter, shuffle_emoji=self.shuffle_emoji, show_logo=has_logo
             )
-            embed.add_field(
-                name="📋 Before you start",
-                value=(
-                    "• Make sure you signed up on Shuffle using our affiliate code\n"
-                    "• Enter your **exact** Shuffle username\n"
-                    "• One Shuffle account per Discord user"
-                ),
-                inline=False,
-            )
-            embed.set_footer(text="Click 'Verify Shuffle Account' to get started")
-
-            view = ShufflePanelView(self.bot, self.engine, self.settings_getter)
-            message = await channel.send(embed=embed, view=view)
+            if has_logo:
+                logo_file = discord.File(_LOGO_PATH, filename=_LOGO_FILENAME)
+                message = await channel.send(view=view, file=logo_file)
+            else:
+                logger.warning(f"[Shuffle] {_LOGO_PATH} not found — posting panel without the logotype banner.")
+                message = await channel.send(view=view)
 
             self.panel_guild_id = channel.guild.id
             self.panel_channel_id = channel.id
@@ -443,8 +518,12 @@ async def setup_shuffle_panel_system(bot, engine, settings_getter):
     """Set up the Shuffle verify panel system with per-guild instances."""
     panels = {}
 
+    # Register (or reuse) the Shuffle brand-logo application emoji once, then
+    # thread it into every panel so the verify button shows the logo.
+    shuffle_emoji = await ensure_shuffle_emoji(bot)
+
     for guild in bot.guilds:
-        panel = ShufflePanel(bot, engine, settings_getter, guild_id=guild.id)
+        panel = ShufflePanel(bot, engine, settings_getter, guild_id=guild.id, shuffle_emoji=shuffle_emoji)
         panels[guild.id] = panel
         logger.debug(f"✅ Shuffle verify panel initialized")
 
@@ -470,7 +549,10 @@ async def setup_shuffle_panel_system(bot, engine, settings_getter):
                 channel = bot.get_channel(panel.panel_channel_id)
                 if channel:
                     message = await channel.fetch_message(panel.panel_message_id)
-                    view = ShufflePanelView(bot, engine, settings_getter)
+                    # The original message keeps its logo attachment across edits,
+                    # so the re-attach view references it (show_logo=True) to keep
+                    # the banner; editing only rebinds the button handler.
+                    view = ShufflePanelView(bot, engine, settings_getter, shuffle_emoji=shuffle_emoji, show_logo=True)
                     await message.edit(view=view)
                     logger.debug(f"Re-attached Shuffle panel view to existing message in guild {guild_id}")
             except Exception as e:
