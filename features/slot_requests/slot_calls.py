@@ -36,11 +36,37 @@ class SlotCallTracker:
         self.kick_send_callback = kick_send_callback  # Callback to send messages to Kick chat
         self.panel = None  # Reference to SlotRequestPanel (set externally)
 
+        # Lazily-built, guild-aware settings manager for platform lookups.
+        self._settings = None
+
         # Initialize database and load enabled state
         self._init_database()
         self.enabled = self._load_enabled_state()
         self.max_requests_per_user = self._load_max_requests()
         self.cooldown_seconds = self._load_cooldown()  # Load from database
+
+    def _get_platform(self) -> str:
+        """Resolve this server's selected wager platform → "shuffle" | "howl".
+
+        Mirrors ShuffleTracker._load_settings: reads bot_settings
+        `wager_platform_name` (guild-aware), refreshed each call so a platform
+        switch from the dashboard takes effect without a bot restart. Defaults
+        to "shuffle" when unset/invalid. Used to pick which slot catalog
+        (shuffle_slots vs howl_slots) the ban check queries.
+        """
+        if not self.engine:
+            return "shuffle"
+        try:
+            from utils.bot_settings import BotSettingsManager
+
+            if self._settings is None:
+                self._settings = BotSettingsManager(self.engine, guild_id=self.server_id)
+            self._settings.refresh()
+            platform = (self._settings.get("wager_platform_name") or "shuffle").strip().lower()
+            return platform if platform in ("shuffle", "howl") else "shuffle"
+        except Exception as e:
+            logger.warning(f"SlotCallTracker._get_platform: defaulting to shuffle ({e})")
+            return "shuffle"
 
     def _init_database(self):
         """Create feature_settings and slot_requests tables if they don't exist"""
@@ -481,21 +507,30 @@ class SlotCallTracker:
             try:
                 # Normalize to a slug candidate (lowercase, non-alphanumeric -> '-')
                 slot_slug_candidate = re.sub(r"[^a-z0-9]+", "-", slot_call_safe.lower()).strip("-")
+                # Strict: check only the server's selected platform catalog, and
+                # only this server's rows. `slot_table` is a validated, closed-set
+                # name (safe to interpolate); all values stay bound parameters.
+                slot_table = "howl_slots" if self._get_platform() == "howl" else "shuffle_slots"
                 with self.engine.connect() as conn:
                     slot_check = conn.execute(
                         text(
-                            """
+                            f"""
                         SELECT banned, is_active
-                        FROM shuffle_slots
+                        FROM {slot_table}
                         WHERE (
                                 LOWER(name) = LOWER(:slot_name)
                              OR LOWER(slug) = LOWER(:slot_slug)
                              OR LOWER(REPLACE(name,' ','-')) = LOWER(:slot_slug)
                           )
+                          AND discord_server_id = :server_id
                         LIMIT 1
                     """
                         ),
-                        {"slot_name": slot_call_safe, "slot_slug": slot_slug_candidate},
+                        {
+                            "slot_name": slot_call_safe,
+                            "slot_slug": slot_slug_candidate,
+                            "server_id": self.server_id,
+                        },
                     ).fetchone()
 
                 if slot_check:
