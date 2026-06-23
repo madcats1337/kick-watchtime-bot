@@ -39,6 +39,32 @@ def _platform_label(platform: str) -> str:
     return "Twitch" if platform == "twitch" else "Kick"
 
 
+def _sanitize_button_url(url: str) -> str:
+    """Return a Discord-valid link-button URL, or "" if it can't be salvaged.
+
+    Discord rejects the whole message (400 / URL_TYPE_INVALID_SCHEME) if any
+    link button has a bad scheme, so one malformed saved URL must not break the
+    go-live alert. Repairs the common `https:/host` → `https://host` typo (a
+    single slash, the actual bug seen in the wild) and missing scheme
+    (`twitch.tv/x` → `https://twitch.tv/x`); anything that still isn't an
+    http(s) URL is dropped so the caller falls back to the stream URL.
+    """
+    import re
+
+    u = (url or "").strip()
+    if not u:
+        return ""
+    # `https:/host` or `http:/host` (one slash after the colon) → two slashes.
+    u = re.sub(r"^(https?):/(?!/)", r"\1://", u, flags=re.IGNORECASE)
+    low = u.lower()
+    if low.startswith("http://") or low.startswith("https://"):
+        return u
+    # Scheme-less but otherwise URL-ish (has a dot before any slash) → assume https.
+    if "://" not in u and "." in u.split("/", 1)[0]:
+        return "https://" + u
+    return ""
+
+
 # Per-platform live-alert settings live under these prefixes. Kick falls back to
 # the legacy shared `stream_notification_*` keys so existing servers keep working.
 _ALERT_SUFFIXES = ("enabled", "channel_id", "title", "description", "link_text", "link_small", "footer", "buttons")
@@ -209,7 +235,10 @@ async def build_alert_components(settings: dict, platform: str, stream_url: str,
             continue
         label = str(btn.get("label") or "").strip()
         emoji = str(btn.get("emoji") or "").strip()
-        url = str(btn.get("url") or "").strip()
+        # Sanitize so a malformed saved URL (e.g. `https:/twitch.tv/x`) can't
+        # 400 the whole alert; unsalvageable URLs become "" and are handled
+        # below (primary → stream_url, extra → dropped).
+        url = _sanitize_button_url(str(btn.get("url") or ""))
         is_primary = i == 0
         # Primary button: blank url ⇒ the live stream; blank label ⇒ "Watch Stream".
         if is_primary:
