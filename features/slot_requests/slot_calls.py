@@ -418,9 +418,10 @@ class SlotCallTracker:
             await _reply(f"@{mention_name} Slot requests are not open at the moment.")
             return
 
-        if not self.discord_channel_id:
-            logger.warning("Slot call received but no Discord channel configured")
-            return
+        # Note: a missing Discord channel must NOT abort the request. The Kick/Twitch
+        # confirmation reply and the DB record are what the streamer relies on; the
+        # Discord embed is a best-effort mirror. Posting is skipped gracefully below
+        # when no channel is configured (see the embed/post block).
 
         # 🔒 SECURITY: Rate limiting - prevent spam
         now = datetime.utcnow()
@@ -644,96 +645,103 @@ class SlotCallTracker:
         if not avatar_url:
             avatar_url = f"https://ui-avatars.com/api/?name={kick_username_safe}&background=random&size=95"
 
-        # Get the Discord channel
-        channel = self.bot.get_channel(self.discord_channel_id)
-        if not channel:
-            logger.error(f"Could not find Discord channel {self.discord_channel_id}")
-            return
-
-        # Create embed for the slot call — show the viewer's NATIVE platform name.
-        platform_label = "Twitch" if platform == "twitch" else "Kick"
-        embed = discord.Embed(
-            title="🎰 Slot Call",
-            description=f"**{mention_name_safe}** requested **{slot_call_safe}**",
-            color=discord.Color.gold(),
-            timestamp=datetime.utcnow(),
-        )
-        embed.set_footer(text=f"From {platform_label} chat • {mention_name_safe}")
-
-        try:
-            await channel.send(embed=embed)
-            logger.info(f"Posted slot call from {kick_username_safe}: {slot_call_safe}")
-
-            # Save slot request to database with avatar
-            if self.engine:
+        # Post to Discord — BEST EFFORT ONLY. A missing/unresolvable channel must
+        # not stop the request from being recorded or confirmed in chat. We only
+        # attempt the embed when a channel is configured; any failure is logged
+        # and swallowed so the DB save + chat reply below always run.
+        if self.discord_channel_id:
+            channel = self.bot.get_channel(self.discord_channel_id)
+            if channel:
+                # Show the viewer's NATIVE platform name in the embed.
+                platform_label = "Twitch" if platform == "twitch" else "Kick"
+                embed = discord.Embed(
+                    title="🎰 Slot Call",
+                    description=f"**{mention_name_safe}** requested **{slot_call_safe}**",
+                    color=discord.Color.gold(),
+                    timestamp=datetime.utcnow(),
+                )
+                embed.set_footer(text=f"From {platform_label} chat • {mention_name_safe}")
                 try:
+                    await channel.send(embed=embed)
+                    logger.info(f"Posted slot call from {kick_username_safe}: {slot_call_safe}")
+                except Exception as e:
+                    logger.error(f"Failed to post slot call to Discord (request still recorded): {e}")
+            else:
+                logger.warning(
+                    f"Could not find Discord channel {self.discord_channel_id} "
+                    f"(request still recorded; check the configured channel)"
+                )
+        else:
+            logger.info(
+                "No Discord channel configured for slot requests — skipping Discord post (request still recorded)"
+            )
 
-                    with self.engine.begin() as conn:
-                        if self.server_id:
-                            conn.execute(
-                                text(
-                                    """
-                                INSERT INTO slot_requests (kick_username, slot_call, requested_at, discord_server_id, avatar_url, display_name)
-                                VALUES (:username, :slot_call, CURRENT_TIMESTAMP, :server_id, :avatar_url, :display_name)
-                            """
-                                ),
-                                {
-                                    "username": kick_username_safe,
-                                    "slot_call": slot_call_safe,
-                                    "server_id": self.server_id,
-                                    "avatar_url": avatar_url,
-                                    "display_name": mention_name_safe,
-                                },
-                            )
-                        else:
-                            conn.execute(
-                                text(
-                                    """
-                                INSERT INTO slot_requests (kick_username, slot_call, requested_at, avatar_url, display_name)
-                                VALUES (:username, :slot_call, CURRENT_TIMESTAMP, :avatar_url, :display_name)
-                            """
-                                ),
-                                {
-                                    "username": kick_username_safe,
-                                    "slot_call": slot_call_safe,
-                                    "avatar_url": avatar_url,
-                                    "display_name": mention_name_safe,
-                                },
-                            )
-                    logger.debug(f"Saved slot request to database with avatar")
-
-                    # Publish event for real-time dashboard updates
-                    try:
-                        from bot import publish_redis_event
-
-                        publish_redis_event(
-                            "dashboard:slot_requests",
-                            "new_request",
+        # Save slot request to database with avatar — ALWAYS, independent of Discord.
+        if self.engine:
+            try:
+                with self.engine.begin() as conn:
+                    if self.server_id:
+                        conn.execute(
+                            text(
+                                """
+                            INSERT INTO slot_requests (kick_username, slot_call, requested_at, discord_server_id, avatar_url, display_name)
+                            VALUES (:username, :slot_call, CURRENT_TIMESTAMP, :server_id, :avatar_url, :display_name)
+                        """
+                            ),
                             {
                                 "username": kick_username_safe,
                                 "slot_call": slot_call_safe,
-                                "discord_server_id": self.server_id,
+                                "server_id": self.server_id,
+                                "avatar_url": avatar_url,
+                                "display_name": mention_name_safe,
                             },
                         )
-                    except Exception as redis_err:
-                        logger.debug(f"Redis publish failed (non-critical): {redis_err}")
-                except Exception as e:
-                    logger.error(f"Failed to save slot request to database: {e}")
+                    else:
+                        conn.execute(
+                            text(
+                                """
+                            INSERT INTO slot_requests (kick_username, slot_call, requested_at, avatar_url, display_name)
+                            VALUES (:username, :slot_call, CURRENT_TIMESTAMP, :avatar_url, :display_name)
+                        """
+                            ),
+                            {
+                                "username": kick_username_safe,
+                                "slot_call": slot_call_safe,
+                                "avatar_url": avatar_url,
+                                "display_name": mention_name_safe,
+                            },
+                        )
+                logger.debug(f"Saved slot request to database with avatar")
 
-            # Send confirmation reply to ONLY the originating platform (not a broadcast).
-            await _reply(f"@{mention_name_safe} Your slot request for {slot_call_safe} has been received! ✅")
-            logger.info(f"Sent slot confirmation to {kick_username_safe} on {platform}")
-
-            # Update panel if available
-            if self.panel:
+                # Publish event for real-time dashboard updates
                 try:
-                    await self.panel.update_panel()
-                    logger.debug("Updated slot request panel after new request")
-                except Exception as panel_error:
-                    logger.error(f"Failed to update panel: {panel_error}")
+                    from bot import publish_redis_event
 
-        except Exception as e:
-            logger.error(f"Failed to post slot call to Discord: {e}")
+                    publish_redis_event(
+                        "dashboard:slot_requests",
+                        "new_request",
+                        {
+                            "username": kick_username_safe,
+                            "slot_call": slot_call_safe,
+                            "discord_server_id": self.server_id,
+                        },
+                    )
+                except Exception as redis_err:
+                    logger.debug(f"Redis publish failed (non-critical): {redis_err}")
+            except Exception as e:
+                logger.error(f"Failed to save slot request to database: {e}")
+
+        # Send confirmation reply to ONLY the originating platform (not a broadcast).
+        await _reply(f"@{mention_name_safe} Your slot request for {slot_call_safe} has been received! ✅")
+        logger.info(f"Sent slot confirmation to {kick_username_safe} on {platform}")
+
+        # Update panel if available
+        if self.panel:
+            try:
+                await self.panel.update_panel()
+                logger.debug("Updated slot request panel after new request")
+            except Exception as panel_error:
+                logger.error(f"Failed to update panel: {panel_error}")
 
 
 class SlotCallCommands(commands.Cog):
