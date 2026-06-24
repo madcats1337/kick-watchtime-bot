@@ -1393,19 +1393,26 @@ class RedisSubscriber:
             logger.warning(f"⚠️ post_panel channel {channel_id} not found / not visible to bot")
             return
 
-        # If the panel already exists somewhere, delete the old message (move semantics)
-        old_channel_id = getattr(panel, "panel_channel_id", None)
-        old_message_id = getattr(panel, "panel_message_id", None)
-        if old_message_id and old_channel_id:
-            try:
-                old_channel = self.bot.get_channel(int(old_channel_id))
-                if old_channel:
-                    old_message = await old_channel.fetch_message(int(old_message_id))
-                    await old_message.delete()
-                    logger.info(f"🗑️ Removed old {panel_type} panel message in channel {old_channel_id}")
-            except Exception as e:
-                # Non-fatal: old message may already be gone
-                logger.info(f"ℹ️ Could not delete old {panel_type} panel message: {e}")
+        # Standing panels (link/verify/rules/features/sub_roles) are a single
+        # message that should "move" to the new channel, so we delete the old one.
+        # Patch-notes panels are a changelog FEED: each post is a distinct release
+        # announcement and earlier releases must stay in the channel — so we never
+        # delete the previous patch-notes message, we just track the newest one.
+        FEED_PANEL_TYPES = ("patchnotes", "patchnotes_extension")
+        if panel_type not in FEED_PANEL_TYPES:
+            # If the panel already exists somewhere, delete the old message (move semantics)
+            old_channel_id = getattr(panel, "panel_channel_id", None)
+            old_message_id = getattr(panel, "panel_message_id", None)
+            if old_message_id and old_channel_id:
+                try:
+                    old_channel = self.bot.get_channel(int(old_channel_id))
+                    if old_channel:
+                        old_message = await old_channel.fetch_message(int(old_message_id))
+                        await old_message.delete()
+                        logger.info(f"🗑️ Removed old {panel_type} panel message in channel {old_channel_id}")
+                except Exception as e:
+                    # Non-fatal: old message may already be gone
+                    logger.info(f"ℹ️ Could not delete old {panel_type} panel message: {e}")
 
         try:
             # The patch-notes panel renders content forwarded in the event data
