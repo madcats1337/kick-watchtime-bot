@@ -141,55 +141,12 @@ def run_database_migration():
 
                 logger.info("   ✅ Primary key migrated to composite (discord_id, discord_server_id)!")
 
-            # Check if kick_name unique constraint exists
-            result = conn.execute(
-                text(
-                    """
-                SELECT constraint_name
-                FROM information_schema.table_constraints
-                WHERE table_name = 'links'
-                AND constraint_type = 'UNIQUE'
-                AND constraint_name = 'links_kick_name_server_unique'
-            """
-                )
-            )
-
-            if not result.fetchone():
-                logger.info("   Adding unique constraint on (kick_name, discord_server_id)...")
-
-                # Remove old single-column unique constraint if it exists
-                conn.execute(
-                    text(
-                        """
-                    ALTER TABLE links DROP CONSTRAINT IF EXISTS links_kick_name_key
-                """
-                    )
-                )
-                conn.execute(
-                    text(
-                        """
-                    ALTER TABLE links DROP CONSTRAINT IF EXISTS links_discord_id_key
-                """
-                    )
-                )
-
-                # Add composite unique constraint for kick_name per server
-                try:
-                    conn.execute(
-                        text(
-                            """
-                        ALTER TABLE links
-                        ADD CONSTRAINT links_kick_name_server_unique
-                        UNIQUE (kick_name, discord_server_id)
-                    """
-                        )
-                    )
-                except Exception as e:
-                    logger.warning(f"   ⚠️ Could not add kick_name constraint: {e}")
-
-                logger.info("   ✅ Unique constraints configured!")
-            else:
-                logger.info("   ✅ Database schema is up to date")
+            # NOTE: links UNIQUE constraints (on kick_name / discord_id) are owned
+            # entirely by raffle_system/migrations/add_platform_to_links.py, which
+            # platform-scopes them to UNIQUE (..., platform) so a user can link both
+            # a Kick and a Twitch account in one server. Re-adding the old unscoped
+            # UNIQUE (kick_name, discord_server_id) here fought that migration and
+            # failed on the now-valid dual-platform duplicate rows, so it was removed.
 
     except Exception as e:
         logger.warning(f"   ⚠️ Migration warning: {e}")
