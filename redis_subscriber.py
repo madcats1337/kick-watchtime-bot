@@ -1373,6 +1373,7 @@ class RedisSubscriber:
             "howl_verify": "howl_panels",
             # Global super-admin panels for the official guild.
             "patchnotes": "patchnotes_panels",
+            "patchnotes_extension": "extension_patchnotes_panels",
             "rules": "rules_panels",
             "features": "features_panels",
             "sub_roles": "sub_role_panels",
@@ -1411,7 +1412,7 @@ class RedisSubscriber:
             # (the latest release from the /patch-notes page); other global panels
             # read their content from bot_settings. Existing link/verify panels
             # take only the channel.
-            if panel_type in ("patchnotes", "rules", "features", "sub_roles"):
+            if panel_type in ("patchnotes", "patchnotes_extension", "rules", "features", "sub_roles"):
                 success = await panel.create_panel(new_channel, data=data)
             else:
                 success = await panel.create_panel(new_channel)
@@ -1643,36 +1644,52 @@ class RedisSubscriber:
             # correct no-video message for free.
             message_content, footer_text = _build_live_message(settings, platform, streamer, "", "")
 
+            # 30s timeout + footer posted INDEPENDENTLY of the main POST's read
+            # outcome: Discord can accept the alert but be slow to return, and a
+            # tight timeout / nesting the footer inside the open response dropped
+            # the footer. The two messages are unrelated Discord objects (the
+            # footer needs no message id). Matches the real go-live path.
+            headers = {"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"}
+            channel_url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
+            timeout = aiohttp.ClientTimeout(total=30)
             async with aiohttp.ClientSession() as session:
                 # Action-row link buttons (primary Watch Stream + any custom buttons),
                 # built from the same per-platform settings as the real go-live post.
                 # Built inside the session so app:<name> emoji tokens resolve against
                 # the bot's application emojis over the same connection.
                 components = await build_alert_components(settings, platform, stream_url, session, bot_token)
-                async with session.post(
-                    f"https://discord.com/api/v10/channels/{channel_id}/messages",
-                    headers={"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"},
-                    json={"content": message_content, "components": components},
-                    timeout=aiohttp.ClientTimeout(total=10),
-                ) as resp:
-                    if resp.status in [200, 201]:
-                        # If footer is set, send it as a follow-up message
-                        if footer_text:
-                            await asyncio.sleep(0.5)
-                            async with session.post(
-                                f"https://discord.com/api/v10/channels/{channel_id}/messages",
-                                headers={"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"},
-                                json={"content": f"-# {footer_text}"},
-                                timeout=aiohttp.ClientTimeout(total=10),
-                            ) as footer_resp:
-                                if footer_resp.status not in [200, 201]:
-                                    logger.warning(f"⚠️ Failed to send footer: {footer_resp.status}")
+                try:
+                    async with session.post(
+                        channel_url,
+                        headers=headers,
+                        json={"content": message_content, "components": components},
+                        timeout=timeout,
+                    ) as resp:
+                        if resp.status in [200, 201]:
+                            test_label = " (TEST)" if is_test else ""
+                            logger.info(f"✅ Discord stream notification sent to channel {channel_id}{test_label}")
+                        else:
+                            error_text = await resp.text()
+                            logger.error(f"❌ Failed to send Discord notification: {resp.status} - {error_text[:200]}")
+                except asyncio.TimeoutError:
+                    logger.warning("⚠️ Timed out reading Discord response for alert (may have posted)")
 
-                        test_label = " (TEST)" if is_test else ""
-                        logger.info(f"✅ Discord stream notification sent to channel {channel_id}{test_label}")
-                    else:
-                        error_text = await resp.text()
-                        logger.error(f"❌ Failed to send Discord notification: {resp.status} - {error_text[:200]}")
+                # If footer is set, send it as a follow-up message (independent of
+                # the main POST's read outcome).
+                if footer_text:
+                    await asyncio.sleep(0.5)
+                    try:
+                        async with session.post(
+                            channel_url,
+                            headers=headers,
+                            json={"content": f"-# {footer_text}"},
+                            timeout=timeout,
+                        ) as footer_resp:
+                            if footer_resp.status not in [200, 201]:
+                                footer_err = (await footer_resp.text())[:200]
+                                logger.warning(f"⚠️ Failed to send footer: {footer_resp.status} - {footer_err}")
+                    except asyncio.TimeoutError:
+                        logger.warning("⚠️ Timed out reading Discord response for footer (may have posted)")
 
         except Exception as e:
             logger.error(f"❌ Error handling stream notification event: {e}")

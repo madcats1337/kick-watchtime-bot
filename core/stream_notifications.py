@@ -343,31 +343,56 @@ async def _post_discord_notification(discord_server_id, streamer, title, categor
         bot_token = os.getenv("DISCORD_TOKEN")
         if not bot_token:
             return
+        # Discord's message-create endpoint can be slow during their bad windows;
+        # 10s was tight enough that the response read timed out *after* Discord had
+        # already created the message, which made us skip the footer follow-up.
+        # Use 30s and post the footer INDEPENDENTLY of the main POST's outcome —
+        # the two messages are unrelated Discord objects (the footer doesn't need
+        # the main message's id), so a slow/timed-out main read must not drop it.
+        # (Matches the already-fixed oauth_server go-live path.)
+        headers = {"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"}
+        channel_url = f"https://discord.com/api/v10/channels/{notification_channel_id}/messages"
+        timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession() as session:
             # Built inside the session so app:<name> emoji tokens can be resolved
             # against the bot's application emojis over the same connection.
             components = await build_alert_components(settings, platform, stream_url, session, bot_token)
-            async with session.post(
-                f"https://discord.com/api/v10/channels/{notification_channel_id}/messages",
-                headers={"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"},
-                json={"content": message_content, "components": components},
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
-                if resp.status in (200, 201):
-                    if footer_text:
-                        await asyncio.sleep(0.5)
-                        async with session.post(
-                            f"https://discord.com/api/v10/channels/{notification_channel_id}/messages",
-                            headers={"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"},
-                            json={"content": f"-# {footer_text}"},
-                            timeout=aiohttp.ClientTimeout(total=10),
-                        ) as footer_resp:
-                            if footer_resp.status not in (200, 201):
-                                logger.info(f"[StreamNotify] ⚠️ Failed to send footer: {footer_resp.status}")
-                    logger.info(f"[StreamNotify] ✅ Notification sent to channel {notification_channel_id}")
-                else:
-                    error_text = await resp.text()
-                    logger.info(f"[StreamNotify] ⚠️ Failed to send notification: {resp.status} - {error_text[:200]}")
+            try:
+                async with session.post(
+                    channel_url,
+                    headers=headers,
+                    json={"content": message_content, "components": components},
+                    timeout=timeout,
+                ) as resp:
+                    if resp.status in (200, 201):
+                        logger.info(f"[StreamNotify] ✅ Notification sent to channel {notification_channel_id}")
+                    else:
+                        error_text = await resp.text()
+                        logger.info(f"[StreamNotify] ⚠️ Failed to send notification: {resp.status} - {error_text[:200]}")
+            except asyncio.TimeoutError:
+                # Discord likely accepted the POST but the response read timed out —
+                # proceed to the footer anyway so we don't drop it when the alert is
+                # actually visible in the channel.
+                logger.info("[StreamNotify] ⚠️ Timed out reading Discord response for alert (may have posted)")
+
+            # Footer goes as a separate follow-up message: a classic content +
+            # components message can't place text below the buttons, and the video
+            # unfurl needs the link in the main content. Sent regardless of the
+            # main POST's read outcome (see above).
+            if footer_text:
+                await asyncio.sleep(0.5)
+                try:
+                    async with session.post(
+                        channel_url,
+                        headers=headers,
+                        json={"content": f"-# {footer_text}"},
+                        timeout=timeout,
+                    ) as footer_resp:
+                        if footer_resp.status not in (200, 201):
+                            footer_err = (await footer_resp.text())[:200]
+                            logger.info(f"[StreamNotify] ⚠️ Failed to send footer: {footer_resp.status} - {footer_err}")
+                except asyncio.TimeoutError:
+                    logger.info("[StreamNotify] ⚠️ Timed out reading Discord response for footer (may have posted)")
     except Exception as e:
         logger.info(f"[StreamNotify] ⚠️ Failed to send Discord stream notification: {e}")
 

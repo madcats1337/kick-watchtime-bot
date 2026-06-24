@@ -63,6 +63,9 @@ def _shorten(text: str) -> str:
 
 class PatchNotesPanel(GlobalPanel):
     PANEL_TYPE = "patchnotes"
+    # Prefix shown above the version line. The extension panel overrides this so
+    # the post is clearly labelled as a browser-extension release.
+    HEADING_PREFIX = ""
 
     def build_view(self, data=None) -> discord.ui.LayoutView:
         release = (data or {}).get("release") or {}
@@ -70,7 +73,7 @@ class PatchNotesPanel(GlobalPanel):
         date = release.get("date") or ""
         tag = release.get("tag") or ""
 
-        header = f"# {version}"
+        header = f"# {self.HEADING_PREFIX}{version}"
         if tag:
             header += f" — {tag}"
         if date:
@@ -116,9 +119,26 @@ class PatchNotesPanel(GlobalPanel):
         return view
 
 
+class ExtensionPatchNotesPanel(PatchNotesPanel):
+    """Browser-extension changelog panel. Identical rendering to the dashboard
+    patch-notes panel, but a distinct PANEL_TYPE (so it's tracked as its own
+    message in link_panels and moves independently) and a labelled heading."""
+
+    PANEL_TYPE = "patchnotes_extension"
+    HEADING_PREFIX = "🧩 Extension — "
+
+
 async def setup_patchnotes_panel_system(bot, engine):
     """Build the per-(official)-guild patch-notes panel registry. Returns
     {guild_id: PatchNotesPanel}."""
     from ._panel_base import OFFICIAL_GUILD_ID
 
     return {OFFICIAL_GUILD_ID: PatchNotesPanel(bot, engine)}
+
+
+async def setup_extension_patchnotes_panel_system(bot, engine):
+    """Build the per-(official)-guild EXTENSION patch-notes panel registry.
+    Returns {guild_id: ExtensionPatchNotesPanel}."""
+    from ._panel_base import OFFICIAL_GUILD_ID
+
+    return {OFFICIAL_GUILD_ID: ExtensionPatchNotesPanel(bot, engine)}

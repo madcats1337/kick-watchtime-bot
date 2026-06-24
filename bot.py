@@ -73,7 +73,7 @@ from features.slot_requests.slot_request_panel import setup_slot_panel
 # Global super-admin panels for the official guild (footer/patch-notes/rules/
 # features/subscription roles managed from the dashboard super-admin console).
 from features.superadmin.features_panel import setup_features_panel_system
-from features.superadmin.patchnotes_panel import setup_patchnotes_panel_system
+from features.superadmin.patchnotes_panel import setup_extension_patchnotes_panel_system, setup_patchnotes_panel_system
 from features.superadmin.rules_panel import setup_rules_panel_system
 from features.superadmin.sub_role_panel import setup_sub_role_panel_system
 from raffle_system.auto_leaderboard import setup_auto_leaderboard
@@ -8251,6 +8251,7 @@ async def on_ready():
             # redis post_panel flow (registry attrs read by _post_panel).
             try:
                 bot.patchnotes_panels = await setup_patchnotes_panel_system(bot, engine)
+                bot.extension_patchnotes_panels = await setup_extension_patchnotes_panel_system(bot, engine)
                 bot.rules_panels = await setup_rules_panel_system(bot, engine)
                 bot.features_panels = await setup_features_panel_system(bot, engine)
                 bot.sub_role_panels = await setup_sub_role_panel_system(bot, engine)
