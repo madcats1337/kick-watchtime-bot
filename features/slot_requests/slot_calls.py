@@ -68,6 +68,28 @@ class SlotCallTracker:
             logger.warning(f"SlotCallTracker._get_platform: defaulting to shuffle ({e})")
             return "shuffle"
 
+    def _chat_replies_enabled(self, platform: str) -> bool:
+        """Whether the chatbot should post !call/!sr replies into `platform`'s
+        chat. Toggled per-platform from the dashboard via bot_settings
+        `slot_reply_kick_enabled` / `slot_reply_twitch_enabled` (default on).
+        Only suppresses the in-chat reply — the request is still recorded and
+        still posted to the Discord channel. Refreshed each call so a dashboard
+        toggle takes effect without a bot restart.
+        """
+        if not self.engine:
+            return True
+        key = "slot_reply_twitch_enabled" if platform == "twitch" else "slot_reply_kick_enabled"
+        try:
+            from utils.bot_settings import BotSettingsManager
+
+            if self._settings is None:
+                self._settings = BotSettingsManager(self.engine, guild_id=self.server_id)
+            self._settings.refresh()
+            return self._settings.get_bool(key, default=True)
+        except Exception as e:
+            logger.warning(f"SlotCallTracker._chat_replies_enabled({key}): defaulting to on ({e})")
+            return True
+
     def _init_database(self):
         """Create feature_settings and slot_requests tables if they don't exist"""
         if not self.engine:
@@ -377,7 +399,16 @@ class SlotCallTracker:
         mention_name = display_username or kick_username
 
         async def _reply(msg: str):
-            """Send a command reply to only the originating platform."""
+            """Send a command reply to only the originating platform.
+
+            Honors the per-platform reply toggle: when the originating
+            platform's chat replies are disabled from the dashboard, the
+            request is still recorded + posted to Discord, but no message is
+            sent into that platform's chat.
+            """
+            if not self._chat_replies_enabled(platform):
+                logger.debug(f"[Slot Call] {platform} chat replies disabled — suppressing reply")
+                return
             try:
                 import sys as _sys
 
