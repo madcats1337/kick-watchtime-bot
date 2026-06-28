@@ -16,6 +16,17 @@ from sqlalchemy.engine import Engine
 
 logger = logging.getLogger(__name__)
 
+
+def gtb_rank_marker(rank: int) -> str:
+    """Podium medal for ranks 1-3, a numbered marker (#4, #5, …) beyond that.
+
+    GTB winner count is configurable (1-10), so announcements/embeds can list
+    more than the three medal positions. Keeps the celebratory podium for the
+    top three and stays readable for the rest.
+    """
+    return {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"#{rank}")
+
+
 # Lazy-init Redis client for publishing guess events to dashboard
 _guess_redis_client = None
 
@@ -257,7 +268,7 @@ class GuessTheBalanceManager:
                 session = conn.execute(
                     text(
                         """
-                    SELECT id FROM gtb_sessions
+                    SELECT id, winner_count FROM gtb_sessions
                     WHERE status = 'closed' AND discord_server_id = :server_id
                     ORDER BY closed_at DESC
                     LIMIT 1
@@ -270,6 +281,10 @@ class GuessTheBalanceManager:
                     return False, "No closed session found. Close a session first with !gtbclose", None
 
                 session_id = session[0]
+                # Number of winners to score — chosen at open time, defaults to
+                # 3 for legacy sessions. Clamp to the supported 1..10 range.
+                winner_count = session[1] if session[1] else 3
+                winner_count = max(1, min(10, int(winner_count)))
 
                 # Update session with result
                 conn.execute(
@@ -283,8 +298,8 @@ class GuessTheBalanceManager:
                     {"amount": result_amount, "session_id": session_id},
                 )
 
-                # Get all guesses with calculated differences. Select the native
-                # display name (fallback to the canonical kick_username).
+                # Get the N closest guesses (N = the session's winner_count).
+                # Select the native display name (fallback to kick_username).
                 guesses = conn.execute(
                     text(
                         """
@@ -294,10 +309,10 @@ class GuessTheBalanceManager:
                     FROM gtb_guesses
                     WHERE session_id = :session_id
                     ORDER BY difference ASC, guessed_at ASC
-                    LIMIT 3
+                    LIMIT :winner_count
                 """
                     ),
-                    {"result": result_amount, "session_id": session_id},
+                    {"result": result_amount, "session_id": session_id, "winner_count": winner_count},
                 ).fetchall()
 
                 if not guesses:

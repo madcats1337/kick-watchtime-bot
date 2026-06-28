@@ -24,6 +24,7 @@ import discord
 import redis
 from sqlalchemy import create_engine, text  # type: ignore
 
+from features.games.guess_the_balance import gtb_rank_marker
 from utils.log_context import server_context
 
 logger = logging.getLogger(__name__)
@@ -480,9 +481,13 @@ class RedisSubscriber:
         if action == "open":
             session_id = data.get("session_id")
             opened_by = data.get("opened_by")
+            winner_count = data.get("winner_count", 3) or 3
+            # "winner" vs "winners" so a count of 1 reads correctly.
+            winner_label = "winner" if winner_count == 1 else "winners"
             # Announce in Kick chat
             await self.announce_in_chat(
-                f"💰 Guess the Balance session #{session_id} is now OPEN! Use !gtb <amount> to guess!",
+                f"💰 Guess the Balance session #{session_id} is now OPEN! "
+                f"Use !gtb <amount> to guess — top {winner_count} {winner_label} win!",
                 guild_id=guild_id,
             )
 
@@ -491,7 +496,10 @@ class RedisSubscriber:
                 try:
                     channel = self.bot.get_channel(self.bot.gtb_channel_id)
                     if channel:
-                        await channel.send(f"💰 **GTB Session #{session_id} OPENED** by {opened_by}")
+                        await channel.send(
+                            f"💰 **GTB Session #{session_id} OPENED** by {opened_by} "
+                            f"— top {winner_count} {winner_label} will be picked"
+                        )
                 except Exception as e:
                     logger.info(f"Failed to send Discord notification: {e}")
 
@@ -552,10 +560,11 @@ class RedisSubscriber:
                 # Small delay to ensure messages don't get combined
                 await asyncio.sleep(1)
 
-                # Announce top 3 winners
+                # Announce every winner the dashboard scored (count is the
+                # session's configured winner_count, already applied there).
                 winner_messages = []
-                for winner in winners[:3]:
-                    rank_emoji = "🥇" if winner["rank"] == 1 else "🥈" if winner["rank"] == 2 else "🥉"
+                for winner in winners:
+                    rank_emoji = gtb_rank_marker(winner["rank"])
                     winner_messages.append(
                         f"{rank_emoji} {winner['username']}: ${winner['guess']:,.2f} (${winner['difference']:,.2f} off)"
                     )
@@ -579,10 +588,11 @@ class RedisSubscriber:
                             # Small delay to ensure messages don't get combined
                             await asyncio.sleep(1)
 
-                            # Announce top 3 winners
+                            # Announce every winner the bot's own scorer
+                            # produced (honours the session winner_count).
                             winner_messages = []
-                            for winner in calculated_winners[:3]:
-                                rank_emoji = "🥇" if winner["rank"] == 1 else "🥈" if winner["rank"] == 2 else "🥉"
+                            for winner in calculated_winners:
+                                rank_emoji = gtb_rank_marker(winner["rank"])
                                 winner_messages.append(
                                     f"{rank_emoji} {winner['username']}: ${winner['guess']:,.2f} (${winner['difference']:,.2f} off)"
                                 )

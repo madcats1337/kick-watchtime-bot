@@ -11,7 +11,7 @@ from discord.ext import commands, tasks
 from discord.ui import Button, Modal, TextInput, View
 from sqlalchemy import text
 
-from features.games.guess_the_balance import parse_amount
+from features.games.guess_the_balance import gtb_rank_marker, parse_amount
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +53,11 @@ class SetResultModal(Modal, title="Set Result Amount"):
                     timestamp=datetime.utcnow(),
                 )
 
-                # Add winners
+                # Add winners (medal for the podium, #N beyond it).
                 for winner in winners:
-                    medal = "🥇" if winner["rank"] == 1 else "🥈" if winner["rank"] == 2 else "🥉"
+                    medal = gtb_rank_marker(winner["rank"])
                     embed.add_field(
-                        name=f"{medal} #{winner['rank']} - {winner['username']}",
+                        name=f"{medal} {winner['username']}",
                         value=f"Guess: ${winner['guess']:,.2f} (off by ${winner['difference']:,.2f})",
                         inline=False,
                     )
@@ -72,7 +72,7 @@ class SetResultModal(Modal, title="Set Result Amount"):
                         kick_msg = f"🏆 GTB RESULTS - Final Balance: ${amount:,.2f} | "
                         winner_texts = []
                         for winner in winners:
-                            medal = "🥇" if winner["rank"] == 1 else "🥈" if winner["rank"] == 2 else "🥉"
+                            medal = gtb_rank_marker(winner["rank"])
                             winner_texts.append(f"{medal} {winner['username']} (${winner['guess']:,.2f})")
                         kick_msg += " | ".join(winner_texts)
                         await self.panel.kick_send_callback(kick_msg, guild_id=self.panel.guild_id)

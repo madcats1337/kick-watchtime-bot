@@ -1860,7 +1860,8 @@ try:
             closed_at TIMESTAMP,
             result_amount NUMERIC(12, 2),
             status TEXT DEFAULT 'open' CHECK (status IN ('open', 'closed', 'completed')),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            winner_count INTEGER NOT NULL DEFAULT 3
         );
         """
             )
@@ -1889,7 +1890,7 @@ try:
             id SERIAL PRIMARY KEY,
             session_id INTEGER NOT NULL REFERENCES gtb_sessions(id) ON DELETE CASCADE,
             kick_username TEXT NOT NULL,
-            rank INTEGER NOT NULL CHECK (rank IN (1, 2, 3)),
+            rank INTEGER NOT NULL CHECK (rank BETWEEN 1 AND 10),
             guess_amount NUMERIC(12, 2) NOT NULL,
             result_amount NUMERIC(12, 2) NOT NULL,
             difference NUMERIC(12, 2) NOT NULL,
@@ -1898,6 +1899,28 @@ try:
         """
             )
         )
+
+        # GTB configurable winner count. The column + the relaxed rank check are
+        # owned by the dashboard's run_migrations(), but the bot must not depend
+        # on the dashboard having deployed first (it READS winner_count and
+        # WRITES ranks > 3) — add them defensively so the bot's GTB scoring never
+        # hits "column does not exist" or the old rank IN (1,2,3) check on a DB
+        # where this table predates the feature. Mirrors the token-table pattern
+        # below. Each statement is IF-EXISTS-guarded so it never aborts the
+        # surrounding transaction on the common (already-applied) path.
+        try:
+            conn.execute(
+                text("ALTER TABLE gtb_sessions ADD COLUMN IF NOT EXISTS winner_count INTEGER NOT NULL DEFAULT 3;")
+            )
+        except Exception:
+            pass  # Column may already exist
+        try:
+            conn.execute(text("ALTER TABLE gtb_winners DROP CONSTRAINT IF EXISTS gtb_winners_rank_check;"))
+            conn.execute(
+                text("ALTER TABLE gtb_winners ADD CONSTRAINT gtb_winners_rank_check CHECK (rank BETWEEN 1 AND 10);")
+            )
+        except Exception:
+            pass  # Constraint may already be in the relaxed form
 
         conn.execute(
             text(
