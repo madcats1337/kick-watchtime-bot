@@ -873,6 +873,98 @@ class RedisSubscriber:
 
                 traceback.print_exc()
 
+    async def handle_tournament_event(self, action, data):
+        """Handle bonus-buy tournament events from the dashboard.
+
+        Currently the only action is `announce_winner`, fired when the OBS
+        match-reveal animation lands. We announce the decided match to the
+        server's stream chat (Kick/Twitch fan-out) and to Discord, and DM the
+        loser an elimination notice when possible.
+        """
+        logger.info(f"🏆 Tournament Event: {action}")
+
+        if action != "announce_winner":
+            return
+
+        # The dashboard forwards the widget's `match` object plus server id.
+        match = data.get("match") or {}
+        server_id = data.get("discord_server_id") or data.get("server_id")
+        winner_side = data.get("winner_side")
+        is_final = bool(data.get("is_final"))
+
+        # Resolve winner / loser sides from the match payload.
+        c1 = match.get("c1") or {}
+        c2 = match.get("c2") or {}
+        winner_cid = match.get("winner_competitor_id")
+        if winner_cid is not None and c1.get("competitor_id") == winner_cid:
+            winner, loser = c1, c2
+        elif winner_cid is not None and c2.get("competitor_id") == winner_cid:
+            winner, loser = c2, c1
+        elif winner_side == "c1":
+            winner, loser = c1, c2
+        else:
+            winner, loser = c2, c1
+
+        w_name = winner.get("name") or winner.get("kick_username") or "Winner"
+        l_name = loser.get("name") or loser.get("kick_username") or "Opponent"
+        slot = winner.get("slot_name") or "their slot"
+        payout = winner.get("payout")
+        mult = winner.get("multiplier")
+
+        def _money(v):
+            try:
+                return f"${float(v):,.2f}"
+            except (TypeError, ValueError):
+                return None
+
+        parts = [f"🏆 {w_name} beats {l_name}"]
+        detail = []
+        if slot:
+            detail.append(str(slot))
+        if mult is not None:
+            try:
+                detail.append(f"{float(mult):.2f}x")
+            except (TypeError, ValueError):
+                pass
+        if _money(payout):
+            detail.append(_money(payout))
+        if detail:
+            parts.append("(" + " · ".join(detail) + ")")
+        if is_final:
+            parts.insert(0, "FINAL —")
+            parts.append("is the tournament CHAMPION! 🎉")
+        chat_msg = " ".join(parts)
+
+        # Stream chat (Kick / Twitch). Swallows its own errors.
+        try:
+            await self.announce_in_chat(chat_msg, guild_id=server_id)
+        except Exception as e:
+            logger.warning(f"[Tournament] chat announce failed: {e}")
+
+        # Discord announcement — use the dedicated tournament channel, falling
+        # back to the slot-calls channel for setups that haven't picked one yet.
+        try:
+            channel_id = None
+            if server_id:
+                from bot import get_guild_settings
+
+                gs = get_guild_settings(int(server_id))
+                if gs:
+                    channel_id = gs.get_int("tournament_announcement_channel_id") or gs.get_int("slot_calls_channel_id")
+            if channel_id:
+                channel = self.bot.get_channel(int(channel_id))
+                if channel is None:
+                    try:
+                        channel = await self.bot.fetch_channel(int(channel_id))
+                    except Exception:
+                        channel = None
+                if channel is not None:
+                    await channel.send(chat_msg)
+            else:
+                logger.info("[Tournament] no Discord channel configured; skipping Discord announce")
+        except Exception as e:
+            logger.warning(f"[Tournament] Discord announce failed: {e}")
+
     async def handle_commands_event(self, action, data):
         """Handle custom commands events from dashboard"""
         guild_id = data.get("discord_server_id")
@@ -1967,6 +2059,7 @@ Congratulations! Please contact an admin to claim your prize! 🎊
             "dashboard:giveaway",
             "dashboard:stream_notification",
             "dashboard:subscriptions",
+            "dashboard:tournament",
             # bot_events: Twitch chat (via EventSub webhook in the Gunicorn process)
             # is forwarded here for the bot to process. Kick chat still uses the
             # direct WebSocket (not this channel).
@@ -2024,6 +2117,8 @@ Congratulations! Please contact an admin to claim your prize! 🎊
                                 await self.handle_stream_notification_event(action, data)
                             elif channel == "dashboard:subscriptions":
                                 await self.handle_subscriptions_event(action, data)
+                            elif channel == "dashboard:tournament":
+                                await self.handle_tournament_event(action, data)
                             elif channel == "bot_events":
                                 # bot_events uses {type, data} rather than {action, data}.
                                 await self.handle_bot_event(payload)
@@ -2056,6 +2151,7 @@ Congratulations! Please contact an admin to claim your prize! 🎊
                         "dashboard:giveaway",
                         "dashboard:stream_notification",
                         "dashboard:subscriptions",
+                        "dashboard:tournament",
                         # 'bot_events' removed - no longer using webhooks
                     )
 

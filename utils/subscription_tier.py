@@ -31,6 +31,7 @@ TIER2 = FREE + [
     "timed_messages",
     "personal_subdomain",
     "giveaway",
+    "tournament",
 ]
 TIER3 = TIER2 + [
     "full_dashboard",
