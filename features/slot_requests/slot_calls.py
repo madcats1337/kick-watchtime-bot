@@ -759,6 +759,15 @@ class SlotCallTracker:
                     )
                 except Exception as redis_err:
                     logger.debug(f"Redis publish failed (non-critical): {redis_err}")
+
+                # Tournament auto-match: if this chatter is a live competitor in
+                # the server's active tournament and has a current undecided
+                # match, fill the slot they just !call'd into their match side so
+                # the streamer doesn't have to type it. Gated to TIER2+ servers.
+                try:
+                    self._tournament_autofill_slot(kick_username_safe, slot_call_safe)
+                except Exception as tourney_err:
+                    logger.debug(f"Tournament auto-match skipped (non-critical): {tourney_err}")
             except Exception as e:
                 logger.error(f"Failed to save slot request to database: {e}")
 
@@ -773,6 +782,115 @@ class SlotCallTracker:
                 logger.debug("Updated slot request panel after new request")
             except Exception as panel_error:
                 logger.error(f"Failed to update panel: {panel_error}")
+
+    def _tournament_autofill_slot(self, kick_username: str, slot_call: str) -> None:
+        """Fill a !call slot into the chatter's CURRENT tournament match side, if
+        they're a live competitor in the server's active tournament.
+
+        Mirrors utils.tournament.set_competitor_active_slot_by_username on the
+        dashboard side, but runs against the bot's SQLAlchemy engine so it works
+        without a dashboard round-trip. No-op when: no engine/server, the server
+        isn't TIER2+, there's no live tournament, the username doesn't match a
+        non-eliminated competitor, or they have no current undecided match.
+
+        On a successful fill it publishes a `match_refresh` widget event so the
+        tournament overlay re-reads the current match.
+        """
+        if not self.engine or not self.server_id or not slot_call.strip():
+            return
+
+        # Gate to servers whose tier grants the tournament feature.
+        try:
+            from utils.subscription_tier import server_has_feature
+
+            if not server_has_feature(self.engine, self.server_id, "tournament"):
+                return
+        except Exception as e:
+            logger.debug(f"tournament feature check failed: {e}")
+            return
+
+        matched = False
+        with self.engine.begin() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT id FROM tournaments
+                    WHERE discord_server_id = :sid AND status IN ('drafting','active')
+                    ORDER BY created_at DESC LIMIT 1
+                    """
+                ),
+                {"sid": self.server_id},
+            ).fetchone()
+            if not row:
+                return
+            tid = row[0]
+
+            comp = conn.execute(
+                text(
+                    """
+                    SELECT id FROM tournament_competitors
+                    WHERE tournament_id = :tid AND eliminated = FALSE
+                      AND LOWER(kick_username) = LOWER(:ku)
+                    LIMIT 1
+                    """
+                ),
+                {"tid": tid, "ku": kick_username},
+            ).fetchone()
+            if not comp:
+                return
+            competitor_id = comp[0]
+
+            cm = conn.execute(
+                text(
+                    """
+                    SELECT id, competitor1_id FROM tournament_matches
+                    WHERE tournament_id = :tid AND status != 'decided'
+                      AND (competitor1_id = :cid OR competitor2_id = :cid)
+                    ORDER BY round ASC, match_number ASC
+                    LIMIT 1
+                    """
+                ),
+                {"tid": tid, "cid": competitor_id},
+            ).fetchone()
+            if not cm:
+                return
+            match_id, c1_id = cm[0], cm[1]
+            prefix = "c1" if c1_id == competitor_id else "c2"
+
+            conn.execute(
+                text(f"UPDATE tournament_matches SET {prefix}_slot_name = :slot WHERE id = :mid"),
+                {"slot": slot_call.strip(), "mid": match_id},
+            )
+            conn.execute(
+                text("UPDATE tournament_competitors SET requested_slot = :slot WHERE id = :cid"),
+                {"slot": slot_call.strip(), "cid": competitor_id},
+            )
+            matched = True
+
+        if matched:
+            logger.info(f"[Tournament] Auto-filled '{slot_call}' for competitor {kick_username}")
+            try:
+                import json as _json
+
+                import bot as _bot
+
+                # Publish a widget refresh on the tournament events channel. This
+                # channel uses the {type, server_id, payload} shape consumed by
+                # the OBS overlay's SSE stream (NOT publish_redis_event's
+                # {action,data} dashboard shape), so publish the raw message.
+                if getattr(_bot, "redis_client", None):
+                    _bot.redis_client.publish(
+                        "tournament:match:events",
+                        _json.dumps(
+                            {
+                                "type": "match_refresh",
+                                "server_id": str(self.server_id),
+                                "payload": {},
+                            }
+                        ),
+                    )
+            except Exception as redis_err:
+                logger.debug(f"tournament widget refresh publish failed: {redis_err}")
 
 
 class SlotCallCommands(commands.Cog):
