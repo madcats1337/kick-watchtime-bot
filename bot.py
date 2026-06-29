@@ -1962,12 +1962,18 @@ try:
         # never hit "column does not exist". The PK rescope stays the dashboard's
         # job; only the column is needed here.
         for _tok_table in ("twitch_oauth_tokens", "kick_oauth_tokens"):
+            # SAVEPOINT-isolate: on a fresh/partial DB this ALTER fails because
+            # the table doesn't exist yet. Without a nested transaction that
+            # failure poisons the whole init transaction (Postgres:
+            # "current transaction is aborted"), silently skipping every later
+            # CREATE TABLE. begin_nested() rolls back only this statement.
             try:
-                conn.execute(
-                    text(
-                        f"ALTER TABLE {_tok_table} ADD COLUMN IF NOT EXISTS discord_server_id BIGINT NOT NULL DEFAULT 0;"
+                with conn.begin_nested():
+                    conn.execute(
+                        text(
+                            f"ALTER TABLE {_tok_table} ADD COLUMN IF NOT EXISTS discord_server_id BIGINT NOT NULL DEFAULT 0;"
+                        )
                     )
-                )
             except Exception:
                 pass  # Table may not exist yet (dashboard creates it) or column present
 
@@ -1976,8 +1982,11 @@ try:
         # key; display_name is what's SHOWN in embeds/panels/announcements. Nullable —
         # old rows fall back to the username column at render time.
         for _disp_table in ("slot_requests", "gtb_guesses", "gtb_winners", "giveaway_entries"):
+            # SAVEPOINT-isolate (see note above): these tables may not exist yet
+            # on a fresh DB; a bare failure would abort the init transaction.
             try:
-                conn.execute(text(f"ALTER TABLE {_disp_table} ADD COLUMN IF NOT EXISTS display_name TEXT;"))
+                with conn.begin_nested():
+                    conn.execute(text(f"ALTER TABLE {_disp_table} ADD COLUMN IF NOT EXISTS display_name TEXT;"))
             except Exception:
                 pass  # Table may not exist yet or column already present
 
