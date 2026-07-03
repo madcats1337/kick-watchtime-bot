@@ -4,11 +4,11 @@
 
 ## 1. Acceptance of Terms
 
-By using the LeleBot Discord bot, the associated Admin Dashboard, and the LeleBot Browser Extension (collectively, the "Service"), you agree to be bound by these Terms of Service ("Terms"). If you do not agree to these Terms, please do not use the Service.
+By using the Wagerlabs Discord bot, the associated Admin Dashboard, and the Wagerlabs Browser Extension (collectively, the "Service"), you agree to be bound by these Terms of Service ("Terms"). If you do not agree to these Terms, please do not use the Service.
 
 ## 2. Description of Service
 
-LeleBot is a comprehensive Discord-Kick integration platform providing automation, community engagement, and fair gaming systems. The Service is offered on a freemium basis: a free tier is available to everyone, and paid subscription tiers unlock additional features (see Section 11, "Subscriptions and Billing"). The Service includes:
+Wagerlabs is a comprehensive Discord-Kick integration platform providing automation, community engagement, and fair gaming systems. The Service is offered on a freemium basis: a free tier is available to everyone, and paid subscription tiers unlock additional features (see Section 11, "Subscriptions and Billing"). The Service includes:
 
 **Core Discord Bot Features:**
 - **Account Linking:** Secure OAuth 2.0 linking between Discord and Kick.com accounts
@@ -118,7 +118,7 @@ You may NOT:
 
 ## 11. Subscriptions and Billing
 
-LeleBot offers a free tier and paid subscription tiers. Subscriptions apply per Discord server.
+Wagerlabs offers a free tier and paid subscription tiers. Subscriptions apply per Discord server.
 
 **Tiers and pricing:**
 - **Tier 1 (Free):** Bonus Hunt, Slot Requests, Guess the Balance, and OBS widgets for those features. No payment required.
@@ -195,7 +195,7 @@ You are subject to the terms and policies of these third-party services.
 
 ## 17. Intellectual Property
 
-- The Service and its original content, features, and functionality are owned by LeleBot
+- The Service and its original content, features, and functionality are owned by Wagerlabs
 - You may not copy, modify, distribute, or create derivative works without permission
 - OBS overlays may be used for streaming purposes as intended
 
@@ -214,7 +214,7 @@ These Terms shall be governed by and construed in accordance with applicable law
 ## 21. Contact Information
 
 For questions about these Terms, billing, or your subscription:
-- Email **support@lelebot.xyz**
+- Email **support@wagerlabs.app**
 - For questions specific to a particular Discord community, contact that server's administrators
 - Visit the Admin Dashboard for server-specific support
 

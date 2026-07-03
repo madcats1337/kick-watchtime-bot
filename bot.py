@@ -2155,10 +2155,9 @@ def get_guild_settings(guild_id: int) -> BotSettingsManager:
 
 
 # Default !raffle promo (used when a guild hasn't configured its own in the dashboard).
-# Kept identical to the original hardcoded text so unconfigured servers are unchanged.
 DEFAULT_RAFFLE_PROMO_MESSAGE = (
     "Do you want to win a $100 super buy on Sweet Bonanza 1000? "
-    "All you gotta do is join my discord, verify with lelebot and follow the instructions"
+    "All you gotta do is join my discord, verify with Wagerlabs and follow the instructions"
 )
 DEFAULT_DISCORD_INVITE_URL = "https://discord.gg/k7CXJtfrPY"
 

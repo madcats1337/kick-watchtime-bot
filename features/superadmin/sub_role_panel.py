@@ -24,10 +24,10 @@ from ._panel_base import ACCENT, OFFICIAL_GUILD_ID, GlobalPanel, get_setting, te
 
 logger = logging.getLogger(__name__)
 
-# LeleBot logo shown at the top of the panel (attached to the message and rendered
+# Wagerlabs logo shown at the top of the panel (attached to the message and rendered
 # via a Components V2 MediaGallery). Skipped gracefully if the file is missing.
-_LOGO_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "branding", "lebot_logo.png")
-_LOGO_FILENAME = "lebot_logo.png"
+_LOGO_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "branding", "wagerlabs_logo.png")
+_LOGO_FILENAME = "wagerlabs_logo.png"
 
 # Tier 1..4 → bot_settings role-id key. The full set is what we "manage" when
 # syncing (so an old tier role gets removed when a user changes tier).

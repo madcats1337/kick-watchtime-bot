@@ -17,7 +17,7 @@ from ._panel_base import ACCENT, TEXT_CAP, GlobalPanel, get_setting, text_block
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_TITLE = "LeleBot — Feature Overview"
+_DEFAULT_TITLE = "Wagerlabs — Feature Overview"
 _INTRO = (
     "The complete stream toolkit for **Kick** and **Twitch** casino streamers — "
     "a web dashboard, a chat & Discord bot, and a browser extension, working together."

@@ -2,11 +2,11 @@
 
 **Last Updated:** June 2026
 
-**Service:** LeleBot - Discord Bot, Admin Dashboard & Browser Extension
+**Service:** Wagerlabs - Discord Bot, Admin Dashboard & Browser Extension
 
 ## 1. Introduction
 
-This Privacy Policy explains how we collect, use, store, and protect your personal information when you use the Kick Community Bot (the "Bot"), the Admin Dashboard, and the LeleBot Browser Extension (the "Extension") (collectively, the "Service"). By using the Service, you agree to the collection and use of information in accordance with this policy.
+This Privacy Policy explains how we collect, use, store, and protect your personal information when you use the Kick Community Bot (the "Bot"), the Admin Dashboard, and the Wagerlabs Browser Extension (the "Extension") (collectively, the "Service"). By using the Service, you agree to the collection and use of information in accordance with this policy.
 
 ## 2. Information We Collect
 
@@ -83,10 +83,10 @@ This Privacy Policy explains how we collect, use, store, and protect your person
 
 ### 2.4 Browser Extension
 
-The LeleBot Browser Extension is an optional companion to your Admin Dashboard. It is installed in your own browser and works only with your own dashboard.
+The Wagerlabs Browser Extension is an optional companion to your Admin Dashboard. It is installed in your own browser and works only with your own dashboard.
 
 **What the Extension accesses:**
-- **Dashboard session cookie:** the Extension reuses your existing lelebot.xyz login session to make authenticated requests to your dashboard's API. It does not read, store, or transmit cookies for any site other than your lelebot.xyz dashboard.
+- **Dashboard session cookie:** the Extension reuses your existing wagerlabs.app login session to make authenticated requests to your dashboard's API. It does not read, store, or transmit cookies for any site other than your wagerlabs.app dashboard.
 - **Local cache (in your browser only):** which dashboard server you are connected to, your extension preferences, and a short-lived copy of your active bonus hunt and bot status so the popup and overlay render instantly. This stays in the browser's local extension storage and is not sent to third parties.
 - **Slot titles on casino pages:** on supported casino sites (Stake, Shuffle), the Extension reads the slot/game title from the page you are viewing so you can add that slot to your bonus hunt. It reads only the slot title and only on those sites; it does not read other page content, form fields, or your account details on those sites.
 
@@ -94,7 +94,7 @@ The LeleBot Browser Extension is an optional companion to your Admin Dashboard. 
 - It does not track your browsing history or activity across the web.
 - It does not collect personal, financial, or payment information.
 - It does not execute remote code; all of its code is contained in the published package.
-- It only communicates with your own LeleBot dashboard — never with third-party servers.
+- It only communicates with your own Wagerlabs dashboard — never with third-party servers.
 
 ### 2.5 Subscription and Billing Information
 
@@ -426,7 +426,7 @@ These automated decisions do not have legal effects beyond Discord server role a
 ## 16. Contact Information
 
 For privacy-related questions, concerns, billing inquiries, or data requests:
-- Email **support@lelebot.xyz**
+- Email **support@wagerlabs.app**
 - For requests specific to a particular Discord community, you may also contact that server's administrators (for data deletion, an administrator with "Manage Server" permissions)
 - Visit the Admin Dashboard for server-specific support
 
