@@ -20,8 +20,9 @@ import logging
 import os
 
 import discord
+from discord import MediaGalleryItem
 from discord.ext import commands
-from discord.ui import ActionRow, Button, Container, LayoutView, Separator, TextDisplay
+from discord.ui import ActionRow, Button, Container, LayoutView, MediaGallery, Separator, TextDisplay
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,9 @@ FALLBACK_EMOJI = {"kick": "🟢", "twitch": "🟣"}
 # Application-emoji names + the PNG files supplied under assets/emojis/.
 _EMOJI_FILES = {"kick": "kick.png", "twitch": "twitch.png"}
 _EMOJI_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "emojis")
+_ASSET_ROOT = os.path.join(os.path.dirname(__file__), "..", "..", "assets")
+_LOGO_PATH = os.path.join(_ASSET_ROOT, "branding", "wagerlabs_logo.png")
+_LOGO_FILENAME = "wagerlabs_logo.png"
 
 
 async def ensure_link_emojis(bot) -> dict:
@@ -114,6 +118,7 @@ class CombinedLinkPanelView(LayoutView):
         kick_emoji=None,
         twitch_emoji=None,
         platforms=None,
+        show_logo=True,
     ):
         super().__init__(timeout=None)  # Persistent
         self.bot = bot
@@ -134,6 +139,8 @@ class CombinedLinkPanelView(LayoutView):
         accent = TWITCH_COLOUR if platforms == ["twitch"] else KICK_COLOUR
 
         container = Container(accent_colour=accent)
+        if show_logo:
+            container.add_item(MediaGallery(MediaGalleryItem(f"attachment://{_LOGO_FILENAME}")))
         container.add_item(TextDisplay("## 🔗 Link Your Account"))
         container.add_item(
             TextDisplay(
@@ -276,7 +283,14 @@ class CombinedLinkPanelView(LayoutView):
 
 
 def _build_view_for_guild(
-    bot, engine, kick_url_generator, twitch_url_generator, guild_id, kick_emoji=None, twitch_emoji=None
+    bot,
+    engine,
+    kick_url_generator,
+    twitch_url_generator,
+    guild_id,
+    kick_emoji=None,
+    twitch_emoji=None,
+    show_logo=True,
 ):
     """Build a view showing only the buttons for the guild's active platforms.
     Used when POSTING the panel (so a kick-only server shows just the Kick button).
@@ -290,6 +304,7 @@ def _build_view_for_guild(
         kick_emoji=kick_emoji,
         twitch_emoji=twitch_emoji,
         platforms=platforms,
+        show_logo=show_logo,
     )
     return view, platforms
 
@@ -357,6 +372,7 @@ class CombinedLinkPanel:
 
     async def create_panel(self, channel: discord.TextChannel):
         try:
+            has_logo = os.path.isfile(_LOGO_PATH)
             view, platforms = _build_view_for_guild(
                 self.bot,
                 self.engine,
@@ -365,11 +381,17 @@ class CombinedLinkPanel:
                 channel.guild.id,
                 kick_emoji=self.kick_emoji,
                 twitch_emoji=self.twitch_emoji,
+                show_logo=has_logo,
             )
             names = " & ".join(p.capitalize() for p in platforms)
             # Components V2: the panel is a LayoutView (no embed — a V2 message
             # can't carry one). All copy lives inside the view's TextDisplays.
-            message = await channel.send(view=view)
+            if has_logo:
+                logo_file = discord.File(_LOGO_PATH, filename=_LOGO_FILENAME)
+                message = await channel.send(view=view, file=logo_file)
+            else:
+                logger.warning(f"[CombinedLink] {_LOGO_PATH} not found — posting panel without the logotype banner.")
+                message = await channel.send(view=view)
             self.panel_guild_id = channel.guild.id
             self.panel_channel_id = channel.id
             self.panel_message_id = message.id
@@ -441,6 +463,7 @@ async def setup_combined_link_panel_system(bot, engine, kick_url_generator, twit
                         guild_id,
                         kick_emoji=kick_emoji,
                         twitch_emoji=twitch_emoji,
+                        show_logo=os.path.isfile(_LOGO_PATH),
                     )
                     await message.edit(view=view)
             except Exception as e:
