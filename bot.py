@@ -1977,6 +1977,20 @@ try:
             except Exception:
                 pass  # Table may not exist yet (dashboard creates it) or column present
 
+        # needs_reauth on kick_oauth_tokens: set when Kick rejects a refresh with
+        # invalid_grant (dead token). The bot's refresh scheduler reads/writes it,
+        # so add it defensively here too rather than depend on the dashboard
+        # deploying first (same reasoning as the discord_server_id backfill above).
+        try:
+            with conn.begin_nested():
+                conn.execute(
+                    text(
+                        "ALTER TABLE kick_oauth_tokens ADD COLUMN IF NOT EXISTS needs_reauth BOOLEAN NOT NULL DEFAULT FALSE;"
+                    )
+                )
+        except Exception:
+            pass  # Table may not exist yet (dashboard creates it) or column present
+
         # Native display name for chat-activity entries (Twitch name on Twitch, Kick
         # name on Kick). The existing username column stays the canonical credit/dedup
         # key; display_name is what's SHOWN in embeds/panels/announcements. Nullable —
@@ -4579,7 +4593,7 @@ async def proactive_token_refresh_task():
                     """
                 SELECT user_id, kick_username, refresh_token, expires_at
                 FROM kick_oauth_tokens
-                WHERE refresh_token IS NOT NULL
+                WHERE refresh_token IS NOT NULL AND needs_reauth = FALSE
                 ORDER BY expires_at ASC
             """
                 )
@@ -4718,6 +4732,7 @@ async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, re
                             SET access_token = :access_token,
                                 refresh_token = :refresh_token,
                                 expires_at = :expires_at,
+                                needs_reauth = FALSE,
                                 updated_at = CURRENT_TIMESTAMP
                             WHERE user_id = :user_id
                         """
@@ -4774,13 +4789,30 @@ async def refresh_kick_oauth_token_for_user(user_id: int, kick_username: str, re
                         f"[Kick] ❌ Refresh failed for {kick_username} (HTTP {response.status}): {error_text[:100]}"
                     )
 
-                    # Kick refresh tokens never expire, so do NOT clear the refresh
-                    # token on failure — it remains valid and the caller will retry.
+                    # invalid_grant = the refresh token is permanently dead (revoked
+                    # / issued to another client). Flag needs_reauth (by user_id, so
+                    # both the per-server and legacy discord_server_id=0 rows are
+                    # covered) so the scheduler stops looping and the dashboard
+                    # prompts the streamer to reconnect. Other errors stay
+                    # retryable — the refresh token itself may still be valid.
+                    error_code = ""
+                    try:
+                        error_code = (json.loads(error_text) or {}).get("error", "")
+                    except Exception:
+                        error_code = "invalid_grant" if "invalid_grant" in (error_text or "") else ""
 
-                    # Release lock
-                    with engine.connect() as conn:
+                    with engine.begin() as conn:
+                        if error_code == "invalid_grant":
+                            conn.execute(
+                                text(
+                                    "UPDATE kick_oauth_tokens SET needs_reauth = TRUE, updated_at = CURRENT_TIMESTAMP WHERE user_id = :uid"
+                                ),
+                                {"uid": user_id},
+                            )
+                            logger.warning(
+                                f"[Kick] 🔐 Refresh token for {kick_username} is invalid_grant (revoked) - flagged needs_reauth; streamer must reconnect Kick"
+                            )
                         conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": lock_key})
-                        conn.commit()
                     return False
 
     except Exception as e:
