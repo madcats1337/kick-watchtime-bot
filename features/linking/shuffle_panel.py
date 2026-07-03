@@ -18,10 +18,63 @@ import os
 
 import aiohttp
 import discord
-from discord import MediaGalleryItem
 from discord.ext import commands
-from discord.ui import ActionRow, Button, Container, LayoutView, MediaGallery, Modal, Separator, TextDisplay, TextInput
 from sqlalchemy import text
+
+try:
+    from discord import MediaGalleryItem
+except Exception:  # pragma: no cover - compatibility with older discord.py versions
+    MediaGalleryItem = None
+
+try:
+    from discord.ui import (
+        ActionRow,
+        Button,
+        Container,
+        LayoutView,
+        MediaGallery,
+        Modal,
+        Separator,
+        TextDisplay,
+        TextInput,
+    )
+except Exception:  # pragma: no cover - compatibility with older discord.py versions
+    from discord.ui import Button, Modal, View
+
+    class ActionRow:
+        def __init__(self):
+            self.items = []
+
+        def add_item(self, item):
+            self.items.append(item)
+
+    class Container:
+        def __init__(self, *args, **kwargs):
+            self.items = []
+
+        def add_item(self, item):
+            self.items.append(item)
+
+    class LayoutView(View):
+        pass
+
+    class MediaGallery:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    class Separator:
+        pass
+
+    class TextDisplay:
+        def __init__(self, content):
+            self.content = content
+
+    class TextInput:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +91,16 @@ _ASSET_ROOT = os.path.join(os.path.dirname(__file__), "..", "..", "assets")
 _EMOJI_PATH = os.path.join(_ASSET_ROOT, "emojis", "shuffle.png")
 _LOGO_PATH = os.path.join(_ASSET_ROOT, "branding", "shuffle_logo.png")
 _LOGO_FILENAME = "shuffle_logo.png"
+
+
+def _build_panel_message_kwargs(view, has_logo=False, clear_attachments=False):
+    """Build send/edit kwargs for a shuffle panel message, including the logo attachment when needed."""
+    kwargs = {"view": view}
+    if has_logo:
+        kwargs["attachments"] = [discord.File(_LOGO_PATH, filename=_LOGO_FILENAME)]
+    elif clear_attachments:
+        kwargs["attachments"] = []
+    return kwargs
 
 
 async def ensure_shuffle_emoji(bot):
@@ -369,7 +432,7 @@ class ShufflePanelView(LayoutView):
         # Shuffle logotype banner at the very top, shown from the message's
         # attachment (ShufflePanel.create_panel sends shuffle_logo.png). show_logo
         # is False only when that file is missing, so the panel still posts.
-        if show_logo:
+        if show_logo and MediaGalleryItem is not None:
             container.add_item(MediaGallery(MediaGalleryItem(f"attachment://{_LOGO_FILENAME}")))
         container.add_item(TextDisplay("## Verify Your Shuffle Account"))
         container.add_item(
@@ -495,12 +558,9 @@ class ShufflePanel:
             view = ShufflePanelView(
                 self.bot, self.engine, self.settings_getter, shuffle_emoji=self.shuffle_emoji, show_logo=has_logo
             )
-            if has_logo:
-                logo_file = discord.File(_LOGO_PATH, filename=_LOGO_FILENAME)
-                message = await channel.send(view=view, file=logo_file)
-            else:
+            if not has_logo:
                 logger.warning(f"[Shuffle] {_LOGO_PATH} not found — posting panel without the logotype banner.")
-                message = await channel.send(view=view)
+            message = await channel.send(**_build_panel_message_kwargs(view, has_logo=has_logo))
 
             self.panel_guild_id = channel.guild.id
             self.panel_channel_id = channel.id
@@ -549,12 +609,18 @@ async def setup_shuffle_panel_system(bot, engine, settings_getter):
                 channel = bot.get_channel(panel.panel_channel_id)
                 if channel:
                     message = await channel.fetch_message(panel.panel_message_id)
-                    # The original message keeps its logo attachment across edits,
-                    # so the re-attach view references it (show_logo=True) to keep
-                    # the banner; editing only rebinds the button handler.
-                    view = ShufflePanelView(bot, engine, settings_getter, shuffle_emoji=shuffle_emoji, show_logo=True)
-                    await message.edit(view=view)
-                    logger.debug(f"Re-attached Shuffle panel view to existing message in guild {guild_id}")
+                    has_logo = os.path.isfile(_LOGO_PATH)
+                    view = ShufflePanelView(
+                        bot,
+                        engine,
+                        settings_getter,
+                        shuffle_emoji=shuffle_emoji,
+                        show_logo=has_logo,
+                    )
+                    await message.edit(
+                        **_build_panel_message_kwargs(view, has_logo=has_logo, clear_attachments=not has_logo)
+                    )
+                    logger.info(f"[Shuffle] Refreshed panel view for guild {guild_id}")
             except Exception as e:
                 logger.error(f"Failed to re-attach Shuffle panel view for guild {guild_id}: {e}")
 

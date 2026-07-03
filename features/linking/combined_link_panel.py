@@ -20,10 +20,48 @@ import logging
 import os
 
 import discord
-from discord import MediaGalleryItem
 from discord.ext import commands
-from discord.ui import ActionRow, Button, Container, LayoutView, MediaGallery, Separator, TextDisplay
 from sqlalchemy import text
+
+try:
+    from discord import MediaGalleryItem
+except Exception:  # pragma: no cover - compatibility with older discord.py versions
+    MediaGalleryItem = None
+
+try:
+    from discord.ui import ActionRow, Button, Container, LayoutView, MediaGallery, Separator, TextDisplay
+except Exception:  # pragma: no cover - compatibility with older discord.py versions
+    from discord.ui import Button, View
+
+    class ActionRow:
+        def __init__(self):
+            self.items = []
+
+        def add_item(self, item):
+            self.items.append(item)
+
+    class Container:
+        def __init__(self, *args, **kwargs):
+            self.items = []
+
+        def add_item(self, item):
+            self.items.append(item)
+
+    class LayoutView(View):
+        pass
+
+    class MediaGallery:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    class Separator:
+        pass
+
+    class TextDisplay:
+        def __init__(self, content):
+            self.content = content
+
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +177,7 @@ class CombinedLinkPanelView(LayoutView):
         accent = TWITCH_COLOUR if platforms == ["twitch"] else KICK_COLOUR
 
         container = Container(accent_colour=accent)
-        if show_logo:
+        if show_logo and MediaGalleryItem is not None:
             container.add_item(MediaGallery(MediaGalleryItem(f"attachment://{_LOGO_FILENAME}")))
         container.add_item(TextDisplay("## 🔗 Link Your Account"))
         container.add_item(
@@ -282,6 +320,16 @@ class CombinedLinkPanelView(LayoutView):
         logger.info(f"[CombinedLink] Sent {platform} OAuth link to {interaction.user.name} ({discord_id})")
 
 
+def _build_panel_message_kwargs(view, has_logo=False, clear_attachments=False):
+    """Build send/edit kwargs for a link panel message, including the logo attachment when needed."""
+    kwargs = {"view": view}
+    if has_logo:
+        kwargs["attachments"] = [discord.File(_LOGO_PATH, filename=_LOGO_FILENAME)]
+    elif clear_attachments:
+        kwargs["attachments"] = []
+    return kwargs
+
+
 def _build_view_for_guild(
     bot,
     engine,
@@ -386,12 +434,9 @@ class CombinedLinkPanel:
             names = " & ".join(p.capitalize() for p in platforms)
             # Components V2: the panel is a LayoutView (no embed — a V2 message
             # can't carry one). All copy lives inside the view's TextDisplays.
-            if has_logo:
-                logo_file = discord.File(_LOGO_PATH, filename=_LOGO_FILENAME)
-                message = await channel.send(view=view, file=logo_file)
-            else:
+            if not has_logo:
                 logger.warning(f"[CombinedLink] {_LOGO_PATH} not found — posting panel without the logotype banner.")
-                message = await channel.send(view=view)
+            message = await channel.send(**_build_panel_message_kwargs(view, has_logo=has_logo))
             self.panel_guild_id = channel.guild.id
             self.panel_channel_id = channel.id
             self.panel_message_id = message.id
@@ -455,6 +500,7 @@ async def setup_combined_link_panel_system(bot, engine, kick_url_generator, twit
                 channel = bot.get_channel(panel.panel_channel_id)
                 if channel:
                     message = await channel.fetch_message(panel.panel_message_id)
+                    has_logo = os.path.isfile(_LOGO_PATH)
                     view, _ = _build_view_for_guild(
                         bot,
                         engine,
@@ -463,9 +509,12 @@ async def setup_combined_link_panel_system(bot, engine, kick_url_generator, twit
                         guild_id,
                         kick_emoji=kick_emoji,
                         twitch_emoji=twitch_emoji,
-                        show_logo=os.path.isfile(_LOGO_PATH),
+                        show_logo=has_logo,
                     )
-                    await message.edit(view=view)
+                    await message.edit(
+                        **_build_panel_message_kwargs(view, has_logo=has_logo, clear_attachments=not has_logo)
+                    )
+                    logger.info(f"[CombinedLink] Refreshed panel view for guild {guild_id}")
             except Exception as e:
                 logger.error(f"[CombinedLink] Failed to re-attach view for guild {guild_id}: {e}")
 
