@@ -183,6 +183,7 @@ class CustomCommandsManager:
         - {tickets} - User's raffle ticket count (if linked)
         - {points} - User's points balance (if they have points)
         - {watchtime} - User's total watchtime in hours (if linked)
+        - {current_slot} - Slot the streamer is currently playing (extension-tracked)
 
         Args:
             text: The response text with variables
@@ -258,6 +259,26 @@ class CustomCommandsManager:
                         hours = minutes / 60
                         text = text.replace("{watchtime}", f"{hours:.1f}")
                         logger.info(f"✅ Replaced {{watchtime}} for {username}: {hours:.1f} hours ({minutes} minutes)")
+
+                    # Get the slot the streamer is currently playing (latest
+                    # current_slot_history row, pushed by the browser extension
+                    # on every casino game-page change).
+                    if "{current_slot}" in text:
+                        cursor.execute(
+                            """
+                            SELECT slot_name, provider FROM current_slot_history
+                            WHERE discord_server_id = %s
+                            ORDER BY started_at DESC, id DESC
+                            LIMIT 1
+                        """,
+                            (self.discord_server_id,),
+                        )
+                        result = cursor.fetchone()
+                        if result and result[0]:
+                            current = f"{result[0]} ({result[1]})" if result[1] else result[0]
+                        else:
+                            current = "unknown"
+                        text = text.replace("{current_slot}", current)
 
                     cursor.close()
                     conn.close()

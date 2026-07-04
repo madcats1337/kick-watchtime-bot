@@ -1069,6 +1069,42 @@ class KickWebSocketManager:
                         f"@{display_username}, Unable to retrieve points balance at this time.", guild_id=guild_id
                     )
 
+            # !current / !slot — what slot is the streamer playing right now?
+            # Reads the latest current_slot_history row (written by the browser
+            # extension's dashboard push on every game-page change). Ungated:
+            # the write path is already tier-gated, so servers without the
+            # extension feature simply have no rows.
+            elif content_stripped.lower() in ("!current", "!slot"):
+                logger.info(f"🎰 Processing !current command from {username}")
+                try:
+                    with engine.connect() as conn:
+                        result = conn.execute(
+                            text(
+                                """
+                            SELECT slot_name, provider FROM current_slot_history
+                            WHERE discord_server_id = :guild_id
+                            ORDER BY started_at DESC, id DESC
+                            LIMIT 1
+                        """
+                            ),
+                            {"guild_id": guild_id},
+                        ).fetchone()
+
+                    if result and result[0]:
+                        slot_name, provider = result[0], result[1]
+                        suffix = f" ({provider})" if provider else ""
+                        await send_kick_message(
+                            f"@{display_username} Currently playing: {slot_name}{suffix}",
+                            guild_id=guild_id,
+                        )
+                    else:
+                        await send_kick_message(
+                            f"@{display_username} No slot tracked yet.",
+                            guild_id=guild_id,
+                        )
+                except Exception as e:
+                    logger.info(f"❌ Error fetching current slot: {e}")
+
             # !call / !sr commands (slot requests)
             elif content_stripped.startswith(("!call", "!sr")):
                 logger.info(f"🎰 Detected slot command: {content_stripped[:50]}")
@@ -3517,6 +3553,38 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                             await _send_kick_message_raw(
                                                 f"@{username} GTB system not initialized", guild_id=guild_id
                                             )
+
+                                    # !current / !slot — what slot is the streamer playing right
+                                    # now? Same read as the primary chain's branch: latest
+                                    # current_slot_history row (extension-pushed). Duplicated here
+                                    # because this Pusher-loop path dispatches its own commands.
+                                    if content_stripped.lower() in ("!current", "!slot"):
+                                        try:
+                                            with engine.connect() as conn:
+                                                result = conn.execute(
+                                                    text(
+                                                        """
+                                                    SELECT slot_name, provider FROM current_slot_history
+                                                    WHERE discord_server_id = :guild_id
+                                                    ORDER BY started_at DESC, id DESC
+                                                    LIMIT 1
+                                                """
+                                                    ),
+                                                    {"guild_id": guild_id},
+                                                ).fetchone()
+                                            if result and result[0]:
+                                                _cs_suffix = f" ({result[1]})" if result[1] else ""
+                                                await send_kick_message(
+                                                    f"@{username} Currently playing: {result[0]}{_cs_suffix}",
+                                                    guild_id=guild_id,
+                                                )
+                                            else:
+                                                await send_kick_message(
+                                                    f"@{username} No slot tracked yet.",
+                                                    guild_id=guild_id,
+                                                )
+                                        except Exception as e:
+                                            logger.info(f"❌ Error fetching current slot: {e}")
 
                                     # Handle !clip command - Create a clip of the livestream
                                     if content_stripped.lower().startswith("!clip"):
