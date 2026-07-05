@@ -157,6 +157,33 @@ class SlotCallTracker:
                 """
                     )
                 )
+
+                # Append-only request log — persists past queue picks/clears so
+                # the dashboard can count all-time requests + trends. Created
+                # here too (idempotent) so the bot never fails to log if it
+                # starts before the dashboard's migration runs. Mirrors the
+                # dashboard's run_migrations() definition.
+                conn.execute(
+                    text(
+                        """
+                    CREATE TABLE IF NOT EXISTS slot_request_log (
+                        id SERIAL PRIMARY KEY,
+                        discord_server_id BIGINT NOT NULL,
+                        slot_call TEXT NOT NULL,
+                        kick_username TEXT,
+                        requested_at TIMESTAMPTZ DEFAULT NOW()
+                    )
+                """
+                    )
+                )
+                conn.execute(
+                    text(
+                        """
+                    CREATE INDEX IF NOT EXISTS idx_slot_request_log_server_norm
+                    ON slot_request_log(discord_server_id, LOWER(regexp_replace(slot_call, '[^a-zA-Z0-9]', '', 'g')))
+                """
+                    )
+                )
             logger.debug("Slot call tables initialized")
         except Exception as e:
             logger.error(f"Failed to initialize slot call tables: {e}")
@@ -740,6 +767,25 @@ class SlotCallTracker:
                                 "slot_call": slot_call_safe,
                                 "avatar_url": avatar_url,
                                 "display_name": mention_name_safe,
+                            },
+                        )
+
+                    # Append-only request log (survives queue picks/clears) so
+                    # the dashboard can show all-time "requested N times" +
+                    # trends. Server-scoped only (the log's discord_server_id is
+                    # NOT NULL); the no-server legacy path above skips it.
+                    if self.server_id:
+                        conn.execute(
+                            text(
+                                """
+                            INSERT INTO slot_request_log (discord_server_id, slot_call, kick_username)
+                            VALUES (:server_id, :slot_call, :username)
+                        """
+                            ),
+                            {
+                                "server_id": self.server_id,
+                                "slot_call": slot_call_safe,
+                                "username": kick_username_safe,
                             },
                         )
                 logger.debug(f"Saved slot request to database with avatar")
