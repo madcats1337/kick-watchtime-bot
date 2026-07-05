@@ -913,42 +913,35 @@ def create_discord_notifier(discord_bot, channel_id: int):
         broadcaster = data.get("broadcaster", {}).get("username", "")
         discord_server_id = data.get("_server_id")
 
-        # Track in raffle system
-        if discord_server_id:
+        # Track in raffle system. Raffle tickets go to the GIFTER, scaled by
+        # the number of subs gifted — so this is ONE award call per event
+        # (not one per giftee). track_gifted_sub resolves the active period and
+        # per-server reward rate itself and dedups on event_id.
+        if discord_server_id and count > 0:
             try:
-                from sqlalchemy import create_engine, text
+                from sqlalchemy import create_engine
 
                 from raffle_system.gifted_sub_tracker import track_gifted_sub
 
                 db_url = os.getenv("DATABASE_URL")
                 if db_url:
                     engine = create_engine(db_url, pool_pre_ping=True)
-                    with engine.connect() as conn:
-                        # Get active raffle period
-                        period_result = conn.execute(
-                            text(
-                                """
-                            SELECT id FROM raffle_periods
-                            WHERE status = 'active' AND discord_server_id = :guild_id
-                            LIMIT 1
-                        """
-                            ),
-                            {"guild_id": discord_server_id},
-                        ).fetchone()
+                    # Prefer Kick's own event id for dedup; fall back to a
+                    # stable composite so re-delivery of the same event is a
+                    # duplicate, not a double-award.
+                    event_id = data.get("id") or data.get("event_id")
+                    if not event_id:
+                        giftee_names = "_".join(sorted(g.get("username", "") for g in giftees))
+                        event_id = f"webhook_{discord_server_id}_{gifter}_{count}_{giftee_names}"
 
-                        if period_result:
-                            period_id = period_result[0]
-
-                            # Track each giftee
-                            for giftee in giftees:
-                                giftee_username = giftee.get("username")
-                                if giftee_username:
-                                    # Track gifted sub for raffle
-                                    await track_gifted_sub(
-                                        kick_username=giftee_username, guild_id=discord_server_id, period_id=period_id
-                                    )
-
-                            logger.info(f"[Webhook] ✅ Tracked {count} gifted subs for raffle")
+                    result = await track_gifted_sub(
+                        engine,
+                        gifter_username=gifter,
+                        guild_id=discord_server_id,
+                        count=count,
+                        event_id=event_id,
+                    )
+                    logger.info(f"[Webhook] Gifted-sub raffle tracking for {gifter} (x{count}): {result.get('status')}")
             except Exception as e:
                 logger.info(f"[Webhook] ⚠️ Failed to track gifted subs in raffle: {e}")
 

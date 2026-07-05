@@ -8184,8 +8184,10 @@ async def on_ready():
                 )
                 logger.debug(f"✅ Gifted sub tracker initialized")
 
-                # Setup watchtime converter for this guild (runs every 10 minutes)
-                await setup_watchtime_converter(bot, engine, server_id=guild.id)
+                # Setup watchtime converter for this guild (runs every 10 minutes).
+                # Pass the per-guild settings manager so it reads THIS server's
+                # "tickets per hour watched" rate, not the global/default one.
+                await setup_watchtime_converter(bot, engine, server_id=guild.id, bot_settings=guild_settings)
                 logger.debug(f"✅ Watchtime converter initialized")
 
                 # Setup wager tracker for this guild. The tracker self-selects the

@@ -54,6 +54,11 @@ class WatchtimeConverter:
             dict: Summary of conversions performed
         """
         try:
+            # Re-read the reward rate every run so a dashboard change to
+            # "Tickets per hour watched" takes effect on the next 10-min tick
+            # instead of only after a full bot restart.
+            self._load_settings()
+
             # Get active raffle period
             period_id = self._get_active_period_id()
             if not period_id:
@@ -256,10 +261,13 @@ class WatchtimeConverter:
 
                 minutes_converted = converted_result.scalar() or 0
 
-                # Calculate unconverted
+                # Calculate unconverted. Use the live per-server rate (loaded
+                # from bot_settings) rather than the static config default so
+                # the "potential tickets" preview matches what actually awards.
+                self._load_settings()
                 unconverted_minutes = total_minutes - minutes_converted
                 convertible_hours = unconverted_minutes // 60
-                potential_tickets = convertible_hours * WATCHTIME_TICKETS_PER_HOUR
+                potential_tickets = convertible_hours * self.watchtime_tickets_per_hour
 
                 return {
                     "kick_name": kick_name,
@@ -310,7 +318,7 @@ class WatchtimeConverter:
             return None
 
 
-async def setup_watchtime_converter(bot, engine, server_id=None):
+async def setup_watchtime_converter(bot, engine, server_id=None, bot_settings=None):
     """
     Setup the watchtime converter as a Discord bot task
 
@@ -318,12 +326,16 @@ async def setup_watchtime_converter(bot, engine, server_id=None):
         bot: Discord bot instance
         engine: SQLAlchemy engine
         server_id: Discord server/guild ID for multiserver support
+        bot_settings: Per-guild BotSettingsManager. Pass the guild-scoped
+            manager so the converter reads THIS server's reward rate; falling
+            back to the bot's global settings_manager would read global/None
+            and silently use the static config default.
     """
     from discord.ext import tasks
 
-    # Get bot_settings from bot if available
-    bot_settings = None
-    if hasattr(bot, "settings_manager") and bot.settings_manager:
+    # Prefer the explicitly-passed per-guild manager; only fall back to the
+    # bot's global manager when a caller didn't supply one.
+    if bot_settings is None and hasattr(bot, "settings_manager") and bot.settings_manager:
         bot_settings = bot.settings_manager
 
     converter = WatchtimeConverter(engine, server_id=server_id, bot_settings=bot_settings)

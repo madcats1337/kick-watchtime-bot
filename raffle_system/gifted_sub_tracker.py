@@ -67,6 +67,11 @@ class GiftedSubTracker:
             dict: Result of ticket awarding
         """
         try:
+            # Re-read the reward rate on every event so a dashboard change to
+            # "Tickets per gifted sub" applies to the next gifted sub instead of
+            # only after a bot restart (this tracker is created once at startup).
+            self._load_settings()
+
             # Extract event details
             event_id = event_data.get("id")
 
@@ -328,3 +333,54 @@ def setup_gifted_sub_handler(engine, server_id=None, bot_settings=None):
     tracker = GiftedSubTracker(engine, server_id=server_id, bot_settings=bot_settings)
     logger.debug(f"✅ Gifted sub tracker initialized" + (f" (server {server_id})" if server_id else ""))
     return tracker
+
+
+async def track_gifted_sub(engine, gifter_username, guild_id, count=1, event_id=None, period_id=None):
+    """Award raffle tickets to a GIFTER for a gifted-sub event (Kick webhook path).
+
+    This is the entry point used by the Kick *webhook* handler
+    (`core/kick_webhooks.py::on_gifted_subs`). It mirrors the websocket/Pusher
+    path by delegating to `GiftedSubTracker.handle_gifted_sub_event`, so both
+    paths share the SAME award math, per-event dedup, per-guild reward rate,
+    and fresh-rate read — there is no second copy of the logic to drift.
+
+    Tickets go to the GIFTER (the person who bought the subs), scaled by
+    `count`. The webhook fires ONCE per gift event with the full giftee list,
+    so callers pass the gifter + the number of subs, NOT one call per giftee.
+
+    Args:
+        engine: SQLAlchemy engine (the webhook already builds one per event).
+        gifter_username: Kick username of the person who gifted the sub(s).
+        guild_id: Discord server id (for per-server scoping + settings).
+        count: Number of subs gifted in this event (default 1).
+        event_id: Stable Kick event id for dedup. Strongly recommended so a
+            webhook re-delivery doesn't double-award; a fallback id is derived
+            when absent (see handle_gifted_sub_event).
+        period_id: Unused — kept for backwards compatibility with the existing
+            call site. The active period is resolved inside the tracker.
+
+    Returns:
+        dict: the tracker's result (status success/duplicate/not_linked/…).
+    """
+    if not gifter_username:
+        return {"status": "error", "error": "missing_gifter"}
+
+    # Build a per-guild settings manager so the reward RATE matches the
+    # dashboard's "Tickets per gifted sub" for THIS server (not a default).
+    bot_settings = None
+    try:
+        from utils.bot_settings import BotSettingsManager
+
+        bot_settings = BotSettingsManager(engine, guild_id=guild_id)
+    except Exception as e:
+        logger.warning(f"[GiftedSub] Could not load per-guild settings for {guild_id}: {e}")
+
+    tracker = GiftedSubTracker(engine, server_id=guild_id, bot_settings=bot_settings)
+
+    # Shape a synthetic event in the same format handle_gifted_sub_event parses.
+    event = {
+        "id": event_id,
+        "sender": {"username": gifter_username},
+        "gift_count": count,
+    }
+    return await tracker.handle_gifted_sub_event(event)
