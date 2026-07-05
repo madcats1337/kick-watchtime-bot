@@ -4328,6 +4328,111 @@ async def update_roles_task():
 
 
 # -------------------------
+# Dashboard access-users materialization
+# -------------------------
+def _refresh_access_users(guild):
+    """Recompute + persist who currently has dashboard access for one guild.
+
+    Mirrors the dashboard's own access rule (utils/auth.py):
+      - 'admin' access: the guild OWNER, or any member with the Administrator or
+        Manage Server permission — full, ungated dashboard access.
+      - 'role' access: a member who holds one of the server's allowed roles
+        (dashboard_role_access) — narrowed per dashboard_role_feature_access.
+    A member who qualifies as BOTH is recorded as 'admin' (admin wins, matching
+    resolve_server_access).
+
+    Writes one row per (server, member) into dashboard_access_users and prunes
+    rows for members who no longer qualify. Requires the members intent (on).
+    """
+    if not engine:
+        return
+
+    # Allowed role IDs for this server (empty if role access disabled / none set).
+    with engine.connect() as conn:
+        allowed_rows = conn.execute(
+            text(
+                """
+                SELECT s.allow_role_access, r.discord_role_id
+                FROM dashboard_access_settings s
+                LEFT JOIN dashboard_role_access r
+                  ON r.discord_server_id = s.discord_server_id
+                WHERE s.discord_server_id = :sid
+                """
+            ),
+            {"sid": guild.id},
+        ).fetchall()
+
+    allow_role_access = bool(allowed_rows and allowed_rows[0][0])
+    allowed_role_ids = {int(row[1]) for row in allowed_rows if row[1] is not None} if allow_role_access else set()
+
+    rows = []
+    for member in guild.members:
+        if member.bot:
+            continue
+        perms = member.guild_permissions
+        is_owner = member.id == getattr(guild, "owner_id", None)
+        name = getattr(member, "global_name", None) or member.name
+
+        if is_owner or perms.administrator or perms.manage_guild:
+            via = "Owner" if is_owner else ("Administrator" if perms.administrator else "Manage Server")
+            rows.append({"d": member.id, "n": name, "t": "admin", "v": via})
+            continue
+
+        if allowed_role_ids:
+            member_role_ids = {r.id for r in member.roles}
+            matched = member_role_ids & allowed_role_ids
+            if matched:
+                # Name the granting role(s) for the "via" column.
+                matched_names = [r.name for r in member.roles if r.id in matched]
+                rows.append(
+                    {
+                        "d": member.id,
+                        "n": name,
+                        "t": "role",
+                        "v": "Role: " + ", ".join(matched_names),
+                    }
+                )
+
+    keep_ids = [r["d"] for r in rows]
+    with engine.begin() as conn:
+        if rows:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO dashboard_access_users
+                    (discord_server_id, discord_id, username, access_type, via, updated_at)
+                    VALUES (:sid, :d, :n, :t, :v, NOW())
+                    ON CONFLICT (discord_server_id, discord_id)
+                    DO UPDATE SET
+                        username = EXCLUDED.username,
+                        access_type = EXCLUDED.access_type,
+                        via = EXCLUDED.via,
+                        updated_at = NOW()
+                    """
+                ),
+                [{"sid": guild.id, **r} for r in rows],
+            )
+        # Prune members who no longer qualify (lost a role/permission, left).
+        if keep_ids:
+            conn.execute(
+                text(
+                    """
+                    DELETE FROM dashboard_access_users
+                    WHERE discord_server_id = :sid
+                      AND discord_id <> ALL(:keep)
+                    """
+                ),
+                {"sid": guild.id, "keep": keep_ids},
+            )
+        else:
+            conn.execute(
+                text("DELETE FROM dashboard_access_users WHERE discord_server_id = :sid"),
+                {"sid": guild.id},
+            )
+    logger.debug(f"[AccessUsers] {len(rows)} member(s) with dashboard access for guild {guild.id}")
+
+
+# -------------------------
 # Discord username backfill
 # -------------------------
 @tasks.loop(minutes=30)
@@ -4404,6 +4509,15 @@ async def update_discord_usernames_task():
                             updates,
                         )
                     logger.debug(f"[DiscordNames] Refreshed {len(updates)} name(s) for guild {guild.id}")
+
+                # Materialize the list of members who currently have dashboard
+                # access, so the Access Control page can show it without live
+                # Discord calls. Reuses the members already in cache (members
+                # intent is on). See _compute_access_users.
+                try:
+                    _refresh_access_users(guild)
+                except Exception as au_err:
+                    logger.warning(f"⚠️ access-users refresh error for {guild.id}: {au_err}")
             except Exception as guild_error:
                 logger.warning(f"⚠️ Discord username backfill error for {guild.id}: {guild_error}")
     except Exception as e:
