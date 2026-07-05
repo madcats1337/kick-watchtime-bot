@@ -4332,13 +4332,17 @@ async def update_roles_task():
 # -------------------------
 @tasks.loop(minutes=30)
 async def update_discord_usernames_task():
-    """Cache each linked viewer's Discord display name onto their links row.
+    """Cache each linked viewer's Discord display name onto their links row,
+    and keep servers.owner_discord_id in sync with the guild owner.
 
     The dashboard's Top Participants list shows the Discord name, which only the
     Discord API knows. Rather than have the dashboard call Discord per
     participant, we resolve it here (where discord.py already has the member
     objects) and persist it to links.discord_username. Runs periodically so
     name changes are picked up; only writes when the value actually changed.
+
+    Piggybacks the same per-guild loop to persist the guild owner so the
+    dashboard can gate owner-only extension writes (current-slot push).
     """
     if not engine:
         return
@@ -4346,6 +4350,25 @@ async def update_discord_usernames_task():
         for guild in bot.guilds:
             set_server(guild.id, guild.name)
             try:
+                # Keep servers.owner_discord_id in sync with the Discord guild
+                # owner. The dashboard gates owner-only extension writes (e.g. the
+                # current-slot push) on this, so a mod/role-access user running the
+                # extension can't write to the streamer's history. Only write when
+                # it actually changed (ownership transfer is rare).
+                owner_id = getattr(guild, "owner_id", None)
+                if owner_id:
+                    with engine.begin() as conn:
+                        conn.execute(
+                            text(
+                                """
+                                UPDATE servers SET owner_discord_id = :oid
+                                WHERE discord_server_id = :sid
+                                  AND (owner_discord_id IS DISTINCT FROM :oid)
+                                """
+                            ),
+                            {"oid": int(owner_id), "sid": guild.id},
+                        )
+
                 with engine.connect() as conn:
                     rows = conn.execute(
                         text(
