@@ -1758,6 +1758,12 @@ try:
             )
         )
 
+        # Cache the viewer's Discord display name on the link row so the
+        # dashboard can show it without a live Discord API call per participant.
+        # Populated on link writes when a member is resolvable and refreshed by
+        # the periodic backfill loop (update_discord_usernames_task).
+        conn.execute(text("ALTER TABLE links ADD COLUMN IF NOT EXISTS discord_username TEXT"))
+
         # Create pending_links table
         conn.execute(
             text(
@@ -4322,6 +4328,74 @@ async def update_roles_task():
 
 
 # -------------------------
+# Discord username backfill
+# -------------------------
+@tasks.loop(minutes=30)
+async def update_discord_usernames_task():
+    """Cache each linked viewer's Discord display name onto their links row.
+
+    The dashboard's Top Participants list shows the Discord name, which only the
+    Discord API knows. Rather than have the dashboard call Discord per
+    participant, we resolve it here (where discord.py already has the member
+    objects) and persist it to links.discord_username. Runs periodically so
+    name changes are picked up; only writes when the value actually changed.
+    """
+    if not engine:
+        return
+    try:
+        for guild in bot.guilds:
+            set_server(guild.id, guild.name)
+            try:
+                with engine.connect() as conn:
+                    rows = conn.execute(
+                        text(
+                            """
+                            SELECT DISTINCT discord_id, discord_username
+                            FROM links
+                            WHERE discord_server_id = :sid AND discord_id IS NOT NULL
+                            """
+                        ),
+                        {"sid": guild.id},
+                    ).fetchall()
+
+                updates = []
+                for discord_id, stored_name in rows:
+                    member = guild.get_member(int(discord_id))
+                    if not member:
+                        continue  # not cached / left the server; leave stored value
+                    # Display name = global_name, else the account username.
+                    name = getattr(member, "global_name", None) or member.name
+                    if name and name != stored_name:
+                        updates.append({"d": int(discord_id), "n": name, "sid": guild.id})
+
+                if updates:
+                    with engine.begin() as conn:
+                        # Update ALL platform rows for this (discord_id, server).
+                        conn.execute(
+                            text(
+                                """
+                                UPDATE links SET discord_username = :n
+                                WHERE discord_id = :d AND discord_server_id = :sid
+                                """
+                            ),
+                            updates,
+                        )
+                    logger.debug(f"[DiscordNames] Refreshed {len(updates)} name(s) for guild {guild.id}")
+            except Exception as guild_error:
+                logger.warning(f"⚠️ Discord username backfill error for {guild.id}: {guild_error}")
+    except Exception as e:
+        logger.error(f"⚠️ Error in Discord username backfill task: {e}")
+        import traceback
+
+        traceback.print_exc()
+
+
+@update_discord_usernames_task.before_loop
+async def before_update_discord_usernames():
+    await bot.wait_until_ready()
+
+
+# -------------------------
 # Cleanup expired verification codes and old chat data
 # -------------------------
 @tasks.loop(seconds=5)  # Check every 5 seconds for fast response
@@ -4411,6 +4485,25 @@ async def check_oauth_notifications_task():
                                 platform=link_platform,
                             )
                         else:
+                            # Immediately cache the Discord display name on the
+                            # new link row(s) so the dashboard has it without
+                            # waiting for the periodic backfill. Best-effort.
+                            try:
+                                _dname = getattr(user, "global_name", None) or user.name
+                                if _dname and guild_id:
+                                    with engine.begin() as _conn:
+                                        _conn.execute(
+                                            text(
+                                                """
+                                                UPDATE links SET discord_username = :n
+                                                WHERE discord_id = :d AND discord_server_id = :sid
+                                                """
+                                            ),
+                                            {"n": _dname, "d": int(discord_id), "sid": int(guild_id)},
+                                        )
+                            except Exception as _name_err:
+                                logger.debug(f"[DiscordNames] immediate cache skipped: {_name_err}")
+
                             # Send success message via DM
                             try:
                                 await user.send(
@@ -8076,6 +8169,10 @@ async def on_ready():
         if not update_roles_task.is_running():
             update_roles_task.start()
             logger.debug("✅ Role updater started")
+
+        if not update_discord_usernames_task.is_running() and engine:
+            update_discord_usernames_task.start()
+            logger.debug("✅ Discord username backfill started (runs every 30 minutes)")
 
         if not cleanup_pending_links_task.is_running():
             cleanup_pending_links_task.start()
