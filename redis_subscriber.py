@@ -26,6 +26,7 @@ from sqlalchemy import create_engine, text  # type: ignore
 
 from features.games.guess_the_balance import gtb_rank_marker
 from utils.log_context import server_context
+from utils.server_urls import get_server_base_url
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,17 @@ def build_raffle_kick_message(winner: dict, prize_description: str) -> str:
     ticket = winner.get("winning_ticket", "?")
     prize = prize_description or "Monthly Raffle Prize"
     return f"🎉 Raffle Winner: {name} won {prize}! Ticket #{ticket}. Congratulations! 🎊"
+
+
+def resolve_public_server_url(guild_id):
+    """Public per-server base URL (https://<subdomain>.<base-domain>) or None.
+
+    Viewer-facing pages like /provably-fair/winners resolve their server from
+    the request's subdomain, so links must use the server's own subdomain on
+    the public base domain. Returns None when the server has no subdomain, in
+    which case no public page exists to link to.
+    """
+    return get_server_base_url(engine, guild_id)
 
 
 class RedisSubscriber:
@@ -1827,9 +1839,11 @@ class RedisSubscriber:
                     guild_settings = get_guild_settings(int(guild_id))
                     if guild_settings:
                         channel_id = guild_settings.get_int("raffle_announcement_channel_id")
-                        # Same dashboard_url bot_setting the clip-buffer calls reuse —
-                        # used to build the "Verify this draw" link below.
-                        dashboard_url = (guild_settings.dashboard_url or "").rstrip("/") or None
+                        # Base for the "Verify this draw" link below: the server's
+                        # own public subdomain. Deliberately NOT dashboard_url —
+                        # that's the admin/API host, where the public winners page
+                        # can't resolve the server. No subdomain → no link.
+                        dashboard_url = resolve_public_server_url(guild_id)
                         logger.info(f"[Raffle] Got channel_id {channel_id} from guild settings for guild {guild_id}")
                 except ImportError as ie:
                     logger.info(f"[Raffle] Could not import get_guild_settings: {ie}")

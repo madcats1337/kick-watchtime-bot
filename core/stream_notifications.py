@@ -423,7 +423,11 @@ async def _control_clip_buffer(discord_server_id, streamer, is_live, platform):
             ).fetchall()
         settings = {key: value for key, value in rows}
         kick_channel = settings.get("kick_channel")
-        dashboard_url = settings.get("dashboard_url")
+        # Prefer the derived per-server base (servers.subdomain + public
+        # domain); the stored dashboard_url is only a stale-prone fallback.
+        from utils.server_urls import get_server_base_url
+
+        dashboard_url = get_server_base_url(engine, discord_server_id) or settings.get("dashboard_url")
         api_key = settings.get("bot_api_key")
         auto_start_buffer = str(settings.get("clips_auto_start_on_live", "true")).lower() != "false"
 

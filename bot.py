@@ -28,6 +28,7 @@ from sqlalchemy import create_engine, text  # type: ignore
 # before the core/redis_subscriber imports below, which can log at import time.
 from utils.log_context import clear_server, server_context, set_server  # noqa: E402
 from utils.logging_config import setup_logging  # noqa: E402
+from utils.server_urls import get_server_base_url  # noqa: E402
 from utils.subscription_tier import server_has_feature, upgrade_message  # noqa: E402
 
 # Platform that the chat message currently being handled arrived on ('kick' |
@@ -1298,6 +1299,11 @@ class KickWebSocketManager:
                                     api_key = value
                                 elif key == "clip_duration":
                                     clip_duration = int(value) if value else 30
+
+                        # Prefer the derived per-server base (servers.subdomain +
+                        # public domain); the stored dashboard_url is only a
+                        # fallback and may be stale (pre-rebrand host).
+                        dashboard_url = get_server_base_url(engine, guild_id) or dashboard_url
 
                         if not dashboard_url or not api_key:
                             logger.info(f"[Clip] ❌ Dashboard URL or API key not configured")
@@ -3624,11 +3630,14 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                 # Refresh settings from database to get latest values
                                                 bot_settings.refresh()
 
-                                                # Get Dashboard URL from bot_settings (database)
-                                                dashboard_url = bot_settings.dashboard_url
+                                                # Derived per-server base first; the stored
+                                                # dashboard_url setting is a stale-prone fallback.
+                                                dashboard_url = (
+                                                    get_server_base_url(engine, guild_id) or bot_settings.dashboard_url
+                                                )
                                                 api_key = bot_settings.bot_api_key
 
-                                                logger.info(f"[Clip] DEBUG - dashboard_url from DB: '{dashboard_url}'")
+                                                logger.info(f"[Clip] DEBUG - dashboard_url resolved: '{dashboard_url}'")
                                                 logger.info(f"[Clip] DEBUG - bot_api_key exists: {bool(api_key)}")
 
                                                 if not dashboard_url:
@@ -4991,6 +5000,10 @@ async def clip_buffer_management_task():
                         bot_api_key = value
                     elif key == "clips_auto_start_on_live":
                         auto_start_buffer = str(value).lower() != "false"
+
+            # Prefer the derived per-server base (servers.subdomain + public
+            # domain); the stored dashboard_url is only a stale-prone fallback.
+            dashboard_url = get_server_base_url(engine, guild_id) or dashboard_url
 
             # Skip guilds without required configuration
             if not kick_channel:
