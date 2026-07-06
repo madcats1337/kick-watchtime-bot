@@ -93,13 +93,22 @@ _LOGO_PATH = os.path.join(_ASSET_ROOT, "branding", "shuffle_logo.png")
 _LOGO_FILENAME = "shuffle_logo.png"
 
 
-def _build_panel_message_kwargs(view, has_logo=False, clear_attachments=False):
-    """Build send/edit kwargs for a shuffle panel message, including the logo attachment when needed."""
+def _build_panel_message_kwargs(view, has_logo=False, clear_attachments=False, for_send=False):
+    """Build send/edit kwargs for a shuffle panel message, including the logo attachment when needed.
+
+    Messageable.send() and Message.edit() take different kwargs for files:
+    send() wants files=[...] (and can't clear anything), edit() wants attachments=[...]
+    (where [] clears existing attachments). Pass for_send=True from the create path.
+    """
     kwargs = {"view": view}
-    if has_logo:
-        kwargs["attachments"] = [discord.File(_LOGO_PATH, filename=_LOGO_FILENAME)]
-    elif clear_attachments:
-        kwargs["attachments"] = []
+    if for_send:
+        if has_logo:
+            kwargs["files"] = [discord.File(_LOGO_PATH, filename=_LOGO_FILENAME)]
+    else:
+        if has_logo:
+            kwargs["attachments"] = [discord.File(_LOGO_PATH, filename=_LOGO_FILENAME)]
+        elif clear_attachments:
+            kwargs["attachments"] = []
     return kwargs
 
 
@@ -560,7 +569,7 @@ class ShufflePanel:
             )
             if not has_logo:
                 logger.warning(f"[Shuffle] {_LOGO_PATH} not found — posting panel without the logotype banner.")
-            message = await channel.send(**_build_panel_message_kwargs(view, has_logo=has_logo))
+            message = await channel.send(**_build_panel_message_kwargs(view, has_logo=has_logo, for_send=True))
 
             self.panel_guild_id = channel.guild.id
             self.panel_channel_id = channel.id

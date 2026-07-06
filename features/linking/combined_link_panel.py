@@ -320,13 +320,22 @@ class CombinedLinkPanelView(LayoutView):
         logger.info(f"[CombinedLink] Sent {platform} OAuth link to {interaction.user.name} ({discord_id})")
 
 
-def _build_panel_message_kwargs(view, has_logo=False, clear_attachments=False):
-    """Build send/edit kwargs for a link panel message, including the logo attachment when needed."""
+def _build_panel_message_kwargs(view, has_logo=False, clear_attachments=False, for_send=False):
+    """Build send/edit kwargs for a link panel message, including the logo attachment when needed.
+
+    Messageable.send() and Message.edit() take different kwargs for files:
+    send() wants files=[...] (and can't clear anything), edit() wants attachments=[...]
+    (where [] clears existing attachments). Pass for_send=True from the create path.
+    """
     kwargs = {"view": view}
-    if has_logo:
-        kwargs["attachments"] = [discord.File(_LOGO_PATH, filename=_LOGO_FILENAME)]
-    elif clear_attachments:
-        kwargs["attachments"] = []
+    if for_send:
+        if has_logo:
+            kwargs["files"] = [discord.File(_LOGO_PATH, filename=_LOGO_FILENAME)]
+    else:
+        if has_logo:
+            kwargs["attachments"] = [discord.File(_LOGO_PATH, filename=_LOGO_FILENAME)]
+        elif clear_attachments:
+            kwargs["attachments"] = []
     return kwargs
 
 
@@ -436,7 +445,7 @@ class CombinedLinkPanel:
             # can't carry one). All copy lives inside the view's TextDisplays.
             if not has_logo:
                 logger.warning(f"[CombinedLink] {_LOGO_PATH} not found — posting panel without the logotype banner.")
-            message = await channel.send(**_build_panel_message_kwargs(view, has_logo=has_logo))
+            message = await channel.send(**_build_panel_message_kwargs(view, has_logo=has_logo, for_send=True))
             self.panel_guild_id = channel.guild.id
             self.panel_channel_id = channel.id
             self.panel_message_id = message.id
