@@ -617,7 +617,18 @@ async def setup_shuffle_panel_system(bot, engine, settings_getter):
             try:
                 channel = bot.get_channel(panel.panel_channel_id)
                 if channel:
-                    message = await channel.fetch_message(panel.panel_message_id)
+                    try:
+                        message = await channel.fetch_message(panel.panel_message_id)
+                    except discord.NotFound:
+                        # The stored panel message was deleted in Discord; the DB row
+                        # is a ghost. Re-post the panel (create_panel overwrites the
+                        # stale message_id) so verification keeps working after a restart.
+                        logger.warning(
+                            f"[Shuffle] Stored panel message for guild {guild_id} is gone (404); re-posting."
+                        )
+                        if await panel.create_panel(channel):
+                            logger.info(f"[Shuffle] Re-posted missing panel for guild {guild_id}")
+                        continue
                     has_logo = os.path.isfile(_LOGO_PATH)
                     view = ShufflePanelView(
                         bot,
