@@ -7,7 +7,7 @@ Handles giveaway lifecycle, entry tracking, and winner selection.
 import asyncio
 import hashlib
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from sqlalchemy import text
 
@@ -263,8 +263,11 @@ class GiveawayManager:
                 },
             )
 
-            # Check if user qualifies for auto-entry
-            cutoff_time = datetime.utcnow() - timedelta(minutes=time_window)
+            # Check if user qualifies for auto-entry.
+            # Compute the time window entirely in the DB (CURRENT_TIMESTAMP - INTERVAL)
+            # so both sides of the comparison use the DB server clock. Comparing the
+            # DB-populated `timestamp` against a Python `datetime.utcnow()` cutoff would
+            # silently return 0 if the DB session timezone were ever behind UTC.
             message_count = conn.execute(
                 text(
                     """
@@ -272,10 +275,10 @@ class GiveawayManager:
                 FROM giveaway_chat_activity
                 WHERE giveaway_id = :giveaway_id
                 AND kick_username = :username
-                AND timestamp >= :cutoff
+                AND timestamp >= CURRENT_TIMESTAMP - (:window_minutes * INTERVAL '1 minute')
             """
                 ),
-                {"giveaway_id": giveaway_id, "username": kick_username, "cutoff": cutoff_time},
+                {"giveaway_id": giveaway_id, "username": kick_username, "window_minutes": time_window},
             ).fetchone()
 
             conn.commit()

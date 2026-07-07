@@ -34,7 +34,7 @@ def run_migration():
                 description TEXT,
                 entry_method VARCHAR(20) NOT NULL DEFAULT 'keyword',
                 keyword VARCHAR(50),
-                messages_required INTEGER DEFAULT 5,
+                messages_required INTEGER DEFAULT 1,
                 time_window_minutes INTEGER DEFAULT 10,
                 allow_multiple_entries BOOLEAN DEFAULT FALSE,
                 max_entries_per_user INTEGER DEFAULT 1,
