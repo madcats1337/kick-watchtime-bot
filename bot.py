@@ -4859,7 +4859,35 @@ async def proactive_twitch_token_refresh_task():
                     logger.info(f"[Twitch] ✅ Refreshed token for {twitch_username or user_id}")
             except Exception as e:
                 failed += 1
-                logger.info(f"[Twitch] ❌ Failed to maintain token for {twitch_username or user_id}: {e}")
+                # A 400 from id.twitch.tv/oauth2/token on a refresh grant means the
+                # refresh token is PERMANENTLY invalid (authorization revoked,
+                # client secret rotated, or a stale row for a retired account —
+                # e.g. the old lelebotxyz bot account). It will never succeed, so
+                # clear it to stop retrying every hour; the maintenance SELECT
+                # skips NULL refresh tokens. A fresh OAuth link rewrites the row.
+                if getattr(e, "status", None) == 400:
+                    try:
+                        with engine.begin() as conn:
+                            conn.execute(
+                                text(
+                                    """
+                                    UPDATE twitch_oauth_tokens
+                                    SET refresh_token = NULL, updated_at = CURRENT_TIMESTAMP
+                                    WHERE user_id = :u AND discord_server_id = :sid
+                                    """
+                                ),
+                                {"u": user_id, "sid": row_server_id},
+                            )
+                        logger.warning(
+                            f"[Twitch] 🧹 Refresh token for {twitch_username or user_id} is permanently "
+                            f"invalid (400) — cleared it; re-link the account if it is still needed"
+                        )
+                    except Exception as db_err:
+                        logger.info(
+                            f"[Twitch] Could not clear dead refresh token for {twitch_username or user_id}: {db_err}"
+                        )
+                else:
+                    logger.info(f"[Twitch] ❌ Failed to maintain token for {twitch_username or user_id}: {e}")
             finally:
                 await api.close()
 
