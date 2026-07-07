@@ -82,7 +82,6 @@ from raffle_system.commands import setup as setup_raffle_commands
 
 # Raffle system imports
 from raffle_system.database import (
-    create_new_period,
     get_current_period,
     migrate_add_created_at_to_shuffle_wagers,
     migrate_add_panel_type_to_link_panels,
@@ -8380,37 +8379,23 @@ async def on_ready():
                 logger.debug(f"  - slot_calls_channel_id: {guild_settings.slot_calls_channel_id}")
                 logger.debug(f"  - raffle_announcement_channel_id: {guild_settings.raffle_announcement_channel_id}")
 
-                # Ensure this guild has an active raffle period.
-                # IMPORTANT: only create a period when the lookup SUCCEEDS and
-                # genuinely returns nothing. A DB error (get_current_period now
-                # re-raises) must NOT fall through to create_new_period — that
-                # would end the real active period and start a bogus new one
-                # (exactly the bug a transient DB drop caused on the pg upgrade).
-                # On error, skip creation; the per-minute scheduler reconciles
-                # once the DB is healthy again.
+                # Raffle period creation is opt-in — the bot NEVER auto-creates a
+                # period on startup/activation. A server begins with no active
+                # period; the user starts one from the dashboard (Start New
+                # Period) or with !rafflestart, and auto_renew (off by default)
+                # governs whether it rolls over when it ends. We still look up the
+                # current period here purely to log its state (and never create).
+                # get_current_period re-raises on DB error, so guard the lookup.
                 try:
                     current_period = get_current_period(engine, discord_server_id=guild.id)
                 except Exception as e:
                     current_period = None
-                    logger.warning(
-                        f"⚠️ Could not check raffle period " f"(DB error: {e}); skipping period creation this startup"
-                    )
-                    create_period = False
+                    logger.warning(f"⚠️ Could not check raffle period (DB error: {e})")
                 else:
-                    create_period = current_period is None
-
-                if create_period:
-                    # Create initial raffle period for this month for this guild
-                    start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-                    if start.month == 12:
-                        end = start.replace(year=start.year + 1, month=1, day=1) - timedelta(seconds=1)
+                    if current_period:
+                        logger.debug(f"✅ Active raffle period found (#{current_period['id']})")
                     else:
-                        end = start.replace(month=start.month + 1, day=1) - timedelta(seconds=1)
-
-                    period_id = create_new_period(engine, start, end, discord_server_id=guild.id)
-                    logger.debug(f"✅ Created initial raffle period #{period_id}")
-                elif current_period:
-                    logger.debug(f"✅ Active raffle period found (#{current_period['id']})")
+                        logger.debug(f"No active raffle period for guild {guild.id} — dormant until one is started")
 
                 # Setup gifted sub tracker for this guild
                 gifted_sub_trackers[guild.id] = setup_gifted_sub_handler(

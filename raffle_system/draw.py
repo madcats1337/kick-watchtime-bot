@@ -69,6 +69,23 @@ class RaffleDraw:
                 committed_seed = period_row[1]
                 committed_commitment = period_row[2]
 
+                # Prize fallback: when no per-draw prize is given, use the global
+                # raffle_prize (server-wide bot_settings) so the recorded +
+                # announced prize still reflects what the raffle offers.
+                if not (prize_description or "").strip() and server_id is not None:
+                    try:
+                        gp = conn.execute(
+                            text(
+                                "SELECT value FROM bot_settings "
+                                "WHERE key = 'raffle_prize' AND discord_server_id = :sid"
+                            ),
+                            {"sid": server_id},
+                        ).fetchone()
+                        if gp and (gp[0] or "").strip():
+                            prize_description = gp[0].strip()
+                    except Exception as e:
+                        logger.warning(f"Could not read global raffle_prize for draw: {e}")
+
                 # Get all participants with tickets (excluding those in raffle_exclusions and excluded_discord_ids)
                 query = """
                     SELECT rt.discord_id, rt.kick_name, rt.total_tickets

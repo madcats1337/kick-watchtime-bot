@@ -66,6 +66,38 @@ class RaffleScheduler:
             logger.warning(f"Failed to get raffle_auto_draw setting from DB: {e}")
         return self._auto_draw_default
 
+    @property
+    def auto_renew(self):
+        """
+        Get the server-wide raffle_auto_renew setting (refreshes on each check).
+
+        When TRUE, a new period is created automatically once the current one
+        ends. When FALSE (the default), the raffle goes dormant at period end —
+        no new period is created until the user starts one from the dashboard or
+        with !rafflestart. This is what makes period creation opt-in.
+        """
+        try:
+            with self.engine.begin() as conn:
+                result = conn.execute(
+                    text(
+                        """
+                        SELECT value FROM bot_settings
+                        WHERE key = 'raffle_auto_renew' AND discord_server_id = :server_id
+                    """
+                    ),
+                    {"server_id": self.discord_server_id},
+                )
+                row = result.fetchone()
+                if row:
+                    value = row[0]
+                    if isinstance(value, str):
+                        return value.lower() == "true"
+                    return bool(value)
+        except Exception as e:
+            logger.warning(f"Failed to get raffle_auto_renew setting from DB: {e}")
+        # Default OFF: renewal is opt-in.
+        return False
+
     def check_period_transition(self):
         """
         Check if we need to transition to a new raffle period
@@ -78,11 +110,19 @@ class RaffleScheduler:
             current_period = get_current_period(self.engine, self.discord_server_id)
 
             if not current_period:
-                logger.warning(
-                    f"[Server {self.discord_server_id}] No active raffle period found - creating monthly period!"
+                # No active period. Creation is opt-in, so normally we stay
+                # dormant — EXCEPT when auto_renew is on: most periods don't end
+                # via the now>end_date transition below. An early auto-draw, a
+                # dashboard draw, or "End Current Period" marks the period
+                # 'ended' BEFORE end_date passes (draw_winner's update_period),
+                # so _transition_to_new_period never runs for them and renewal
+                # has to be recovered here once the scheduled end has passed.
+                if self.auto_renew:
+                    return self._maybe_renew_after_end()
+                logger.debug(
+                    f"[Server {self.discord_server_id}] No active raffle period — staying dormant (start one to begin)"
                 )
-                # Auto-create monthly period starting on 1st of current month
-                return self._create_monthly_period()
+                return None
 
             now = datetime.now()
             end_date = current_period["end_date"]
@@ -127,6 +167,56 @@ class RaffleScheduler:
         except Exception as e:
             logger.error(f"Failed to check period transition: {e}")
             return None
+
+    def _maybe_renew_after_end(self):
+        """
+        Auto-renew recovery for periods that ended without a transition.
+
+        Called from check_period_transition when no period is active and
+        auto_renew is ON. Rolls into a fresh monthly period once the latest
+        period's SCHEDULED end has passed:
+          • no periods at all → raffle never started, stay dormant
+          • latest end_date still in the future (drawn/ended early) → stay
+            dormant until the scheduled end passes, then renew
+          • latest end_date passed → create the current month's period
+
+        Returns the transition dict from _create_monthly_period, or None.
+        """
+        if self.discord_server_id is not None:
+            query = text(
+                """
+                SELECT end_date FROM raffle_periods
+                WHERE discord_server_id = :server_id
+                ORDER BY end_date DESC
+                LIMIT 1
+            """
+            )
+            params = {"server_id": self.discord_server_id}
+        else:
+            query = text("SELECT end_date FROM raffle_periods ORDER BY end_date DESC LIMIT 1")
+            params = {}
+
+        with self.engine.begin() as conn:
+            row = conn.execute(query, params).fetchone()
+
+        if not row:
+            logger.debug(f"[Server {self.discord_server_id}] Auto-renew ON but no periods exist — staying dormant")
+            return None
+
+        latest_end = row[0]
+        if isinstance(latest_end, str):
+            latest_end = datetime.fromisoformat(latest_end)
+
+        if datetime.now() <= latest_end:
+            # Ended early (draw or manual end). Renew when the schedule says the
+            # period would have ended, not immediately — otherwise "End Current
+            # Period" would be undone within a minute.
+            return None
+
+        logger.info(
+            f"[Server {self.discord_server_id}] Auto-renew ON — latest period's end passed, creating next monthly period"
+        )
+        return self._create_monthly_period()
 
     def _create_monthly_period(self):
         """Create a new monthly raffle period starting on 1st of current month"""
@@ -235,7 +325,16 @@ class RaffleScheduler:
 
             logger.info(f"✅ Period #{old_period['id']} closed")
 
-            # Step 3: Create new monthly period
+            # Step 3: Roll over into a new period ONLY when auto_renew is on.
+            # When off (the default), the raffle goes dormant after the period
+            # ends — the user must start the next one manually. This is the
+            # core opt-in behavior; it mirrors the wager-leaderboard rollover.
+            if not self.auto_renew:
+                logger.info(
+                    f"[Server {self.discord_server_id}] Auto-renew OFF — period #{old_period['id']} ended, no new period created"
+                )
+                return transition_info
+
             # IMPORTANT: Don't clear tickets if auto-draw is disabled and no winner drawn yet
             # This allows manual winner drawing after period ends
             clear_tickets = self.auto_draw or old_period.get("winner_discord_id") is not None
@@ -273,7 +372,7 @@ class RaffleScheduler:
             logger.info(
                 f"✅ New monthly period #{new_period_id} created ({start.strftime('%b %d')} - {end.strftime('%b %d, %Y')})"
             )
-            logger.info("� Next period will auto-start on 1st of next month")
+            logger.info("Auto-renew ON — next period rolled over automatically")
 
             return transition_info
 
@@ -443,16 +542,19 @@ async def setup_raffle_scheduler(bot, engine, auto_draw=False, announcement_chan
                     )
                 return
 
+            # Announce winner if drawn — independent of rollover. With
+            # auto-renew OFF the transition ends the period WITHOUT creating a
+            # successor (new_period_id=None), and the drawn winner must still
+            # be announced.
+            if transition and transition.get("winner_drawn") and transition.get("winner_info"):
+                await scheduler.announce_winner(transition["winner_info"])
+
             # Process period transition whenever it happens (not just at midnight on 1st)
             if transition and transition.get("new_period_id"):
                 logger.info(f"📊 [Server {discord_server_id}] Period transition completed:")
                 if transition["old_period_id"]:
                     logger.info(f"   Old period: #{transition['old_period_id']}")
                 logger.info(f"   New period: #{transition['new_period_id']}")
-
-                # Announce winner if drawn
-                if transition.get("winner_drawn") and transition.get("winner_info"):
-                    await scheduler.announce_winner(transition["winner_info"])
 
                 # Announce new period
                 new_period = get_current_period(engine, discord_server_id=scheduler.discord_server_id)

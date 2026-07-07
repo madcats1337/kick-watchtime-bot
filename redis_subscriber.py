@@ -662,7 +662,36 @@ class RedisSubscriber:
         elif action == "start_period":
             start_date = data.get("start_date")
             end_date = data.get("end_date")
-            await self.announce_in_chat(f"🎟️ New raffle period started! {start_date} to {end_date}")
+            server_id = data.get("discord_server_id")
+
+            # Pull the global raffle title/prize (server-wide bot_settings) so the
+            # announcement names the raffle and states the prize when configured.
+            raffle_title = ""
+            raffle_prize = ""
+            if server_id is not None:
+                try:
+                    from bot import get_guild_settings
+
+                    gs = get_guild_settings(int(server_id))
+                    if gs is not None:
+                        # The manager caches bot_settings; the dashboard saved
+                        # title/prize moments ago and the settings-sync event may
+                        # not have been processed yet — re-read from the DB so
+                        # the announcement can't use stale values.
+                        gs.refresh()
+                        raffle_title = (gs.get("raffle_title", "") or "").strip()[:200]
+                        raffle_prize = (gs.get("raffle_prize", "") or "").strip()[:500]
+                except Exception as e:
+                    logger.warning(f"[Raffle] Could not read raffle title/prize for start announcement: {e}")
+
+            label = raffle_title or "New raffle period"
+            msg = f"🎟️ {label} started! {start_date} to {end_date}"
+            if raffle_prize:
+                msg += f" — Prize: {raffle_prize}"
+            await self.announce_in_chat(
+                msg,
+                guild_id=int(server_id) if server_id is not None else None,
+            )
 
     async def handle_raffle_event(self, action, data):
         """Handle raffle events from dashboard"""
@@ -716,7 +745,14 @@ class RedisSubscriber:
                         winner = draw_handler.draw_winner(
                             period_id=period_id,
                             drawn_by_discord_id=drawn_by_discord_id,
-                            prize_description=f"{prize_description} (Winner {i+1}/{winner_count})",
+                            # Suffix only when a prize was given — an empty prize
+                            # must stay empty so draw_winner's global raffle_prize
+                            # fallback applies instead of recording "(Winner 1/3)".
+                            prize_description=(
+                                f"{prize_description} (Winner {i+1}/{winner_count})"
+                                if (prize_description or "").strip()
+                                else ""
+                            ),
                             excluded_discord_ids=excluded_discord_ids if excluded_discord_ids else None,
                             update_period=(i == 0),
                         )

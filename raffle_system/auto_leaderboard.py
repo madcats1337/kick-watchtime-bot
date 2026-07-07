@@ -39,11 +39,25 @@ class AutoLeaderboard:
 
             logger.debug(f"[Auto-Leaderboard] Found channel: #{self.channel.name}")
 
-            # Try to find existing leaderboard message
+            # Try to find our existing leaderboard message. Two accepted shapes:
+            #   • the default heading, matched exactly (covers messages posted
+            #     before the footer marker existed, incl. the footer-less
+            #     no-period/error variants), or
+            #   • a custom raffle title (🎟️-prefixed) TOGETHER WITH the
+            #     "Updates every …" footer every leaderboard embed now sets.
+            # A bare startswith("🎟️") is not enough — other bot embeds share
+            # the emoji (e.g. "🎟️ Watchtime Conversion Result") and would get
+            # adopted and overwritten by the next leaderboard edit.
             async for message in self.channel.history(limit=50):
                 if message.author == self.bot.user and message.embeds:
                     embed = message.embeds[0]
-                    if embed.title and "🎟️ Raffle Ticket Leaderboard" in embed.title:
+                    if not embed.title or not embed.title.startswith("🎟️"):
+                        continue
+                    footer_text = embed.footer.text if embed.footer else None
+                    is_ours = embed.title == "🎟️ Raffle Ticket Leaderboard" or (
+                        footer_text and footer_text.startswith("Updates every")
+                    )
+                    if is_ours:
                         self.message_id = message.id
                         logger.debug(f"[Auto-Leaderboard] Found existing message: {self.message_id}")
                         break
@@ -121,9 +135,35 @@ class AutoLeaderboard:
 
             # Resolve the configured wager platform name for this server's messages.
             platform = "Shuffle"
+            # Global raffle details (server-wide bot_settings). Shown on the
+            # leaderboard when set; blank falls back to the default heading.
+            raffle_title = ""
+            raffle_prize = ""
             getter = getattr(self.bot, "get_guild_settings", None)
             if callable(getter) and self.server_id is not None:
-                platform = platform_display_name(getter(self.server_id))
+                guild_settings = getter(self.server_id)
+                platform = platform_display_name(guild_settings)
+                try:
+                    # Truncate defensively: Discord caps embed titles at 256
+                    # chars and rejects the whole embed past that — a too-long
+                    # title would break every leaderboard update.
+                    raffle_title = (guild_settings.get("raffle_title", "") or "").strip()[:200]
+                    raffle_prize = (guild_settings.get("raffle_prize", "") or "").strip()[:500]
+                except Exception:
+                    pass
+
+            # Embed heading: prefix the configured raffle title when present.
+            embed_title = f"🎟️ {raffle_title}" if raffle_title else "🎟️ Raffle Ticket Leaderboard"
+
+            # Footer marker ("Updates every …") — set on every variant of the
+            # leaderboard embed. Message re-detection keys on it (see
+            # initialize), so custom-titled embeds stay identifiable as ours.
+            if AUTO_LEADERBOARD_UPDATE_INTERVAL >= 3600:
+                update_text = f"Updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/3600:.1f} hours"
+            elif AUTO_LEADERBOARD_UPDATE_INTERVAL >= 60:
+                update_text = f"Updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/60:.0f} minutes"
+            else:
+                update_text = f"Updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL} seconds"
 
             # Check if period hasn't started yet
             now = datetime.now()
@@ -133,10 +173,12 @@ class AutoLeaderboard:
 
                 time_msg = f"{days_until_start} days" if days_until_start > 0 else f"{hours_until_start} hours"
 
-                return discord.Embed(
-                    title="🎟️ Raffle Ticket Leaderboard",
+                prize_line = f"🏆 **Prize:** {raffle_prize}\n" if raffle_prize else ""
+                not_started = discord.Embed(
+                    title=embed_title,
                     description=(
                         f"**Raffle Period Not Started Yet**\n\n"
+                        f"{prize_line}"
                         f"📅 **Starts:** {start_date.strftime('%b %d, %Y at %I:%M %p')}\n"
                         f"📅 **Ends:** {end_date.strftime('%b %d, %Y at %I:%M %p')}\n\n"
                         f"⏳ **Time until start:** {time_msg}\n\n"
@@ -144,6 +186,8 @@ class AutoLeaderboard:
                     ),
                     color=discord.Color.blue(),
                 )
+                not_started.set_footer(text=update_text)
+                return not_started
 
             # Get leaderboard using the proper method (top 5)
             leaderboard = ticket_manager.get_leaderboard(limit=5)
@@ -153,9 +197,11 @@ class AutoLeaderboard:
             total_tickets = stats["total_tickets"]
 
             # Create embed
+            prize_line = f"🏆 **Prize:** {raffle_prize}\n" if raffle_prize else ""
             embed = discord.Embed(
-                title="🎟️ Raffle Ticket Leaderboard",
-                description=f"**Period:** {start_date.strftime('%b %d')} - {end_date.strftime('%b %d, %Y')}\n"
+                title=embed_title,
+                description=f"{prize_line}"
+                f"**Period:** {start_date.strftime('%b %d')} - {end_date.strftime('%b %d, %Y')}\n"
                 f"**Participants:** {total_participants:,} | **Total Tickets:** {total_tickets:,}",
                 color=discord.Color.gold(),
                 timestamp=datetime.utcnow(),
@@ -246,14 +292,7 @@ class AutoLeaderboard:
                 inline=False,
             )
 
-            # Dynamic footer based on update interval
-            if AUTO_LEADERBOARD_UPDATE_INTERVAL >= 3600:
-                update_text = f"Updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/3600:.1f} hours"
-            elif AUTO_LEADERBOARD_UPDATE_INTERVAL >= 60:
-                update_text = f"Updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL/60:.0f} minutes"
-            else:
-                update_text = f"Updates every {AUTO_LEADERBOARD_UPDATE_INTERVAL} seconds"
-
+            # Footer marker computed above (also used by message re-detection).
             embed.set_footer(text=update_text)
 
             return embed
