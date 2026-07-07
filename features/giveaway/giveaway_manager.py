@@ -210,15 +210,20 @@ class GiveawayManager:
             return True
 
     async def track_message(self, kick_username, message, platform="kick", display_name=None):
-        """Track a chat message for active chatter detection"""
+        """Track a chat message for active chatter detection.
+
+        Returns True only when this message pushed the chatter over the threshold
+        and a new/incremented entry was actually recorded, so the caller can emit a
+        realtime "entry added" event; False/None otherwise.
+        """
         if not self.active_giveaway:
-            return
+            return False
 
         giveaway = self.active_giveaway
 
         # Only track if using active_chatter entry method
         if giveaway["entry_method"] != "active_chatter":
-            return
+            return False
 
         giveaway_id = giveaway["id"]
         messages_required = giveaway["messages_required"]
@@ -243,7 +248,7 @@ class GiveawayManager:
 
             if existing:
                 logger.debug(f"Duplicate message from {kick_username}, not tracking")
-                return
+                return False
 
             # Track the message
             conn.execute(
@@ -286,9 +291,11 @@ class GiveawayManager:
             if message_count and message_count[0] >= messages_required:
                 # User qualifies! Add entry
                 logger.info(f"{kick_username} qualified for auto-entry with {message_count[0]} unique messages")
-                await self.add_entry(
+                return await self.add_entry(
                     kick_username, entry_method="active_chatter", platform=platform, display_name=display_name
                 )
+
+        return False
 
     async def get_entries(self):
         """Get all entries for active giveaway"""

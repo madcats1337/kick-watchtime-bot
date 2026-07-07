@@ -989,20 +989,36 @@ class KickWebSocketManager:
                 if giveaway_manager.active_giveaway:
                     try:
                         entry_method = giveaway_manager.active_giveaway["entry_method"]
+                        giveaway_id = giveaway_manager.active_giveaway["id"]
+                        entry_added = False
 
                         # Keyword detection - exact match only (no extra text)
                         if entry_method == "keyword":
                             keyword = giveaway_manager.active_giveaway.get("keyword", "").lower()
                             if keyword and content.strip().lower() == keyword:
-                                await giveaway_manager.add_entry(
+                                entry_added = await giveaway_manager.add_entry(
                                     username, entry_method="keyword", platform=platform, display_name=display_username
                                 )
-                                logger.info(f"🎁 Giveaway entry added: {username} (keyword: {keyword})")
+                                if entry_added:
+                                    logger.info(f"🎁 Giveaway entry added: {username} (keyword: {keyword})")
 
                         # Active chatter tracking
                         elif entry_method == "active_chatter":
-                            await giveaway_manager.track_message(
+                            entry_added = await giveaway_manager.track_message(
                                 username, content, platform=platform, display_name=display_username
+                            )
+
+                        # Notify the dashboard admin page so its entries list updates
+                        # live (session-scoped SSE forwards this by discord_server_id).
+                        if entry_added:
+                            publish_redis_event(
+                                channel="dashboard:giveaway",
+                                action="giveaway_entry",
+                                data={
+                                    "discord_server_id": guild_id,
+                                    "giveaway_id": giveaway_id,
+                                    "kick_username": username,
+                                },
                             )
                     except Exception as e:
                         logger.info(f"⚠️ Giveaway tracking error: {e}")
