@@ -9,7 +9,10 @@ import requests
 
 # Get access token from environment or database
 KICK_ACCESS_TOKEN = os.getenv("KICK_BOT_USER_TOKEN")  # Your bot's access token
-WEBHOOK_URL = "https://bot.lelebot.xyz/webhooks/kick"
+# Callback host comes from BOT_PUBLIC_URL (the deployment's public host) so the
+# webhook URL follows the environment; falls back to the production host.
+BOT_PUBLIC_URL = os.getenv("BOT_PUBLIC_URL", "https://bot.wagerlabs.app").rstrip("/")
+WEBHOOK_URL = f"{BOT_PUBLIC_URL}/webhooks/kick"
 
 if not KICK_ACCESS_TOKEN:
     print("❌ KICK_BOT_USER_TOKEN not set")

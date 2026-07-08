@@ -37,7 +37,10 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-WEBHOOK_URL = "https://bot.lelebot.xyz/webhooks/kick"
+# Callback host comes from BOT_PUBLIC_URL (the deployment's public host) so the
+# webhook URL follows the environment; falls back to the production host.
+BOT_PUBLIC_URL = os.getenv("BOT_PUBLIC_URL", "https://bot.wagerlabs.app").rstrip("/")
+WEBHOOK_URL = f"{BOT_PUBLIC_URL}/webhooks/kick"
 
 
 def get_database_engine():

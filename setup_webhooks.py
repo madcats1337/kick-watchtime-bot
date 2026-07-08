@@ -52,8 +52,8 @@ if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 # Webhook URL — derived from BOT_PUBLIC_URL so the deployment's public host is the
-# single source of truth (falls back to the legacy host when the env var is unset).
-BOT_PUBLIC_URL = os.getenv("BOT_PUBLIC_URL", "https://bot.lelebot.xyz").rstrip("/")
+# single source of truth (falls back to the production host when the env var is unset).
+BOT_PUBLIC_URL = os.getenv("BOT_PUBLIC_URL", "https://bot.wagerlabs.app").rstrip("/")
 WEBHOOK_URL = f"{BOT_PUBLIC_URL}/webhooks/kick"
 
 # Events to subscribe to

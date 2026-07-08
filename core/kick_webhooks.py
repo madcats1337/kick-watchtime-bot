@@ -786,7 +786,7 @@ def simulate_real_webhook_event():
 
     # Call the SIMULATE endpoint (bypasses RSA verification)
     # This tests the event handling logic without requiring Kick's private key
-    bot_public_url = os.getenv("BOT_PUBLIC_URL", "https://bot.lelebot.xyz")
+    bot_public_url = os.getenv("BOT_PUBLIC_URL", "https://bot.wagerlabs.app")
     webhook_url = f"{bot_public_url}/webhooks/kick/simulate"
 
     # Simulate endpoint expects different payload format

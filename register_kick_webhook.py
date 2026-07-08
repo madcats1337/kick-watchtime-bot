@@ -6,7 +6,7 @@ This script registers your bot to receive chat messages via webhooks instead of 
 Run this once per broadcaster channel you want to monitor.
 
 Usage:
-    python register_kick_webhook.py --broadcaster-id 152837 --webhook-url https://bot.lelebot.xyz/webhooks/kick
+    python register_kick_webhook.py --broadcaster-id 152837 --webhook-url https://bot.wagerlabs.app/webhooks/kick
 """
 
 import argparse
@@ -36,7 +36,7 @@ async def register_webhook(broadcaster_user_id: str, webhook_url: str, access_to
 
     Args:
         broadcaster_user_id: The Kick broadcaster user ID (e.g., "152837")
-        webhook_url: The webhook endpoint URL (e.g., "https://bot.lelebot.xyz/webhooks/kick")
+        webhook_url: The webhook endpoint URL (e.g., "https://bot.wagerlabs.app/webhooks/kick")
         access_token: Optional OAuth access token (will use client credentials if not provided)
     """
     client_id = os.getenv("KICK_CLIENT_ID")
@@ -176,20 +176,20 @@ def main():
         epilog="""
 Examples:
   # Register webhook for broadcaster ID 152837
-  python register_kick_webhook.py --broadcaster-id 152837 --webhook-url https://bot.lelebot.xyz/webhooks/kick
+  python register_kick_webhook.py --broadcaster-id 152837 --webhook-url https://bot.wagerlabs.app/webhooks/kick
 
   # List existing subscriptions
   python register_kick_webhook.py --list
 
   # Use custom access token
-  python register_kick_webhook.py --broadcaster-id 152837 --webhook-url https://bot.lelebot.xyz/webhooks/kick --token YOUR_TOKEN
+  python register_kick_webhook.py --broadcaster-id 152837 --webhook-url https://bot.wagerlabs.app/webhooks/kick --token YOUR_TOKEN
         """,
     )
 
     parser.add_argument("--broadcaster-id", type=str, help="Kick broadcaster user ID (e.g., 152837 for maikelele)")
 
     parser.add_argument(
-        "--webhook-url", type=str, help="Webhook callback URL (e.g., https://bot.lelebot.xyz/webhooks/kick)"
+        "--webhook-url", type=str, help="Webhook callback URL (e.g., https://bot.wagerlabs.app/webhooks/kick)"
     )
 
     parser.add_argument(
