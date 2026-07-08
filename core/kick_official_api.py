@@ -715,10 +715,15 @@ class KickOfficialAPI:
         Returns:
             WebhookSubscription object
         """
+        # Kick's current create schema takes an `events` array of {name, version}
+        # with broadcaster_user_id/method at the TOP level. The old flat schema
+        # ({event, callback_url, broadcaster_user_id}) is silently accepted with
+        # HTTP 200 {"data": [], "message": "OK"} but creates NOTHING — which used
+        # to produce ghost subscriptions (recorded locally, absent on Kick).
+        # callback_url is app-level (configured on the Kick app), not per-request.
         data = {
-            "event": event,
+            "events": [{"name": event, "version": 1}],
             "method": "webhook",
-            "callback_url": callback_url,
             "broadcaster_user_id": int(broadcaster_user_id),
         }
 
@@ -728,16 +733,29 @@ class KickOfficialAPI:
 
         response = await self._post(KICK_WEBHOOKS_URL, json=data)
 
-        # Kick may return 200/201/204 with empty body, list, or dict
-        # ALL are SUCCESS - we don't fail on empty responses
-        # HTTP status code determines success, not response body
-
-        logger.info(f"[API] Webhook creation response type: {type(response)}")
         logger.info(f"[API] Webhook creation response: {response}")
 
-        # Return response as-is (may be empty, list, or dict)
-        # Caller doesn't need WebhookSubscription object for creation
-        return response if response else {"event": event, "status": "created"}
+        # Success REQUIRES a created subscription in `data` with a subscription_id.
+        # An empty `data` means Kick created nothing (e.g. wrong schema) even though
+        # the HTTP status was 200 — treat that as a failure so we never record a
+        # ghost subscription again.
+        created = (response or {}).get("data") or []
+        first = created[0] if created else {}
+        sub_id = first.get("subscription_id") or first.get("id")
+        if not sub_id:
+            raise RuntimeError(
+                f"Kick did not create a subscription for {event} (broadcaster "
+                f"{broadcaster_user_id}); response={response}"
+            )
+
+        return WebhookSubscription(
+            id=sub_id,
+            event=first.get("name") or first.get("event") or event,
+            method="webhook",
+            version=first.get("version", 1),
+            callback_url=callback_url,
+            broadcaster_user_id=broadcaster_user_id,
+        )
 
     # -------------------------
     # Moderation API
