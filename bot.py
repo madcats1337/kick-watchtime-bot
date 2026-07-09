@@ -1058,6 +1058,38 @@ class KickWebSocketManager:
                     return
                 try:
                     with engine.connect() as conn:
+                        # Points are shared across a person's linked platforms and
+                        # accrue under a single canonical username. Resolve the
+                        # chatter's canonical account (via their discord_id) so a
+                        # request from their non-canonical platform still reads the
+                        # right balance; fall back to their own handle if unlinked.
+                        canonical = username.lower()
+                        did_row = conn.execute(
+                            text(
+                                """
+                            SELECT discord_id FROM links
+                            WHERE LOWER(kick_name) = :u AND discord_server_id = :guild_id
+                              AND discord_id IS NOT NULL
+                            LIMIT 1
+                        """
+                            ),
+                            {"u": username.lower(), "guild_id": guild_id},
+                        ).fetchone()
+                        if did_row:
+                            names = conn.execute(
+                                text(
+                                    """
+                                SELECT LOWER(kick_name) FROM links
+                                WHERE discord_id = :d AND discord_server_id = :guild_id
+                                  AND kick_name IS NOT NULL
+                            """
+                                ),
+                                {"d": did_row[0], "guild_id": guild_id},
+                            ).fetchall()
+                            handles = [r[0] for r in names if r[0]]
+                            if handles:
+                                canonical = min(handles)
+
                         result = conn.execute(
                             text(
                                 """
@@ -1065,7 +1097,7 @@ class KickWebSocketManager:
                             WHERE LOWER(kick_username) = :username AND discord_server_id = :guild_id
                         """
                             ),
-                            {"username": username.lower(), "guild_id": guild_id},
+                            {"username": canonical, "guild_id": guild_id},
                         ).fetchone()
 
                         if result and result[0] is not None:
@@ -10372,25 +10404,17 @@ class PointShopItemSelect(discord.ui.Select):
         guild_id = interaction.guild.id if interaction.guild else None
 
         with engine.connect() as conn:
-            # Get linked account
-            link = conn.execute(
-                text(
-                    """
-                SELECT kick_name FROM links
-                WHERE discord_id = :d AND discord_server_id = :s
-            """
-                ),
-                {"d": discord_id, "s": guild_id},
-            ).fetchone()
+            # Resolve the canonical account the person's shared balance lives under,
+            # so this pre-modal affordability check matches the (cross-platform)
+            # balance the shop displays and later deducts from.
+            kick_username, accounts = resolve_shop_identity(conn, discord_id, guild_id)
 
-            if not link:
+            if not accounts:
                 await interaction.response.send_message(
-                    "❌ You need to link your Kick account first! Use the link panel or `!link` command.",
+                    "❌ You need to link your account first! Use the link panel or `!link` command.",
                     ephemeral=True,
                 )
                 return
-
-            kick_username = link[0]
 
             # Get balance
             points_data = conn.execute(
