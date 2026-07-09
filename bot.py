@@ -2198,6 +2198,114 @@ except Exception as e:
     logger.warning(f"⚠️ Database initialization error: {e}")
     raise
 
+
+def _merge_cross_platform_points():
+    """One-time-per-deploy merge of split point balances into one row per person.
+
+    Before cross-platform points, a viewer active on both Kick and Twitch accrued
+    separate user_points rows (one per platform username). Now points are shared:
+    a person accrues under a single CANONICAL username (the alphabetically-first of
+    their linked usernames — the same rule the watchtime tracker + shop use). This
+    consolidates any pre-existing split rows into the canonical row so historical
+    balances are preserved and visible.
+
+    Idempotent: after the first run each person has a single row, so re-running on
+    later deploys is a no-op. The points_watchtime_converted ledger is re-pointed to
+    the canonical username too, so future watchtime→points conversion doesn't
+    re-award minutes already converted under a now-merged username.
+    """
+    try:
+        with engine.begin() as conn:
+            # People (per server) with 2+ linked usernames — only these can have splits.
+            groups = conn.execute(
+                text(
+                    """
+                    SELECT discord_server_id, discord_id,
+                           ARRAY_AGG(DISTINCT LOWER(kick_name)) AS unames
+                    FROM links
+                    WHERE discord_id IS NOT NULL AND kick_name IS NOT NULL
+                    GROUP BY discord_server_id, discord_id
+                    HAVING COUNT(DISTINCT LOWER(kick_name)) > 1
+                    """
+                )
+            ).fetchall()
+
+            merged_people = 0
+            for server_id, _discord_id, unames in groups:
+                unames = [u for u in (unames or []) if u]
+                if len(unames) < 2:
+                    continue
+                canonical = min(unames)
+                others = [u for u in unames if u != canonical]
+
+                # Sum the non-canonical rows into the canonical row, then delete them.
+                agg = conn.execute(
+                    text(
+                        """
+                        SELECT COALESCE(SUM(points),0), COALESCE(SUM(total_earned),0),
+                               COALESCE(SUM(total_spent),0)
+                        FROM user_points
+                        WHERE discord_server_id = :sid AND LOWER(kick_username) = ANY(:others)
+                        """
+                    ),
+                    {"sid": server_id, "others": others},
+                ).fetchone()
+                add_points, add_earned, add_spent = (agg[0], agg[1], agg[2]) if agg else (0, 0, 0)
+
+                if add_points or add_earned or add_spent:
+                    # Ensure a canonical row exists, then fold the others in.
+                    conn.execute(
+                        text(
+                            """
+                            INSERT INTO user_points (kick_username, discord_id, points, total_earned, total_spent, discord_server_id)
+                            VALUES (:c, :did, 0, 0, 0, :sid)
+                            ON CONFLICT (kick_username, discord_server_id) DO NOTHING
+                            """
+                        ),
+                        {"c": canonical, "did": _discord_id, "sid": server_id},
+                    )
+                    conn.execute(
+                        text(
+                            """
+                            UPDATE user_points
+                            SET points = points + :p, total_earned = total_earned + :e,
+                                total_spent = total_spent + :s, last_updated = CURRENT_TIMESTAMP
+                            WHERE discord_server_id = :sid AND LOWER(kick_username) = :c
+                            """
+                        ),
+                        {"p": add_points, "e": add_earned, "s": add_spent, "sid": server_id, "c": canonical},
+                    )
+                    conn.execute(
+                        text(
+                            "DELETE FROM user_points WHERE discord_server_id = :sid AND LOWER(kick_username) = ANY(:others)"
+                        ),
+                        {"sid": server_id, "others": others},
+                    )
+
+                # Drop the non-canonical converted-watchtime ledger rows. Those
+                # usernames no longer accrue watchtime (accrual consolidates to the
+                # canonical username now), so their ledger is dead; the canonical
+                # username keeps its own ledger. Deleting (rather than re-pointing)
+                # avoids the (kick_username, discord_server_id) unique-constraint
+                # conflict when the canonical already has ledger rows — the same
+                # approach the username-change handler uses.
+                conn.execute(
+                    text(
+                        "DELETE FROM points_watchtime_converted WHERE discord_server_id = :sid AND LOWER(kick_username) = ANY(:others)"
+                    ),
+                    {"sid": server_id, "others": others},
+                )
+                merged_people += 1
+
+            if merged_people:
+                logger.info(f"[Points] ✅ Merged cross-platform point balances for {merged_people} member(s)")
+    except Exception as e:
+        # Non-fatal: a failed merge must not stop the bot from starting.
+        logger.warning(f"[Points] ⚠️ Cross-platform points merge skipped: {e}")
+
+
+_merge_cross_platform_points()
+
 # -------------------------
 # Bot Settings Manager
 # -------------------------
@@ -3950,6 +4058,79 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
 # -------------------------
 # Point Reward System
 # -------------------------
+def dedupe_active_users_by_person(conn, active_users: dict, guild_id) -> dict:
+    """Collapse the active-viewer set to one entry per linked person so a viewer
+    watching a simultaneous Kick+Twitch stream can't earn watchtime/points twice.
+
+    A person's platform accounts share one discord_id in `links`. For each active
+    username we find its discord_id, then for each linked person we accrue under a
+    single CANONICAL username: the alphabetically-first of ALL that person's linked
+    usernames (not just the ones active this interval), so the same person always
+    accrues to the same row every interval regardless of which platform they chatted
+    on. Usernames with no discord_id (unlinked viewers) are kept as-is — they can't
+    be deduped cross-platform and continue to earn per-platform.
+
+    We also carry the canonical username's last_seen forward even when the person was
+    only active under a different platform account this interval, so their accrual
+    doesn't stall. Returns {username_lower: last_seen}, deduped.
+    """
+    if not active_users:
+        return active_users
+
+    names = list(active_users.keys())
+    # Map active usernames -> discord_id.
+    active_rows = conn.execute(
+        text(
+            """
+            SELECT LOWER(kick_name) AS uname, discord_id
+            FROM links
+            WHERE discord_server_id = :sid AND LOWER(kick_name) = ANY(:names)
+            """
+        ),
+        {"sid": guild_id, "names": names},
+    ).fetchall()
+    username_to_did = {row[0]: row[1] for row in active_rows if row[1] is not None}
+
+    # For the people who are active, fetch ALL their linked usernames so the
+    # canonical pick is stable across intervals (independent of which account
+    # was active now).
+    dids = list({did for did in username_to_did.values()})
+    canonical_for_did = {}
+    if dids:
+        all_rows = conn.execute(
+            text(
+                """
+                SELECT discord_id, LOWER(kick_name) AS uname
+                FROM links
+                WHERE discord_server_id = :sid AND discord_id = ANY(:dids)
+                """
+            ),
+            {"sid": guild_id, "dids": dids},
+        ).fetchall()
+        per_person = {}
+        for did, uname in all_rows:
+            if uname:
+                per_person.setdefault(did, []).append(uname)
+        canonical_for_did = {did: min(unames) for did, unames in per_person.items()}
+
+    kept = {}
+    handled_person = set()
+    for user in sorted(active_users.keys()):
+        did = username_to_did.get(user)
+        if did is None:
+            kept[user] = active_users[user]  # unlinked: keep, earns per-platform
+            continue
+        if did in handled_person:
+            continue  # another platform account of the same person this interval — drop
+        handled_person.add(did)
+        canonical = canonical_for_did.get(did, user)
+        # Accrue under the canonical username, using this person's most-recent
+        # last_seen across whichever account(s) they were active on this interval.
+        person_last_seen = max(ls for u, ls in active_users.items() if username_to_did.get(u) == did)
+        kept[canonical] = person_last_seen
+    return kept
+
+
 async def award_points_for_watchtime(active_usernames: list, guild_id: Optional[int] = None):
     """
     Award points to users based on their new watchtime.
@@ -4201,6 +4382,12 @@ async def update_watchtime_task():
 
             # Update all active users for this guild
             with engine.begin() as conn:
+                # Collapse dual-platform viewers (Kick + Twitch) to one entry per
+                # linked person so simultaneous cross-platform watching can't
+                # double-count watchtime (and therefore points). Unlinked viewers
+                # pass through and keep earning per-platform.
+                active_users = dedupe_active_users_by_person(conn, active_users, server_id)
+
                 for user, last_seen in active_users.items():
                     try:
                         conn.execute(
@@ -4219,7 +4406,8 @@ async def update_watchtime_task():
                         logger.error(f"⚠️ Error updating watchtime for {user}: {e}")
                         continue  # Skip this user but continue with others
 
-            # Award points for new watchtime (runs after watchtime update)
+            # Award points for new watchtime (runs after watchtime update).
+            # active_users is already deduped to one canonical username per person.
             await award_points_for_watchtime(list(active_users.keys()), guild_id=server_id)
 
     except Exception as e:
@@ -10029,22 +10217,13 @@ class PointShopPurchaseModal(discord.ui.Modal):
 
         # Get user's balance
         with engine.connect() as conn:
-            # Get linked account
-            link = conn.execute(
-                text(
-                    """
-                SELECT kick_name FROM links
-                WHERE discord_id = :d AND discord_server_id = :s
-            """
-                ),
-                {"d": discord_id, "s": interaction.guild.id},
-            ).fetchone()
+            # Resolve the canonical account the person's shared balance lives under,
+            # so the affordability check AND the later deduction hit the same row.
+            kick_username, accounts = resolve_shop_identity(conn, discord_id, interaction.guild.id)
 
-            if not link:
-                await interaction.response.send_message("❌ You need to link your Kick account first!", ephemeral=True)
+            if not accounts:
+                await interaction.response.send_message("❌ You need to link your account first!", ephemeral=True)
                 return
-
-            kick_username = link[0]
 
             # Get balance (with multiserver support)
             points_data = conn.execute(
@@ -10264,6 +10443,39 @@ class PointShopView(discord.ui.View):
         self.add_item(PointShopBalanceButton())
 
 
+def resolve_shop_identity(conn, discord_id, guild_id):
+    """Resolve a member's point-shop identity for THIS server.
+
+    Returns (canonical_username, accounts) where:
+      - canonical_username is the single username the person's points accrue under
+        (the alphabetically-first of all their linked usernames — the SAME rule the
+        watchtime tracker uses, so balance is read from the row points are written
+        to). Points are shared across a person's platforms, not per-platform.
+      - accounts is the list of (username, platform) they've linked, for display.
+    Returns (None, []) if the member has no linked account.
+    """
+    rows = conn.execute(
+        text(
+            """
+            SELECT kick_name, platform FROM links
+            WHERE discord_id = :d AND discord_server_id = :s
+            """
+        ),
+        {"d": discord_id, "s": guild_id},
+    ).fetchall()
+    accounts = [(r[0], r[1]) for r in rows if r[0]]
+    if not accounts:
+        return None, []
+    canonical = min(name.lower() for name, _ in accounts)
+    return canonical, accounts
+
+
+def format_linked_accounts(accounts):
+    """Render linked accounts for a balance footer, e.g.
+    'madcats (Kick), madcatstv (Twitch)'."""
+    return ", ".join(f"{name} ({(platform or 'kick').capitalize()})" for name, platform in accounts)
+
+
 class PointShopBalanceButton(discord.ui.Button):
     """Button to check point balance"""
 
@@ -10278,24 +10490,14 @@ class PointShopBalanceButton(discord.ui.Button):
         guild_id = interaction.guild.id if interaction.guild else None
 
         with engine.connect() as conn:
-            link = conn.execute(
-                text(
-                    """
-                SELECT kick_name FROM links
-                WHERE discord_id = :d AND discord_server_id = :s
-            """
-                ),
-                {"d": discord_id, "s": guild_id},
-            ).fetchone()
+            canonical, accounts = resolve_shop_identity(conn, discord_id, guild_id)
 
-            if not link:
+            if not accounts:
                 await interaction.response.send_message(
-                    "❌ You need to link your Kick account first! Use the link panel or `!link` command.",
+                    "❌ You need to link your account first! Use the link panel or `!link` command.",
                     ephemeral=True,
                 )
                 return
-
-            kick_username = link[0]
 
             points_data = conn.execute(
                 text(
@@ -10305,7 +10507,7 @@ class PointShopBalanceButton(discord.ui.Button):
                 WHERE kick_username = :k AND discord_server_id = :s
             """
                 ),
-                {"k": kick_username, "s": guild_id},
+                {"k": canonical, "s": guild_id},
             ).fetchone()
 
             if not points_data:
@@ -10317,7 +10519,7 @@ class PointShopBalanceButton(discord.ui.Button):
         embed.add_field(name="Current Balance", value=f"**{points:,}** points", inline=True)
         embed.add_field(name="Total Earned", value=f"{total_earned:,} points", inline=True)
         embed.add_field(name="Total Spent", value=f"{total_spent:,} points", inline=True)
-        embed.set_footer(text=f"Kick Account: {kick_username}")
+        embed.set_footer(text=f"Account: {format_linked_accounts(accounts)}")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -10923,23 +11125,13 @@ async def cmd_points(ctx):
     """Check your point balance"""
     discord_id = ctx.author.id
 
-    # Get linked Kick account
+    # Resolve the member's shared (cross-platform) balance under their canonical row
     with engine.connect() as conn:
-        link = conn.execute(
-            text(
-                """
-            SELECT kick_name FROM links
-            WHERE discord_id = :d AND discord_server_id = :s
-        """
-            ),
-            {"d": discord_id, "s": ctx.guild.id},
-        ).fetchone()
+        canonical, accounts = resolve_shop_identity(conn, discord_id, ctx.guild.id)
 
-        if not link:
-            await ctx.send("❌ You need to link your Kick account first! Use the link panel or `!link` command.")
+        if not accounts:
+            await ctx.send("❌ You need to link your account first! Use the link panel or `!link` command.")
             return
-
-        kick_username = link[0]
 
         # Get points balance
         points_data = conn.execute(
@@ -10950,7 +11142,7 @@ async def cmd_points(ctx):
             WHERE kick_username = :k AND discord_server_id = :s
         """
             ),
-            {"k": kick_username, "s": ctx.guild.id},
+            {"k": canonical, "s": ctx.guild.id},
         ).fetchone()
 
         if not points_data:
@@ -10962,7 +11154,7 @@ async def cmd_points(ctx):
     embed.add_field(name="Current Balance", value=f"**{points:,}** points", inline=True)
     embed.add_field(name="Total Earned", value=f"{total_earned:,} points", inline=True)
     embed.add_field(name="Total Spent", value=f"{total_spent:,} points", inline=True)
-    embed.set_footer(text=f"Kick Account: {kick_username}")
+    embed.set_footer(text=f"Account: {format_linked_accounts(accounts)}")
 
     await ctx.send(embed=embed)
 
