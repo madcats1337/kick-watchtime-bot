@@ -2155,10 +2155,14 @@ try:
             )
         )
 
-        # Per-user purchase cap (-1 = unlimited, same sentinel as `stock`).
-        # Also created by the dashboard's migration; declared here too so the column
-        # exists no matter which service deploys first.
+        # Per-user purchase cap (-1 = unlimited, same sentinel as `stock`), and the
+        # rolling window that cap is measured over (0 = all-time, never resets).
+        # Also created by the dashboard's migration; declared here too so the columns
+        # exist no matter which service deploys first.
         conn.execute(text("ALTER TABLE point_shop_items ADD COLUMN IF NOT EXISTS per_user_limit INTEGER DEFAULT -1;"))
+        conn.execute(
+            text("ALTER TABLE point_shop_items ADD COLUMN IF NOT EXISTS limit_window_seconds INTEGER DEFAULT 0;")
+        )
 
         # Point shop sales/purchases
         conn.execute(
@@ -9932,8 +9936,10 @@ class PointShopConfirmView(discord.ui.View):
                 # modal left open (or two clicked at once) can't push the buyer past it.
                 reached_limit = per_user_limit_blocked(conn, item_id, self.discord_id, self.server_id)
                 if reached_limit is not None:
+                    cap, window = reached_limit
+                    per = f" per {format_duration(window)}" if window else ""
                     await interaction.response.edit_message(
-                        content=f"❌ Purchase limit reached! You can only buy **{reached_limit}** of **{item_name}**.",
+                        content=f"❌ Purchase limit reached! You can only buy **{cap}** of **{item_name}**{per}.",
                         view=None,
                     )
                     return
@@ -10448,8 +10454,10 @@ class PointShopItemSelect(discord.ui.Select):
             reached_limit = per_user_limit_blocked(conn, item["id"], discord_id, guild_id)
 
         if reached_limit is not None:
+            cap, window = reached_limit
+            per = f" per {format_duration(window)}" if window else ""
             await interaction.response.send_message(
-                f"❌ **Purchase Limit Reached!**\n\nYou can only buy **{reached_limit}** of **{item['name']}**.",
+                f"❌ **Purchase Limit Reached!**\n\nYou can only buy **{cap}** of **{item['name']}**{per}.",
                 ephemeral=True,
             )
             return
@@ -10529,51 +10537,104 @@ def format_linked_accounts(accounts):
 # `-1` means "no cap", mirroring the `stock` column's unlimited sentinel.
 UNLIMITED_PER_USER = -1
 
+# `0` means the cap is measured over all time and never rolls over.
+NO_LIMIT_WINDOW = 0
 
-def get_item_per_user_limit(conn, item_id):
-    """Read an item's per-person purchase cap. The column is guaranteed by init_db.
+# point_settings key holding the timestamp of the last manual "reset limits".
+LIMITS_RESET_KEY = "shop_limits_reset_at"
+
+
+def format_duration(seconds):
+    """Render a window as the largest whole unit that divides it, e.g. '7 days'."""
+    seconds = int(seconds)
+    for unit_seconds, name in ((86400, "day"), (3600, "hour"), (60, "minute")):
+        if seconds >= unit_seconds and seconds % unit_seconds == 0:
+            n = seconds // unit_seconds
+            return f"{n} {name}{'s' if n != 1 else ''}"
+    return f"{seconds} second{'s' if seconds != 1 else ''}"
+
+
+def get_item_limit_config(conn, item_id):
+    """Read an item's per-person cap and its rolling window, as (limit, window_seconds).
 
     Deliberately does not swallow errors: silently returning "unlimited" would let
     buyers past a configured cap, and the read runs inside the purchase transaction
     where a caught failure would poison the enclosing block anyway.
     """
     row = conn.execute(
-        text("SELECT COALESCE(per_user_limit, -1) FROM point_shop_items WHERE id = :id"),
+        text(
+            """
+            SELECT COALESCE(per_user_limit, -1), COALESCE(limit_window_seconds, 0)
+            FROM point_shop_items WHERE id = :id
+            """
+        ),
         {"id": item_id},
     ).fetchone()
-    return int(row[0]) if row and row[0] is not None else UNLIMITED_PER_USER
+    if not row:
+        return UNLIMITED_PER_USER, NO_LIMIT_WINDOW
+    return int(row[0] or UNLIMITED_PER_USER), int(row[1] or NO_LIMIT_WINDOW)
 
 
-def count_user_item_purchases(conn, item_id, discord_id, guild_id):
-    """How many of `item_id` this person already holds against their cap.
+def get_limits_reset_at(conn, guild_id):
+    """Timestamp of the last manual limit reset for this server, or None."""
+    row = conn.execute(
+        text("SELECT value FROM point_settings WHERE key = :k AND discord_server_id = :g"),
+        {"k": LIMITS_RESET_KEY, "g": guild_id},
+    ).fetchone()
+    return (row[0] or None) if row else None
+
+
+def count_user_item_purchases(conn, item_id, discord_id, guild_id, window_seconds=0, reset_at=None):
+    """How many of `item_id` this person holds against their cap right now.
 
     Keyed on discord_id (not the platform username) so a viewer cannot reset their
     allowance by buying under their Kick handle and then their Twitch one — the same
     rule the shared point balance follows. Cancelled sales are refunded, so they
     release the allowance and are not counted.
+
+    Two things exclude an otherwise-counting sale, both by raising the floor on
+    `purchased_at` rather than deleting anything:
+      - `window_seconds`: a rolling cooldown; only recent purchases count.
+      - `reset_at`: the admin's last manual "reset limits".
     """
-    row = conn.execute(
-        text(
-            """
-            SELECT COUNT(*) FROM point_sales
-            WHERE item_id = :item_id
-              AND discord_id = :discord_id
-              AND discord_server_id = :guild_id
-              AND status IN ('pending', 'completed')
-            """
-        ),
-        {"item_id": item_id, "discord_id": discord_id, "guild_id": guild_id},
-    ).fetchone()
+    sql = """
+        SELECT COUNT(*) FROM point_sales
+        WHERE item_id = :item_id
+          AND discord_id = :discord_id
+          AND discord_server_id = :guild_id
+          AND status IN ('pending', 'completed')
+    """
+    params = {"item_id": item_id, "discord_id": discord_id, "guild_id": guild_id}
+
+    if window_seconds and window_seconds > 0:
+        # `purchased_at` is a naive timestamp defaulted from CURRENT_TIMESTAMP.
+        sql += " AND purchased_at > CURRENT_TIMESTAMP - (:window * INTERVAL '1 second')"
+        params["window"] = window_seconds
+
+    if reset_at:
+        # Round-trips through point_settings.value (TEXT); cast back explicitly.
+        sql += " AND purchased_at > CAST(:reset_at AS timestamp)"
+        params["reset_at"] = reset_at
+
+    row = conn.execute(text(sql), params).fetchone()
     return int(row[0]) if row else 0
 
 
 def per_user_limit_blocked(conn, item_id, discord_id, guild_id):
-    """Return the cap if this person has already hit it, else None."""
-    limit = get_item_per_user_limit(conn, item_id)
+    """Return (limit, window_seconds) if this person has hit their cap, else None."""
+    limit, window = get_item_limit_config(conn, item_id)
     if limit == UNLIMITED_PER_USER:
         return None
-    if count_user_item_purchases(conn, item_id, discord_id, guild_id) >= limit:
-        return limit
+    bought = count_user_item_purchases(
+        conn,
+        item_id,
+        discord_id,
+        guild_id,
+        window_seconds=window,
+        reset_at=get_limits_reset_at(conn, guild_id),
+    )
+    if bought >= limit:
+        return limit, window
     return None
 
 
