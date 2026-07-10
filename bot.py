@@ -2155,6 +2155,11 @@ try:
             )
         )
 
+        # Per-user purchase cap (-1 = unlimited, same sentinel as `stock`).
+        # Also created by the dashboard's migration; declared here too so the column
+        # exists no matter which service deploys first.
+        conn.execute(text("ALTER TABLE point_shop_items ADD COLUMN IF NOT EXISTS per_user_limit INTEGER DEFAULT -1;"))
+
         # Point shop sales/purchases
         conn.execute(
             text(
@@ -9923,6 +9928,16 @@ class PointShopConfirmView(discord.ui.View):
                     await interaction.response.edit_message(content="❌ This item is sold out!", view=None)
                     return
 
+                # Authoritative per-user cap check: re-read inside this transaction so a
+                # modal left open (or two clicked at once) can't push the buyer past it.
+                reached_limit = per_user_limit_blocked(conn, item_id, self.discord_id, self.server_id)
+                if reached_limit is not None:
+                    await interaction.response.edit_message(
+                        content=f"❌ Purchase limit reached! You can only buy **{reached_limit}** of **{item_name}**.",
+                        view=None,
+                    )
+                    return
+
                 # Check user's points balance
                 user_points = conn.execute(
                     text(
@@ -10428,6 +10443,17 @@ class PointShopItemSelect(discord.ui.Select):
 
             current_balance = points_data[0] if points_data else 0
 
+            # Stop them at the dropdown if they've already used up their allowance,
+            # rather than after they've filled in the purchase modal.
+            reached_limit = per_user_limit_blocked(conn, item["id"], discord_id, guild_id)
+
+        if reached_limit is not None:
+            await interaction.response.send_message(
+                f"❌ **Purchase Limit Reached!**\n\nYou can only buy **{reached_limit}** of **{item['name']}**.",
+                ephemeral=True,
+            )
+            return
+
         # Check if they can afford it
         if current_balance < item["price"]:
             await interaction.response.send_message(
@@ -10498,6 +10524,57 @@ def format_linked_accounts(accounts):
     """Render linked accounts for a balance footer, e.g.
     'madcats (Kick), madcatstv (Twitch)'."""
     return ", ".join(f"{name} ({(platform or 'kick').capitalize()})" for name, platform in accounts)
+
+
+# `-1` means "no cap", mirroring the `stock` column's unlimited sentinel.
+UNLIMITED_PER_USER = -1
+
+
+def get_item_per_user_limit(conn, item_id):
+    """Read an item's per-person purchase cap. The column is guaranteed by init_db.
+
+    Deliberately does not swallow errors: silently returning "unlimited" would let
+    buyers past a configured cap, and the read runs inside the purchase transaction
+    where a caught failure would poison the enclosing block anyway.
+    """
+    row = conn.execute(
+        text("SELECT COALESCE(per_user_limit, -1) FROM point_shop_items WHERE id = :id"),
+        {"id": item_id},
+    ).fetchone()
+    return int(row[0]) if row and row[0] is not None else UNLIMITED_PER_USER
+
+
+def count_user_item_purchases(conn, item_id, discord_id, guild_id):
+    """How many of `item_id` this person already holds against their cap.
+
+    Keyed on discord_id (not the platform username) so a viewer cannot reset their
+    allowance by buying under their Kick handle and then their Twitch one — the same
+    rule the shared point balance follows. Cancelled sales are refunded, so they
+    release the allowance and are not counted.
+    """
+    row = conn.execute(
+        text(
+            """
+            SELECT COUNT(*) FROM point_sales
+            WHERE item_id = :item_id
+              AND discord_id = :discord_id
+              AND discord_server_id = :guild_id
+              AND status IN ('pending', 'completed')
+            """
+        ),
+        {"item_id": item_id, "discord_id": discord_id, "guild_id": guild_id},
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def per_user_limit_blocked(conn, item_id, discord_id, guild_id):
+    """Return the cap if this person has already hit it, else None."""
+    limit = get_item_per_user_limit(conn, item_id)
+    if limit == UNLIMITED_PER_USER:
+        return None
+    if count_user_item_purchases(conn, item_id, discord_id, guild_id) >= limit:
+        return limit
+    return None
 
 
 class PointShopBalanceButton(discord.ui.Button):
