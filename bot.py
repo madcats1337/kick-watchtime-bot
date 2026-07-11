@@ -9861,6 +9861,13 @@ async def fixlinks_resolve(ctx, kick_name: str, keep_server_id: int):
 # -------------------------
 
 
+class _ShopSoldOut(Exception):
+    """Raised inside the purchase transaction when the last unit is taken by a
+    concurrent buyer. Propagating it out of `engine.begin()` rolls the whole
+    transaction back (restoring the just-deducted points); the handler then
+    shows a sold-out message instead of the generic error."""
+
+
 class PointShopConfirmView(discord.ui.View):
     """View with button to confirm purchase"""
 
@@ -9932,6 +9939,23 @@ class PointShopConfirmView(discord.ui.View):
                     await interaction.response.edit_message(content="❌ This item is sold out!", view=None)
                     return
 
+                # Lock this buyer's points row FIRST. FOR UPDATE serializes
+                # concurrent purchases by the same buyer (two Discord clicks at
+                # once, or a simultaneous web-shop purchase) for the rest of the
+                # transaction. Acquiring it BEFORE the per-user-cap count is what
+                # makes that check race-safe: a second concurrent request blocks
+                # here until the first commits, then counts the first's sale.
+                user_points = conn.execute(
+                    text(
+                        """
+                    SELECT points FROM user_points
+                    WHERE kick_username = :k AND discord_server_id = :g
+                    FOR UPDATE
+                """
+                    ),
+                    {"k": self.kick_username, "g": self.guild_id},
+                ).fetchone()
+
                 # Authoritative per-user cap check: re-read inside this transaction so a
                 # modal left open (or two clicked at once) can't push the buyer past it.
                 reached_limit = per_user_limit_blocked(conn, item_id, self.discord_id, self.server_id)
@@ -9944,17 +9968,6 @@ class PointShopConfirmView(discord.ui.View):
                     )
                     return
 
-                # Check user's points balance
-                user_points = conn.execute(
-                    text(
-                        """
-                    SELECT points FROM user_points
-                    WHERE kick_username = :k AND discord_server_id = :g
-                """
-                    ),
-                    {"k": self.kick_username, "g": self.guild_id},
-                ).fetchone()
-
                 if not user_points or user_points[0] < price:
                     current_balance = user_points[0] if user_points else 0
                     await interaction.response.edit_message(
@@ -9963,33 +9976,50 @@ class PointShopConfirmView(discord.ui.View):
                     )
                     return
 
-                # Deduct points
-                conn.execute(
+                # Deduct points atomically. The `points >= :p` guard makes the DB
+                # enforce sufficiency; if a concurrent path already spent the
+                # balance, no row matches and we abort instead of going negative.
+                deducted = conn.execute(
                     text(
                         """
                     UPDATE user_points
                     SET points = points - :p,
                         total_spent = total_spent + :p,
                         last_updated = CURRENT_TIMESTAMP
-                    WHERE kick_username = :k AND discord_server_id = :g
+                    WHERE kick_username = :k AND discord_server_id = :g AND points >= :p
+                    RETURNING points
                 """
                     ),
                     {"p": price, "k": self.kick_username, "g": self.guild_id},
-                )
+                ).fetchone()
 
-                # Reduce stock if not unlimited
+                if deducted is None:
+                    await interaction.response.edit_message(
+                        content="❌ Insufficient points! Your balance changed — please try again.",
+                        view=None,
+                    )
+                    return
+
+                # Reduce stock if not unlimited. The `stock > 0` guard rejects an
+                # oversell under concurrency; a lost race aborts the whole
+                # transaction so the points deduction above is rolled back too.
                 if stock > 0:
-                    conn.execute(
+                    reduced = conn.execute(
                         text(
                             """
                         UPDATE point_shop_items
                         SET stock = stock - 1,
                             updated_at = CURRENT_TIMESTAMP
-                        WHERE id = :id
+                        WHERE id = :id AND stock > 0
+                        RETURNING stock
                     """
                         ),
                         {"id": item_id},
-                    )
+                    ).fetchone()
+
+                    if reduced is None:
+                        # Last unit was taken concurrently — undo the deduction.
+                        raise _ShopSoldOut()
 
                 # Record the sale with requirement input (and note in requirement if both exist)
                 full_requirement = self.requirement_value
@@ -10197,6 +10227,12 @@ class PointShopConfirmView(discord.ui.View):
                 f"[Point Shop] {self.kick_username} (Discord ID: {self.discord_id}) purchased {item_name} for {price} points"
             )
 
+        except _ShopSoldOut:
+            # The transaction rolled back on the way out, so the points deduction
+            # was undone — nothing to refund. Just tell the buyer.
+            await interaction.response.edit_message(
+                content="❌ This item just sold out! Your points were not spent.", view=None
+            )
         except Exception as e:
             logger.warning(f"[Point Shop] Purchase error: {e}")
             import traceback
