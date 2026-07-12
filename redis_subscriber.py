@@ -94,6 +94,9 @@ class RedisSubscriber:
         self.redis_url = os.getenv("REDIS_URL")
         self.enabled = False
         self.last_shop_sync = 0  # Timestamp for debouncing shop sync
+        # Per-(guild,item) cooldown for restock DM fan-outs, so a burst of
+        # item edits that each cross 0->positive can't spam viewers.
+        self._last_restock_dm = {}
 
         # Ensure point_sales has columns for tracking Discord order notification messages
         try:
@@ -1206,6 +1209,78 @@ class RedisSubscriber:
                 import traceback
 
                 traceback.print_exc()
+
+        elif action == "item_restocked":
+            # A sold-out item is back in stock. DM every viewer on this server
+            # who opted in via notify_restock.
+            item_name = data.get("item_name") or "An item"
+            if not guild_id:
+                return
+            # Cooldown: swallow repeat restock events for the same item within
+            # a short window (dashboard edits can fire several updates quickly).
+            cooldown_key = (str(guild_id), str(data.get("item_id")))
+            now = time.time()
+            if now - self._last_restock_dm.get(cooldown_key, 0) < 60:
+                logger.info(f"⏭️  Skipping duplicate restock DM for {item_name} (guild={guild_name})")
+                return
+            self._last_restock_dm[cooldown_key] = now
+
+            message = f"**{item_name}** is back in stock in **{guild_name}**'s point shop!"
+            await self._dm_shop_opted_in(guild_id, "notify_restock", message)
+
+        elif action == "limits_reset":
+            # Per-user purchase limits were reset. DM every viewer on this
+            # server who opted in via notify_limit_reset.
+            if not guild_id:
+                return
+            message = f"Purchase limits have been reset in **{guild_name}**'s point shop — you can buy again!"
+            await self._dm_shop_opted_in(guild_id, "notify_limit_reset", message)
+
+    async def _dm_shop_opted_in(self, guild_id, pref_column, message):
+        """DM `message` to every viewer on `guild_id` who opted into `pref_column`.
+
+        `pref_column` is one of the shop_notification_prefs boolean columns
+        (notify_restock / notify_limit_reset) — a fixed literal chosen by the
+        caller, never user input, so it's safe to interpolate into the query.
+        Each send is isolated: a user who blocks DMs or left the guild is
+        logged and skipped, never aborting the fan-out.
+        """
+        if engine is None:
+            logger.info("[Point Shop] DB engine not available; cannot fan out shop notification")
+            return
+
+        try:
+            with engine.connect() as conn:
+                rows = conn.execute(
+                    text(
+                        f"""
+                        SELECT discord_id
+                        FROM shop_notification_prefs
+                        WHERE discord_server_id = :guild_id AND {pref_column} = TRUE
+                        """
+                    ),
+                    {"guild_id": int(guild_id)},
+                ).fetchall()
+        except Exception as e:
+            logger.warning(f"[Point Shop] Failed to load opted-in viewers ({pref_column}): {e}")
+            return
+
+        discord_ids = [r[0] for r in rows if r[0]]
+        if not discord_ids:
+            logger.info(f"[Point Shop] No viewers opted in ({pref_column}) for guild {guild_id}")
+            return
+
+        sent = 0
+        for discord_id in discord_ids:
+            try:
+                user = await self.bot.fetch_user(int(discord_id))
+                await user.send(message)
+                sent += 1
+            except Exception as e:
+                # Blocked DMs, deleted account, or a bad id — skip and continue.
+                logger.info(f"[Point Shop] Could not DM {discord_id}: {e}")
+
+        logger.info(f"✅ Sent {sent}/{len(discord_ids)} shop notification DMs ({pref_column}) for guild {guild_id}")
 
     async def handle_notifications_event(self, action, data):
         """Handle notifications events from dashboard and forward to Discord if configured."""
