@@ -411,12 +411,18 @@ class GiveawayManager:
 
 async def setup_giveaway_managers(bot, engine):
     """Create giveaway manager for each guild"""
+    from utils.log_context import clear_server, set_server
+
     managers = {}
 
     for guild in bot.guilds:
+        # Tag this guild's giveaway-load logs with the server (not "[-]").
+        set_server(guild.id, guild.name)
         manager = GiveawayManager(engine, guild_id=guild.id)
         await manager.load_active_giveaway()
         managers[guild.id] = manager
         logger.debug(f"Set up giveaway manager for guild {guild.id}")
 
+    # Don't let the last guild's tag bleed into subsequent global startup logs.
+    clear_server()
     return managers

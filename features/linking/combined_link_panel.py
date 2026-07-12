@@ -503,7 +503,12 @@ async def setup_combined_link_panel_system(bot, engine, kick_url_generator, twit
             await ctx.send("❌ Failed to create link panel. Check logs for details.")
 
     # Re-attach the (platform-filtered) view to existing panel messages on restart.
+    from utils.log_context import clear_server, set_server
+
     for guild_id, panel in panels.items():
+        # Tag this guild's panel-refresh logs with the server (not "[-]").
+        _g = bot.get_guild(guild_id) if guild_id else None
+        set_server(guild_id, _g.name if _g else None)
         if panel.panel_message_id and panel.panel_channel_id:
             try:
                 channel = bot.get_channel(panel.panel_channel_id)
@@ -538,4 +543,6 @@ async def setup_combined_link_panel_system(bot, engine, kick_url_generator, twit
             except Exception as e:
                 logger.error(f"[CombinedLink] Failed to re-attach view for guild {guild_id}: {e}")
 
+    # Don't let the last guild's tag bleed into subsequent global startup logs.
+    clear_server()
     return panels

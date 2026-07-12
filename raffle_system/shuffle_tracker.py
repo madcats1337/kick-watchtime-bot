@@ -88,27 +88,36 @@ class ShuffleWagerTracker:
             self.platform_name = platform
 
             if platform == "howl":
-                self.howl_api_key = self.bot_settings.get("howl_api_key") or ""
-                self.affiliate_url = self.bot_settings.get("howl_affiliate_url") or self.HOWL_DEFAULT_LB_URL
+                self.howl_api_key = (self.bot_settings.get("howl_api_key") or "").strip()
+                # Strip first so a blank-but-not-empty stored value falls back to
+                # the default endpoint instead of fetching a whitespace URL.
+                self.affiliate_url = (
+                    self.bot_settings.get("howl_affiliate_url") or ""
+                ).strip() or self.HOWL_DEFAULT_LB_URL
                 self.campaign_code = self.bot_settings.get("howl_campaign_code") or ""
                 # Reuse the shared ticket rate (no separate howl rate setting yet).
                 self.tickets_per_1000 = self.bot_settings.shuffle_tickets_per_1000 or 20
             else:
                 self.howl_api_key = ""
-                self.affiliate_url = self.bot_settings.shuffle_affiliate_url or ""
+                # Strip so a blank-but-not-empty value (stray spaces from a cleared
+                # dashboard field) is treated as "not configured" — the task's
+                # empty-URL guard then skips this server instead of fetching "   ".
+                self.affiliate_url = (self.bot_settings.shuffle_affiliate_url or "").strip()
                 self.campaign_code = self.bot_settings.shuffle_campaign_code or "lele"
                 self.tickets_per_1000 = self.bot_settings.shuffle_tickets_per_1000 or 20
         else:
             # Fallback to environment variables
             self.platform_name = os.getenv("WAGER_PLATFORM_NAME", "shuffle").lower()
             if self.platform_name == "howl":
-                self.howl_api_key = os.getenv("HOWL_API_KEY", "")
-                self.affiliate_url = os.getenv("HOWL_AFFILIATE_URL") or self.HOWL_DEFAULT_LB_URL
+                self.howl_api_key = os.getenv("HOWL_API_KEY", "").strip()
+                self.affiliate_url = (os.getenv("HOWL_AFFILIATE_URL") or "").strip() or self.HOWL_DEFAULT_LB_URL
                 self.campaign_code = os.getenv("HOWL_CAMPAIGN_CODE", "")
                 self.tickets_per_1000 = int(os.getenv("WAGER_TICKETS_PER_1000_USD", "20"))
             else:
                 self.howl_api_key = ""
-                self.affiliate_url = os.getenv("WAGER_AFFILIATE_URL") or os.getenv("SHUFFLE_AFFILIATE_URL", "")
+                self.affiliate_url = (
+                    os.getenv("WAGER_AFFILIATE_URL") or os.getenv("SHUFFLE_AFFILIATE_URL", "")
+                ).strip()
                 self.campaign_code = os.getenv("WAGER_CAMPAIGN_CODE") or os.getenv("SHUFFLE_CAMPAIGN_CODE", "lele")
                 self.tickets_per_1000 = int(os.getenv("WAGER_TICKETS_PER_1000_USD", "20"))
 
@@ -784,41 +793,61 @@ class ShuffleWagerTracker:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(fetch_url, headers=headers, params=params, timeout=30) as response:
-                    if response.status != 200:
-                        logger.error(f"{self.platform_name.capitalize()} API returned status {response.status}")
+                    try:
+                        data = await response.json(content_type=None)
+                    except Exception:
+                        # Non-JSON body (e.g. an HTML error page). Only a genuine
+                        # problem is worth surfacing; a transient 5xx/timeout page
+                        # will simply be retried next poll.
+                        logger.warning(
+                            f"{self.platform_name.capitalize()} affiliate API returned "
+                            f"HTTP {response.status} with a non-JSON body; skipping this poll"
+                        )
                         return None
 
-                    data = await response.json()
-
-                    # Shuffle's /wager/ and /stats/ endpoints return their
-                    # rate-limit (and some other) errors as an HTTP *200* whose
-                    # body is a JSON OBJECT like
-                    #   {"statusCode":400,"message":"TOO_MANY_REQUEST",...}
-                    # rather than a proper 4xx status. The normal success body is
-                    # a JSON ARRAY, so a dict here is always an error envelope.
-                    # Detect it explicitly and log a clear, distinct message so a
-                    # transient rate-limit isn't reported as a generic fetch
-                    # failure (and so we back off to the next poll cleanly).
-                    if isinstance(data, dict):
-                        msg = data.get("message") or data.get("error") or "unknown error"
-                        code = data.get("statusCode")
-                        if str(msg).upper() == "TOO_MANY_REQUEST" or code in (400, 429):
+                    # Shuffle-ONLY error handling. Shuffle's affiliate endpoints
+                    # serve rate-limit errors INCONSISTENTLY: sometimes as a proper
+                    # HTTP 400/429, and sometimes as an HTTP 200 whose body is a
+                    # JSON error OBJECT {"statusCode":400,"message":"TOO_MANY_REQUEST"}.
+                    # Shuffle's SUCCESS body is a JSON array, so a dict from Shuffle
+                    # is always an error envelope. Classify and skip cleanly.
+                    #
+                    # Howl is DIFFERENT: its success body is a dict
+                    # ({"success": true, "data": [...]}), so we must NOT treat a
+                    # Howl dict as an error — _normalize_rows validates Howl's shape
+                    # (and logs if `success` is false). Only apply the array check
+                    # to Shuffle-style (bare-list) platforms.
+                    if self.platform_name != "howl" and not isinstance(data, list):
+                        msg = "unknown error"
+                        code = None
+                        if isinstance(data, dict):
+                            msg = data.get("message") or data.get("error") or "unknown error"
+                            code = data.get("statusCode")
+                        is_rate_limit = (
+                            str(msg).upper() == "TOO_MANY_REQUEST"
+                            or code in (400, 429)
+                            or response.status in (400, 429)
+                        )
+                        if is_rate_limit:
                             # Transient and self-recovering (the next 2-min poll
                             # usually succeeds), so DEBUG — not worth a warning
                             # every poll during a rate-limit spell.
                             logger.debug(
                                 f"{self.platform_name.capitalize()} affiliate API rate-limited "
-                                f"(HTTP 200 body: {msg}); skipping this poll"
+                                f"(status {response.status}, body: {msg}); skipping this poll"
                             )
                         else:
-                            # An unexpected error object IS worth surfacing — it's
-                            # not a normal rate-limit and may need attention.
+                            # A real error (bad URL, server error, unexpected
+                            # shape) IS worth surfacing — it may need attention.
                             logger.warning(
-                                f"{self.platform_name.capitalize()} affiliate API returned an "
-                                f"error object (HTTP 200): {str(data)[:200]}"
+                                f"{self.platform_name.capitalize()} affiliate API error "
+                                f"(HTTP {response.status}): {str(data)[:200]}"
                             )
                         return None
 
+                    # For a non-200 status that still returned parseable JSON on a
+                    # platform we didn't special-case above, let _normalize_rows do
+                    # the shape validation (and its own error logging).
                     return self._normalize_rows(data)
 
         except asyncio.TimeoutError:

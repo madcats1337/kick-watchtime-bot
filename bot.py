@@ -5064,6 +5064,10 @@ async def proactive_twitch_token_refresh_task():
 
         refreshed = failed = validated = 0
         for user_id, row_server_id, twitch_username, access_token, refresh_token, expires_at in rows:
+            # Tag this token's refresh/validation logs with its owning server so a
+            # "[Twitch] Refreshed token…" line shows "[<server name>]" not "[-]".
+            _g = bot.get_guild(row_server_id) if row_server_id else None
+            set_server(row_server_id, _g.name if _g else None)
             api = TwitchAPI(access_token=access_token, refresh_token=refresh_token)
             try:
                 needs_refresh = False
@@ -5136,6 +5140,9 @@ async def proactive_twitch_token_refresh_task():
             finally:
                 await api.close()
 
+        # Per-token loop done; the summary below is a global (all-servers) line, so
+        # clear the last token's server tag before emitting it.
+        clear_server()
         if refreshed or failed:
             logger.info(f"[Twitch] Token maintenance: {validated} validated, {refreshed} refreshed, {failed} failed")
         else:
@@ -8643,6 +8650,15 @@ async def on_ready():
 
             # Initialize per-guild trackers and managers (without adding cogs yet)
             for guild in bot.guilds:
+                # Tag every log line emitted while initializing THIS guild (settings
+                # load, period check, gifted-sub/watchtime/wager trackers,
+                # auto-leaderboard, link panels, giveaways, …) with the server, so
+                # startup logs show "[<server name>]" instead of "[-]". Per-guild
+                # background tasks that run later set their own context; this covers
+                # the synchronous init pass. The clear_server() after the loop stops
+                # the last guild's tag bleeding into later global startup logs.
+                set_server(guild.id, guild.name)
+
                 logger.debug(f"[Init] Loading settings for guild {guild.name} ({guild.id})...")
                 guild_settings = get_guild_settings(guild.id)
 

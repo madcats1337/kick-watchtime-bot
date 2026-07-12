@@ -241,7 +241,12 @@ async def setup_link_panel_system(bot, engine, oauth_url_generator):
             await ctx.send("❌ Failed to create link panel. Check logs for details.")
 
     # Re-attach views to existing panels on bot restart
+    from utils.log_context import clear_server, set_server
+
     for guild_id, panel in panels.items():
+        # Tag this guild's panel-refresh logs with the server (not "[-]").
+        _g = bot.get_guild(guild_id) if guild_id else None
+        set_server(guild_id, _g.name if _g else None)
         if panel.panel_message_id and panel.panel_channel_id:
             try:
                 channel = bot.get_channel(panel.panel_channel_id)
@@ -255,4 +260,6 @@ async def setup_link_panel_system(bot, engine, oauth_url_generator):
             except Exception as e:
                 logger.error(f"Failed to re-attach link panel view for guild {guild_id}: {e}")
 
+    # Don't let the last guild's tag bleed into subsequent global startup logs.
+    clear_server()
     return panels
