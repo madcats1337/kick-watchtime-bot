@@ -8686,7 +8686,7 @@ async def on_ready():
                 # active platform (shuffle/howl) from wager_platform_name on every
                 # refresh, so a platform switch hot-swaps this same instance.
                 shuffle_trackers[guild.id] = await setup_shuffle_tracker(
-                    bot, engine, server_id=guild.id, bot_settings=guild_settings
+                    bot, engine, server_id=guild.id, bot_settings=guild_settings, server_name=guild.name
                 )
                 # Expose per-guild wager trackers so the Redis settings-sync handler
                 # can call refresh_settings() for an instant platform hot-swap.

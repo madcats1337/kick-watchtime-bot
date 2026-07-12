@@ -171,6 +171,14 @@ async def _fetch_affiliate_data(affiliate_url: str):
                     return None
 
                 data = await response.json()
+                # Shuffle serves rate-limit errors as an HTTP 200 whose body is a
+                # JSON object ({"statusCode":400,"message":"TOO_MANY_REQUEST"}),
+                # not the expected array. Surface that distinctly so a transient
+                # rate-limit isn't logged as an "unexpected format" bug.
+                if isinstance(data, dict):
+                    msg = data.get("message") or data.get("error") or "unknown error"
+                    logger.warning(f"Affiliate API returned an error object (HTTP 200): {msg}")
+                    return None
                 if not isinstance(data, list):
                     logger.error(f"Unexpected affiliate API response format: {type(data)}")
                     return None

@@ -369,7 +369,11 @@ class ShuffleWagerTracker:
             wager_data = await self._fetch_shuffle_data()
 
             if not wager_data:
-                logger.error(f"Failed to fetch {self.platform_name} affiliate data")
+                # _fetch_shuffle_data already logged the specific reason (rate
+                # limit, timeout, HTTP status, bad body) at the appropriate level,
+                # so avoid a duplicate generic line here. The caller decides how to
+                # surface `fetch_failed`.
+                logger.debug(f"No {self.platform_name} affiliate data this poll (see fetch log above)")
                 return {"status": "fetch_failed", "updates": 0}
 
             # Filter for campaign code(s) - supports multiple codes separated by comma.
@@ -384,7 +388,10 @@ class ShuffleWagerTracker:
                 filtered_data = [user for user in wager_data if user.get("campaignCode", "").lower() in campaign_codes]
 
             if not filtered_data:
-                logger.warning(f"No users found with campaign codes '{self.campaign_code}' on {self.platform_name}")
+                # A valid, benign state (an affiliate with no qualifying referees
+                # yet), so DEBUG — not a warning. With the /wager/ endpoint the
+                # campaign code is stamped, so this means genuinely-empty data.
+                logger.debug(f"No qualifying users in {self.platform_name} affiliate data this poll")
                 return {"status": "no_users", "updates": 0}
 
             logger.debug(
@@ -782,6 +789,36 @@ class ShuffleWagerTracker:
                         return None
 
                     data = await response.json()
+
+                    # Shuffle's /wager/ and /stats/ endpoints return their
+                    # rate-limit (and some other) errors as an HTTP *200* whose
+                    # body is a JSON OBJECT like
+                    #   {"statusCode":400,"message":"TOO_MANY_REQUEST",...}
+                    # rather than a proper 4xx status. The normal success body is
+                    # a JSON ARRAY, so a dict here is always an error envelope.
+                    # Detect it explicitly and log a clear, distinct message so a
+                    # transient rate-limit isn't reported as a generic fetch
+                    # failure (and so we back off to the next poll cleanly).
+                    if isinstance(data, dict):
+                        msg = data.get("message") or data.get("error") or "unknown error"
+                        code = data.get("statusCode")
+                        if str(msg).upper() == "TOO_MANY_REQUEST" or code in (400, 429):
+                            # Transient and self-recovering (the next 2-min poll
+                            # usually succeeds), so DEBUG — not worth a warning
+                            # every poll during a rate-limit spell.
+                            logger.debug(
+                                f"{self.platform_name.capitalize()} affiliate API rate-limited "
+                                f"(HTTP 200 body: {msg}); skipping this poll"
+                            )
+                        else:
+                            # An unexpected error object IS worth surfacing — it's
+                            # not a normal rate-limit and may need attention.
+                            logger.warning(
+                                f"{self.platform_name.capitalize()} affiliate API returned an "
+                                f"error object (HTTP 200): {str(data)[:200]}"
+                            )
+                        return None
+
                     return self._normalize_rows(data)
 
         except asyncio.TimeoutError:
@@ -919,7 +956,7 @@ class ShuffleWagerTracker:
             return None
 
 
-async def setup_shuffle_tracker(bot, engine, server_id=None, bot_settings=None):
+async def setup_shuffle_tracker(bot, engine, server_id=None, bot_settings=None, server_name=None):
     """
     Setup the Shuffle wager tracker as a Discord bot task
 
@@ -928,20 +965,34 @@ async def setup_shuffle_tracker(bot, engine, server_id=None, bot_settings=None):
         engine: SQLAlchemy engine
         server_id: Discord server/guild ID for multi-server support (optional)
         bot_settings: Guild-specific bot settings manager (optional)
+        server_name: Discord guild name, for per-server log tagging (optional)
     """
     from discord.ext import tasks
+
+    from utils.log_context import set_server
 
     tracker = ShuffleWagerTracker(engine, bot_settings=bot_settings, server_id=server_id)
 
     @tasks.loop(minutes=2)  # Run every 2 minutes
     async def update_shuffle_task():
         """Periodic task to update Shuffle wagers and award tickets"""
+        # Tag every log line from this per-guild task with the server, so a
+        # warning shows "[<server name>]" instead of "[-]" (faster debugging).
+        set_server(server_id, server_name)
         try:
             # Refresh settings before each update to get latest from database
             tracker.refresh_settings()
 
+            # Skip (and stay silent) when this server has no wager source
+            # configured for its ACTIVE platform. `affiliate_url` already resolves
+            # per-platform in _load_settings (the shuffle stats/wager URL when
+            # shuffle is active, the howl leaderboard URL when howl is active), so
+            # an empty value means "wager tracking isn't set up for this server" —
+            # nothing to fetch, and any fetch warning below would be pure noise.
+            # This is DEBUG only, so a server without wager tracking never emits a
+            # warning about a missing/failing affiliate URL.
             if not tracker.affiliate_url:
-                logger.debug("[Shuffle Tracker] No affiliate URL configured - skipping update")
+                logger.debug("[Shuffle Tracker] No affiliate URL for active platform - skipping update")
                 return
 
             logger.debug("[Shuffle Tracker] 🔄 Checking wagers...")
@@ -963,7 +1014,10 @@ async def setup_shuffle_tracker(bot, engine, server_id=None, bot_settings=None):
             elif result["status"] == "no_users":
                 logger.debug(f"[Shuffle Tracker] No users found with campaign code(s): {tracker.campaign_code}")
             elif result["status"] == "fetch_failed":
-                logger.warning(f"[Shuffle Tracker] ❌ Failed to fetch data from affiliate URL")
+                # The specific cause (rate-limit / timeout / HTTP status / bad
+                # body) was already logged at the right level inside the fetch, so
+                # keep this summary at DEBUG to avoid a duplicate warning per poll.
+                logger.debug("[Shuffle Tracker] No data fetched this poll (see fetch log for cause)")
             elif result["status"] == "error":
                 logger.warning(f"[Shuffle Tracker] ❌ Update failed: {result.get('error')}")
         except Exception as e:
