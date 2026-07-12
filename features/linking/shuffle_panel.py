@@ -143,6 +143,20 @@ async def ensure_shuffle_emoji(bot):
         return None
 
 
+def _shuffle_wager_url(affiliate_url: str) -> str:
+    """Derive Shuffle's /wager/<id> endpoint from a stored /stats/<id> URL.
+
+    Mirrors ShuffleWagerTracker._shuffle_wager_url. The /wager/ endpoint returns
+    the same referees as /stats/ (username + raw wagerAmount) plus the RTP-
+    weighted weightedWagerAmount, without the per-row campaignCode. For link
+    verification we only need the username, so this is a drop-in source. URLs
+    that don't contain /stats/ are returned unchanged.
+    """
+    if not affiliate_url:
+        return affiliate_url
+    return affiliate_url.replace("/stats/", "/wager/", 1)
+
+
 async def _fetch_affiliate_data(affiliate_url: str):
     """Fetch the affiliate-stats JSON array from the configured URL.
 
@@ -218,8 +232,13 @@ async def verify_and_grant(interaction: discord.Interaction, engine, settings_ge
     # Defer: the affiliate fetch can take a few seconds
     await interaction.response.defer(ephemeral=True, thinking=True)
 
-    # 2. Fetch affiliate JSON
-    data = await _fetch_affiliate_data(affiliate_url)
+    # 2. Fetch affiliate JSON.
+    # Use Shuffle's newer /wager/<id> endpoint (derived from the stored /stats/
+    # URL). It returns the same referees/usernames as /stats/ but drops the
+    # per-row campaignCode (the <id> already scopes to this affiliate) — so the
+    # campaign-code filter below degrades to a username-only match for these
+    # rows, which is correct: everyone the endpoint returns is our referee.
+    data = await _fetch_affiliate_data(_shuffle_wager_url(affiliate_url))
     if data is None:
         await interaction.followup.send(
             "❌ Couldn't reach the Shuffle affiliate stats right now. Please try again later.",
@@ -227,15 +246,18 @@ async def verify_and_grant(interaction: discord.Interaction, engine, settings_ge
         )
         return
 
-    # 3. Match: case-insensitive username, filtered by campaign code(s)
+    # 3. Match: case-insensitive username, filtered by campaign code(s).
+    # A row only fails the campaign check if it actually carries a campaignCode
+    # (legacy /stats/) that isn't one of ours; /wager/ rows have no campaignCode
+    # and match on username alone.
     campaign_codes = [code.strip().lower() for code in (campaign_code or "").split(",") if code.strip()]
     entered_lower = entered.lower()
     matched = None
     for row in data:
         if str(row.get("username", "")).lower() != entered_lower:
             continue
-        # If campaign codes are configured, require a match; otherwise accept any
-        if campaign_codes and str(row.get("campaignCode", "")).lower() not in campaign_codes:
+        row_code = str(row.get("campaignCode", "")).lower()
+        if campaign_codes and row_code and row_code not in campaign_codes:
             continue
         matched = row
         break

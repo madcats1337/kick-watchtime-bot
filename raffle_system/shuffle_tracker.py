@@ -54,6 +54,24 @@ class ShuffleWagerTracker:
     # Default howl affiliate leaderboard endpoint (overridable per-server).
     HOWL_DEFAULT_LB_URL = "https://howl.gg/api/user/affiliate/lb"
 
+    @staticmethod
+    def _shuffle_wager_url(affiliate_url):
+        """Derive Shuffle's `/wager/<id>` endpoint from a configured `/stats/<id>` URL.
+
+        Servers store the affiliate URL as the classic public stats endpoint
+        (https://affiliate.shuffle.com/stats/<id>). Shuffle added a newer public
+        endpoint at the same host — /wager/<id> — that returns, per referee,
+        BOTH the raw `wagerAmount` and the RTP-weighted `weightedWagerAmount`
+        (the 100/50/10% tiers already applied server-side). Same public id, no
+        auth. We derive /wager/ from the stored /stats/ URL so existing configs
+        keep working without anyone re-entering anything. If the URL doesn't look
+        like the stats endpoint, it's returned unchanged (defensive; the caller
+        falls back to the stored URL's own shape).
+        """
+        if not affiliate_url:
+            return affiliate_url
+        return affiliate_url.replace("/stats/", "/wager/", 1)
+
     def _load_settings(self):
         """Load wager settings from bot_settings (database) or environment variables.
 
@@ -201,8 +219,12 @@ class ShuffleWagerTracker:
                     username = user_data.get("username")
                     if not username:
                         continue
+                    # Leaderboard totals use the RTP-WEIGHTED wager. Shuffle's
+                    # /wager/ endpoint supplies weightedWagerAmount; Howl (and any
+                    # legacy /stats/ response) fall back to the raw amount via
+                    # _normalize_rows, so this reads correctly for every platform.
                     try:
-                        total = round(float(user_data.get("wagerAmount", 0) or 0), 2)
+                        total = round(float(user_data.get("weightedWagerAmount", 0) or 0), 2)
                     except (TypeError, ValueError):
                         total = 0.0
                     kick_name, discord_id = links.get(str(username).lower(), (None, None))
@@ -239,6 +261,92 @@ class ShuffleWagerTracker:
         except Exception as e:
             logger.info(
                 f"[Shuffle Tracker] shuffle_wager_totals upsert failed for "
+                f"server={self.server_id}: {type(e).__name__}: {e}"
+            )
+            return
+
+        # One-time cutover, in its OWN transaction so a failure here never rolls
+        # back the weighted totals written above. The totals just stored are now
+        # RTP-WEIGHTED (previously raw); any leaderboard period active across this
+        # switch has baselines snapshotted from the OLD raw totals, so
+        # `weighted_now - raw_baseline` would be wrong. Re-anchor those baselines
+        # to the fresh weighted totals, exactly once per server. Shuffle only
+        # (Howl weighted == raw, so there's nothing to re-anchor).
+        if self.platform_name == "shuffle":
+            self._rebaseline_active_periods_for_weighted_cutover()
+
+    def _rebaseline_active_periods_for_weighted_cutover(self):
+        """Re-anchor active leaderboard baselines to weighted totals, once.
+
+        Guarded by a marker row in `shuffle_weighted_cutover` so it fires exactly
+        once per server, the first time weighted totals are stored. For every
+        ACTIVE leaderboard period on this server it overwrites each existing
+        baseline with the user's current (now weighted) total from
+        shuffle_wager_totals, so the period's displayed wager continues from ~0 at
+        the cutover instant rather than showing a broken weighted-minus-raw value.
+
+        Runs in its OWN transaction (the marker claim + the UPDATE commit
+        together) so it's atomic and safe to retry: if anything fails, the
+        transaction rolls back the marker too and the next poll tries again. Only
+        baselines that already exist are re-anchored; a period's own new-user
+        snapshotting keeps handling users first seen after the cutover.
+        """
+        try:
+            with self.engine.begin() as conn:
+                # Marker table: presence of a row means the cutover already ran.
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE IF NOT EXISTS shuffle_weighted_cutover (
+                            discord_server_id BIGINT PRIMARY KEY,
+                            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                        """
+                    )
+                )
+                claimed = conn.execute(
+                    text(
+                        """
+                        INSERT INTO shuffle_weighted_cutover (discord_server_id)
+                        VALUES (:sid)
+                        ON CONFLICT (discord_server_id) DO NOTHING
+                        RETURNING discord_server_id
+                        """
+                    ),
+                    {"sid": self.server_id},
+                ).fetchone()
+
+                # Row already existed → cutover done before; nothing to do.
+                if not claimed:
+                    return
+
+                # Re-baseline every active period's EXISTING baselines to the
+                # current weighted totals. Join baselines → totals by username.
+                result = conn.execute(
+                    text(
+                        """
+                        UPDATE wager_leaderboard_baselines b
+                        SET baseline_amount = t.total_wager_usd
+                        FROM wager_leaderboard_periods p, shuffle_wager_totals t
+                        WHERE b.period_id = p.id
+                          AND p.discord_server_id = :sid
+                          AND p.status = 'active'
+                          AND t.discord_server_id = :sid
+                          AND t.platform = 'shuffle'
+                          AND LOWER(t.shuffle_username) = LOWER(b.shuffle_username)
+                        """
+                    ),
+                    {"sid": self.server_id},
+                )
+                logger.info(
+                    f"[Shuffle Tracker] weighted-wager cutover: re-baselined "
+                    f"{result.rowcount} active-period baseline(s) for server={self.server_id}"
+                )
+        except Exception as e:
+            # Non-fatal and self-retrying: the marker and UPDATE share one
+            # transaction, so a failure rolls back both and the next poll retries.
+            logger.info(
+                f"[Shuffle Tracker] weighted-wager cutover re-baseline failed for "
                 f"server={self.server_id}: {type(e).__name__}: {e}"
             )
 
@@ -570,14 +678,22 @@ class ShuffleWagerTracker:
 
     def _normalize_rows(self, raw):
         """Normalize a platform's raw affiliate response into the row shape the
-        update loop consumes: dicts with `username`, `wagerAmount`, `campaignCode`.
+        update loop consumes: dicts with `username`, `wagerAmount`,
+        `weightedWagerAmount`, `campaignCode`.
 
-        - Shuffle: a bare JSON list already in that shape — passed through.
+        `wagerAmount` (raw) drives raffle TICKET awards; `weightedWagerAmount`
+        (RTP-weighted) drives the dashboard leaderboard totals. See
+        _store_lifetime_totals / the ticket loop for how each is used.
+
+        - Shuffle: a bare JSON list from the /wager/<id> endpoint, already
+          carrying both `wagerAmount` and `weightedWagerAmount`. It has NO
+          per-row `campaignCode` (the /wager/ endpoint drops it; the <id> in the
+          URL already scopes to one affiliate), so we stamp the configured code
+          onto each row to keep the campaign-code filter a no-op pass-through.
         - Howl: `{success, data:[{name, wageredUSD, userId, ...}]}` (see
           leaderboard-howl-data.md). `name`→username, `wageredUSD`→wagerAmount.
-          Howl rows carry no per-row campaign code, so we stamp the configured
-          one (or "*") so the existing campaign-code filter passes — howl scopes
-          by API params/account, not per-row matching.
+          Howl has no RTP weighting, so weighted == raw. Howl rows carry no
+          per-row campaign code either, so we stamp the configured one (or "*").
         """
         if self.platform_name == "howl":
             if not isinstance(raw, dict) or not raw.get("success"):
@@ -590,20 +706,39 @@ class ShuffleWagerTracker:
                 name = r.get("name")
                 if not name:
                     continue
+                wagered = r.get("wageredUSD", 0)
                 normalized.append(
                     {
                         "username": name,
-                        "wagerAmount": r.get("wageredUSD", 0),
+                        "wagerAmount": wagered,
+                        # Howl doesn't weight by RTP — leaderboard uses the raw total.
+                        "weightedWagerAmount": wagered,
                         "campaignCode": stamp,
                     }
                 )
             return normalized
 
-        # Shuffle (and other bare-list platforms)
+        # Shuffle (and other bare-list platforms): the /wager/<id> endpoint
+        # returns [{username, wagerAmount, weightedWagerAmount}]. Stamp the
+        # configured campaign code so the (now redundant) campaign filter passes,
+        # and default weightedWagerAmount to the raw amount if a row is missing it
+        # (e.g. a legacy /stats/ response served during a transition).
         if not isinstance(raw, list):
             logger.error(f"Unexpected {self.platform_name} API response format: {type(raw)}")
             return None
-        return raw
+        stamp = self.campaign_code.split(",")[0].strip().lower() if self.campaign_code else "*"
+        normalized = []
+        for r in raw:
+            if not isinstance(r, dict):
+                continue
+            row = dict(r)
+            if "weightedWagerAmount" not in row:
+                row["weightedWagerAmount"] = row.get("wagerAmount", 0)
+            # Preserve a real campaignCode if present (legacy /stats/), else stamp.
+            if not row.get("campaignCode"):
+                row["campaignCode"] = stamp
+            normalized.append(row)
+        return normalized
 
     async def _fetch_shuffle_data(self):
         """
@@ -614,6 +749,7 @@ class ShuffleWagerTracker:
         """
         headers = {}
         params = None
+        fetch_url = self.affiliate_url
         if self.platform_name == "howl":
             if not self.howl_api_key:
                 logger.error("Howl selected but no howl_api_key configured")
@@ -632,10 +768,15 @@ class ShuffleWagerTracker:
                 "to": now.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
                 "limit": "1000",
             }
+        else:
+            # Shuffle: use the newer /wager/<id> endpoint (derived from the stored
+            # /stats/<id> URL). It returns both raw `wagerAmount` (drives tickets)
+            # and `weightedWagerAmount` (RTP-weighted, drives the leaderboard).
+            fetch_url = self._shuffle_wager_url(self.affiliate_url)
 
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(self.affiliate_url, headers=headers, params=params, timeout=30) as response:
+                async with session.get(fetch_url, headers=headers, params=params, timeout=30) as response:
                     if response.status != 200:
                         logger.error(f"{self.platform_name.capitalize()} API returned status {response.status}")
                         return None
