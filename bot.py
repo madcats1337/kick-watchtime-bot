@@ -8797,6 +8797,13 @@ async def on_ready():
             bot.add_view(gtb_persistent_view)
             logger.debug(f"✅ GTB panel persistent view registered (handles all guilds)")
 
+            # Point shop storefront: register a stateless template so the
+            # purchase select and balance button on already-posted shop
+            # messages keep working after a restart (their callbacks read all
+            # state from the interaction + DB, not from this instance).
+            bot.add_view(ShopLayoutView.template())
+            logger.debug(f"✅ Point shop persistent view registered (handles all guilds)")
+
             # Create slot panels per-guild (but only add cogs once)
             first_guild = True
             for guild in bot.guilds:
@@ -10386,39 +10393,11 @@ class PointShopPurchaseModal(discord.ui.Modal):
 class PointShopItemSelect(discord.ui.Select):
     """Dropdown to select a shop item"""
 
-    def __init__(self, items: list):
-        self.items_data = {}  # Store item data for quick lookup
+    def __init__(self, items: list = None):
         options = []
 
-        for item in items[:25]:  # Discord limit
-            # Support both old (9-col) and new (11-col) query results
-            if len(item) >= 11:
-                (
-                    item_id,
-                    name,
-                    description,
-                    price,
-                    stock,
-                    image_url,
-                    is_active,
-                    requirement_title,
-                    requirement_footer,
-                    item_type,
-                    raffle_ticket_amount,
-                ) = item[:11]
-            else:
-                (
-                    item_id,
-                    name,
-                    description,
-                    price,
-                    stock,
-                    image_url,
-                    is_active,
-                    requirement_title,
-                    requirement_footer,
-                ) = item[:9]
-                item_type, raffle_ticket_amount = "custom", 0
+        for item in (items or [])[:25]:  # Discord limit
+            item_id, name, description, price, stock, image_url, is_active = item[:7]
             if is_active:
                 # Stock display
                 if stock < 0:
@@ -10427,18 +10406,6 @@ class PointShopItemSelect(discord.ui.Select):
                     stock_text = "SOLD OUT"
                 else:
                     stock_text = str(stock)
-
-                self.items_data[str(item_id)] = {
-                    "id": item_id,
-                    "name": name,
-                    "description": description or "No description",
-                    "price": price,
-                    "stock": stock,
-                    "requirement_title": requirement_title,
-                    "requirement_footer": requirement_footer,
-                    "item_type": item_type or "custom",
-                    "raffle_ticket_amount": raffle_ticket_amount or 0,
-                }
 
                 # Format: "Item Name: Xpts" with "──── In-stock: X ────" as description
                 options.append(
@@ -10456,27 +10423,58 @@ class PointShopItemSelect(discord.ui.Select):
         super().__init__(placeholder="🛍️ Select an item to purchase...", options=options, custom_id="shop_item_select")
 
     async def callback(self, interaction: discord.Interaction):
-        """Show purchase modal when item is selected"""
+        """Show purchase modal when item is selected.
+
+        Item details are read fresh from the DB (never from view state captured
+        at post time) so price/stock/availability are always current — and so
+        the stateless template view registered at startup can serve shop
+        messages posted before a restart.
+        """
         selected_id = self.values[0]
 
         if selected_id == "none":
             await interaction.response.send_message("❌ No items are available for purchase right now.", ephemeral=True)
             return
 
-        item = self.items_data.get(selected_id)
-        if not item:
-            await interaction.response.send_message("❌ Item not found. Please try again.", ephemeral=True)
-            return
-
-        if item["stock"] == 0:
-            await interaction.response.send_message(f"❌ **{item['name']}** is sold out!", ephemeral=True)
-            return
-
-        # First, show the user their balance and item details
         discord_id = interaction.user.id
         guild_id = interaction.guild.id if interaction.guild else None
 
         with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                SELECT id, name, description, price, stock, requirement_title, requirement_footer,
+                       COALESCE(item_type, 'custom') as item_type,
+                       COALESCE(raffle_ticket_amount, 0) as raffle_ticket_amount,
+                       is_active
+                FROM point_shop_items
+                WHERE id = :id AND discord_server_id = :g
+            """
+                ),
+                {"id": int(selected_id), "g": guild_id},
+            ).fetchone()
+
+            if not row or not row[9]:
+                await interaction.response.send_message("❌ This item is no longer available.", ephemeral=True)
+                return
+
+            (
+                item_id,
+                item_name,
+                description,
+                price,
+                stock,
+                requirement_title,
+                requirement_footer,
+                item_type,
+                raffle_ticket_amount,
+                _is_active,
+            ) = row
+
+            if stock == 0:
+                await interaction.response.send_message(f"❌ **{item_name}** is sold out!", ephemeral=True)
+                return
+
             # Resolve the canonical account the person's shared balance lives under,
             # so this pre-modal affordability check matches the (cross-platform)
             # balance the shop displays and later deducts from.
@@ -10503,39 +10501,39 @@ class PointShopItemSelect(discord.ui.Select):
 
             # Stop them at the dropdown if they've already used up their allowance,
             # rather than after they've filled in the purchase modal.
-            reached_limit = per_user_limit_blocked(conn, item["id"], discord_id, guild_id)
+            reached_limit = per_user_limit_blocked(conn, item_id, discord_id, guild_id)
 
         if reached_limit is not None:
             cap, window = reached_limit
             per = f" per {format_duration(window)}" if window else ""
             await interaction.response.send_message(
-                f"❌ **Purchase Limit Reached!**\n\nYou can only buy **{cap}** of **{item['name']}**{per}.",
+                f"❌ **Purchase Limit Reached!**\n\nYou can only buy **{cap}** of **{item_name}**{per}.",
                 ephemeral=True,
             )
             return
 
         # Check if they can afford it
-        if current_balance < item["price"]:
+        if current_balance < price:
             await interaction.response.send_message(
                 f"❌ **Insufficient Points!**\n\n"
-                f"**{item['name']}** costs **{item['price']:,}** points\n"
+                f"**{item_name}** costs **{price:,}** points\n"
                 f"Your balance: **{current_balance:,}** points\n"
-                f"You need **{item['price'] - current_balance:,}** more points!",
+                f"You need **{price - current_balance:,}** more points!",
                 ephemeral=True,
             )
             return
 
         # Show the purchase modal
         modal = PointShopPurchaseModal(
-            item_id=item["id"],
-            item_name=item["name"],
-            price=item["price"],
-            description=item["description"],
-            stock=item["stock"],
-            requirement_title=item.get("requirement_title"),
-            requirement_footer=item.get("requirement_footer"),
-            item_type=item.get("item_type", "custom"),
-            raffle_ticket_amount=item.get("raffle_ticket_amount", 0),
+            item_id=item_id,
+            item_name=item_name,
+            price=price,
+            description=description or "No description",
+            stock=stock,
+            requirement_title=requirement_title,
+            requirement_footer=requirement_footer,
+            item_type=item_type or "custom",
+            raffle_ticket_amount=raffle_ticket_amount or 0,
         )
         await interaction.response.send_modal(modal)
 
@@ -10738,6 +10736,44 @@ class PointShopBalanceButton(discord.ui.Button):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+class ShopLayoutView(discord.ui.LayoutView):
+    """Single-message Components V2 storefront: header, mosaic grid, purchase
+    select, balance button, and footer all live in one message, so shop updates
+    can edit it in place instead of re-posting a multi-message stack."""
+
+    def __init__(self, items: list = None, has_mosaic: bool = False, force_select: bool = False):
+        super().__init__(timeout=None)
+        items = items or []
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("# 🛍️ Point Shop"),
+                discord.ui.TextDisplay("Spend your hard-earned points on awesome rewards!"),
+                accent_colour=0xFFD700,
+            )
+        )
+
+        if has_mosaic:
+            self.add_item(discord.ui.MediaGallery(discord.MediaGalleryItem("attachment://shop_items.png")))
+
+        if not items:
+            self.add_item(discord.ui.TextDisplay("No items available at the moment. Check back later!"))
+
+        self.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        if items or force_select:
+            self.add_item(discord.ui.ActionRow(PointShopItemSelect(items)))
+        self.add_item(discord.ui.ActionRow(PointShopBalanceButton()))
+        self.add_item(discord.ui.TextDisplay("💡 *Earn points by watching streams!*"))
+
+    @classmethod
+    def template(cls):
+        """Stateless instance for bot.add_view at startup: keeps the select and
+        balance button on already-posted shop messages working across restarts
+        (their callbacks read everything from the interaction + DB)."""
+        return cls(items=[], force_select=True)
+
+
 async def create_shop_mosaic_image(items, max_width=2400):
     """Create a grid mosaic image from shop item images, preserving original aspect ratios
 
@@ -10771,11 +10807,12 @@ async def create_shop_mosaic_image(items, max_width=2400):
     # Settings - VERY LARGE sizes for maximum visibility
     COLS = min(len(items_with_images), 3)  # Max 3 columns
     PADDING = 30
-    TITLE_HEIGHT = 70  # Title above image
-    FOOTER_HEIGHT = 140  # Price + stock below image (increased for larger fonts)
-    TITLE_FONT_SIZE = 42  # Much bigger title
-    PRICE_FONT_SIZE = 46  # Increased price font size
-    STOCK_FONT_SIZE = 34  # Increased stock font size
+    TITLE_HEIGHT = 100  # Title above image
+    FOOTER_HEIGHT = 210  # Price + stock below image
+    # Sized so text stays readable after Discord downscales the 2400px canvas ~4x to chat width
+    TITLE_FONT_SIZE = 64
+    PRICE_FONT_SIZE = 72
+    STOCK_FONT_SIZE = 52
     BG_COLOR = (30, 30, 35)
     TITLE_BG_COLOR = (45, 45, 55)
     FOOTER_BG_COLOR = (50, 50, 60)
@@ -10885,14 +10922,20 @@ async def create_shop_mosaic_image(items, max_width=2400):
             # Draw TITLE background (above image)
             draw.rectangle([x, current_y, x + cell_width, current_y + TITLE_HEIGHT], fill=TITLE_BG_COLOR)
 
-            # Draw item title (no item number, just the name)
-            max_chars = cell_width // 14
-            name_text = f"{name[:max_chars]}{'...' if len(name) > max_chars else ''}"
-            # Center the title text
+            # Draw item title (no item number, just the name), trimmed by
+            # measured width so it can't overflow the cell at any font size
+            name_text = name
+            if draw.textlength(name_text, font=title_font) > cell_width - 20:
+                while name_text and draw.textlength(name_text + "…", font=title_font) > cell_width - 20:
+                    name_text = name_text[:-1]
+                name_text += "…"
+            # Center the title text in its band
             bbox = draw.textbbox((0, 0), name_text, font=title_font)
             text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
             text_x = x + (cell_width - text_width) // 2
-            draw.text((text_x, current_y + 10), name_text, fill=TEXT_COLOR, font=title_font)
+            text_y = current_y + (TITLE_HEIGHT - text_height) // 2 - bbox[1]
+            draw.text((text_x, text_y), name_text, fill=TEXT_COLOR, font=title_font)
 
             # IMAGE area starts after title
             img_y = current_y + TITLE_HEIGHT
@@ -10931,7 +10974,7 @@ async def create_shop_mosaic_image(items, max_width=2400):
 
             # Line 1: Price (big, gold)
             price_text = f"{price:,} pts"
-            draw.text((x + 10, footer_y + 15), price_text, fill=PRICE_COLOR, font=price_font)
+            draw.text((x + 10, footer_y + 18), price_text, fill=PRICE_COLOR, font=price_font)
 
             # Line 2: Stock text
             if stock < 0:
@@ -10944,7 +10987,7 @@ async def create_shop_mosaic_image(items, max_width=2400):
                 stock_text = f"In-stock: {stock}"
                 stock_color = STOCK_COLOR
 
-            draw.text((x + 10, footer_y + 75), stock_text, fill=stock_color, font=stock_font)
+            draw.text((x + 10, footer_y + 115), stock_text, fill=stock_color, font=stock_font)
 
         current_y += TITLE_HEIGHT + row_height + FOOTER_HEIGHT + PADDING
 
@@ -10959,7 +11002,13 @@ async def create_shop_mosaic_image(items, max_width=2400):
 async def post_point_shop_to_discord(
     bot, guild_id: int = None, channel_id: int = None, update_existing: bool = True, use_components_v2: bool = True
 ):
-    """Post or update the point shop using Components V2 with grid mosaic layout"""
+    """Post or update the single-message point shop storefront (Components V2).
+
+    The storefront message carries the header, mosaic grid, purchase select,
+    balance button, and footer together, and is edited in place on updates so
+    it keeps its channel position and message ID. A fresh message is only
+    posted when none exists yet, it was deleted, or the shop channel changed.
+    """
 
     try:
         # If channel_id is provided, get the channel and derive guild_id from it
@@ -11052,18 +11101,67 @@ async def post_point_shop_to_discord(
             ).fetchone()
             existing_footer_id = int(existing_footer_result[0]) if existing_footer_result else None
 
-        # Delete existing messages if updating
+            # Which channel the storefront message currently lives in (it may
+            # differ from `channel` if an admin re-pointed the shop).
+            stored_channel_result = conn.execute(
+                text(
+                    """
+                SELECT value FROM point_settings
+                WHERE key = 'shop_message_channel_id' AND discord_server_id = :guild_id
+            """
+                ),
+                {"guild_id": guild_id},
+            ).fetchone()
+            stored_channel_id = int(stored_channel_result[0]) if stored_channel_result else None
+
+        old_channel = None
+        if stored_channel_id and stored_channel_id != channel.id:
+            old_channel = bot.get_channel(stored_channel_id)
+
         if update_existing:
-            for msg_id in [existing_message_id, existing_interactive_id, existing_footer_id]:
-                if msg_id:
+            # One-time migration from the old 3-message stack: the interactive
+            # and footer messages are obsolete now that the storefront message
+            # carries the select, balance button, and footer itself.
+            for msg_id in (existing_interactive_id, existing_footer_id):
+                if not msg_id:
+                    continue
+                for ch in (channel, old_channel):
+                    if ch is None:
+                        continue
                     try:
-                        existing_message = await channel.fetch_message(msg_id)
-                        await existing_message.delete()
-                        logger.debug(f"[Point Shop] Deleted old shop message {msg_id}")
+                        old_msg = await ch.fetch_message(msg_id)
+                        await old_msg.delete()
+                        logger.debug(f"[Point Shop] Deleted legacy shop message {msg_id}")
+                        break
                     except discord.NotFound:
-                        pass
+                        continue
                     except Exception as e:
-                        logger.warning(f"[Point Shop] Error deleting message {msg_id}: {e}")
+                        logger.warning(f"[Point Shop] Error deleting legacy shop message {msg_id}: {e}")
+                        break
+            if existing_interactive_id or existing_footer_id:
+                with engine.begin() as conn:
+                    conn.execute(
+                        text(
+                            """
+                        DELETE FROM point_settings
+                        WHERE key IN ('shop_interactive_id', 'shop_footer_id') AND discord_server_id = :guild_id
+                    """
+                        ),
+                        {"guild_id": guild_id},
+                    )
+
+            # If the shop moved to a different channel, remove the storefront
+            # from the old one so two shops don't coexist.
+            if old_channel and existing_message_id:
+                try:
+                    old_msg = await old_channel.fetch_message(existing_message_id)
+                    await old_msg.delete()
+                    logger.debug(f"[Point Shop] Deleted relocated shop message {existing_message_id}")
+                except discord.NotFound:
+                    pass
+                except Exception as e:
+                    logger.warning(f"[Point Shop] Error deleting relocated shop message {existing_message_id}: {e}")
+                existing_message_id = None
 
         # Check if Components V2 is supported (discord.py 2.6+)
         has_components_v2 = hasattr(discord.ui, "LayoutView") and hasattr(discord.ui, "MediaGallery")
@@ -11072,173 +11170,88 @@ async def post_point_shop_to_discord(
             f"[Point Shop] Components V2 available: {has_components_v2}, use_components_v2: {use_components_v2}, items count: {len(items)}"
         )
 
-        if use_components_v2 and has_components_v2 and items:
-            # ==================== Components V2 Mode with Mosaic ====================
-            v2_success = False
+        if use_components_v2 and has_components_v2:
+            # ==================== Components V2 Mode (single storefront message) ====================
             try:
                 # Generate the mosaic image (name, price, stock already included in image)
-                mosaic_image = await create_shop_mosaic_image(items)
-                mosaic_file = None
-                if mosaic_image:
-                    mosaic_file = discord.File(mosaic_image, filename="shop_items.png")
+                mosaic_image = await create_shop_mosaic_image(items) if items else None
+                mosaic_file = discord.File(mosaic_image, filename="shop_items.png") if mosaic_image else None
 
-                # Build Components V2 layout
-                class ShopLayout(discord.ui.LayoutView):
-                    def __init__(self, has_mosaic):
-                        super().__init__(timeout=None)
-                        self._build_layout(has_mosaic)
+                layout = ShopLayoutView(items, has_mosaic=mosaic_file is not None)
 
-                    def _build_layout(self, has_mosaic):
-                        # Header container
-                        self.add_item(
-                            discord.ui.Container(
-                                discord.ui.TextDisplay("# 🛍️ Point Shop"),
-                                discord.ui.TextDisplay("Spend your hard-earned points on awesome rewards!"),
-                                accent_colour=0xFFD700,
-                            )
-                        )
+                # Edit the existing storefront in place so the shop keeps its
+                # message ID and channel position; only post fresh if there is
+                # no message yet or it's gone.
+                message = None
+                if update_existing and existing_message_id:
+                    existing_message = None
+                    try:
+                        existing_message = await channel.fetch_message(existing_message_id)
+                    except discord.NotFound:
+                        pass
+                    except Exception as e:
+                        logger.warning(f"[Point Shop] Could not fetch shop message {existing_message_id}: {e}")
 
-                        # Show mosaic image in MediaGallery
-                        if has_mosaic:
-                            self.add_item(
-                                discord.ui.MediaGallery(discord.MediaGalleryItem("attachment://shop_items.png"))
-                            )
+                    if existing_message:
+                        try:
+                            await existing_message.edit(view=layout, attachments=[mosaic_file] if mosaic_file else [])
+                            message = existing_message
+                        except Exception as e:
+                            # e.g. the stored message is a pre-V2 embed that
+                            # can't gain the components-v2 flag — replace it.
+                            logger.warning(f"[Point Shop] Edit-in-place failed, re-posting: {e}")
+                            try:
+                                await existing_message.delete()
+                            except Exception:
+                                pass
 
-                layout = ShopLayout(mosaic_file is not None)
+                if message is None:
+                    if mosaic_image:
+                        # A failed edit attempt may have consumed the file stream.
+                        mosaic_image.seek(0)
+                        mosaic_file = discord.File(mosaic_image, filename="shop_items.png")
+                        message = await channel.send(view=layout, file=mosaic_file)
+                    else:
+                        message = await channel.send(view=layout)
 
-                # Send the Components V2 display with mosaic
-                if mosaic_file:
-                    message = await channel.send(view=layout, file=mosaic_file)
-                else:
-                    message = await channel.send(view=layout)
-
-                # Send a follow-up message with interactive components (select + button)
-                interactive_view = PointShopView(items)
-                interactive_msg = await channel.send("**Purchase an item:**", view=interactive_view)
-
-                # Send footer message at the bottom
-                footer_msg = await channel.send("💡 *Earn points by watching streams!*")
-
-                # Mark as successful after messages are sent
-                v2_success = True
-
-                # Store all three message IDs - critical operation
                 with engine.begin() as conn:
-                    # Check and update shop_message_id
-                    existing = conn.execute(
-                        text(
-                            """
-                        SELECT key FROM point_settings
-                        WHERE key = 'shop_message_id' AND discord_server_id = :guild_id
-                    """
-                        ),
-                        {"guild_id": guild_id},
-                    ).fetchone()
-
-                    if existing:
-                        conn.execute(
-                            text(
-                                """
-                            UPDATE point_settings
-                            SET value = :m, updated_at = CURRENT_TIMESTAMP
-                            WHERE key = 'shop_message_id' AND discord_server_id = :guild_id
-                        """
-                            ),
-                            {"m": str(message.id), "guild_id": guild_id},
-                        )
-                    else:
+                    for key, value in (
+                        ("shop_message_id", str(message.id)),
+                        ("shop_message_channel_id", str(channel.id)),
+                    ):
                         conn.execute(
                             text(
                                 """
                             INSERT INTO point_settings (key, value, discord_server_id, updated_at)
-                            VALUES ('shop_message_id', :m, :guild_id, CURRENT_TIMESTAMP)
+                            VALUES (:k, :v, :guild_id, CURRENT_TIMESTAMP)
+                            ON CONFLICT (key, discord_server_id) DO UPDATE SET value = :v, updated_at = CURRENT_TIMESTAMP
                         """
                             ),
-                            {"m": str(message.id), "guild_id": guild_id},
+                            {"k": key, "v": value, "guild_id": guild_id},
                         )
 
-                    # Check and update shop_interactive_id
-                    existing = conn.execute(
-                        text(
-                            """
-                        SELECT key FROM point_settings
-                        WHERE key = 'shop_interactive_id' AND discord_server_id = :guild_id
-                    """
-                        ),
-                        {"guild_id": guild_id},
-                    ).fetchone()
-
-                    if existing:
-                        conn.execute(
-                            text(
-                                """
-                            UPDATE point_settings
-                            SET value = :m, updated_at = CURRENT_TIMESTAMP
-                            WHERE key = 'shop_interactive_id' AND discord_server_id = :guild_id
-                        """
-                            ),
-                            {"m": str(interactive_msg.id), "guild_id": guild_id},
-                        )
-                    else:
-                        conn.execute(
-                            text(
-                                """
-                            INSERT INTO point_settings (key, value, discord_server_id, updated_at)
-                            VALUES ('shop_interactive_id', :m, :guild_id, CURRENT_TIMESTAMP)
-                        """
-                            ),
-                            {"m": str(interactive_msg.id), "guild_id": guild_id},
-                        )
-
-                    # Check and update shop_footer_id
-                    existing = conn.execute(
-                        text(
-                            """
-                        SELECT key FROM point_settings
-                        WHERE key = 'shop_footer_id' AND discord_server_id = :guild_id
-                    """
-                        ),
-                        {"guild_id": guild_id},
-                    ).fetchone()
-
-                    if existing:
-                        conn.execute(
-                            text(
-                                """
-                            UPDATE point_settings
-                            SET value = :m, updated_at = CURRENT_TIMESTAMP
-                            WHERE key = 'shop_footer_id' AND discord_server_id = :guild_id
-                        """
-                            ),
-                            {"m": str(footer_msg.id), "guild_id": guild_id},
-                        )
-                    else:
-                        conn.execute(
-                            text(
-                                """
-                            INSERT INTO point_settings (key, value, discord_server_id, updated_at)
-                            VALUES ('shop_footer_id', :m, :guild_id, CURRENT_TIMESTAMP)
-                        """
-                            ),
-                            {"m": str(footer_msg.id), "guild_id": guild_id},
-                        )
-
-                logger.debug(f"[Point Shop] Posted Components V2 mosaic shop to channel {channel_id}")
+                logger.debug(f"[Point Shop] Storefront updated in channel {channel_id} (message {message.id})")
                 return True
 
             except Exception as v2_error:
-                if not v2_success:
-                    logger.warning(f"[Point Shop] Components V2 failed, falling back to legacy: {v2_error}")
-                    import traceback
+                logger.warning(f"[Point Shop] Components V2 failed, falling back to legacy: {v2_error}")
+                import traceback
 
-                    traceback.print_exc()
-                    # Fall through to legacy mode
-                else:
-                    # Messages were sent successfully, just log the error and return
-                    logger.warning(f"[Point Shop] Components V2 posted but error occurred: {v2_error}")
-                    return True
+                traceback.print_exc()
+                # Fall through to legacy mode
 
         # ==================== Legacy Mode (Embed + Mosaic) ====================
+        # Legacy mode re-posts rather than edits; drop the old storefront first.
+        if update_existing and existing_message_id:
+            try:
+                old_msg = await channel.fetch_message(existing_message_id)
+                await old_msg.delete()
+                logger.debug(f"[Point Shop] Deleted old shop message {existing_message_id}")
+            except discord.NotFound:
+                pass
+            except Exception as e:
+                logger.warning(f"[Point Shop] Error deleting message {existing_message_id}: {e}")
+
         if not items:
             embed = discord.Embed(
                 title="🛍️ Point Shop", description="No items available at the moment. Check back later!", color=0xFFD700
@@ -11247,16 +11260,20 @@ async def post_point_shop_to_discord(
             message = await channel.send(embed=embed)
 
             with engine.begin() as conn:
-                conn.execute(
-                    text(
-                        """
-                    INSERT INTO point_settings (key, value, discord_server_id, updated_at)
-                    VALUES ('shop_message_id', :m, :guild_id, CURRENT_TIMESTAMP)
-                    ON CONFLICT (key, discord_server_id) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
-                """
-                    ),
-                    {"m": str(message.id), "guild_id": guild_id},
-                )
+                for key, value in (
+                    ("shop_message_id", str(message.id)),
+                    ("shop_message_channel_id", str(channel.id)),
+                ):
+                    conn.execute(
+                        text(
+                            """
+                        INSERT INTO point_settings (key, value, discord_server_id, updated_at)
+                        VALUES (:k, :v, :guild_id, CURRENT_TIMESTAMP)
+                        ON CONFLICT (key, discord_server_id) DO UPDATE SET value = :v, updated_at = CURRENT_TIMESTAMP
+                    """
+                        ),
+                        {"k": key, "v": value, "guild_id": guild_id},
+                    )
             return True
 
         # Create mosaic image for legacy mode
@@ -11298,16 +11315,20 @@ async def post_point_shop_to_discord(
 
         # Store the message ID for future updates (legacy mode has interactive in same message)
         with engine.begin() as conn:
-            conn.execute(
-                text(
-                    """
-                INSERT INTO point_settings (key, value, discord_server_id, updated_at)
-                VALUES ('shop_message_id', :m, :guild_id, CURRENT_TIMESTAMP)
-                ON CONFLICT (key, discord_server_id) DO UPDATE SET value = :m, updated_at = CURRENT_TIMESTAMP
-            """
-                ),
-                {"m": str(message.id), "guild_id": guild_id},
-            )
+            for key, value in (
+                ("shop_message_id", str(message.id)),
+                ("shop_message_channel_id", str(channel.id)),
+            ):
+                conn.execute(
+                    text(
+                        """
+                    INSERT INTO point_settings (key, value, discord_server_id, updated_at)
+                    VALUES (:k, :v, :guild_id, CURRENT_TIMESTAMP)
+                    ON CONFLICT (key, discord_server_id) DO UPDATE SET value = :v, updated_at = CURRENT_TIMESTAMP
+                """
+                    ),
+                    {"k": key, "v": value, "guild_id": guild_id},
+                )
             # Clear interactive ID since legacy mode includes it in same message
             conn.execute(
                 text(
