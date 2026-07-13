@@ -1,8 +1,15 @@
+import os
+
 import psycopg2
 
-conn = psycopg2.connect(
-    "postgresql://postgres:QzzlAELgpwfZtHIVCuIHpuGxhXorXTZv@shinkansen.proxy.rlwy.net:57221/railway"
-)
+# Credentials come from the environment only. A hardcoded production URL used to
+# live here and leaked into git history — rotate that password if it was ever
+# committed. Set DATABASE_URL before running (PowerShell: $env:DATABASE_URL = '...').
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise SystemExit("❌ DATABASE_URL must be set in the environment.")
+
+conn = psycopg2.connect(DATABASE_URL)
 cur = conn.cursor()
 cur.execute("SELECT key, value, discord_server_id FROM bot_settings WHERE key = 'kick_channel';")
 results = cur.fetchall()

@@ -1,7 +1,13 @@
+import os
+
 import psycopg2
 
-# Connect to database
-DATABASE_URL = "postgresql://postgres:QzzlAELgpwfZtHIVCuIHpuGxhXorXTZv@shinkansen.proxy.rlwy.net:57221/railway"
+# Connect to database — credentials come from the environment only. A hardcoded
+# production URL used to live here and leaked into git history; rotate that
+# password if it was ever committed. Set DATABASE_URL before running.
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise SystemExit("❌ DATABASE_URL must be set in the environment.")
 
 conn = psycopg2.connect(DATABASE_URL)
 cur = conn.cursor()

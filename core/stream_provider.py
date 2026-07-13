@@ -18,6 +18,8 @@ import json
 import logging
 import os
 
+from utils.redis_signing import sign_payload
+
 logger = logging.getLogger(__name__)
 
 
@@ -83,7 +85,7 @@ async def dispatch_twitch_chat_message(event: dict):
             },
         }
         client = redis.from_url(redis_url, decode_responses=True, socket_connect_timeout=5, socket_timeout=5)
-        client.publish("bot_events", json.dumps(payload))
+        client.publish("bot_events", json.dumps(sign_payload(payload)))
         logger.info(f"[Twitch Chat] ✅ Forwarded {msg.get('username')} message to bot via Redis")
     except Exception as e:
         logger.info(f"[Twitch Chat] ❌ Failed to forward chat: {e}")

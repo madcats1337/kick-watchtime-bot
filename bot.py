@@ -26,6 +26,7 @@ from sqlalchemy import create_engine, text  # type: ignore
 # Centralized logging FIRST: installs the root handler + per-server context filter so
 # every log line (and converted print) is tagged "[BOT] [<server name>]". Must run
 # before the core/redis_subscriber imports below, which can log at import time.
+from utils.clip_auth import get_clip_api_key  # noqa: E402
 from utils.log_context import clear_server, server_context, set_server  # noqa: E402
 from utils.logging_config import setup_logging  # noqa: E402
 from utils.server_urls import get_server_base_url  # noqa: E402
@@ -447,6 +448,35 @@ class KickWebSocketManager:
 
             traceback.print_exc()
             return False
+
+    async def disconnect(self, guild_id: int):
+        """Tear down a guild's websocket connection, tasks and queue.
+
+        Called on guild removal so the per-guild connection + its maintain/sender
+        tasks don't keep running (and reconnecting) forever after the bot leaves.
+        """
+        task = self.connection_tasks.pop(guild_id, None)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.info(f"⚠️ Error awaiting cancelled kick task for guild {guild_id}: {e}")
+        api = self.connections.pop(guild_id, None)
+        if api is not None:
+            close_fn = getattr(api, "disconnect", None) or getattr(api, "close", None)
+            if close_fn:
+                try:
+                    result = close_fn()
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception as e:
+                    logger.info(f"⚠️ Error closing kick api for guild {guild_id}: {e}")
+        self.message_queues.pop(guild_id, None)
+        self.connected_channels.pop(guild_id, None)
+        logger.info(f"🔌 Tore down Kick websocket for guild {guild_id}")
 
     async def _maintain_connection(self, guild_id: int, guild_name: str, api, kick_username: str):
         """Maintain websocket connection and process message queue"""
@@ -1351,6 +1381,10 @@ class KickWebSocketManager:
                         # public domain); the stored dashboard_url is only a
                         # fallback and may be stale (pre-rebrand host).
                         dashboard_url = get_server_base_url(engine, guild_id) or dashboard_url
+
+                        # Env-controlled system secret takes precedence over the legacy
+                        # per-server bot_settings value.
+                        api_key = get_clip_api_key(api_key)
 
                         if not dashboard_url or not api_key:
                             logger.info(f"[Clip] ❌ Dashboard URL or API key not configured")
@@ -2786,7 +2820,18 @@ intents.message_content = True
 intents.members = True
 intents.reactions = True  # Enable reaction events
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+# Safe default mentions: never let user/chat-derived text ping @everyone/@here or
+# roles. Individual user mentions are still allowed (needed for reply pings); pass an
+# explicit allowed_mentions on a specific send only when that send needs different rules.
+# max_messages=None disables the default 1000-entry message cache: only
+# on_raw_reaction_add / on_command_error are used (no message edit/delete or non-raw
+# reaction handlers), so nothing reads the cache - it is pure resident memory.
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents,
+    allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
+    max_messages=None,
+)
 
 
 @bot.before_invoke
@@ -3422,10 +3467,11 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
             )
             logger.info(f"[Kick] Connecting to WebSocket: {ws_url}")
 
-            # Prepare SSL context
+            # Verify TLS certificates. Pusher/Kick present valid public certs, and this
+            # chat feed drives points/commands/clips, so a MITM here would mean forged
+            # economy actions. create_default_context() enables verification + hostname
+            # checking; do not disable it (fix cert issues via the trust store, not here).
             ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
 
             # Connect to Pusher WebSocket with headers
             async with websockets.connect(
@@ -3805,7 +3851,9 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                                 dashboard_url = (
                                                     get_server_base_url(engine, guild_id) or bot_settings.dashboard_url
                                                 )
-                                                api_key = bot_settings.bot_api_key
+                                                # Env-controlled system secret first;
+                                                # DB value is a legacy fallback.
+                                                api_key = get_clip_api_key(bot_settings.bot_api_key)
 
                                                 logger.info(f"[Clip] DEBUG - dashboard_url resolved: '{dashboard_url}'")
                                                 logger.info(f"[Clip] DEBUG - bot_api_key exists: {bool(api_key)}")
@@ -4359,6 +4407,29 @@ async def update_watchtime_task():
 
             # Tag this guild's iteration's logging with the server name.
             set_server(server_id, guild.name)
+
+            # Memory: evict stale keys so these accumulators don't grow unbounded with
+            # every unique username that ever chats. They are only ever read as a
+            # recent-window snapshot (active viewers within WATCH_INTERVAL_SECONDS+60,
+            # chatters within CHAT_ACTIVITY_WINDOW_MINUTES), so older entries are dead
+            # weight. Runs before the early-continue live checks so offline guilds -
+            # whose accumulators would otherwise never shrink - get pruned too.
+            _prune_now = datetime.now(timezone.utc)
+            _viewers = active_viewers_by_guild.get(server_id)
+            if _viewers:
+                for _u in [
+                    u for u, t in _viewers.items() if (_prune_now - t).total_seconds() >= (WATCH_INTERVAL_SECONDS + 60)
+                ]:
+                    del _viewers[_u]
+                if not _viewers:
+                    active_viewers_by_guild.pop(server_id, None)
+            _chatters = recent_chatters_by_guild.get(server_id)
+            if _chatters:
+                _chat_max_age = timedelta(minutes=CHAT_ACTIVITY_WINDOW_MINUTES)
+                for _u in [u for u, t in _chatters.items() if (_prune_now - t) >= _chat_max_age]:
+                    del _chatters[_u]
+                if not _chatters:
+                    recent_chatters_by_guild.pop(server_id, None)
 
             # 🔒 SECURITY: Per-guild multi-factor stream-live detection
             if not tracking_force_override:
@@ -5514,6 +5585,10 @@ async def clip_buffer_management_task():
             # domain); the stored dashboard_url is only a stale-prone fallback.
             dashboard_url = get_server_base_url(engine, guild_id) or dashboard_url
 
+            # Env-controlled system secret takes precedence over the legacy per-server
+            # DB value (covers both the live-start and offline-stop calls below).
+            bot_api_key = get_clip_api_key(bot_api_key)
+
             # Skip guilds without required configuration
             if not kick_channel:
                 continue
@@ -6071,6 +6146,28 @@ async def before_leaderboard_sync_task():
 # -------------------------
 # Progressive cooldown tracking: {user_id: {command: attempt_count}}
 progressive_cooldown_attempts = {}
+_cooldown_last_sweep = None
+# Entries unused for this long are dead for cooldown purposes (>> any real cooldown),
+# so they can be evicted. Without this the dict grows with every distinct user forever.
+_COOLDOWN_ENTRY_TTL_SECONDS = 3600
+
+
+def _sweep_cooldown_attempts(now):
+    """Throttled eviction of stale progressive-cooldown entries (runs at most every
+    10 minutes) so progressive_cooldown_attempts stays bounded by recently-active
+    users instead of every user who ever ran a cooldowned command."""
+    global _cooldown_last_sweep
+    if _cooldown_last_sweep and (now - _cooldown_last_sweep).total_seconds() < 600:
+        return
+    _cooldown_last_sweep = now
+    for _uid in list(progressive_cooldown_attempts.keys()):
+        _cmds = progressive_cooldown_attempts[_uid]
+        for _cmd in list(_cmds.keys()):
+            _last = _cmds[_cmd].get("last_use")
+            if _last and (now - _last).total_seconds() > _COOLDOWN_ENTRY_TTL_SECONDS:
+                del _cmds[_cmd]
+        if not _cmds:
+            del progressive_cooldown_attempts[_uid]
 
 
 class CommandCooldowns:
@@ -6115,6 +6212,10 @@ def progressive_cooldown(base_seconds: int, increment_seconds: int, max_seconds:
 
         tracking = progressive_cooldown_attempts[user_id][command_name]
         now = datetime.now(timezone.utc)
+
+        # Memory: opportunistically evict stale entries (throttled internally). Only
+        # touches entries with a set-but-old last_use, so the current fresh entry is safe.
+        _sweep_cooldown_attempts(now)
 
         # Reset count if enough time has passed (2x max cooldown = full reset)
         if tracking["last_use"]:
@@ -8403,6 +8504,50 @@ async def sync_shuffle_role_on_startup(bot, engine):
 # Bot events
 # -------------------------
 @bot.event
+async def on_guild_remove(guild):
+    """Free per-guild state when the bot is removed from a guild.
+
+    Without this, the guild's Kick websocket connection + maintain/sender tasks keep
+    running (and reconnecting) forever, and its entries in the per-guild registries
+    (accumulators, trackers, managers, panels) never get released.
+    """
+    gid = guild.id
+    logger.info(f"👋 Removed from guild {gid} ({guild.name}); cleaning up per-guild state")
+    try:
+        await kick_ws_manager.disconnect(gid)
+    except Exception as e:
+        logger.info(f"⚠️ Error disconnecting kick ws for guild {gid}: {e}")
+
+    # Cancel the legacy Pusher chat loop for this guild, if one is running.
+    _legacy_tasks = getattr(bot, "_legacy_kick_tasks", None)
+    if isinstance(_legacy_tasks, dict):
+        _legacy = _legacy_tasks.pop(gid, None)
+        if _legacy and not _legacy.done():
+            _legacy.cancel()
+
+    for _registry in (
+        active_viewers_by_guild,
+        recent_chatters_by_guild,
+        last_chat_activity_by_guild,
+        kick_chatroom_ids,
+        clip_buffer_active_by_guild,
+        last_stream_live_state_by_guild,
+        gifted_sub_trackers,
+        shuffle_trackers,
+        slot_call_trackers,
+        gtb_managers,
+        giveaway_managers,
+        guild_settings_managers,
+    ):
+        _registry.pop(gid, None)
+
+    for _attr in ("custom_commands_managers", "slot_panels_by_guild", "gtb_panels_by_guild"):
+        _reg = getattr(bot, _attr, None)
+        if isinstance(_reg, dict):
+            _reg.pop(gid, None)
+
+
+@bot.event
 async def on_ready():
     # Track bot uptime for health checks
     if not hasattr(bot, "uptime_start"):
@@ -8470,8 +8615,17 @@ async def on_ready():
                 logger.info(f"⚠️ Error loading kick_channel: {e}")
 
             if kick_channel:
-                asyncio.create_task(kick_chat_loop(kick_channel, guild.id))
-                logger.debug(f"✅ Pusher WebSocket started: {kick_channel}")
+                # on_ready fires on every gateway reconnect, so guard against spawning a
+                # duplicate Pusher loop (each holds its own websocket + reconnect loop).
+                # Only (re)spawn if there is no live task for this guild.
+                if not hasattr(bot, "_legacy_kick_tasks"):
+                    bot._legacy_kick_tasks = {}
+                existing = bot._legacy_kick_tasks.get(guild.id)
+                if existing and not existing.done():
+                    logger.debug(f"↩️ Pusher WebSocket already running for guild {guild.id}; not respawning")
+                else:
+                    bot._legacy_kick_tasks[guild.id] = asyncio.create_task(kick_chat_loop(kick_channel, guild.id))
+                    logger.debug(f"✅ Pusher WebSocket started: {kick_channel}")
             else:
                 logger.info(f"⚠️ No kick_channel configured - skipping WebSocket")
 

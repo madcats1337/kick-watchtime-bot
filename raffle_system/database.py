@@ -295,6 +295,7 @@ def verify_raffle_schema(engine):
     try:
         with engine.begin() as conn:
             for table in required_tables:
+                # `table` iterates a hardcoded list (required_tables); no user input.
                 result = conn.execute(
                     text(
                         f"""

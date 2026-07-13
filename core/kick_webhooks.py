@@ -35,6 +35,17 @@ from flask import Blueprint, abort, jsonify, request
 
 logger = logging.getLogger(__name__)
 
+
+def _test_endpoints_enabled() -> bool:
+    """Whether the simulate/test webhook routes are reachable.
+
+    These bypass Kick's signature verification (they inject arbitrary events,
+    including gifted-sub -> raffle tickets and fake go-live), so they are disabled
+    unless ENABLE_TEST_WEBHOOKS is explicitly set. Must stay off in production.
+    """
+    return os.getenv("ENABLE_TEST_WEBHOOKS", "").lower() in ("1", "true", "yes")
+
+
 # RSA verification imports
 try:
     from cryptography.hazmat.backends import default_backend
@@ -443,6 +454,30 @@ def handle_kick_webhook():
 
         logger.info(f"[Webhook] ✅ Signature verified for subscription {subscription_id}")
 
+        # 4.5️⃣ REPLAY PROTECTION: reject deliveries whose signed timestamp is outside a
+        # ~10-minute window (mirrors the Twitch path's MAX_MESSAGE_AGE). The signature
+        # is already verified, so the timestamp is authentic. Skip only when the header
+        # is absent or unparseable (the idempotency table still catches exact replays).
+        MAX_WEBHOOK_AGE_SECONDS = 600
+        if message_timestamp:
+            ts = None
+            try:
+                ts = datetime.fromisoformat(message_timestamp.replace("Z", "+00:00"))
+            except ValueError:
+                try:
+                    ts = datetime.fromtimestamp(int(message_timestamp), tz=timezone.utc)
+                except (ValueError, OverflowError):
+                    ts = None
+            if ts is not None:
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                age = abs((datetime.now(timezone.utc) - ts).total_seconds())
+                if age > MAX_WEBHOOK_AGE_SECONDS:
+                    logger.warning(
+                        f"[Webhook] ❌ Stale webhook (age {age:.0f}s > {MAX_WEBHOOK_AGE_SECONDS}s); rejecting replay"
+                    )
+                    return jsonify({"error": "Stale webhook"}), 401
+
         # 5️⃣ PARSE JSON AFTER SIGNATURE VERIFICATION
         try:
             event_data = json.loads(raw_body.decode("utf-8"))
@@ -540,14 +575,13 @@ def handle_webhook_challenge():
 
 @kick_webhooks_bp.route("/webhooks/kick/test", methods=["GET"])
 def test_webhook_endpoint():
-    """Test endpoint to verify webhook server is reachable"""
+    """Minimal reachability check. Does not disclose secret/config state."""
     return (
         jsonify(
             {
                 "status": "ok",
                 "message": "Webhook server is running",
                 "endpoint": "/webhooks/kick",
-                "secret_configured": bool(WEBHOOK_SECRET),
             }
         ),
         200,
@@ -573,6 +607,9 @@ def simulate_webhook_event():
         "data": { ... event-specific data ... }
     }
     """
+    if not _test_endpoints_enabled():
+        return jsonify({"error": "Not found"}), 404
+
     # Verify test token - must be set via WEBHOOK_TEST_TOKEN env var
     test_token = os.getenv("WEBHOOK_TEST_TOKEN", "")
 
@@ -681,6 +718,9 @@ def simulate_real_webhook_event():
         "data": { ... optional event-specific data ... }
     }
     """
+    if not _test_endpoints_enabled():
+        return jsonify({"error": "Not found"}), 404
+
     from datetime import datetime
 
     import requests

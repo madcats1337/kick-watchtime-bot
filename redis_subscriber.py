@@ -26,6 +26,7 @@ from sqlalchemy import create_engine, text  # type: ignore
 
 from features.games.guess_the_balance import gtb_rank_marker
 from utils.log_context import server_context
+from utils.redis_signing import signing_enabled, verify_payload
 from utils.server_urls import get_server_base_url
 
 logger = logging.getLogger(__name__)
@@ -46,8 +47,16 @@ _engine = None
 
 
 def get_engine():
-    """Create (or return) a SQLAlchemy engine for the bot database."""
+    """Return a single shared SQLAlchemy engine for the bot database.
+
+    Reuses the module-level ``engine`` created at import when available, otherwise
+    lazily builds and caches one. Never creates a new engine/pool per call - event
+    handlers used to ``create_engine`` per raffle draw / leaderboard post, leaking a
+    connection pool every time.
+    """
     global _engine
+    if engine is not None:
+        return engine
     if _engine is not None:
         return _engine
 
@@ -720,9 +729,8 @@ class RedisSubscriber:
 
                 from raffle_system.draw import RaffleDraw
 
-                database_url = os.getenv("DATABASE_URL")
-                engine = create_engine(database_url)
-                draw_handler = RaffleDraw(engine)
+                # Reuse the shared engine (was create_engine per draw - leaked a pool).
+                draw_handler = RaffleDraw(get_engine())
 
                 # Convert initial excluded IDs to integers
                 excluded_discord_ids = [int(eid) for eid in initial_excluded_ids if eid]
@@ -896,16 +904,14 @@ class RedisSubscriber:
             guild_id = data.get("guild_id")
             logger.info(f"📋 [RAFFLE] Leaderboard re-post requested (guild_id={guild_id})")
             try:
-                from sqlalchemy import create_engine
-
                 from raffle_system.auto_leaderboard import setup_auto_leaderboard
 
                 # Refresh settings first so the new channel ID is visible.
                 if hasattr(self.bot, "settings_manager") and self.bot.settings_manager:
                     self.bot.settings_manager.refresh()
 
-                database_url = os.getenv("DATABASE_URL")
-                engine = create_engine(database_url)
+                # Reuse the shared engine (was create_engine per repost - leaked a pool).
+                engine = get_engine()
 
                 # setup_auto_leaderboard picks the channel ID from
                 # settings_manager when not passed explicitly, and posts an
@@ -2191,7 +2197,13 @@ Congratulations! Please contact an admin to claim your prize! 🎊
             "bot_events",
         )
 
-        logger.info("🎧 Redis subscriber listening for dashboard events...")
+        if signing_enabled():
+            logger.info("🎧 Redis subscriber listening (message signatures REQUIRED)...")
+        else:
+            logger.warning(
+                "🎧 Redis subscriber listening WITHOUT message authentication - "
+                "set REDIS_MSG_SECRET on the dashboard and bot to reject forged events."
+            )
 
         while True:
             try:
@@ -2202,6 +2214,13 @@ Congratulations! Please contact an admin to claim your prize! 🎊
                     channel = message["channel"]
                     try:
                         payload = json.loads(message["data"])
+
+                        # Reject forged commands: every publisher signs with the
+                        # shared REDIS_MSG_SECRET. No-op when the secret is unset.
+                        if not verify_payload(payload):
+                            logger.warning(f"Dropped Redis message on {channel}: bad or missing signature")
+                            continue
+
                         action = payload.get("action")
                         data = payload.get("data", {})
 

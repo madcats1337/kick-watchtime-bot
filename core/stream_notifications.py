@@ -16,6 +16,8 @@ import logging
 import os
 from typing import Optional
 
+from utils.clip_auth import get_clip_api_key
+
 logger = logging.getLogger(__name__)
 
 
@@ -428,7 +430,8 @@ async def _control_clip_buffer(discord_server_id, streamer, is_live, platform):
         from utils.server_urls import get_server_base_url
 
         dashboard_url = get_server_base_url(engine, discord_server_id) or settings.get("dashboard_url")
-        api_key = settings.get("bot_api_key")
+        # Env-controlled system secret first; DB value is a legacy fallback.
+        api_key = get_clip_api_key(settings.get("bot_api_key"))
         auto_start_buffer = str(settings.get("clips_auto_start_on_live", "true")).lower() != "false"
 
         if not (dashboard_url and api_key and kick_channel):

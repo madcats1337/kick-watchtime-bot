@@ -32,6 +32,7 @@ Webhook Events:
 import asyncio
 import base64
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -1033,7 +1034,8 @@ def verify_webhook_signature(
     message = f"{message_id}.{timestamp}.{body.decode()}"
     expected = hashlib.sha256((secret + message).encode()).hexdigest()
 
-    return signature == expected
+    # Constant-time compare so a bad signature can't be recovered via timing.
+    return bool(signature) and hmac.compare_digest(str(signature), expected)
 
 
 # Export all public interfaces

@@ -23,6 +23,9 @@ skips = ["B101", "B311", "B110", "B105", "B113", "B324", "B608", "B104", "B108",
 # B101: assert, B311: random, B110: try-except-pass, B105: hardcoded password
 # B113: requests without timeout, B324: weak hash, B608: SQL f-strings
 # B104: bind all interfaces, B108: tmp directory, B404/B603/B606/B607: subprocess
+# NOTE: re-enabling B105/B608 is deferred - see SECURITY_BACKLOG.md. All current
+# dynamic SQL uses hardcoded/closed-set identifiers with bound params (no injection
+# reachable), so every B608 hit is a false positive and every B105 hit is a URL.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

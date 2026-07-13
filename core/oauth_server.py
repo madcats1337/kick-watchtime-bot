@@ -16,7 +16,7 @@ import logging
 import os
 import secrets
 from datetime import datetime, timezone
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from authlib.integrations.requests_client import OAuth2Session
 from flask import Flask, jsonify, redirect, render_template_string, request
@@ -29,6 +29,9 @@ from utils.logging_config import setup_logging  # noqa: E402
 
 setup_logging("kick_oauth", log_level=os.getenv("LOG_LEVEL", "INFO"), source_tag="BOT")
 logger = logging.getLogger(__name__)
+
+# Sign bot_events messages so the bot's redis_subscriber can reject forged chat.
+from utils.redis_signing import sign_payload  # noqa: E402
 
 # Import webhook handlers
 try:
@@ -199,7 +202,7 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
                     },
                 }
 
-                redis_client.publish("bot_events", json.dumps(event))
+                redis_client.publish("bot_events", json.dumps(sign_payload(event)))
                 logger.info(f"[Webhook] ✅ Forwarded chat message to bot via Redis")
 
             except Exception as e:
@@ -242,7 +245,7 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
 
             # Get notification settings from database
             import aiohttp
-            from sqlalchemy import create_engine, text
+            from sqlalchemy import text
 
             db_url = os.getenv("DATABASE_URL")
             if not db_url:
@@ -256,7 +259,7 @@ if HAS_KICK_OFFICIAL and register_webhook_routes:
             ph = ", ".join(f":k{i}" for i in range(len(cols)))
             params = {"guild_id": discord_server_id}
             params.update({f"k{i}": c for i, c in enumerate(cols)})
-            engine = create_engine(db_url, pool_pre_ping=True)
+            # Reuse the shared module engine (was create_engine per webhook - leaked a pool).
             with engine.connect() as conn:
                 settings_result = conn.execute(
                     text(
@@ -437,11 +440,35 @@ logger.info(f"[OAuth] Clips directory: {CLIPS_DIR.absolute()}")
 
 
 def add_cors_headers(response):
-    """Add CORS headers to allow dashboard access"""
+    """Add CORS headers to allow dashboard/overlay access to public clip reads.
+
+    Only GET/OPTIONS are advertised: clip GETs are public (OBS overlays load the
+    mp4 cross-origin), but the destructive DELETE is server-to-server only and is
+    deliberately NOT offered to browser origins.
+    """
     response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type"
     return response
+
+
+def _clip_admin_authorized() -> bool:
+    """Timing-safe check of the shared bot-admin secret for mutating clip calls.
+
+    Fails closed: if BOT_AUTH_TOKEN is not configured the endpoint is disabled
+    rather than left open. Accepts the token via the Authorization: Bearer header
+    or an X-Bot-Auth header (never the query string, which lands in access logs).
+    """
+    expected = os.getenv("BOT_AUTH_TOKEN")
+    if not expected:
+        logger.warning("BOT_AUTH_TOKEN not configured - clip delete disabled")
+        return False
+    provided = request.headers.get("X-Bot-Auth", "")
+    if not provided:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            provided = auth[len("Bearer ") :]
+    return bool(provided) and hmac.compare_digest(provided, expected)
 
 
 @app.route("/clips/<filename>", methods=["GET", "OPTIONS"])
@@ -488,11 +515,15 @@ def list_clips():
 
 @app.route("/clips/<filename>", methods=["DELETE", "OPTIONS"])
 def delete_clip(filename):
-    """Delete a clip file"""
+    """Delete a clip file (requires the shared bot-admin secret)."""
     # Handle CORS preflight
     if request.method == "OPTIONS":
         response = make_response()
         return add_cors_headers(response)
+
+    # Auth: destructive endpoint - require the shared bot-admin secret (fail closed).
+    if not _clip_admin_authorized():
+        return add_cors_headers(jsonify({"error": "Unauthorized"})), 403
 
     # Security: only allow .mp4 files and prevent path traversal
     if not filename.endswith(".mp4") or ".." in filename or "/" in filename:
@@ -626,25 +657,13 @@ def health():
 
 @app.route("/api/status")
 def api_status():
+    """Minimal public health check.
+
+    Deliberately does NOT expose which secrets are configured, the available
+    OAuth scopes/webhook events, or the endpoint map - that is reconnaissance
+    detail an unauthenticated caller does not need.
     """
-    Get detailed API status including official Kick API availability.
-    """
-    status = {
-        "status": "healthy",
-        "oauth_configured": bool(KICK_CLIENT_ID and KICK_CLIENT_SECRET),
-        "official_api_available": HAS_KICK_OFFICIAL,
-        "webhook_secret_configured": bool(os.getenv("KICK_WEBHOOK_SECRET")),
-        "available_scopes": OAUTH_SCOPES if HAS_KICK_OFFICIAL else [],
-        "available_webhook_events": WEBHOOK_EVENTS if HAS_KICK_OFFICIAL else [],
-        "endpoints": {
-            "oauth_authorize": "/auth/kick",
-            "oauth_callback": "/auth/kick/callback",
-            "bot_authorize": "/bot/authorize",
-            "webhooks": "/webhooks/kick",
-            "webhook_subscriptions": "/api/webhooks",
-        },
-    }
-    return jsonify(status), 200
+    return jsonify({"status": "healthy"}), 200
 
 
 @app.route("/api/webhooks", methods=["GET"])
@@ -691,6 +710,28 @@ def list_webhook_subscriptions():
         return jsonify({"error": str(e)}), 500
 
 
+def _callback_url_allowed(url: str) -> bool:
+    """Only permit registering a webhook callback that points back at THIS bot's own
+    public endpoint. Otherwise a caller with any accepted Kick token could redirect
+    the app's webhook subscriptions to an arbitrary host (webhook hijacking). Fails
+    closed if no public URL is configured."""
+    if not url:
+        return False
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    if parsed.scheme != "https" or not parsed.netloc:
+        return False
+    allowed_hosts = set()
+    for base in (os.getenv("BOT_PUBLIC_URL", ""), os.getenv("OAUTH_BASE_URL", "")):
+        if base:
+            host = urlparse(base if "://" in base else f"https://{base}").netloc
+            if host:
+                allowed_hosts.add(host.lower())
+    return parsed.netloc.lower() in allowed_hosts
+
+
 @app.route("/api/webhooks", methods=["POST"])
 def create_webhook_subscription():
     """
@@ -720,6 +761,10 @@ def create_webhook_subscription():
 
     if not event or not callback_url:
         return jsonify({"error": "event and callback_url are required"}), 400
+
+    if not _callback_url_allowed(callback_url):
+        logger.warning(f"[API] Rejected webhook callback_url (not this bot's host): {callback_url}")
+        return jsonify({"error": "callback_url must point to this bot's public URL"}), 400
 
     try:
         import asyncio
@@ -2067,15 +2112,17 @@ def bot_authorize():
     Requires admin authentication via token.
     """
     try:
-        # Check for admin authorization token
-        auth_token = request.args.get("token")
+        # Check for admin authorization token. Prefer the X-Bot-Auth header (which
+        # does not land in access logs); fall back to the query param so the legacy
+        # browser link keeps working. Compare in constant time.
+        auth_token = request.headers.get("X-Bot-Auth") or request.args.get("token")
         expected_token = os.getenv("BOT_AUTH_TOKEN")
 
         if not expected_token:
             logger.warning(f"⚠️ BOT_AUTH_TOKEN not configured - bot authorization disabled")
             return render_error("Bot authorization is not configured. Contact the administrator.")
 
-        if not auth_token or auth_token != expected_token:
+        if not auth_token or not hmac.compare_digest(str(auth_token), expected_token):
             logger.error(f"❌ Invalid or missing bot authorization token")
             return render_error("Unauthorized. Invalid or missing authentication token.")
 

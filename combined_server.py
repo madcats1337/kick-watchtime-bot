@@ -234,8 +234,17 @@ if __name__ == "__main__":
                 "gunicorn",
                 "--bind",
                 f"0.0.0.0:{port}",
+                # 1 worker: this is a low-traffic OAuth/webhook callback server, and each
+                # worker imports Flask/authlib/cryptography + its own DB engine, so a
+                # second worker roughly doubles this process's memory for no throughput
+                # need. Override with GUNICORN_WORKERS if real load ever appears.
                 "--workers",
-                "2",
+                os.getenv("GUNICORN_WORKERS", "1"),
+                # Recycle workers periodically to reclaim any slow memory growth.
+                "--max-requests",
+                "1000",
+                "--max-requests-jitter",
+                "100",
                 "--timeout",
                 "120",
                 # Config re-asserts our single root logging handler per worker so
