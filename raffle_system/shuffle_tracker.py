@@ -35,6 +35,11 @@ class ShuffleWagerTracker:
         self.ticket_manager = TicketManager(engine, server_id=server_id)
         self.bot_settings = bot_settings
 
+        # True after warning about a Cloudflare challenge on the affiliate API,
+        # so a multi-hour challenge spell logs ONE warning (then debug) instead
+        # of one per 2-minute poll. Reset on the next successful fetch.
+        self._cf_challenge_warned = False
+
         # Load settings from bot_settings (database) or fall back to env vars
         self._load_settings()
 
@@ -777,6 +782,11 @@ class ShuffleWagerTracker:
             # lifetime total. At a month rollover the period total drops, making
             # the delta <= 0 → the row is skipped (no negative tickets) — safe.
             headers["Authorization"] = self.howl_api_key
+            # howl.gg fronts its API with Cloudflare bot protection that scores
+            # requests; aiohttp's default "Python/x aiohttp/y" UA scores worst.
+            # Identify honestly but not as a bare python client.
+            headers["Accept"] = "application/json"
+            headers["User-Agent"] = "Mozilla/5.0 (compatible; WagerlabsBot/1.0; +https://wagerlabs.app)"
             now = datetime.utcnow()
             month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
             params = {
@@ -796,14 +806,42 @@ class ShuffleWagerTracker:
                     try:
                         data = await response.json(content_type=None)
                     except Exception:
-                        # Non-JSON body (e.g. an HTML error page). Only a genuine
-                        # problem is worth surfacing; a transient 5xx/timeout page
-                        # will simply be retried next poll.
-                        logger.warning(
-                            f"{self.platform_name.capitalize()} affiliate API returned "
-                            f"HTTP {response.status} with a non-JSON body; skipping this poll"
-                        )
+                        # Non-JSON body (an HTML error page). Distinguish a
+                        # Cloudflare challenge (howl.gg's zone serves a managed
+                        # "Just a moment..." challenge on its own API when bot
+                        # protection is dialed up — Cf-Mitigated header) from a
+                        # transient 5xx page. Missed polls are harmless: totals
+                        # are cumulative, so the next successful poll's delta
+                        # includes everything wagered during the outage.
+                        if response.headers.get("Cf-Mitigated"):
+                            msg = (
+                                f"{self.platform_name.capitalize()} affiliate API is behind a "
+                                f"Cloudflare challenge (HTTP {response.status}, Cf-Mitigated: "
+                                f"{response.headers.get('Cf-Mitigated')}) — {self.platform_name}'s "
+                                f"bot protection is blocking server-to-server API calls. Polls keep "
+                                f"retrying and recover on their own once the challenge lifts; if it "
+                                f"persists, ask {self.platform_name} to exempt the affiliate API "
+                                f"(or this server's IP) from their WAF challenge. Skipping this poll"
+                            )
+                            if self._cf_challenge_warned:
+                                logger.debug(msg)
+                            else:
+                                self._cf_challenge_warned = True
+                                logger.warning(msg)
+                        else:
+                            # Only a genuine problem is worth surfacing; a transient
+                            # 5xx/timeout page will simply be retried next poll.
+                            logger.warning(
+                                f"{self.platform_name.capitalize()} affiliate API returned "
+                                f"HTTP {response.status} with a non-JSON body; skipping this poll"
+                            )
                         return None
+                    if self._cf_challenge_warned:
+                        self._cf_challenge_warned = False
+                        logger.info(
+                            f"{self.platform_name.capitalize()} affiliate API recovered from the "
+                            f"Cloudflare challenge; polling resumed normally"
+                        )
 
                     # Shuffle-ONLY error handling. Shuffle's affiliate endpoints
                     # serve rate-limit errors INCONSISTENTLY: sometimes as a proper

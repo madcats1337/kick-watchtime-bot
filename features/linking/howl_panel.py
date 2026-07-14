@@ -44,7 +44,13 @@ async def _fetch_howl_affiliate_data(affiliate_url: str, api_key: str):
         logger.error("Howl verify: no howl_api_key configured")
         return None
 
-    headers = {"Authorization": api_key}
+    # Accept/UA match the tracker's: howl.gg's Cloudflare scores bare
+    # python-client UAs worst, so identify honestly but not as one.
+    headers = {
+        "Authorization": api_key,
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (compatible; WagerlabsBot/1.0; +https://wagerlabs.app)",
+    }
     now = datetime.utcnow()
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     params = {

@@ -5742,6 +5742,12 @@ async def clip_buffer_management_task():
                                 result = await response.json()
                                 clip_buffer_active_by_guild[guild_id] = False
                                 logger.info(f"[Clip Buffer] ✅ Buffer stopped: {result.get('message', 'OK')}")
+                            elif response.status == 404:
+                                # No buffer was running (auto-start off, start had
+                                # failed, or the dashboard restarted and lost it).
+                                # The desired end state — stopped — already holds.
+                                clip_buffer_active_by_guild[guild_id] = False
+                                logger.info(f"[Clip Buffer] ℹ️ No buffer was running — nothing to stop")
                             else:
                                 error = await response.text()
                                 logger.info(f"[Clip Buffer] ⚠️ Failed to stop buffer: HTTP {response.status} - {error}")
@@ -5822,7 +5828,14 @@ def _fetch_howl_freeze_rows(conn, server_id, start_dt, end_dt, winner_count):
         "limit": str(limit),
     }
     try:
-        resp = requests.get(url, params=params, headers={"Authorization": api_key}, timeout=15)
+        # Accept/UA match the tracker's: howl.gg's Cloudflare scores bare
+        # python-client UAs worst, so identify honestly but not as one.
+        headers = {
+            "Authorization": api_key,
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (compatible; WagerlabsBot/1.0; +https://wagerlabs.app)",
+        }
+        resp = requests.get(url, params=params, headers=headers, timeout=15)
         body = resp.json() if resp.status_code == 200 else None
     except Exception as e:
         logger.warning(f"[Leaderboard] howl freeze fetch failed for server {server_id}: {e}")
