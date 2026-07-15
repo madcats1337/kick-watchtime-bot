@@ -156,14 +156,14 @@ def get_user_highest_tier(engine, discord_id) -> str:
 
 def tier_needed_for(feature_key: str) -> str:
     """Cheapest tier that grants `feature_key` (for upgrade messages)."""
-    for tier in ("free", "tier2", "tier3"):
+    for tier in ("free", "tier2", "tier3", "tier4"):
         if feature_key in TIER_FEATURES[tier]:
             return tier
     return "tier3"
 
 
 # Human labels for chat replies.
-TIER_LABEL = {"free": "Tier 1", "tier2": "Tier 2", "tier3": "Tier 3"}
+TIER_LABEL = {"free": "Tier 1", "tier2": "Tier 2", "tier3": "Tier 3", "tier4": "Tier 4"}
 
 
 def upgrade_message(username: str, feature_key: str) -> str:
