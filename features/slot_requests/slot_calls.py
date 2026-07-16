@@ -46,13 +46,12 @@ class SlotCallTracker:
         self.cooldown_seconds = self._load_cooldown()  # Load from database
 
     def _get_platform(self) -> str:
-        """Resolve this server's selected wager platform → "shuffle" | "howl".
+        """Resolve this server's selected WAGER platform → "shuffle" | "howl".
 
         Mirrors ShuffleTracker._load_settings: reads bot_settings
         `wager_platform_name` (guild-aware), refreshed each call so a platform
         switch from the dashboard takes effect without a bot restart. Defaults
-        to "shuffle" when unset/invalid. Used to pick which slot catalog
-        (shuffle_slots vs howl_slots) the ban check queries.
+        to "shuffle" when unset/invalid. Used for chat-reply toggles.
         """
         if not self.engine:
             return "shuffle"
@@ -67,6 +66,29 @@ class SlotCallTracker:
         except Exception as e:
             logger.warning(f"SlotCallTracker._get_platform: defaulting to shuffle ({e})")
             return "shuffle"
+
+    def _get_slot_platform(self) -> str:
+        """Resolve this server's selected SLOT CATALOG platform.
+
+        Reads bot_settings `slot_platform_name` (any registry casino), falling
+        back to the wager platform when unset — mirrors the dashboard's
+        get_slot_platform. Picks which catalog table the ban check queries.
+        """
+        if not self.engine:
+            return "shuffle"
+        try:
+            from utils.bot_settings import BotSettingsManager
+            from utils.slot_platforms import SLOT_PLATFORMS
+
+            if self._settings is None:
+                self._settings = BotSettingsManager(self.engine, guild_id=self.server_id)
+            self._settings.refresh()
+            platform = (self._settings.get("slot_platform_name") or "").strip().lower()
+            if platform in SLOT_PLATFORMS:
+                return platform
+        except Exception as e:
+            logger.warning(f"SlotCallTracker._get_slot_platform: falling back to wager platform ({e})")
+        return self._get_platform()
 
     def _chat_replies_enabled(self, platform: str) -> bool:
         """Whether the chatbot should post !call/!sr replies into `platform`'s
@@ -566,10 +588,12 @@ class SlotCallTracker:
             try:
                 # Normalize to a slug candidate (lowercase, non-alphanumeric -> '-')
                 slot_slug_candidate = re.sub(r"[^a-z0-9]+", "-", slot_call_safe.lower()).strip("-")
-                # Strict: check only the server's selected platform catalog, and
+                # Strict: check only the server's selected slot catalog, and
                 # only this server's rows. `slot_table` is a validated, closed-set
                 # name (safe to interpolate); all values stay bound parameters.
-                slot_table = "howl_slots" if self._get_platform() == "howl" else "shuffle_slots"
+                from utils.slot_platforms import slot_table_for_platform
+
+                slot_table = slot_table_for_platform(self._get_slot_platform())
                 with self.engine.connect() as conn:
                     slot_check = conn.execute(
                         text(
