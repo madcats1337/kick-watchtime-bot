@@ -8560,6 +8560,129 @@ async def on_guild_remove(guild):
             _reg.pop(gid, None)
 
 
+async def ensure_standalone_chat_runtime(sid: int, server_name: str, kick_channel: str) -> None:
+    """Spin up the per-server CHAT runtime for a standalone (guild-less)
+    workspace: settings manager, slot-call tracker, GTB manager, and the Kick
+    chat connection. Idempotent — safe to call again for an already-running
+    workspace.
+
+    Standalone workspaces are dashboard-created `servers` rows with a synthetic
+    NEGATIVE discord_server_id (email accounts, no Discord guild). They get
+    ONLY the chat-driven free features (slot requests, GTB) + chat replies;
+    every Discord-side subsystem (panels, announcements, raffle, watchtime,
+    giveaways...) stays off because those init loops iterate bot.guilds.
+    """
+    set_server(sid, server_name)
+    try:
+        # Settings manager (registers into guild_settings_managers).
+        get_guild_settings(sid)
+
+        # Slot-call tracker → the !call/!sr handler resolves it from this
+        # registry. discord_channel_id stays None (no guild): the tracker
+        # records + replies in chat and skips the Discord embed gracefully.
+        from features.slot_requests.slot_calls import SlotCallTracker
+
+        if not hasattr(bot, "slot_call_trackers_by_guild"):
+            bot.slot_call_trackers_by_guild = {}
+        if sid not in bot.slot_call_trackers_by_guild:
+            bot.slot_call_trackers_by_guild[sid] = SlotCallTracker(
+                bot=bot,
+                discord_channel_id=None,
+                kick_send_callback=send_stream_message,
+                engine=engine,
+                server_id=sid,
+            )
+            logger.info(f"✅ [Standalone] Slot call tracker initialized")
+
+        # Guess the Balance manager (pure DB/memory — no Discord usage).
+        if not hasattr(bot, "gtb_managers_by_guild"):
+            bot.gtb_managers_by_guild = {}
+        if sid not in bot.gtb_managers_by_guild:
+            bot.gtb_managers_by_guild[sid] = GuessTheBalanceManager(engine, sid)
+            logger.info(f"✅ [Standalone] GTB manager initialized")
+
+        # Kick chat connection (reading). Same mechanism real guilds use.
+        if not kick_channel or not str(kick_channel).strip():
+            return
+        if KICK_USE_KICKPYTHON_WS:
+            await kick_ws_manager.ensure_connection(sid, server_name)
+        else:
+            if not hasattr(bot, "_legacy_kick_tasks"):
+                bot._legacy_kick_tasks = {}
+            existing = bot._legacy_kick_tasks.get(sid)
+            if not existing or existing.done():
+                bot._legacy_kick_tasks[sid] = asyncio.create_task(kick_chat_loop(kick_channel, sid))
+        logger.info(f"✅ [Standalone] Kick chat runtime ready for '{kick_channel}'")
+    except Exception as e:
+        logger.warning(f"⚠️ [Standalone] chat runtime setup failed for {sid}: {e}")
+    finally:
+        clear_server()
+
+
+async def refresh_standalone_chat(sid: int) -> None:
+    """React to a dashboard settings save for a standalone workspace (called by
+    the Redis `dashboard:bot_settings` reload handler). Connects a newly
+    configured Kick channel live (no restart), reconnects on a channel CHANGE,
+    and tears the connection down when the channel was cleared.
+    """
+    try:
+        sid = int(sid)
+    except (TypeError, ValueError):
+        return
+    if sid >= 0:
+        return
+
+    server_name, kick_channel = str(sid), None
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT s.server_name, bs.value
+                    FROM servers s
+                    LEFT JOIN bot_settings bs
+                      ON bs.discord_server_id = s.discord_server_id AND bs.key = 'kick_channel'
+                    WHERE s.discord_server_id = :sid
+                    """
+                ),
+                {"sid": sid},
+            ).fetchone()
+        if row:
+            server_name = row[0] or server_name
+            kick_channel = (row[1] or "").strip() or None
+    except Exception as e:
+        logger.info(f"[Standalone] settings lookup failed for {sid}: {e}")
+        return
+
+    # Refresh the cached per-server settings so trackers read the new values.
+    try:
+        get_guild_settings(sid).refresh()
+    except Exception:
+        pass
+
+    if KICK_USE_KICKPYTHON_WS:
+        current = kick_ws_manager.connected_channels.get(sid)
+        if not kick_channel:
+            if sid in kick_ws_manager.connections:
+                await kick_ws_manager.disconnect(sid)
+                logger.info(f"[Standalone] Kick channel cleared — disconnected {sid}")
+            return
+        if current and str(current).lower() != str(kick_channel).lower():
+            await kick_ws_manager.disconnect(sid)
+            logger.info(f"[Standalone] Kick channel changed ({current} → {kick_channel}) — reconnecting")
+    else:
+        task = getattr(bot, "_legacy_kick_tasks", {}).get(sid)
+        if task and not task.done():
+            if not kick_channel:
+                task.cancel()
+                return
+            # Legacy loop caches the channel arg — restart it on any reload so a
+            # channel change takes effect.
+            task.cancel()
+
+    await ensure_standalone_chat_runtime(sid, server_name, kick_channel)
+
+
 @bot.event
 async def on_ready():
     # Track bot uptime for health checks
@@ -8644,6 +8767,20 @@ async def on_ready():
 
     # WebSocket-start loop done — clear context so the global setup below (and any
     # task spawned from here, e.g. the Redis subscriber) doesn't inherit the last guild.
+    clear_server()
+
+    # Standalone (guild-less) workspaces: start the chat runtime (slot requests,
+    # GTB, Kick websocket) for every dashboard-created standalone server with a
+    # configured Kick channel. These never appear in bot.guilds; newly created/
+    # configured ones are picked up live by the Redis bot_settings reload hook
+    # (refresh_standalone_chat), so this loop only covers restarts.
+    try:
+        from utils.standalone import standalone_chat_servers
+
+        for _sid, _sname, _skick in standalone_chat_servers(engine):
+            await ensure_standalone_chat_runtime(_sid, _sname, _skick)
+    except Exception as e:
+        logger.warning(f"⚠️ Standalone workspace startup failed: {e}")
     clear_server()
 
     # Attach helper function to bot so other cogs can access it

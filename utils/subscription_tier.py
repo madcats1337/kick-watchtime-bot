@@ -50,6 +50,33 @@ TIER4 = TIER3 + [
 
 TIER_FEATURES = {"free": FREE, "tier2": TIER2, "tier3": TIER3, "tier4": TIER4}
 
+# Features that need a real Discord guild. Standalone (Discord-less) workspaces
+# — servers rows with a synthetic NEGATIVE discord_server_id, created by email
+# accounts on the dashboard — never have these regardless of tier. MUST match
+# Admin-Dashboard/utils/tiers.py REQUIRES_DISCORD.
+REQUIRES_DISCORD = {
+    "commands",
+    "timed_messages",
+    "point_shop",
+    "point_rewards",
+    "giveaway",
+    "raffle",
+    "clips",
+    "wagers",
+    "tournament",
+    "full_dashboard",
+    "leaderboard_generator",
+}
+
+
+def is_standalone_server(guild_id) -> bool:
+    """True for synthetic (guild-less) workspace ids."""
+    try:
+        return guild_id is not None and int(guild_id) < 0
+    except (TypeError, ValueError):
+        return False
+
+
 # Small in-process cache so we don't hit the DB on every chat line. Keyed by
 # guild_id -> (tier, expires_at). The dashboard caches in Redis (~60s); a short
 # local TTL here is enough since tier changes are rare and not latency-critical.
@@ -113,7 +140,13 @@ def get_server_tier(engine, guild_id) -> str:
 
 
 def server_has_feature(engine, guild_id, feature_key: str) -> bool:
-    """True if the guild's effective tier grants `feature_key`."""
+    """True if the guild's effective tier grants `feature_key`.
+
+    Standalone (guild-less) workspaces never get the Discord-dependent
+    features regardless of tier — mirrors the dashboard's server_has_feature.
+    """
+    if feature_key in REQUIRES_DISCORD and is_standalone_server(guild_id):
+        return False
     return feature_key in TIER_FEATURES.get(get_server_tier(engine, guild_id), FREE)
 
 

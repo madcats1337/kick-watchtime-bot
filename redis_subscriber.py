@@ -1567,6 +1567,21 @@ class RedisSubscriber:
             logger.info(f"✅ Reload request for guild: {guild_id}")
             # Settings will be reloaded automatically on next access
 
+            # Standalone (guild-less) workspaces: a settings save is also how
+            # their Kick channel gets configured/changed — (re)build the chat
+            # runtime live so slot requests/GTB work without a bot restart.
+            try:
+                if guild_id is not None and int(guild_id) < 0:
+                    import sys as _sys
+
+                    _main = _sys.modules.get("__main__")
+                    _refresh = getattr(_main, "refresh_standalone_chat", None)
+                    if _refresh is None:
+                        from bot import refresh_standalone_chat as _refresh
+                    await _refresh(int(guild_id))
+            except Exception as standalone_err:
+                logger.warning(f"⚠️ Standalone chat refresh failed for {guild_id}: {standalone_err}")
+
         elif action == "post_panel":
             # Dashboard chose a channel for a link/verify panel → post (or move) it there.
             await self._post_panel(data)
