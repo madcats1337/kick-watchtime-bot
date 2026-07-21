@@ -1,17 +1,18 @@
 # Terms of Service
 
-**Last Updated:** June 2026
+**Last Updated:** July 2026
 
 ## 1. Acceptance of Terms
 
-By using the Wagerlabs Discord bot, the associated Admin Dashboard, and the Wagerlabs Browser Extension (collectively, the "Service"), you agree to be bound by these Terms of Service ("Terms"). If you do not agree to these Terms, please do not use the Service.
+By using the Wagerlabs chat bot (Kick & Twitch), the optional Discord bot, the associated Admin Dashboard, and the Wagerlabs Browser Extension (collectively, the "Service"), you agree to be bound by these Terms of Service ("Terms"). If you do not agree to these Terms, please do not use the Service.
 
 ## 2. Description of Service
 
-Wagerlabs is a comprehensive Discord-Kick integration platform providing automation, community engagement, and fair gaming systems. The Service is offered on a freemium basis: a free tier is available to everyone, and paid subscription tiers unlock additional features (see Section 11, "Subscriptions and Billing"). The Service includes:
+Wagerlabs is a comprehensive stream-automation platform for Kick and Twitch creators, providing automation, community engagement, and fair gaming systems, with optional Discord integration. The Service is offered on a freemium basis: a free tier is available to everyone, and paid subscription tiers unlock additional features (see Section 11, "Subscriptions and Billing"). The Service includes:
 
-**Core Discord Bot Features:**
-- **Account Linking:** Secure OAuth 2.0 linking between Discord and Kick.com accounts
+**Core Bot Features:**
+- **Account Creation & Sign-In:** Create an account with email and password, Google Sign-In, or Discord OAuth
+- **Streaming Account Linking:** Secure OAuth 2.0 linking with your Kick.com or Twitch channel, and optional linking with Discord
 - **Watchtime Tracking:** Real-time tracking of viewer activity in Kick.com chat
 - **Automated Role Assignment:** Discord roles assigned based on watchtime milestones
 - **Leaderboard & Statistics:** Display top viewers and personal watchtime data
@@ -54,13 +55,15 @@ By using the Service, you agree to:
 - Comply with Kick.com's Terms of Service
 - Respect other users and community guidelines
 
-## 4. Account Linking
+## 4. Accounts and Linking
 
-- You may only link one Discord account to one Kick.com account per server
-- Account linking requires OAuth authorization through Kick.com
-- You are responsible for maintaining the security of your linked accounts
-- We reserve the right to unlink accounts that violate these Terms
-- You may request to unlink your account at any time by contacting a server administrator or using the `/unlink` command
+- You may create a Wagerlabs account with an email address and password, with Google Sign-In, or with Discord. A Discord server is not required to use the Service.
+- When creating an account with email and password, you must provide a valid email address and keep your password confidential. You are responsible for all activity under your account.
+- Streaming features require linking your Kick.com or Twitch channel via OAuth authorization; Discord features require linking a Discord server.
+- You may only link one Discord account to one streaming account per server.
+- You are responsible for maintaining the security of your account and any linked accounts.
+- We reserve the right to unlink accounts or suspend accounts that violate these Terms.
+- You may request to unlink your account at any time by contacting a server administrator or using the `/unlink` command.
 
 ## 5. Watchtime Tracking
 
@@ -187,7 +190,9 @@ TO THE MAXIMUM EXTENT PERMITTED BY LAW, WE SHALL NOT BE LIABLE FOR:
 
 The Service integrates with third-party services including:
 - **Discord** - Chat platform and OAuth provider
-- **Kick.com** - Streaming platform and OAuth provider
+- **Kick.com** and **Twitch** - Streaming platforms and OAuth providers
+- **Google** - OAuth provider for Google Sign-In
+- **Resend** - Transactional email delivery (verification, password resets, support)
 - **Stripe** - Payment processing for paid subscriptions
 - **Railway.app** - Hosting infrastructure
 

@@ -1,8 +1,8 @@
 # Privacy Policy
 
-**Last Updated:** June 2026
+**Last Updated:** July 2026
 
-**Service:** Wagerlabs - Discord Bot, Admin Dashboard & Browser Extension
+**Service:** Wagerlabs - Chat Bot (Kick & Twitch), Discord Bot, Admin Dashboard & Browser Extension
 
 ## 1. Introduction
 
@@ -35,6 +35,12 @@ This Privacy Policy explains how we collect, use, store, and protect your person
 - Analytics queries and data access
 
 ### 2.2 Information You Provide
+
+**Account Creation:**
+You can create a Wagerlabs account in one of three ways, and we collect only what is needed for the method you choose:
+- **Email & password:** your email address and a securely hashed password (we never store your password in plain text). We may send a verification email to confirm the address, and password-reset emails at your request.
+- **Google Sign-In:** if you sign in with Google, we receive your Google account's email address, whether that email is verified, and your Google account identifier. We do not receive your Google password.
+- **Discord:** if you sign in with Discord, we receive the Discord profile information described in Section 2.1.
 
 **Account Linking:**
 - OAuth authorization tokens (encrypted)
@@ -184,7 +190,7 @@ If you purchase a paid subscription, payment is processed by **Stripe, Inc.**, o
 
 **Dashboard Data:**
 - Separate secure data store for administrative information
-- Login credentials hashed with strong algorithms
+- Passwords for email accounts hashed with strong, salted algorithms (never stored in plain text)
 - Session tokens encrypted and time-limited
 - All dashboard actions logged and auditable
 - Configuration changes encrypted and versioned
@@ -231,7 +237,7 @@ If you purchase a paid subscription, payment is processed by **Stripe, Inc.**, o
 - HMAC-SHA256 signature verification for OAuth links
 - PKCE (Proof Key for Code Exchange) for OAuth security
 - Time-limited OAuth state/token expiration
-- Authentication via Discord OAuth; access is scoped per Discord server
+- Authentication via email & password, Google Sign-In, or Discord OAuth; dashboard access is scoped per workspace
 
 **Access Control:**
 - Environment-based credential management (no hardcoded secrets)
@@ -273,7 +279,9 @@ While we use industry-standard measures to protect your data, no method of trans
 
 **Service Providers:**
 - **Discord** - For bot functionality, authentication, and message handling
-- **Kick.com** - For OAuth authentication and chat monitoring
+- **Kick.com** and **Twitch** - For OAuth authentication and chat monitoring
+- **Google** - For Google Sign-In (we receive your email address, its verified status, and Google account identifier)
+- **Resend** - For sending transactional email (address verification, password resets, and support replies)
 - **Stripe** - For processing paid subscription payments
 - **Railway.app** - For hosting and infrastructure
 
@@ -329,10 +337,20 @@ Note: Raffle draw records may be retained for transparency.
 - Used for: Bot API, message handling, user authentication, role management
 - Compliance: We adhere to Discord's Terms of Service and Developer Policy
 
-**Kick.com:**
-- Privacy Policy: https://kick.com/privacy
+**Kick.com & Twitch:**
+- Privacy Policy: https://kick.com/privacy and https://www.twitch.tv/p/legal/privacy-notice/
 - Used for: OAuth authentication, chat monitoring, stream information
 - Monitoring: We track public chat messages for watchtime; no private messages stored
+
+**Google:**
+- Privacy Policy: https://policies.google.com/privacy
+- Used for: Google Sign-In (account creation and login)
+- Data shared: We receive your email address, its verified status, and your Google account identifier; we do not receive your Google password
+
+**Resend:**
+- Privacy Policy: https://resend.com/legal/privacy-policy
+- Used for: Sending transactional email — address verification, password resets, and support replies
+- Data shared: The recipient email address and the contents of the message being sent
 
 **Stripe:**
 - Privacy Policy: https://stripe.com/privacy
@@ -365,7 +383,7 @@ Your data may be transferred to and stored in countries outside your country of 
 
 ## 10. Cookies and Tracking
 
-- The Bot uses session management for authentication
+- We use a session cookie to keep you signed in, whether you authenticate with email & password, Google, or Discord
 - We do not use tracking cookies or third-party analytics
 - OAuth flow uses temporary state tokens for security
 - The Browser Extension reuses your existing dashboard session cookie to authenticate API requests to your own dashboard; it does not set tracking cookies and does not read cookies for any other site
