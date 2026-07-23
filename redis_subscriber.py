@@ -1414,7 +1414,6 @@ class RedisSubscriber:
             price = notif_data.get("price")
             sale_id = notif_data.get("sale_id")
             requirement_title = notif_data.get("requirement_title")
-            requirement_footer = notif_data.get("requirement_footer")
             requirement_input = notif_data.get("requirement_input") or notif_data.get("requirement")
             note = notif_data.get("note")
             item_type = notif_data.get("item_type", "custom")
@@ -1453,21 +1452,19 @@ class RedisSubscriber:
                     inline=True,
                 )
 
-            if requirement_title:
-                embed.add_field(name="Requirement Title", value=str(requirement_title)[:1024], inline=False)
-            if requirement_footer:
-                embed.add_field(name="Requirement Footer", value=str(requirement_footer)[:1024], inline=False)
-
-            details_parts = []
             if requirement_input:
-                details_parts.append(str(requirement_input))
+                field_name = (str(requirement_title).strip() if requirement_title else "") or "Details"
+                field_name = field_name[:256]
+                field_value = str(requirement_input)
+                if len(field_value) > 1024:
+                    field_value = field_value[:1021] + "…"
+                embed.add_field(name=field_name, value=field_value, inline=False)
+
             if note:
-                details_parts.append(f"Note: {note}")
-            if details_parts:
-                details = "\n".join(details_parts)
-                if len(details) > 1000:
-                    details = details[:1000] + "…"
-                embed.add_field(name="Details", value=details, inline=False)
+                note_value = str(note)
+                if len(note_value) > 1024:
+                    note_value = note_value[:1021] + "…"
+                embed.add_field(name="Note", value=note_value, inline=False)
 
             sent_message = await channel.send(embed=embed)
 
