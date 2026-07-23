@@ -43,7 +43,7 @@ def test_wagerlabs_command_uses_safe_public_links():
     assert kwargs["ephemeral"] is True
     assert kwargs["embed"].title == "Wagerlabs"
     assert [item.url for item in kwargs["view"].children] == [
-        "https://wagerlabs.app",
+        "https://wagerlabs.app/",
         "https://wagerlabs.app/provably-fair",
     ]
 

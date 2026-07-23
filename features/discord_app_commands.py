@@ -12,6 +12,7 @@ from utils.server_urls import get_server_public_page_url
 logger = logging.getLogger(__name__)
 
 WAGERLABS_YELLOW = 0xFACC15
+WAGERLABS_LANDING_URL = "https://wagerlabs.app/"
 
 
 def _link_view(*buttons: tuple[str, str]) -> discord.ui.View:
@@ -28,14 +29,13 @@ def register_wagerlabs_slash_commands(bot: commands.Bot, engine) -> None:
 
         @bot.tree.command(
             name="wagerlabs",
-            description=("Learn what Wagerlabs does and open this server's page."),
+            description="Learn what Wagerlabs does and open the official website.",
         )
         @app_commands.guild_only()
         async def wagerlabs(interaction: discord.Interaction) -> None:
             guild_id = interaction.guild_id
             guild_name = interaction.guild.name if interaction.guild else None
             with server_context(guild_id, guild_name):
-                dashboard_url = get_server_public_page_url(engine, guild_id)
                 fair_url = get_server_public_page_url(engine, guild_id, "/provably-fair")
                 embed = discord.Embed(
                     title="Wagerlabs",
@@ -47,13 +47,13 @@ def register_wagerlabs_slash_commands(bot: commands.Bot, engine) -> None:
                     color=WAGERLABS_YELLOW,
                 )
                 embed.add_field(
-                    name="For this server",
-                    value=("Open its Wagerlabs page to view the available public " "tools and information."),
+                    name="Official website",
+                    value="Open the Wagerlabs landing page to explore the platform.",
                     inline=False,
                 )
                 embed.set_footer(text="wagerlabs.app")
                 view = _link_view(
-                    ("Open Wagerlabs", dashboard_url),
+                    ("Open Wagerlabs", WAGERLABS_LANDING_URL),
                     ("Verify draws", fair_url),
                 )
                 await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
