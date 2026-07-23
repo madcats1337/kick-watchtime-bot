@@ -106,6 +106,12 @@ class RedisSubscriber:
         # Per-(guild,item) cooldown for restock DM fan-outs, so a burst of
         # item edits that each cross 0->positive can't spam viewers.
         self._last_restock_dm = {}
+        # Per-guild asyncio.Event fired when the slot-request-picker OBS widget
+        # reports its reveal animation landed (action="slot_reveal_landed").
+        # A pending pick that opted into the widget delay waits on this Event
+        # (with a backstop timeout) so the chat/Discord announcement fires in
+        # sync with the on-stream reveal instead of on a fixed timer.
+        self._slot_reveal_events = {}
 
         # Ensure point_sales has columns for tracking Discord order notification messages
         try:
@@ -195,6 +201,37 @@ class RedisSubscriber:
     # ❌ WEBHOOK HANDLING DISABLED - Using direct Pusher WebSocket instead
     # NOTE: The previous webhook handler implementation was intentionally removed
     # because it was disabled and must not run at import/class-definition time.
+
+    def _slot_reveal_event(self, guild_id):
+        """Get (creating if needed) the per-guild reveal Event."""
+        ev = self._slot_reveal_events.get(guild_id)
+        if ev is None:
+            ev = asyncio.Event()
+            self._slot_reveal_events[guild_id] = ev
+        return ev
+
+    async def _wait_for_slot_reveal(self, guild_id, backstop_seconds):
+        """Wait until the slot-picker widget reports its reveal landed, or until
+        the backstop timeout elapses — whichever comes first. Returns True if the
+        widget trigger fired, False if we fell through on the timeout.
+
+        The Event is cleared before waiting so a stale set from a previous pick
+        can't short-circuit this one, and removed afterward so guilds that stop
+        using the widget don't accumulate Events."""
+        ev = self._slot_reveal_event(guild_id)
+        ev.clear()
+        try:
+            await asyncio.wait_for(ev.wait(), timeout=backstop_seconds)
+            logger.info(f"✅ [BOT-REDIS] Slot reveal trigger received for guild {guild_id}; announcing now")
+            return True
+        except asyncio.TimeoutError:
+            logger.info(
+                f"⏰ [BOT-REDIS] No slot reveal trigger within {backstop_seconds}s for guild {guild_id}; "
+                f"announcing on backstop"
+            )
+            return False
+        finally:
+            self._slot_reveal_events.pop(guild_id, None)
 
     async def handle_slot_requests_event(self, action, data):
         """Handle slot request events from dashboard"""
@@ -294,15 +331,18 @@ class RedisSubscriber:
 
             logger.info(f"📥 [BOT-REDIS] Received 'pick' event with delay_announcement={delay_announcement}")
 
-            # If overlay is enabled, delay the announcement to allow animation to play
+            # When the OBS widget is enabled, `delay_announcement` carries the
+            # BACKSTOP timeout (seconds). Wait for the widget's reveal trigger and
+            # announce the instant it lands (in sync with the on-stream reveal);
+            # fall through on the backstop if the widget never reports (closed /
+            # crashed / refreshed mid-spin). When 0, announce immediately.
             if delay_announcement > 0:
                 logger.info(
-                    f"⏰ [BOT-REDIS] Delaying Kick chat announcement by {delay_announcement} seconds for overlay animation"
+                    f"⏳ [BOT-REDIS] Waiting for slot-picker reveal trigger (backstop {delay_announcement}s) for overlay animation"
                 )
-                await asyncio.sleep(delay_announcement)
-                logger.info(f"✅ [BOT-REDIS] Delay complete, announcing now")
+                await self._wait_for_slot_reveal(guild_id, delay_announcement)
             else:
-                logger.info(f"⚡ [BOT-REDIS] No delay, announcing immediately")
+                logger.info(f"⚡ [BOT-REDIS] No overlay, announcing immediately")
 
             # Announce the picked slot in Kick chat (tag the user)
             await self.announce_in_chat(f"🎰 PICKED: {slot_call} (requested by @{username})", guild_id=guild_id)
@@ -355,15 +395,16 @@ class RedisSubscriber:
             # Format reward type for display
             reward_type_display = "Bonus Buy" if reward_type == "bonus_buy" else reward_type.capitalize()
 
-            # If overlay is enabled, delay the announcement to allow animation to play
+            # See the 'pick' handler: with the OBS widget on, `delay_announcement`
+            # is the BACKSTOP timeout — wait for the widget reveal trigger, else
+            # fall through on timeout. When 0, announce immediately.
             if delay_announcement > 0:
                 logger.info(
-                    f"⏰ [BOT-REDIS] Delaying Kick chat announcement by {delay_announcement} seconds for overlay animation"
+                    f"⏳ [BOT-REDIS] Waiting for slot-picker reveal trigger (backstop {delay_announcement}s) for overlay animation"
                 )
-                await asyncio.sleep(delay_announcement)
-                logger.info(f"✅ [BOT-REDIS] Delay complete, announcing now")
+                await self._wait_for_slot_reveal(guild_id, delay_announcement)
             else:
-                logger.info(f"⚡ [BOT-REDIS] No delay, announcing immediately")
+                logger.info(f"⚡ [BOT-REDIS] No overlay, announcing immediately")
 
             # Announce the picked slot WITH reward in Kick chat (tag the user)
             amount = float(reward_amount)
@@ -403,6 +444,21 @@ class RedisSubscriber:
                         logger.info(f"ℹ️  Slot panel not created yet for guild {guild_id}")
                 except Exception as e:
                     logger.warning(f"⚠️ Failed to update slot panel: {e}")
+
+        elif action == "slot_reveal_landed":
+            # The slot-request-picker OBS widget reported its reveal animation
+            # landed. Fire the per-guild Event so a pending pick that's waiting
+            # (see _wait_for_slot_reveal) announces immediately, in sync with the
+            # on-stream reveal. Harmless if no pick is waiting (nothing listens).
+            guild_id = data.get("discord_server_id")
+            if guild_id is not None:
+                try:
+                    guild_id = int(guild_id)
+                except (TypeError, ValueError):
+                    guild_id = None
+            logger.info(f"🎬 [BOT-REDIS] Slot reveal landed for guild {guild_id}")
+            if guild_id is not None:
+                self._slot_reveal_event(guild_id).set()
 
         elif action == "update_max":
             max_requests = data.get("max_requests")
