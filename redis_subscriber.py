@@ -27,7 +27,7 @@ from sqlalchemy import create_engine, text  # type: ignore
 from features.games.guess_the_balance import gtb_rank_marker
 from utils.log_context import server_context
 from utils.redis_signing import signing_enabled, verify_payload
-from utils.server_urls import get_server_base_url
+from utils.server_urls import get_server_public_page_url
 
 logger = logging.getLogger(__name__)
 
@@ -83,17 +83,6 @@ def build_raffle_kick_message(winner: dict, prize_description: str) -> str:
     ticket = winner.get("winning_ticket", "?")
     prize = prize_description or "Monthly Raffle Prize"
     return f"🎉 Raffle Winner: {name} won {prize}! Ticket #{ticket}. Congratulations! 🎊"
-
-
-def resolve_public_server_url(guild_id):
-    """Public per-server base URL (https://<subdomain>.<base-domain>) or None.
-
-    Viewer-facing pages like /provably-fair/winners resolve their server from
-    the request's subdomain, so links must use the server's own subdomain on
-    the public base domain. Returns None when the server has no subdomain, in
-    which case no public page exists to link to.
-    """
-    return get_server_base_url(engine, guild_id)
 
 
 class RedisSubscriber:
@@ -2022,7 +2011,6 @@ class RedisSubscriber:
         """
         try:
             channel_id = None
-            dashboard_url = None
 
             # Multi-server: Get channel from guild-specific settings
             if guild_id:
@@ -2033,11 +2021,6 @@ class RedisSubscriber:
                     guild_settings = get_guild_settings(int(guild_id))
                     if guild_settings:
                         channel_id = guild_settings.get_int("raffle_announcement_channel_id")
-                        # Base for the "Verify this draw" link below: the server's
-                        # own public subdomain. Deliberately NOT dashboard_url —
-                        # that's the admin/API host, where the public winners page
-                        # can't resolve the server. No subdomain → no link.
-                        dashboard_url = resolve_public_server_url(guild_id)
                         logger.info(f"[Raffle] Got channel_id {channel_id} from guild settings for guild {guild_id}")
                 except ImportError as ie:
                     logger.info(f"[Raffle] Could not import get_guild_settings: {ie}")
@@ -2047,16 +2030,20 @@ class RedisSubscriber:
             def build_verify_block(w):
                 """Per-winner proof hash + 'Verify this draw' deep link.
 
-                Returns '' when we lack a proof hash or a dashboard_url, so the
-                announcement degrades gracefully (no broken/empty link).
+                Returns '' when we lack a proof hash or draw id, so the
+                announcement degrades gracefully (no broken/empty link). The
+                link resolves per server: subdomain host when one exists,
+                otherwise the apex with ?server=<slug> (subdomain-less
+                free-tier workspaces).
                 """
                 proof_hash = w.get("proof_hash")
                 draw_id = w.get("draw_id")
                 lines = []
                 if proof_hash:
                     lines.append(f"**Proof**: `{proof_hash[:16]}…`")
-                if dashboard_url and draw_id:
-                    lines.append(f"🔍 [Verify this draw]({dashboard_url}/provably-fair/winners?draw={draw_id})")
+                if draw_id:
+                    verify_url = get_server_public_page_url(engine, guild_id, f"/provably-fair/winners?draw={draw_id}")
+                    lines.append(f"🔍 [Verify this draw]({verify_url})")
                 return ("\n" + "\n".join(lines)) if lines else ""
 
             # Fallback to global settings manager

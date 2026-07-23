@@ -12,6 +12,7 @@ from sqlalchemy import text
 
 from utils.bot_settings import BotSettingsManager
 from utils.log_context import set_server
+from utils.server_urls import get_server_public_page_url
 
 from .draw import RaffleDraw
 from .reward_settings import get_ticket_reward_settings, platform_display_name
@@ -129,6 +130,30 @@ Use `!leaderboard` to see top participants!
         except Exception as e:
             logger.error(f"Error checking tickets: {e}")
             await ctx.send(f"❌ Error checking tickets. Please try again.")
+
+    @commands.command(name="fair", aliases=["pf", "provablyfair"])
+    async def provably_fair_info(self, ctx):
+        """
+        Explain how to verify a provably-fair draw
+        Usage: !fair / !pf
+        """
+        try:
+            guild_id = ctx.guild.id if ctx.guild else None
+            fair_url = get_server_public_page_url(self.engine, guild_id, "/provably-fair")
+            embed = discord.Embed(
+                title="🎲 Provably Fair Draws",
+                description=(
+                    "Every raffle draw and slot reward is provably fair: the server seed is "
+                    "committed (SHA-256) before the draw and revealed afterwards, so the "
+                    "result can't be changed and you can verify it yourself.\n\n"
+                    f"🔍 [Open the verification page]({fair_url})"
+                ),
+                color=discord.Color.green(),
+            )
+            await ctx.send(embed=embed)
+        except Exception as e:
+            logger.error(f"Error in !fair command: {e}")
+            await ctx.send("❌ Could not build the verification link. Please try again.")
 
     @commands.command(name="raffleboard", aliases=["raffletop", "rafflerankings"])
     async def raffle_leaderboard(self, ctx, limit: int = 10):

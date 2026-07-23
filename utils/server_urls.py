@@ -37,3 +37,38 @@ def get_server_base_url(engine, guild_id):
     except Exception as e:
         logger.warning(f"[ServerURL] Could not resolve base URL for guild {guild_id}: {e}")
         return None
+
+
+def get_server_public_page_url(engine, guild_id, path=""):
+    """Viewer-facing URL for a public dashboard page (e.g. "/provably-fair").
+
+    Resolution mirrors how the dashboard itself locates a server:
+      - subdomain server      → https://<subdomain>.<domain><path>
+      - subdomain-less (free) → https://<domain><path>?server=<slug>
+        (the apex resolves server context from the ?server= slug — works for
+        anonymous viewers, no session needed)
+      - neither / lookup fail → https://<domain><path> (generic page, no
+        server context — still shows the explainer)
+    """
+    base = f"https://{PUBLIC_BASE_DOMAIN}{path}"
+    if not guild_id or engine is None:
+        return base
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT subdomain, slug FROM servers WHERE discord_server_id = :gid LIMIT 1"),
+                {"gid": int(guild_id)},
+            ).fetchone()
+        if not row:
+            return base
+        subdomain = (row[0] or "").strip().lower()
+        slug = (row[1] or "").strip().lower()
+        if subdomain:
+            return f"https://{subdomain}.{PUBLIC_BASE_DOMAIN}{path}"
+        if slug:
+            sep = "&" if "?" in path else "?"
+            return f"{base}{sep}server={slug}"
+        return base
+    except Exception as e:
+        logger.warning(f"[ServerURL] Could not resolve public page URL for guild {guild_id}: {e}")
+        return base

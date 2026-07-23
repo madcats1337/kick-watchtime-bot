@@ -30,7 +30,7 @@ from utils.clip_auth import get_clip_api_key  # noqa: E402
 from utils.log_context import clear_server, server_context, set_server  # noqa: E402
 from utils.logging_config import setup_logging  # noqa: E402
 from utils.redis_signing import sign_payload  # noqa: E402
-from utils.server_urls import get_server_base_url  # noqa: E402
+from utils.server_urls import get_server_base_url, get_server_public_page_url  # noqa: E402
 from utils.subscription_tier import server_has_feature, upgrade_message  # noqa: E402
 
 # Platform that the chat message currently being handled arrived on ('kick' |
@@ -1438,6 +1438,21 @@ class KickWebSocketManager:
                         await send_kick_message(f"@{user} Clip error: {str(e)}", guild_id=guild_id)
 
                 asyncio.create_task(create_clip_background(username, clip_title))
+
+            # !fair / !pf — how to verify a provably-fair draw. Links the
+            # server's public /provably-fair page (subdomain host, or the apex
+            # with ?server=<slug> for subdomain-less workspaces).
+            elif content_stripped.lower() in ("!fair", "!pf"):
+                logger.info(f"🎲 Processing !fair command from {username}")
+                try:
+                    fair_url = get_server_public_page_url(engine, guild_id, "/provably-fair")
+                    await send_kick_message(
+                        f"@{username} All draws are provably fair (commit-reveal + SHA-256). "
+                        f"Verify any result yourself: {fair_url}",
+                        guild_id=guild_id,
+                    )
+                except Exception as e:
+                    logger.error(f"Error processing !fair command: {e}")
 
             # !tickets command
             elif content_stripped.lower() == "!tickets":
@@ -7909,6 +7924,7 @@ async def command_list(ctx):
             "`!tickets` - View your raffle tickets\n"
             "`!raffleboard` - View ticket leaderboard\n"
             "`!raffleinfo` - View raffle period information\n"
+            "`!fair` / `!pf` - How to verify a provably-fair draw\n"
             "`!linkshuffle <username>` - Link Shuffle account for wager tracking\n"
             "`!verifyshuffle` - Verify your Shuffle wagers for bonus tickets"
         ),
