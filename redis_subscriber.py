@@ -1410,6 +1410,7 @@ class RedisSubscriber:
                 return
 
             buyer = notif_data.get("buyer") or notif_data.get("username") or "Unknown"
+            discord_id = notif_data.get("discord_id")
             item_name = notif_data.get("item_name") or "Unknown"
             price = notif_data.get("price")
             sale_id = notif_data.get("sale_id")
@@ -1428,9 +1429,17 @@ class RedisSubscriber:
                 embed_color = discord.Color.purple()
                 status_label = "Pending"
 
+            buyer_display = str(buyer)
+            try:
+                buyer_discord_id = int(discord_id)
+                if buyer_discord_id > 0:
+                    buyer_display = f"<@{buyer_discord_id}>"
+            except (TypeError, ValueError):
+                pass
+
             embed = discord.Embed(
                 title="🛒 New Point Shop Order",
-                description=f"**{buyer}** placed an order.",
+                description=f"{buyer_display} placed an order.",
                 color=embed_color,
             )
 
