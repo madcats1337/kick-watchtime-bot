@@ -50,6 +50,7 @@ from core.kick_api import USER_AGENTS, KickAPI, check_stream_live, fetch_chatroo
 
 # Custom commands import
 from features.custom_commands import CustomCommandsManager
+from features.discord_app_commands import register_wagerlabs_slash_commands, sync_global_slash_commands
 from features.games.gambling import setup_gambling
 from features.games.gtb_panel import setup_gtb_panel
 
@@ -2850,6 +2851,11 @@ bot = commands.Bot(
     allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
     max_messages=None,
 )
+
+# App Discovery requires native Discord application commands. These handlers are
+# registered on the local tree at import time and published globally after the
+# bot connects, making them available in every server that installs Wagerlabs.
+register_wagerlabs_slash_commands(bot, engine)
 
 
 @bot.before_invoke
@@ -8715,6 +8721,11 @@ async def on_ready():
     # on_ready fires every time the bot reconnects (not just on first login).
     # Cog registration, command registration, and task creation must only happen once.
     _first_ready = not hasattr(bot, "_bot_initialized")
+
+    # Global application commands are registered before login but must be synced
+    # over Discord's HTTP API. The helper guards successful syncs and leaves
+    # failures retryable on the next gateway ready event.
+    await sync_global_slash_commands(bot)
 
     # START KICKPYTHON WEBSOCKET (for chat messages)
     # NOTE: Subscription events are now handled via Kick webhooks (channel.subscription.*)
