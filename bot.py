@@ -29,6 +29,7 @@ from sqlalchemy import create_engine, text  # type: ignore
 from utils.clip_auth import get_clip_api_key  # noqa: E402
 from utils.log_context import clear_server, server_context, set_server  # noqa: E402
 from utils.logging_config import setup_logging  # noqa: E402
+from utils.redis_signing import sign_payload  # noqa: E402
 from utils.server_urls import get_server_base_url  # noqa: E402
 from utils.subscription_tier import server_has_feature, upgrade_message  # noqa: E402
 
@@ -184,7 +185,9 @@ def publish_redis_event(channel: str, action: str, data: dict = None):
     if not redis_client:
         return False
     try:
-        payload = {"action": action, "data": data or {}, "timestamp": datetime.now(timezone.utc).isoformat()}
+        payload = sign_payload(
+            {"action": action, "data": data or {}, "timestamp": datetime.now(timezone.utc).isoformat()}
+        )
         redis_client.publish(channel, json.dumps(payload))
         return True
     except Exception as e:
