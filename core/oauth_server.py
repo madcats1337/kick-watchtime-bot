@@ -27,6 +27,8 @@ from sqlalchemy import create_engine, text
 # handler + server-context filter itself or its logs fall to the default lastResort format.
 from utils.logging_config import setup_logging  # noqa: E402
 
+from .oauth_results import redirect_oauth_error, redirect_oauth_success, redirect_service_page
+
 setup_logging("kick_oauth", log_level=os.getenv("LOG_LEVEL", "INFO"), source_tag="BOT")
 logger = logging.getLogger(__name__)
 
@@ -611,42 +613,8 @@ def generate_pkce_pair():
 
 @app.route("/")
 def index():
-    """Simple homepage."""
-    return """
-    <html>
-        <head>
-            <title>Kick Discord Bot</title>
-            <style>
-                body {
-                    font-family: Arial, sans-serif;
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    height: 100vh;
-                    margin: 0;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    color: white;
-                }
-                .container {
-                    text-align: center;
-                    padding: 40px;
-                    background: rgba(255, 255, 255, 0.1);
-                    border-radius: 20px;
-                    backdrop-filter: blur(10px);
-                }
-                h1 { margin: 0 0 20px 0; }
-                p { font-size: 18px; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>🎮 Kick Discord Bot</h1>
-                <p>OAuth authentication server is running!</p>
-                <p>Use the <code>!linkoauth</code> command in Discord to link your Kick account.</p>
-            </div>
-        </body>
-    </html>
-    """
+    """Redirect the callback-service root to the branded React surface."""
+    return redirect_service_page()
 
 
 @app.route("/health")
@@ -1273,11 +1241,11 @@ def auth_kick_callback():
 
     if error:
         logger.error(f"❌ Kick returned error: {error}")
-        return render_error(f"Kick authorization failed: {error}")
+        return redirect_oauth_error("Kick authorization was cancelled or denied. Please start again when ready.")
 
     if not code or not state:
         logger.error(f"❌ Missing code or state")
-        return render_error("Missing authorization code or state")
+        return redirect_oauth_error("The Kick authorization response was incomplete. Please start again.")
 
     # Verify state from database
     logger.info(f"🔍 Checking state in database...")
@@ -1314,7 +1282,7 @@ def auth_kick_callback():
                 logger.info(
                     f"   - State: {sanitize_for_logs(s[0], 'state')}, Discord ID: {s[1]}, Created: {s[2]}, Guild ID: {s[3] if len(s) > 3 else 0}"
                 )
-        return render_error("Invalid or expired state. Please try linking again. The link expires after 30 minutes.")
+        return redirect_oauth_error("This Kick connection link is invalid or expired. Please start again.")
 
     discord_id = result[0]
     code_verifier = result[1]
@@ -1353,7 +1321,7 @@ def handle_bot_authorization_callback(code, code_verifier, state):
 
         if not access_token:
             logger.error(f"❌ [BOT AUTH] No access token in response: {list(token_data.keys())}")
-            return render_error("Failed to obtain access token from Kick")
+            return redirect_oauth_error("Kick did not complete the bot authorization. Please try again.", flow="bot")
 
         logger.info(f"✅ [BOT AUTH] Got bot access token (expires in {expires_in} seconds)")
         logger.info(f"✅ [BOT AUTH] Token preview: {sanitize_for_logs(access_token, 'token')}")
@@ -1460,102 +1428,17 @@ def handle_bot_authorization_callback(code, code_verifier, state):
                 traceback.print_exc()
                 # Don't fail the OAuth flow if webhook setup fails
 
-        # Return success page
-        return f"""
-        <html>
-            <head>
-                <title>Bot Authorized</title>
-                <style>
-                    body {{
-                        font-family: Arial, sans-serif;
-                        padding: 40px;
-                        max-width: 800px;
-                        margin: 0 auto;
-                        background: #f5f5f5;
-                    }}
-                    .container {{
-                        background: white;
-                        padding: 30px;
-                        border-radius: 10px;
-                        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-                    }}
-                    h1 {{ color: #53fc18; }}
-                    .instructions {{
-                        background: #e3f2fd;
-                        padding: 15px;
-                        border-radius: 5px;
-                        margin-top: 20px;
-                    }}
-                    .command {{
-                        background: #2d2d2d;
-                        color: #f8f8f2;
-                        padding: 15px;
-                        border-radius: 5px;
-                        font-family: monospace;
-                        margin: 15px 0;
-                        overflow-x: auto;
-                    }}
-                    code {{
-                        background: #f0f0f0;
-                        padding: 2px 6px;
-                        border-radius: 3px;
-                        font-family: monospace;
-                    }}
-                    .success {{
-                        background: #d4edda;
-                        padding: 15px;
-                        border-radius: 5px;
-                        border-left: 4px solid #28a745;
-                        margin-bottom: 20px;
-                    }}
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <h1>✅ Bot Successfully Authorized!</h1>
-
-                    <div class="success">
-                        <strong>Bot Account:</strong> {kick_username}<br>
-                        <strong>Status:</strong> Token stored securely in database
-                    </div>
-
-                    <div class="instructions">
-                        <h3>📋 Next Steps:</h3>
-                        <p><strong>Run this command locally to retrieve the token:</strong></p>
-                        <div class="command">python get_bot_token_from_db.py</div>
-
-                        <p>This script will:</p>
-                        <ol>
-                            <li>Connect to your database securely</li>
-                            <li>Retrieve the bot token for {kick_username}</li>
-                            <li>Display it in your local terminal only</li>
-                        </ol>
-
-                        <p><strong>Then add it to Railway:</strong></p>
-                        <ol>
-                            <li>Copy the token from your terminal</li>
-                            <li>Go to Railway project settings</li>
-                            <li>Add environment variable: <code>KICK_BOT_USER_TOKEN</code></li>
-                            <li>Paste the token as the value</li>
-                            <li>Redeploy your bot</li>
-                        </ol>
-                    </div>
-
-                    <p style="margin-top: 30px; color: #666; font-size: 14px;">
-                        🔒 For security, the token is not displayed in your browser.<br>
-                        It's stored in your database and can only be retrieved using the script above.
-                    </p>
-                </div>
-            </body>
-        </html>
-        """
+        return redirect_oauth_success(kick_username, flow="bot")
 
     except Exception as e:
         logger.error(f"❌ Bot authorization error: {e}")
         import traceback
 
         traceback.print_exc()
-        return render_error(f"Bot authorization failed: {str(e)}")
+        return redirect_oauth_error(
+            "Kick bot authorization could not be completed. Please try again.",
+            flow="bot",
+        )
 
 
 def handle_user_linking_callback(code, code_verifier, state, discord_id, created_at, guild_id=0):
@@ -1567,7 +1450,7 @@ def handle_user_linking_callback(code, code_verifier, state, discord_id, created
         access_token = token_data.get("access_token")
 
         if not access_token:
-            return render_error("Failed to obtain access token from Kick")
+            return redirect_oauth_error("Kick did not complete the account connection. Please try again.")
 
         logger.info(f"✅ Got access token")
 
@@ -1578,10 +1461,10 @@ def handle_user_linking_callback(code, code_verifier, state, discord_id, created
             logger.info(f"📊 Got user info: {sanitize_for_logs(kick_user)}")
         except Exception as e:
             logger.error(f"❌ Failed to get user info: {e}")
-            return render_error(f"Failed to get your Kick username: {str(e)}")
+            return redirect_oauth_error("Wagerlabs could not read your Kick username. Please try again.")
 
         if not kick_user or not kick_user.get("username"):
-            return render_error("Could not retrieve your Kick username. Please try again.")
+            return redirect_oauth_error("Wagerlabs could not read your Kick username. Please try again.")
 
         kick_username = kick_user["username"]
         logger.info(f"👤 Kick username: {kick_username}")
@@ -1604,7 +1487,7 @@ def handle_user_linking_callback(code, code_verifier, state, discord_id, created
                     ),
                     {"d": discord_id, "k": f"FAILED:{kick_username}:already_linked"},
                 )
-                return render_error(
+                return redirect_oauth_error(
                     f"Kick account '{kick_username}' is already linked to another Discord user on this server."
                 )
 
@@ -1693,14 +1576,14 @@ def handle_user_linking_callback(code, code_verifier, state, discord_id, created
                 )
 
         logger.info(f"✅ OAuth link successful: Discord {discord_id} -> Kick {kick_username}")
-        return render_success(kick_username, discord_id)
+        return redirect_oauth_success(kick_username)
 
     except Exception as e:
         logger.error(f"❌ [OAuth] Error during callback: {e}")
         import traceback
 
         traceback.print_exc()
-        return render_error(f"An error occurred: {str(e)}")
+        return redirect_oauth_error("The Kick account connection could not be completed. Please try again.")
 
 
 # =====================================================
@@ -1776,9 +1659,15 @@ def auth_twitch_link_callback():
     state = request.args.get("state")
     error = request.args.get("error")
     if error:
-        return render_error(f"Twitch authorization failed: {error}")
+        return redirect_oauth_error(
+            "Twitch authorization was cancelled or denied. Please start again when ready.",
+            platform="twitch",
+        )
     if not code or not state:
-        return render_error("Missing authorization code or state")
+        return redirect_oauth_error(
+            "The Twitch authorization response was incomplete. Please start again.",
+            platform="twitch",
+        )
 
     # Validate + consume state.
     with engine.connect() as conn:
@@ -1787,13 +1676,19 @@ def auth_twitch_link_callback():
             {"s": state},
         ).fetchone()
     if not row:
-        return render_error("Invalid or expired link. Please use the panel again.")
+        return redirect_oauth_error(
+            "This Twitch connection link is invalid or expired. Please start again.",
+            platform="twitch",
+        )
     discord_id, guild_id = int(row[0]), int(row[1] or 0)
 
     client_id = os.getenv("TWITCH_CLIENT_ID")
     client_secret = os.getenv("TWITCH_CLIENT_SECRET")
     if not client_id or not client_secret:
-        return render_error("Twitch OAuth not configured")
+        return redirect_oauth_error(
+            "Twitch account connections are temporarily unavailable.",
+            platform="twitch",
+        )
     redirect_uri = f"{OAUTH_BASE_URL}/auth/twitch/link/callback"
 
     try:
@@ -1809,7 +1704,10 @@ def auth_twitch_link_callback():
             timeout=15,
         )
         if token_resp.status_code != 200:
-            return render_error(f"Token exchange failed: {token_resp.status_code}")
+            return redirect_oauth_error(
+                "Twitch did not complete the account connection. Please try again.",
+                platform="twitch",
+            )
         access_token = token_resp.json().get("access_token")
 
         user_resp = requests.get(
@@ -1822,7 +1720,10 @@ def auth_twitch_link_callback():
             udata = (user_resp.json().get("data") or [{}])[0]
             twitch_login = udata.get("login")
         if not twitch_login:
-            return render_error("Could not read your Twitch username")
+            return redirect_oauth_error(
+                "Wagerlabs could not read your Twitch username. Please try again.",
+                platform="twitch",
+            )
 
         # Create/update the link (platform='twitch') + notify the bot to grant the role.
         from core.stream_links import upsert_link
@@ -1841,13 +1742,16 @@ def auth_twitch_link_callback():
             )
 
         logger.info(f"✅ Twitch link successful: Discord {discord_id} -> Twitch {twitch_login}")
-        return render_success(twitch_login, discord_id, platform="twitch")
+        return redirect_oauth_success(twitch_login, platform="twitch")
     except Exception as e:
         logger.error(f"❌ [Twitch OAuth] Error during callback: {e}")
         import traceback
 
         traceback.print_exc()
-        return render_error(f"An error occurred: {str(e)}")
+        return redirect_oauth_error(
+            "The Twitch account connection could not be completed. Please try again.",
+            platform="twitch",
+        )
 
 
 def exchange_code_for_token(code, code_verifier=None, redirect_uri=None):
@@ -1921,189 +1825,6 @@ def get_kick_user_info(access_token):
         raise Exception(f"Could not get user info from Kick API: {str(e)}")
 
 
-def render_success(kick_username, discord_id, platform="kick"):
-    """Render success page with auto-close."""
-    platform_label = "Twitch" if platform == "twitch" else "Kick"
-    return f"""
-    <html>
-        <head>
-            <title>✅ Account Linked!</title>
-            <style>
-                body {{
-                    font-family: Arial, sans-serif;
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    height: 100vh;
-                    margin: 0;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    color: white;
-                }}
-                .container {{
-                    text-align: center;
-                    padding: 40px;
-                    background: rgba(255, 255, 255, 0.1);
-                    border-radius: 20px;
-                    backdrop-filter: blur(10px);
-                    max-width: 500px;
-                }}
-                h1 {{ margin: 0 0 20px 0; font-size: 48px; }}
-                .username {{
-                    font-size: 24px;
-                    font-weight: bold;
-                    color: #53FC18;
-                    margin: 20px 0;
-                }}
-                p {{ font-size: 18px; line-height: 1.6; }}
-                .close-btn {{
-                    margin-top: 30px;
-                    padding: 12px 30px;
-                    background: #53FC18;
-                    color: #000;
-                    border: none;
-                    border-radius: 8px;
-                    font-size: 16px;
-                    font-weight: bold;
-                    cursor: pointer;
-                }}
-            </style>
-            <script>
-                // Try to close window immediately
-                function tryClose() {{
-                    window.close();
-                    // If we're still here after 100ms, the close was blocked
-                    setTimeout(function() {{
-                        // Check if window is still open (it will be if close was blocked)
-                        document.getElementById('manualClose').style.display = 'block';
-                        document.getElementById('autoClose').style.display = 'none';
-                    }}, 100);
-                }}
-                // Try to close after page loads
-                window.onload = function() {{
-                    setTimeout(tryClose, 2000);
-                }};
-            </script>
-        </head>
-        <body>
-            <div class="container">
-                <h1>✅</h1>
-                <h2>Account Linked Successfully!</h2>
-                <div class="username">{kick_username}</div>
-                <p>Your Discord account is now linked to your {platform_label} account.</p>
-                <p id="autoClose">Window will close automatically...</p>
-                <p id="manualClose" style="display:none;">You can now close this tab and return to Discord.</p>
-            </div>
-        </body>
-    </html>
-    """
-
-
-def render_error(message):
-    """Render error page."""
-    return (
-        f"""
-    <html>
-        <head>
-            <title>❌ Error</title>
-            <style>
-                body {{
-                    font-family: Arial, sans-serif;
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    height: 100vh;
-                    margin: 0;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    color: white;
-                }}
-                .container {{
-                    text-align: center;
-                    padding: 40px;
-                    background: rgba(255, 255, 255, 0.1);
-                    border-radius: 20px;
-                    backdrop-filter: blur(10px);
-                    max-width: 500px;
-                }}
-                h1 {{ margin: 0 0 20px 0; font-size: 48px; }}
-                .error-message {{
-                    font-size: 18px;
-                    color: #ff6b6b;
-                    margin: 20px 0;
-                    padding: 20px;
-                    background: rgba(255, 107, 107, 0.1);
-                    border-radius: 10px;
-                }}
-                p {{ font-size: 16px; line-height: 1.6; }}
-                .retry-btn {{
-                    margin-top: 20px;
-                    padding: 12px 30px;
-                    background: #53FC18;
-                    color: #000;
-                    border: none;
-                    border-radius: 8px;
-                    font-size: 16px;
-                    font-weight: bold;
-                    cursor: pointer;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>❌</h1>
-                <h2>Something Went Wrong</h2>
-                <div class="error-message">{message}</div>
-                <p>Please return to Discord and try the <code>!linkoauth</code> command again.</p>
-                <button class="retry-btn" onclick="window.close()">Close Window</button>
-            </div>
-        </body>
-    </html>
-    """,
-        400,
-    )
-
-
-def render_error(message):
-    """Render error page."""
-    return (
-        f"""
-    <html>
-        <head>
-            <title>❌ Error</title>
-            <style>
-                body {{
-                    font-family: Arial, sans-serif;
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    min-height: 100vh;
-                    margin: 0;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    color: white;
-                }}
-                .container {{
-                    text-align: center;
-                    padding: 40px;
-                    background: rgba(255, 255, 255, 0.1);
-                    border-radius: 20px;
-                    backdrop-filter: blur(10px);
-                }}
-                h1 {{ margin: 0 0 20px 0; font-size: 48px; }}
-                p {{ font-size: 18px; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>❌</h1>
-                <h2>Oops!</h2>
-                <p>{message}</p>
-            </div>
-        </body>
-    </html>
-    """,
-        400,
-    )
-
-
 @app.route("/bot/authorize")
 def bot_authorize():
     """
@@ -2120,11 +1841,17 @@ def bot_authorize():
 
         if not expected_token:
             logger.warning(f"⚠️ BOT_AUTH_TOKEN not configured - bot authorization disabled")
-            return render_error("Bot authorization is not configured. Contact the administrator.")
+            return redirect_oauth_error(
+                "Kick bot authorization is not configured. Contact the administrator.",
+                flow="bot",
+            )
 
         if not auth_token or not hmac.compare_digest(str(auth_token), expected_token):
             logger.error(f"❌ Invalid or missing bot authorization token")
-            return render_error("Unauthorized. Invalid or missing authentication token.")
+            return redirect_oauth_error(
+                "This Kick bot authorization link is invalid or expired.",
+                flow="bot",
+            )
 
         logger.info(f"🤖 Bot authorization initiated with valid token")
 
@@ -2186,7 +1913,10 @@ def bot_authorize():
         import traceback
 
         traceback.print_exc()
-        return render_error(f"Failed to initiate bot authorization: {str(e)}")
+        return redirect_oauth_error(
+            "Kick bot authorization could not be started. Please try again.",
+            flow="bot",
+        )
 
 
 if __name__ == "__main__":
