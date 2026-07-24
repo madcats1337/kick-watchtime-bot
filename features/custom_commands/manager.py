@@ -38,8 +38,8 @@ _DATABASE_VARIABLES = frozenset(
         "{current_provider}",
         "{slot_requests_open}",
         "{slot_queue_count}",
-        "{next_slot}",
-        "{request_position}",
+        "{user_slot_request_count}",
+        "{user_latest_slot_request}",
         "{giveaway_title}",
         "{giveaway_method}",
         "{giveaway_keyword}",
@@ -277,8 +277,8 @@ class CustomCommandsManager:
         - {current_provider} - Provider of the current slot
         - {slot_requests_open} - open or closed
         - {slot_queue_count} - Number of unpicked slot requests
-        - {next_slot} - Oldest unpicked slot request
-        - {request_position} - User's earliest position in the slot queue
+        - {user_slot_request_count} - User's number of pending slot requests
+        - {user_latest_slot_request} - User's most recently submitted pending slot
         - {giveaway_title} - Active giveaway title
         - {giveaway_method} - Active giveaway entry method
         - {giveaway_keyword} - Active giveaway keyword
@@ -336,8 +336,8 @@ class CustomCommandsManager:
             "raffle_end_date": None,
             "slot_requests_open": True,
             "slot_queue_count": 0,
-            "next_slot": None,
-            "request_position": None,
+            "user_slot_request_count": 0,
+            "user_latest_slot_request": None,
             "giveaway_title": None,
             "giveaway_method": None,
             "giveaway_keyword": None,
@@ -404,8 +404,8 @@ class CustomCommandsManager:
             "{current_provider}": provider,
             "{slot_requests_open}": "open" if data.get("slot_requests_open") else "closed",
             "{slot_queue_count}": f"{int(data.get('slot_queue_count') or 0):,}",
-            "{next_slot}": data.get("next_slot") or "none",
-            "{request_position}": self._format_position(data.get("request_position")),
+            "{user_slot_request_count}": f"{int(data.get('user_slot_request_count') or 0):,}",
+            "{user_latest_slot_request}": data.get("user_latest_slot_request") or "none",
             "{giveaway_title}": data.get("giveaway_title") or "none",
             "{giveaway_method}": (data.get("giveaway_method") or "none").replace("_", " "),
             "{giveaway_keyword}": data.get("giveaway_keyword") or "N/A",
@@ -440,10 +440,6 @@ class CustomCommandsManager:
     @staticmethod
     def _format_rank(rank):
         return f"#{int(rank)}" if rank else "unranked"
-
-    @staticmethod
-    def _format_position(position):
-        return f"#{int(position)}" if position else "not queued"
 
     @staticmethod
     def _format_amount(amount):
@@ -482,7 +478,11 @@ class CustomCommandsManager:
             "{raffle_chance}",
         }
         raffle_stat_tokens = {"{raffle_chance}", "{raffle_total}", "{raffle_participants}"}
-        slot_queue_tokens = {"{slot_queue_count}", "{next_slot}", "{request_position}"}
+        slot_queue_tokens = {
+            "{slot_queue_count}",
+            "{user_slot_request_count}",
+            "{user_latest_slot_request}",
+        }
         giveaway_tokens = {
             "{giveaway_title}",
             "{giveaway_method}",
@@ -502,7 +502,13 @@ class CustomCommandsManager:
             points_value_tokens
             | watchtime_value_tokens
             | raffle_viewer_tokens
-            | {"{points_rank}", "{watchtime_rank}", "{request_position}", "{giveaway_entered}"}
+            | {
+                "{points_rank}",
+                "{watchtime_rank}",
+                "{user_slot_request_count}",
+                "{user_latest_slot_request}",
+                "{giveaway_entered}",
+            }
         )
 
         conn = psycopg2.connect(self.database_url)
@@ -618,7 +624,8 @@ class CustomCommandsManager:
                     SELECT
                         slot_call,
                         LOWER(kick_username) AS username,
-                        ROW_NUMBER() OVER (ORDER BY requested_at ASC, id ASC) AS position
+                        requested_at,
+                        id
                     FROM slot_requests
                     WHERE discord_server_id = %(server_id)s
                       AND picked = FALSE
@@ -763,14 +770,18 @@ class CustomCommandsManager:
                         TRUE
                     ) AS slot_requests_open,
                     (SELECT COUNT(*) FROM slot_queue) AS slot_queue_count,
-                    (SELECT slot_call FROM slot_queue ORDER BY position LIMIT 1) AS next_slot,
                     (
-                        SELECT position
+                        SELECT COUNT(*)
                         FROM slot_queue
                         WHERE username = identity.canonical_username
-                        ORDER BY position
+                    ) AS user_slot_request_count,
+                    (
+                        SELECT slot_call
+                        FROM slot_queue
+                        WHERE username = identity.canonical_username
+                        ORDER BY requested_at DESC, id DESC
                         LIMIT 1
-                    ) AS request_position,
+                    ) AS user_latest_slot_request,
                     (SELECT title FROM active_giveaway) AS giveaway_title,
                     (SELECT entry_method FROM active_giveaway) AS giveaway_method,
                     (SELECT keyword FROM active_giveaway) AS giveaway_keyword,
