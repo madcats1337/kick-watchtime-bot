@@ -6,11 +6,53 @@ Handles dynamic custom commands loaded from database
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 
 import psycopg2
 
 logger = logging.getLogger(__name__)
+
+
+_DATABASE_VARIABLES = frozenset(
+    {
+        "{channel}",
+        "{tickets}",
+        "{points}",
+        "{points_earned}",
+        "{points_spent}",
+        "{watchtime}",
+        "{watchtime_minutes}",
+        "{watchtime_formatted}",
+        "{points_rank}",
+        "{watchtime_rank}",
+        "{watchtime_tickets}",
+        "{gifted_sub_tickets}",
+        "{wager_tickets}",
+        "{bonus_tickets}",
+        "{raffle_rank}",
+        "{raffle_chance}",
+        "{raffle_total}",
+        "{raffle_participants}",
+        "{raffle_ends_in}",
+        "{current_slot}",
+        "{current_provider}",
+        "{slot_requests_open}",
+        "{slot_queue_count}",
+        "{next_slot}",
+        "{request_position}",
+        "{giveaway_title}",
+        "{giveaway_method}",
+        "{giveaway_keyword}",
+        "{giveaway_entries}",
+        "{giveaway_participants}",
+        "{giveaway_entered}",
+        "{hunt_start_balance}",
+        "{hunt_bonus_count}",
+        "{hunt_remaining}",
+        "{hunt_total_payout}",
+        "{hunt_profit}",
+    }
+)
 
 
 class CustomCommandsManager:
@@ -106,13 +148,15 @@ class CustomCommandsManager:
         logger.info("🔄 Reloading custom commands from database...")
         await self.load_commands()
 
-    async def handle_message(self, message_content, username):
+    async def handle_message(self, message_content, username, *, platform="kick", display_name=None):
         """
         Check if message is a custom command and respond
 
         Args:
             message_content: The message text
-            username: Username who sent the message
+            username: Canonical username used for shared viewer statistics
+            platform: Originating chat platform (kick or twitch)
+            display_name: Native platform username used for display
 
         Returns:
             bool: True if command was handled, False otherwise
@@ -121,12 +165,15 @@ class CustomCommandsManager:
         if not message_content.startswith("!"):
             return False
 
-        # Extract command (remove ! and get first word)
-        parts = message_content[1:].split()
-        if not parts:
+        # Extract the command plus both the raw argument tail and its first word.
+        invocation = message_content[1:].strip()
+        if not invocation:
             return False
 
+        parts = invocation.split(maxsplit=1)
         command = parts[0].lower()
+        args = parts[1].strip() if len(parts) > 1 else ""
+        arg1 = args.split(maxsplit=1)[0] if args else ""
 
         # Check if command exists and is enabled
         if command not in self.commands:
@@ -153,13 +200,24 @@ class CustomCommandsManager:
                 response = cmd_data["response"]
 
                 # Apply variable replacements
-                response = await self._replace_variables(response, username, command)
+                next_use_count = int(cmd_data.get("use_count") or 0) + 1
+                response = await self._replace_variables(
+                    response,
+                    username,
+                    command,
+                    args=args,
+                    arg1=arg1,
+                    platform=platform,
+                    display_name=display_name,
+                    use_count=next_use_count,
+                )
 
                 await self.send_message_callback(response)
                 logger.info(f"✅ Custom command !{command} executed by {username}")
 
                 # Update last used
                 self.last_used[command] = datetime.now()
+                cmd_data["use_count"] = next_use_count
 
                 # Increment use count in database (don't wait for it)
                 asyncio.create_task(self._increment_use_count(cmd_data["id"]))
@@ -173,126 +231,611 @@ class CustomCommandsManager:
             logger.error(f"❌ Error executing custom command !{command}: {e}")
             return False
 
-    async def _replace_variables(self, text: str, username: str, command: str) -> str:
+    async def _replace_variables(
+        self,
+        text: str,
+        username: str,
+        command: str,
+        *,
+        args: str = "",
+        arg1: str = "",
+        platform: str = "kick",
+        display_name: str = None,
+        use_count: int = 0,
+    ) -> str:
         """
         Replace custom variables in command response text
 
         Available variables:
         - {user} - Username who triggered the command
-        - {channel} - Kick channel name
+        - {display_name} - Native Kick/Twitch display name
+        - {platform} - Kick or Twitch
+        - {channel} - Channel name for the originating platform
+        - {command} - Command name without the ! prefix
+        - {args} - Full argument text after the command
+        - {arg1} - First whitespace-delimited argument
+        - {uses} - Command use count including this execution
         - {tickets} - User's raffle ticket count (if linked)
         - {points} - User's points balance (if they have points)
+        - {points_earned} - User's lifetime points earned
+        - {points_spent} - User's lifetime points spent
         - {watchtime} - User's total watchtime in hours (if linked)
+        - {watchtime_minutes} - User's total watchtime in minutes
+        - {watchtime_formatted} - User's watchtime as hours/minutes
+        - {points_rank} - User's current points rank
+        - {watchtime_rank} - User's current watchtime rank
+        - {watchtime_tickets} - User's raffle tickets earned from watchtime
+        - {gifted_sub_tickets} - User's raffle tickets earned from gifted subs
+        - {wager_tickets} - User's raffle tickets earned from wager tracking
+        - {bonus_tickets} - User's bonus/manual raffle tickets
+        - {raffle_rank} - User's rank in the active raffle
+        - {raffle_chance} - User's current raffle win chance
+        - {raffle_total} - Total tickets in the active raffle
+        - {raffle_participants} - Number of participants in the active raffle
+        - {raffle_ends_in} - Time remaining in the active raffle
         - {current_slot} - Slot the streamer is currently playing (extension-tracked)
+        - {current_provider} - Provider of the current slot
+        - {slot_requests_open} - open or closed
+        - {slot_queue_count} - Number of unpicked slot requests
+        - {next_slot} - Oldest unpicked slot request
+        - {request_position} - User's earliest position in the slot queue
+        - {giveaway_title} - Active giveaway title
+        - {giveaway_method} - Active giveaway entry method
+        - {giveaway_keyword} - Active giveaway keyword
+        - {giveaway_entries} - Total entries in the active giveaway
+        - {giveaway_participants} - Unique participants in the active giveaway
+        - {giveaway_entered} - yes if the user entered the active giveaway
+        - {hunt_start_balance} - Active bonus hunt starting balance
+        - {hunt_bonus_count} - Total bonuses in the active hunt
+        - {hunt_remaining} - Unopened bonuses in the active hunt
+        - {hunt_total_payout} - Current total payout in the active hunt
+        - {hunt_profit} - Current active-hunt profit or loss
 
         Args:
             text: The response text with variables
             username: Username who triggered the command
-            command: Command name (for logging)
+            command: Command name without the ! prefix
 
         Returns:
             Text with variables replaced
         """
+        platform_key = (platform or "kick").strip().lower()
+        platform_label = {"kick": "Kick", "twitch": "Twitch"}.get(platform_key, platform_key.capitalize())
+        native_name = display_name or username
+        basic_replacements = {
+            "{user}": username,
+            "{display_name}": native_name,
+            "{platform}": platform_label,
+            "{command}": command,
+            "{args}": args,
+            "{arg1}": arg1,
+            "{uses}": f"{int(use_count or 0):,}",
+        }
+        requested_tokens = {token for token in _DATABASE_VARIABLES if token in text}
+        if not requested_tokens:
+            return self._replace_tokens(text, basic_replacements)
+
+        data = {
+            "channel": "unknown",
+            "tickets": 0,
+            "points": 0,
+            "points_earned": 0,
+            "points_spent": 0,
+            "watchtime_minutes": 0,
+            "current_slot": None,
+            "current_provider": None,
+            "points_rank": None,
+            "watchtime_rank": None,
+            "watchtime_tickets": 0,
+            "gifted_sub_tickets": 0,
+            "wager_tickets": 0,
+            "bonus_tickets": 0,
+            "raffle_rank": None,
+            "raffle_pool_tickets": 0,
+            "raffle_participants": 0,
+            "raffle_end_date": None,
+            "slot_requests_open": True,
+            "slot_queue_count": 0,
+            "next_slot": None,
+            "request_position": None,
+            "giveaway_title": None,
+            "giveaway_method": None,
+            "giveaway_keyword": None,
+            "giveaway_entries": 0,
+            "giveaway_participants": 0,
+            "giveaway_entered": False,
+            "hunt_start_balance": 0,
+            "hunt_bonus_count": 0,
+            "hunt_remaining": 0,
+            "hunt_total_payout": 0,
+            "hunt_profit": 0,
+        }
+        server_id = self.discord_server_id
+        if server_id and self.database_url:
+            try:
+                fetched = await asyncio.to_thread(
+                    self._fetch_variable_context,
+                    server_id,
+                    username,
+                    native_name,
+                    platform_key,
+                    requested_tokens,
+                )
+                if fetched:
+                    data.update(fetched)
+            except Exception:
+                logger.exception(f"Error fetching custom-command variable data for {username}")
+
+        minutes = int(data.get("watchtime_minutes") or 0)
+        hours, remaining_minutes = divmod(minutes, 60)
+        if hours:
+            formatted_watchtime = f"{hours}h {remaining_minutes}m"
+        else:
+            formatted_watchtime = f"{remaining_minutes}m"
+
+        tickets = int(data.get("tickets") or 0)
+        raffle_pool = int(data.get("raffle_pool_tickets") or 0)
+        raffle_chance = (tickets / raffle_pool * 100) if raffle_pool > 0 else 0.0
+        provider = data.get("current_provider") or "unknown"
+        slot_name = data.get("current_slot")
+        current_slot = f"{slot_name} ({provider})" if slot_name and provider != "unknown" else slot_name or "unknown"
+
+        database_replacements = {
+            "{channel}": data.get("channel") or "unknown",
+            "{tickets}": f"{tickets:,}",
+            "{points}": f"{int(data.get('points') or 0):,}",
+            "{points_earned}": f"{int(data.get('points_earned') or 0):,}",
+            "{points_spent}": f"{int(data.get('points_spent') or 0):,}",
+            "{watchtime}": f"{minutes / 60:.1f}",
+            "{watchtime_minutes}": f"{minutes:,}",
+            "{watchtime_formatted}": formatted_watchtime,
+            "{points_rank}": self._format_rank(data.get("points_rank")),
+            "{watchtime_rank}": self._format_rank(data.get("watchtime_rank")),
+            "{watchtime_tickets}": f"{int(data.get('watchtime_tickets') or 0):,}",
+            "{gifted_sub_tickets}": f"{int(data.get('gifted_sub_tickets') or 0):,}",
+            "{wager_tickets}": f"{int(data.get('wager_tickets') or 0):,}",
+            "{bonus_tickets}": f"{int(data.get('bonus_tickets') or 0):,}",
+            "{raffle_rank}": self._format_rank(data.get("raffle_rank")),
+            "{raffle_chance}": f"{raffle_chance:.2f}%",
+            "{raffle_total}": f"{raffle_pool:,}",
+            "{raffle_participants}": f"{int(data.get('raffle_participants') or 0):,}",
+            "{raffle_ends_in}": self._format_time_remaining(data.get("raffle_end_date")),
+            "{current_slot}": current_slot,
+            "{current_provider}": provider,
+            "{slot_requests_open}": "open" if data.get("slot_requests_open") else "closed",
+            "{slot_queue_count}": f"{int(data.get('slot_queue_count') or 0):,}",
+            "{next_slot}": data.get("next_slot") or "none",
+            "{request_position}": self._format_position(data.get("request_position")),
+            "{giveaway_title}": data.get("giveaway_title") or "none",
+            "{giveaway_method}": (data.get("giveaway_method") or "none").replace("_", " "),
+            "{giveaway_keyword}": data.get("giveaway_keyword") or "N/A",
+            "{giveaway_entries}": f"{int(data.get('giveaway_entries') or 0):,}",
+            "{giveaway_participants}": f"{int(data.get('giveaway_participants') or 0):,}",
+            "{giveaway_entered}": "yes" if data.get("giveaway_entered") else "no",
+            "{hunt_start_balance}": self._format_amount(data.get("hunt_start_balance")),
+            "{hunt_bonus_count}": f"{int(data.get('hunt_bonus_count') or 0):,}",
+            "{hunt_remaining}": f"{int(data.get('hunt_remaining') or 0):,}",
+            "{hunt_total_payout}": self._format_amount(data.get("hunt_total_payout")),
+            "{hunt_profit}": self._format_amount(data.get("hunt_profit")),
+        }
+        return self._replace_tokens(text, {**basic_replacements, **database_replacements})
+
+    @staticmethod
+    def _replace_tokens(text, replacements):
+        """Replace template tokens once, without expanding tokens inside values.
+
+        In particular, viewer-supplied {args} text must not be able to inject a
+        second response variable and trigger data substitution.
+        """
+        sentinels = {}
+        for index, (token, value) in enumerate(replacements.items()):
+            sentinel = f"\0custom_command_variable_{index}\0"
+            if token in text:
+                text = text.replace(token, sentinel)
+                sentinels[sentinel] = "" if value is None else str(value)
+        for sentinel, value in sentinels.items():
+            text = text.replace(sentinel, value)
+        return text
+
+    @staticmethod
+    def _format_rank(rank):
+        return f"#{int(rank)}" if rank else "unranked"
+
+    @staticmethod
+    def _format_position(position):
+        return f"#{int(position)}" if position else "not queued"
+
+    @staticmethod
+    def _format_amount(amount):
+        return f"{float(amount or 0):,.2f}"
+
+    @staticmethod
+    def _format_time_remaining(end_date):
+        if not end_date:
+            return "N/A"
+        now = datetime.now(timezone.utc)
+        if end_date.tzinfo is None:
+            now = now.replace(tzinfo=None)
+        seconds = int((end_date - now).total_seconds())
+        if seconds <= 0:
+            return "ended"
+        days, remainder = divmod(seconds, 86400)
+        hours, remainder = divmod(remainder, 3600)
+        minutes = remainder // 60
+        if days:
+            return f"{days}d {hours}h"
+        if hours:
+            return f"{hours}h {minutes}m"
+        return f"{minutes}m" if minutes else "<1m"
+
+    def _fetch_variable_context(self, server_id, username, display_name, platform, requested_tokens):
+        """Load all database-backed variables with one tenant-scoped query."""
+        points_value_tokens = {"{points}", "{points_earned}", "{points_spent}"}
+        watchtime_value_tokens = {"{watchtime}", "{watchtime_minutes}", "{watchtime_formatted}"}
+        raffle_viewer_tokens = {
+            "{tickets}",
+            "{watchtime_tickets}",
+            "{gifted_sub_tickets}",
+            "{wager_tickets}",
+            "{bonus_tickets}",
+            "{raffle_rank}",
+            "{raffle_chance}",
+        }
+        raffle_stat_tokens = {"{raffle_chance}", "{raffle_total}", "{raffle_participants}"}
+        slot_queue_tokens = {"{slot_queue_count}", "{next_slot}", "{request_position}"}
+        giveaway_tokens = {
+            "{giveaway_title}",
+            "{giveaway_method}",
+            "{giveaway_keyword}",
+            "{giveaway_entries}",
+            "{giveaway_participants}",
+            "{giveaway_entered}",
+        }
+        hunt_tokens = {
+            "{hunt_start_balance}",
+            "{hunt_bonus_count}",
+            "{hunt_remaining}",
+            "{hunt_total_payout}",
+            "{hunt_profit}",
+        }
+        identity_tokens = (
+            points_value_tokens
+            | watchtime_value_tokens
+            | raffle_viewer_tokens
+            | {"{points_rank}", "{watchtime_rank}", "{request_position}", "{giveaway_entered}"}
+        )
+
+        conn = psycopg2.connect(self.database_url)
+        cursor = conn.cursor()
         try:
-            # Basic replacements
-            text = text.replace("{user}", username)
-
-            # Get channel name and user data if we have discord_server_id
-            if self.discord_server_id and self.database_url:
-                try:
-                    conn = psycopg2.connect(self.database_url)
-                    cursor = conn.cursor()
-
-                    # Get channel name
-                    cursor.execute(
-                        """
-                        SELECT value FROM bot_settings
-                        WHERE key = 'kick_channel' AND discord_server_id = %s
-                    """,
-                        (self.discord_server_id,),
-                    )
-                    result = cursor.fetchone()
-                    if result:
-                        text = text.replace("{channel}", result[0])
-
-                    # Get user's ticket count if linked
-                    if "{tickets}" in text:
-                        cursor.execute(
-                            """
-                            SELECT rt.total_tickets
-                            FROM raffle_tickets rt
-                            JOIN links l ON rt.discord_id = l.discord_id AND rt.discord_server_id = l.discord_server_id
-                            WHERE LOWER(l.kick_name) = %s
-                            AND rt.discord_server_id = %s
-                            AND rt.period_id = (SELECT id FROM raffle_periods WHERE status = 'active' AND discord_server_id = %s LIMIT 1)
-                        """,
-                            (username.lower(), self.discord_server_id, self.discord_server_id),
-                        )
-                        result = cursor.fetchone()
-                        tickets = int(result[0]) if result and result[0] else 0
-                        text = text.replace("{tickets}", f"{tickets:,}")
-
-                    # Get user's points
-                    if "{points}" in text:
-                        cursor.execute(
-                            """
-                            SELECT points FROM user_points
-                            WHERE LOWER(kick_username) = %s AND discord_server_id = %s
-                        """,
-                            (username.lower(), self.discord_server_id),
-                        )
-                        result = cursor.fetchone()
-                        points = int(result[0]) if result and result[0] else 0
-                        text = text.replace("{points}", f"{points:,}")
-
-                    # Get user's watchtime in hours
-                    if "{watchtime}" in text:
-                        cursor.execute(
-                            """
-                            SELECT minutes FROM watchtime
-                            WHERE LOWER(username) = %s AND discord_server_id = %s
-                        """,
-                            (username.lower(), self.discord_server_id),
-                        )
-                        result = cursor.fetchone()
-                        minutes = result[0] if result and result[0] else 0
-                        hours = minutes / 60
-                        text = text.replace("{watchtime}", f"{hours:.1f}")
-                        logger.info(f"✅ Replaced {{watchtime}} for {username}: {hours:.1f} hours ({minutes} minutes)")
-
-                    # Get the slot the streamer is currently playing (latest
-                    # current_slot_history row, pushed by the browser extension
-                    # on every casino game-page change).
-                    if "{current_slot}" in text:
-                        cursor.execute(
-                            """
-                            SELECT slot_name, provider FROM current_slot_history
-                            WHERE discord_server_id = %s
-                            ORDER BY started_at DESC, id DESC
+            cursor.execute(
+                """
+                WITH matched_link AS (
+                    SELECT discord_id
+                    FROM links
+                    WHERE discord_server_id = %(server_id)s
+                      AND platform = %(platform)s
+                      AND LOWER(kick_name) = LOWER(%(display_name)s)
+                      AND %(need_identity)s
+                    LIMIT 1
+                ),
+                identity AS (
+                    SELECT
+                        (SELECT discord_id FROM matched_link) AS discord_id,
+                        COALESCE(
+                            (
+                                SELECT MIN(LOWER(l.kick_name))
+                                FROM links l
+                                WHERE l.discord_server_id = %(server_id)s
+                                  AND l.discord_id = (SELECT discord_id FROM matched_link)
+                                  AND l.kick_name IS NOT NULL
+                            ),
+                            LOWER(%(username)s)
+                        ) AS canonical_username
+                ),
+                active_period AS (
+                    SELECT id, end_date
+                    FROM raffle_periods
+                    WHERE discord_server_id = %(server_id)s AND status = 'active'
+                      AND %(need_raffle_period)s
+                    ORDER BY start_date DESC
+                    LIMIT 1
+                ),
+                viewer_points AS (
+                    SELECT points, total_earned, total_spent
+                    FROM user_points
+                    CROSS JOIN identity
+                    WHERE discord_server_id = %(server_id)s
+                      AND LOWER(kick_username) = identity.canonical_username
+                      AND %(need_points_data)s
+                    LIMIT 1
+                ),
+                point_ranked AS (
+                    SELECT
+                        LOWER(kick_username) AS username,
+                        points,
+                        RANK() OVER (ORDER BY points DESC) AS rank
+                    FROM user_points
+                    WHERE discord_server_id = %(server_id)s
+                      AND points > 0
+                      AND %(need_points_rank)s
+                ),
+                viewer_watchtime AS (
+                    SELECT minutes
+                    FROM watchtime
+                    CROSS JOIN identity
+                    WHERE discord_server_id = %(server_id)s
+                      AND LOWER(username) = identity.canonical_username
+                      AND %(need_watchtime_data)s
+                    LIMIT 1
+                ),
+                watchtime_ranked AS (
+                    SELECT
+                        LOWER(username) AS username,
+                        RANK() OVER (ORDER BY minutes DESC) AS rank
+                    FROM watchtime
+                    WHERE discord_server_id = %(server_id)s
+                      AND minutes > 0
+                      AND %(need_watchtime_rank)s
+                ),
+                raffle_entries AS (
+                    SELECT
+                        discord_id,
+                        watchtime_tickets,
+                        gifted_sub_tickets,
+                        shuffle_wager_tickets,
+                        bonus_tickets,
+                        total_tickets
+                    FROM raffle_tickets
+                    WHERE discord_server_id = %(server_id)s
+                      AND period_id = (SELECT id FROM active_period)
+                      AND total_tickets > 0
+                      AND %(need_raffle)s
+                ),
+                raffle_ranked AS (
+                    SELECT
+                        discord_id,
+                        RANK() OVER (ORDER BY total_tickets DESC) AS rank
+                    FROM raffle_entries
+                    WHERE %(need_raffle_rank)s
+                ),
+                raffle_stats AS (
+                    SELECT
+                        COALESCE(SUM(total_tickets), 0) AS total_tickets,
+                        COUNT(*) AS participants
+                    FROM raffle_entries
+                    WHERE %(need_raffle_stats)s
+                ),
+                latest_slot AS (
+                    SELECT slot_name, provider
+                    FROM current_slot_history
+                    WHERE discord_server_id = %(server_id)s
+                      AND %(need_slot)s
+                    ORDER BY started_at DESC, id DESC
+                    LIMIT 1
+                ),
+                slot_queue AS (
+                    SELECT
+                        slot_call,
+                        LOWER(kick_username) AS username,
+                        ROW_NUMBER() OVER (ORDER BY requested_at ASC, id ASC) AS position
+                    FROM slot_requests
+                    WHERE discord_server_id = %(server_id)s
+                      AND picked = FALSE
+                      AND %(need_slot_queue)s
+                ),
+                active_giveaway AS (
+                    SELECT id, title, entry_method, keyword
+                    FROM giveaways
+                    WHERE discord_server_id = %(server_id)s
+                      AND status = 'active'
+                      AND %(need_giveaway)s
+                    ORDER BY started_at DESC NULLS LAST, id DESC
+                    LIMIT 1
+                ),
+                giveaway_stats AS (
+                    SELECT
+                        COALESCE(SUM(entry_count), 0) AS total_entries,
+                        COUNT(DISTINCT LOWER(kick_username)) AS participants
+                    FROM giveaway_entries
+                    WHERE discord_server_id = %(server_id)s
+                      AND giveaway_id = (SELECT id FROM active_giveaway)
+                      AND %(need_giveaway_stats)s
+                ),
+                active_hunt AS (
+                    SELECT id, starting_balance
+                    FROM bonus_hunt_sessions
+                    WHERE discord_server_id = %(server_id)s
+                      AND status = 'active'
+                      AND %(need_hunt)s
+                    ORDER BY started_at DESC NULLS LAST, id DESC
+                    LIMIT 1
+                ),
+                hunt_stats AS (
+                    SELECT
+                        COUNT(*) AS bonus_count,
+                        COUNT(*) FILTER (WHERE status IS DISTINCT FROM 'opened') AS remaining,
+                        COALESCE(SUM(payout), 0) AS total_payout
+                    FROM bonus_hunt_bonuses
+                    WHERE discord_server_id = %(server_id)s
+                      AND session_id = (SELECT id FROM active_hunt)
+                      AND %(need_hunt)s
+                )
+                SELECT
+                    COALESCE(
+                        (
+                            SELECT value
+                            FROM bot_settings
+                            WHERE discord_server_id = %(server_id)s
+                              AND %(need_channel)s
+                              AND key = CASE
+                                  WHEN %(platform)s = 'twitch' THEN 'twitch_channel'
+                                  ELSE 'kick_channel'
+                              END
                             LIMIT 1
-                        """,
-                            (self.discord_server_id,),
+                        ),
+                        'unknown'
+                    ) AS channel,
+                    COALESCE(
+                        (
+                            SELECT total_tickets
+                            FROM raffle_entries
+                            WHERE discord_id = identity.discord_id
+                            LIMIT 1
+                        ),
+                        0
+                    ) AS tickets,
+                    COALESCE(
+                        (
+                            SELECT watchtime_tickets
+                            FROM raffle_entries
+                            WHERE discord_id = identity.discord_id
+                            LIMIT 1
+                        ),
+                        0
+                    ) AS watchtime_tickets,
+                    COALESCE(
+                        (
+                            SELECT gifted_sub_tickets
+                            FROM raffle_entries
+                            WHERE discord_id = identity.discord_id
+                            LIMIT 1
+                        ),
+                        0
+                    ) AS gifted_sub_tickets,
+                    COALESCE(
+                        (
+                            SELECT shuffle_wager_tickets
+                            FROM raffle_entries
+                            WHERE discord_id = identity.discord_id
+                            LIMIT 1
+                        ),
+                        0
+                    ) AS wager_tickets,
+                    COALESCE(
+                        (
+                            SELECT bonus_tickets
+                            FROM raffle_entries
+                            WHERE discord_id = identity.discord_id
+                            LIMIT 1
+                        ),
+                        0
+                    ) AS bonus_tickets,
+                    COALESCE((SELECT points FROM viewer_points), 0) AS points,
+                    COALESCE((SELECT total_earned FROM viewer_points), 0) AS points_earned,
+                    COALESCE((SELECT total_spent FROM viewer_points), 0) AS points_spent,
+                    COALESCE((SELECT minutes FROM viewer_watchtime), 0) AS watchtime_minutes,
+                    (SELECT slot_name FROM latest_slot) AS current_slot,
+                    (SELECT provider FROM latest_slot) AS current_provider,
+                    (
+                        SELECT rank
+                        FROM point_ranked
+                        WHERE username = identity.canonical_username
+                        LIMIT 1
+                    ) AS points_rank,
+                    (
+                        SELECT rank
+                        FROM watchtime_ranked
+                        WHERE username = identity.canonical_username
+                        LIMIT 1
+                    ) AS watchtime_rank,
+                    (
+                        SELECT rank
+                        FROM raffle_ranked
+                        WHERE discord_id = identity.discord_id
+                        LIMIT 1
+                    ) AS raffle_rank,
+                    (SELECT total_tickets FROM raffle_stats) AS raffle_pool_tickets,
+                    (SELECT participants FROM raffle_stats) AS raffle_participants,
+                    CASE
+                        WHEN %(need_raffle_end)s THEN (SELECT end_date FROM active_period)
+                        ELSE NULL
+                    END AS raffle_end_date,
+                    COALESCE(
+                        (
+                            SELECT LOWER(value) = 'true'
+                            FROM bot_settings
+                            WHERE discord_server_id = %(server_id)s
+                              AND key = 'slot_requests_enabled'
+                              AND %(need_slot_requests_open)s
+                            LIMIT 1
+                        ),
+                        TRUE
+                    ) AS slot_requests_open,
+                    (SELECT COUNT(*) FROM slot_queue) AS slot_queue_count,
+                    (SELECT slot_call FROM slot_queue ORDER BY position LIMIT 1) AS next_slot,
+                    (
+                        SELECT position
+                        FROM slot_queue
+                        WHERE username = identity.canonical_username
+                        ORDER BY position
+                        LIMIT 1
+                    ) AS request_position,
+                    (SELECT title FROM active_giveaway) AS giveaway_title,
+                    (SELECT entry_method FROM active_giveaway) AS giveaway_method,
+                    (SELECT keyword FROM active_giveaway) AS giveaway_keyword,
+                    (SELECT total_entries FROM giveaway_stats) AS giveaway_entries,
+                    (SELECT participants FROM giveaway_stats) AS giveaway_participants,
+                    CASE
+                        WHEN %(need_giveaway_entered)s THEN EXISTS (
+                            SELECT 1
+                            FROM giveaway_entries
+                            WHERE discord_server_id = %(server_id)s
+                              AND giveaway_id = (SELECT id FROM active_giveaway)
+                              AND LOWER(kick_username) = identity.canonical_username
                         )
-                        result = cursor.fetchone()
-                        if result and result[0]:
-                            current = f"{result[0]} ({result[1]})" if result[1] else result[0]
-                        else:
-                            current = "unknown"
-                        text = text.replace("{current_slot}", current)
-
-                    cursor.close()
-                    conn.close()
-
-                except Exception as e:
-                    logger.error(f"⚠️ Error fetching variable data for {username}: {e}")
-                    import traceback
-
-                    traceback.print_exc()
-
-            return text
-        except Exception as e:
-            logger.error(f"❌ Error replacing variables: {e}")
-            return text  # Return original text if error
+                        ELSE FALSE
+                    END AS giveaway_entered,
+                    COALESCE((SELECT starting_balance FROM active_hunt), 0) AS hunt_start_balance,
+                    COALESCE((SELECT bonus_count FROM hunt_stats), 0) AS hunt_bonus_count,
+                    COALESCE((SELECT remaining FROM hunt_stats), 0) AS hunt_remaining,
+                    COALESCE((SELECT total_payout FROM hunt_stats), 0) AS hunt_total_payout,
+                    COALESCE((SELECT total_payout FROM hunt_stats), 0)
+                        - COALESCE((SELECT starting_balance FROM active_hunt), 0) AS hunt_profit
+                FROM identity
+                """,
+                {
+                    "server_id": server_id,
+                    "username": username,
+                    "display_name": display_name,
+                    "platform": platform,
+                    "need_identity": bool(identity_tokens.intersection(requested_tokens)),
+                    "need_channel": "{channel}" in requested_tokens,
+                    "need_points_data": bool(points_value_tokens.intersection(requested_tokens)),
+                    "need_watchtime_data": bool(watchtime_value_tokens.intersection(requested_tokens)),
+                    "need_points_rank": "{points_rank}" in requested_tokens,
+                    "need_watchtime_rank": "{watchtime_rank}" in requested_tokens,
+                    "need_raffle_period": bool(
+                        raffle_viewer_tokens.intersection(requested_tokens)
+                        or raffle_stat_tokens.intersection(requested_tokens)
+                        or "{raffle_ends_in}" in requested_tokens
+                    ),
+                    "need_raffle": bool(
+                        raffle_viewer_tokens.intersection(requested_tokens)
+                        or raffle_stat_tokens.intersection(requested_tokens)
+                    ),
+                    "need_raffle_rank": "{raffle_rank}" in requested_tokens,
+                    "need_raffle_stats": bool(raffle_stat_tokens.intersection(requested_tokens)),
+                    "need_raffle_end": "{raffle_ends_in}" in requested_tokens,
+                    "need_slot": bool({"{current_slot}", "{current_provider}"}.intersection(requested_tokens)),
+                    "need_slot_requests_open": "{slot_requests_open}" in requested_tokens,
+                    "need_slot_queue": bool(slot_queue_tokens.intersection(requested_tokens)),
+                    "need_giveaway": bool(giveaway_tokens.intersection(requested_tokens)),
+                    "need_giveaway_stats": bool(
+                        {"{giveaway_entries}", "{giveaway_participants}"}.intersection(requested_tokens)
+                    ),
+                    "need_giveaway_entered": "{giveaway_entered}" in requested_tokens,
+                    "need_hunt": bool(hunt_tokens.intersection(requested_tokens)),
+                },
+            )
+            row = cursor.fetchone()
+            if not row:
+                return {}
+            columns = [description[0] for description in cursor.description]
+            return dict(zip(columns, row))
+        finally:
+            cursor.close()
+            conn.close()
 
     async def _increment_use_count(self, command_id):
         """Increment use count in database"""

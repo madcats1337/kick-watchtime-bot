@@ -1070,12 +1070,17 @@ class KickWebSocketManager:
                 try:
                     commands_manager = bot.custom_commands_managers[guild_id]
                     original_guild_id = getattr(commands_manager, "discord_server_id", None)
-                    commands_manager.discord_server_id = guild_id
-                    commands_manager.send_message_callback = lambda msg: send_kick_message(msg, guild_id=guild_id)
-
-                    handled = await commands_manager.handle_message(content, username)
-
-                    commands_manager.discord_server_id = original_guild_id
+                    try:
+                        commands_manager.discord_server_id = guild_id
+                        commands_manager.send_message_callback = lambda msg: send_kick_message(msg, guild_id=guild_id)
+                        handled = await commands_manager.handle_message(
+                            content,
+                            username,
+                            platform=platform,
+                            display_name=display_username,
+                        )
+                    finally:
+                        commands_manager.discord_server_id = original_guild_id
                     if handled:
                         logger.info(f"✅ Custom command handled")
                         return  # Command was handled, don't process further
@@ -2753,17 +2758,25 @@ async def kick_chat_loop(channel_slug: str, guild_id: int):
                             content_stripped = content.strip()
 
                             # Custom commands
-                            if hasattr(bot, "custom_commands_manager") and bot.custom_commands_manager:
+                            commands_manager = getattr(bot, "custom_commands_managers", {}).get(guild_id) or getattr(
+                                bot, "custom_commands_manager", None
+                            )
+                            if commands_manager:
                                 try:
-                                    original_guild_id = getattr(bot.custom_commands_manager, "discord_server_id", None)
-                                    bot.custom_commands_manager.discord_server_id = guild_id
-                                    bot.custom_commands_manager.send_message_callback = lambda msg: send_kick_message(
-                                        msg, guild_id=guild_id
-                                    )
-
-                                    handled = await bot.custom_commands_manager.handle_message(content, username)
-
-                                    bot.custom_commands_manager.discord_server_id = original_guild_id
+                                    original_guild_id = getattr(commands_manager, "discord_server_id", None)
+                                    try:
+                                        commands_manager.discord_server_id = guild_id
+                                        commands_manager.send_message_callback = lambda msg: send_kick_message(
+                                            msg, guild_id=guild_id
+                                        )
+                                        handled = await commands_manager.handle_message(
+                                            content,
+                                            username,
+                                            platform="kick",
+                                            display_name=username,
+                                        )
+                                    finally:
+                                        commands_manager.discord_server_id = original_guild_id
                                     if handled:
                                         continue
                                 except Exception as e:
@@ -3655,17 +3668,27 @@ async def kick_chat_loop(channel_name: str, guild_id: int):
                                     logger.info(f"💬 {username}: {content_text}")
 
                                     # Check for custom commands first (they get priority)
-                                    if hasattr(bot, "custom_commands_manager") and bot.custom_commands_manager:
+                                    commands_manager = getattr(bot, "custom_commands_managers", {}).get(
+                                        guild_id
+                                    ) or getattr(bot, "custom_commands_manager", None)
+                                    if commands_manager:
                                         try:
                                             # Create a wrapper that includes guild_id
                                             async def send_message_with_guild(msg):
                                                 return await send_kick_message(msg, guild_id=guild_id)
 
-                                            # Temporarily set the callback with guild context
-                                            bot.custom_commands_manager.send_message_callback = send_message_with_guild
-                                            handled = await bot.custom_commands_manager.handle_message(
-                                                content_text, username
-                                            )
+                                            original_guild_id = getattr(commands_manager, "discord_server_id", None)
+                                            try:
+                                                commands_manager.discord_server_id = guild_id
+                                                commands_manager.send_message_callback = send_message_with_guild
+                                                handled = await commands_manager.handle_message(
+                                                    content_text,
+                                                    username,
+                                                    platform="kick",
+                                                    display_name=username,
+                                                )
+                                            finally:
+                                                commands_manager.discord_server_id = original_guild_id
                                             if handled:
                                                 continue  # Command was handled, skip other processing
                                         except Exception as e:
